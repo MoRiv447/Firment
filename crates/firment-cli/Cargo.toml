@@ -1,0 +1,28 @@
+[package]
+name = "firment-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "firm"
+path = "src/main.rs"
+
+[dependencies]
+firment-core = { path = "../firment-core" }
+firment-tools = { path = "../firment-tools" }
+firment-tui = { path = "../firment-tui" }
+anyhow.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+clap.workspace = true
+clap_complete.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+winreg.workspace = true
+windows-sys.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

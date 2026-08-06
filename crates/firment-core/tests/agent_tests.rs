@@ -1,0 +1,522 @@
+use async_trait::async_trait;
+use firment_core::{
+    Agent, AgentError, AgentEvent, AutoApprove, ChatMessage, ChatRequest, EventSink,
+    PlanModePermission, Provider, ProviderError, ProviderEvent, ProviderStream, Session,
+    SessionMode, SessionStore, StopReason, Tool, ToolContext, ToolError, ToolOutput, ToolRegistry,
+};
+use serde_json::{Value, json};
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+use tempfile::tempdir;
+
+#[derive(Clone)]
+struct FakeProvider {
+    queue: Arc<Mutex<VecDeque<Vec<ProviderEvent>>>>,
+    model: String,
+}
+
+#[async_trait]
+impl Provider for FakeProvider {
+    async fn stream(&self, _request: ChatRequest) -> Result<ProviderStream, ProviderError> {
+        let events = self.queue.lock().unwrap().pop_front().unwrap_or_default();
+        Ok(Box::pin(futures::stream::iter(events.into_iter().map(Ok))))
+    }
+
+    fn model(&self) -> &str {
+        &self.model
+    }
+}
+
+struct EchoTool;
+
+#[async_trait]
+impl Tool for EchoTool {
+    fn name(&self) -> &'static str {
+        "echo"
+    }
+
+    fn description(&self) -> &'static str {
+        "echo a message back"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({"type": "object", "properties": {"message": {"type": "string"}}})
+    }
+
+    async fn run(&self, args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+        Ok(ToolOutput {
+            text: format!(
+                "echo: {}",
+                args.get("message").and_then(|m| m.as_str()).unwrap_or("")
+            ),
+        })
+    }
+}
+
+struct GuardedTool;
+
+#[async_trait]
+impl Tool for GuardedTool {
+    fn name(&self) -> &'static str {
+        "guarded"
+    }
+
+    fn description(&self) -> &'static str {
+        "tool that requires approval"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+
+    fn approval(&self, _args: &Value) -> Option<String> {
+        Some("guarded operation".to_string())
+    }
+
+    async fn run(&self, _args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+        Ok(ToolOutput {
+            text: "guarded ran".to_string(),
+        })
+    }
+}
+
+struct WriteTool;
+
+#[async_trait]
+impl Tool for WriteTool {
+    fn name(&self) -> &'static str {
+        "write_file"
+    }
+
+    fn description(&self) -> &'static str {
+        "fake write tool"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+
+    fn approval(&self, _args: &Value) -> Option<String> {
+        Some("write file".to_string())
+    }
+
+    async fn run(&self, _args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+        Ok(ToolOutput {
+            text: "wrote".to_string(),
+        })
+    }
+}
+
+struct RecordingProvider {
+    requests: Arc<Mutex<Vec<ChatRequest>>>,
+}
+
+#[async_trait]
+impl Provider for RecordingProvider {
+    async fn stream(&self, request: ChatRequest) -> Result<ProviderStream, ProviderError> {
+        self.requests.lock().unwrap().push(request);
+        Ok(Box::pin(futures::stream::iter(vec![Ok(
+            ProviderEvent::Stop(StopReason::EndTurn),
+        )])))
+    }
+
+    fn model(&self) -> &str {
+        "fake"
+    }
+}
+
+struct CollectSink(Arc<Mutex<Vec<AgentEvent>>>);
+
+#[async_trait]
+impl EventSink for CollectSink {
+    async fn event(&self, event: AgentEvent) {
+        self.0.lock().unwrap().push(event);
+    }
+}
+
+fn registry_with(tools: Vec<Arc<dyn Tool>>) -> Arc<ToolRegistry> {
+    let mut registry = ToolRegistry::new();
+    for tool in tools {
+        registry.register(tool);
+    }
+    Arc::new(registry)
+}
+
+#[tokio::test]
+async fn session_roundtrip() {
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let mut session = Session::new(dir.path().to_path_buf(), "default", "test-model");
+    session.push(ChatMessage::User {
+        content: "hello".to_string(),
+    });
+    session.push(ChatMessage::Assistant {
+        content: "hi".to_string(),
+        tool_calls: vec![firment_core::ToolCall {
+            id: "call_1".to_string(),
+            name: "echo".to_string(),
+            arguments: json!({"message": "hi"}),
+        }],
+    });
+    store.save(&session).unwrap();
+
+    let loaded = store.load(&session.id).unwrap();
+    assert_eq!(loaded.id, session.id);
+    assert_eq!(loaded.messages, session.messages);
+    assert_eq!(loaded.model, "test-model");
+
+    let list = store.list().unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].id, session.id);
+}
+
+#[test]
+fn session_load_migrates_deprecated_deepseek_model() {
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let id = "legacy-session";
+    let path = store.path_for(id);
+    std::fs::write(
+        &path,
+        format!(
+            "{{\"type\":\"meta\",\"id\":\"{id}\",\"cwd\":\".\",\"provider\":\"default\",\"model\":\"deepseek-chat\",\"thinking\":\"off\",\"created_at\":0,\"updated_at\":0}}\n"
+        ),
+    )
+    .unwrap();
+
+    let session = store.load(id).unwrap();
+    assert_eq!(session.model, "deepseek-v4-flash");
+    assert_eq!(session.mode, SessionMode::Agent);
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("deepseek-v4-flash"));
+    assert!(!text.contains("deepseek-chat"));
+}
+
+#[test]
+fn session_mode_roundtrip_with_plan() {
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let mut session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    session.mode = SessionMode::Plan;
+    session.push(ChatMessage::User {
+        content: "hi".to_string(),
+    });
+    store.save(&session).unwrap();
+
+    let loaded = store.load(&session.id).unwrap();
+    assert_eq!(loaded.mode, SessionMode::Plan);
+    assert_eq!(loaded.messages, session.messages);
+}
+
+#[test]
+fn system_prompt_covers_core_guidance_and_plan_contract() {
+    let dir = tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("AGENTS.md"),
+        "Use this board's HAL layer for all GPIO access.\n",
+    )
+    .unwrap();
+    let prompt = firment_core::default_system_prompt(dir.path());
+    for needle in [
+        "Firment",
+        "Working directory",
+        "read_file",
+        "edit_file",
+        "shell",
+        "path:line",
+        "AGENTS.md",
+        "Report outcomes faithfully",
+        "Use this board's HAL layer",
+    ] {
+        assert!(prompt.contains(needle), "default prompt missing: {needle}");
+    }
+
+    let plan_prompt = firment_core::system_prompt_for(dir.path(), SessionMode::Plan);
+    assert!(plan_prompt.contains("PLAN mode (read-only)"));
+    assert!(plan_prompt.contains("decision-complete"));
+    assert!(plan_prompt.contains("MUST NOT write"));
+}
+
+#[tokio::test]
+async fn agent_loop_runs_tools() {
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::Text("Checking…".to_string()),
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_1".to_string(),
+                    name: "echo".to_string(),
+                    arguments: json!({"message": "hi"}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            vec![
+                ProviderEvent::Text("Done".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+        ]))),
+        model: "fake".to_string(),
+    };
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(vec![Arc::new(EchoTool)]),
+        session,
+        store,
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(events.clone())),
+        10,
+    );
+
+    let text = agent.run_turn("echo hi").await.unwrap();
+    assert_eq!(text, "Done");
+
+    let collected = events.lock().unwrap();
+    assert!(
+        collected
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ToolStart { name, .. } if name == "echo"))
+    );
+    assert!(
+        collected
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ToolEnd { ok: true, .. }))
+    );
+
+    let roles: Vec<&str> = agent
+        .session()
+        .messages
+        .iter()
+        .map(|m| match m {
+            ChatMessage::User { .. } => "user",
+            ChatMessage::Assistant { .. } => "assistant",
+            ChatMessage::Tool { .. } => "tool",
+            ChatMessage::System { .. } => "system",
+        })
+        .collect();
+    assert_eq!(roles, vec!["user", "assistant", "tool", "assistant"]);
+}
+
+#[tokio::test]
+async fn permission_denied_is_reported_to_model() {
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_1".to_string(),
+                    name: "guarded".to_string(),
+                    arguments: json!({}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            vec![
+                ProviderEvent::Text("ok".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+        ]))),
+        model: "fake".to_string(),
+    };
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(vec![Arc::new(GuardedTool)]),
+        session,
+        store,
+        Arc::new(AutoApprove::nothing()),
+        Arc::new(CollectSink(events)),
+        10,
+    );
+
+    let text = agent.run_turn("go").await.unwrap();
+    assert_eq!(text, "ok");
+    let tool_message = agent
+        .session()
+        .messages
+        .iter()
+        .find_map(|m| match m {
+            ChatMessage::Tool { content, .. } => Some(content.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(tool_message.starts_with("Permission denied"));
+}
+
+#[tokio::test]
+async fn plan_mode_permission_hard_denies_mutating_tools() {
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_1".to_string(),
+                    name: "write_file".to_string(),
+                    arguments: json!({"path": "x"}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            vec![
+                ProviderEvent::Text("ok".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+        ]))),
+        model: "fake".to_string(),
+    };
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let mut session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    session.mode = SessionMode::Plan;
+    let permission = Arc::new(PlanModePermission::new(Arc::new(AutoApprove::everything())));
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(vec![Arc::new(WriteTool)]),
+        session,
+        store,
+        permission,
+        Arc::new(CollectSink(events)),
+        10,
+    );
+
+    let text = agent.run_turn("write").await.unwrap();
+    assert_eq!(text, "ok");
+    let tool_message = agent
+        .session()
+        .messages
+        .iter()
+        .find_map(|m| match m {
+            ChatMessage::Tool { content, .. } => Some(content.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(tool_message.contains("plan mode"));
+    assert!(tool_message.starts_with("Permission denied"));
+}
+
+#[tokio::test]
+async fn plan_mode_injects_read_only_system_prompt() {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let provider = RecordingProvider {
+        requests: requests.clone(),
+    };
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let mut session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    session.mode = SessionMode::Plan;
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(Vec::new()),
+        session,
+        store,
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(Arc::new(Mutex::new(Vec::new())))),
+        10,
+    );
+
+    let _ = agent.run_turn("plan something").await;
+    let requests = requests.lock().unwrap();
+    let first = &requests[0].messages[0];
+    match first {
+        ChatMessage::System { content } => {
+            assert!(content.contains("PLAN mode"));
+            assert!(content.contains("read-only"));
+        }
+        _ => panic!("expected a system message"),
+    }
+}
+
+#[tokio::test]
+async fn switching_back_to_agent_mode_restores_mutating_tools_and_prompt() {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let provider = RecordingProvider {
+        requests: requests.clone(),
+    };
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let mut session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    session.mode = SessionMode::Plan;
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(vec![Arc::new(EchoTool)]),
+        session,
+        store,
+        Arc::new(PlanModePermission::new(Arc::new(AutoApprove::everything()))),
+        Arc::new(CollectSink(Arc::new(Mutex::new(Vec::new())))),
+        10,
+    );
+
+    agent.set_mode(
+        SessionMode::Agent,
+        registry_with(vec![Arc::new(EchoTool), Arc::new(WriteTool)]),
+        Arc::new(AutoApprove::everything()),
+    );
+    let _ = agent.run_turn("back to normal").await;
+
+    let requests = requests.lock().unwrap();
+    let request = &requests[0];
+    assert!(request.tools.iter().any(|t| t.name == "write_file"));
+    match &request.messages[0] {
+        ChatMessage::System { content } => {
+            assert!(!content.contains("PLAN mode"));
+        }
+        _ => panic!("expected a system message"),
+    }
+}
+
+#[tokio::test]
+async fn max_iterations_stops() {
+    let tool_call = vec![
+        ProviderEvent::ToolCall(firment_core::ToolCall {
+            id: "call_1".to_string(),
+            name: "echo".to_string(),
+            arguments: json!({"message": "loop"}),
+        }),
+        ProviderEvent::Stop(StopReason::ToolUse),
+    ];
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([
+            tool_call.clone(),
+            tool_call.clone(),
+        ]))),
+        model: "fake".to_string(),
+    };
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(vec![Arc::new(EchoTool)]),
+        session,
+        store,
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(events)),
+        2,
+    );
+
+    let err = agent.run_turn("loop").await.unwrap_err();
+    assert!(matches!(err, AgentError::MaxIterations(2)));
+}
+
+#[tokio::test]
+async fn agent_without_provider_reports_clear_error() {
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    let mut agent = Agent::new(
+        None,
+        registry_with(vec![Arc::new(EchoTool)]),
+        session,
+        store,
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(Arc::new(Mutex::new(Vec::new())))),
+        10,
+    );
+
+    let err = agent.run_turn("hi").await.unwrap_err();
+    assert!(matches!(err, AgentError::NoProvider));
+}

@@ -1,0 +1,16 @@
+[package]
+name = "firment-tui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+firment-core = { path = "../firment-core" }
+firment-tools = { path = "../firment-tools" }
+anyhow.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+crossterm.workspace = true
+ratatui.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+unicode-width.workspace = true
