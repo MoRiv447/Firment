@@ -1,4 +1,4 @@
-# firment — Firmware + Agent，固件界的苍穹
+# firment — Firmware + Agent
 
 第一层通用编码 Agent（Firment，Beta）的完整版实现：Rust 单体核心 + 交互式 TUI + 单次执行 CLI + 全局安装/自更新 + 只读 Plan 模式。
 
