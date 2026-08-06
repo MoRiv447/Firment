@@ -1,5 +1,35 @@
+# Rust / Cargo 构建产物
 /target
+**/*.rs.bk
+*.pdb
+
+# 注意：Cargo.lock 要提交（二进制项目锁定依赖版本），不要忽略
+
+# Firment 本地运行数据（如果在本目录里跑过 FIRMENT_CONFIG_DIR=. 之类）
+/.firment
+/auth.json
+
+# IDE / 编辑器
 /.idea
 /.vscode
-*.log
+/.vs
+*.iml
+*.suo
+*.user
+*.swp
+*~
+
+# 操作系统垃圾文件
 .DS_Store
+Thumbs.db
+Desktop.ini
+
+# 日志 / 临时文件
+*.log
+*.tmp
+*.temp
+
+# 环境变量 / 密钥（万一有人放 .env 覆盖默认配置）
+.env
+.env.*
+!.env.example
