@@ -23,50 +23,43 @@ if ($arch -eq 'AMD64') {
 }
 $AssetName = "firm-$arch-pc-windows-msvc.zip"
 
-$Tag = ''
-if ($Mirror -and $Version -ne 'latest') {
-    # 镜像模式且显式指定版本：直接使用 {mirror}/{tag}/{asset}，不访问 GitHub API
-    $Tag = $Version
-} else {
-    $apiHeaders = @{ 'User-Agent' = 'firment-installer' }
+$Tag = $Version
+$DownloadUrl = ''
+$SumsUrl = ''
+if ($Mirror) {
     if ($Version -eq 'latest') {
+        $apiHeaders = @{ 'User-Agent' = 'firment-installer' }
         $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers $apiHeaders
+        $Tag = $release.tag_name
+    }
+    $DownloadUrl = "$Mirror/$Tag/$AssetName"
+    $SumsUrl = "$Mirror/$Tag/SHA256SUMS"
+} else {
+    $ReleaseBase = if ($Version -eq 'latest') {
+        "https://github.com/$Repo/releases/latest/download"
     } else {
-        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/tags/$Version" -Headers $apiHeaders
+        "https://github.com/$Repo/releases/download/$Version"
     }
-    $Tag = $release.tag_name
-}
-$asset = $null
-if ($release) {
-    $asset = $release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
-    if (-not $asset) {
-        throw "当前 release ($Tag) 没有 $AssetName，可能尚未发布或平台不支持"
-    }
+    $DownloadUrl = "$ReleaseBase/$AssetName"
+    $SumsUrl = "$ReleaseBase/SHA256SUMS"
 }
 
 $tmp = Join-Path $env:TEMP "firment-install-$([guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Path $tmp | Out-Null
 try {
     $zip = Join-Path $tmp $AssetName
-    if ($Mirror) {
-        Invoke-WebRequest -UseBasicParsing -Uri "$Mirror/$Tag/$AssetName" -OutFile $zip
-    } else {
-        Invoke-WebRequest -UseBasicParsing -Uri $asset.browser_download_url -OutFile $zip
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri $DownloadUrl -OutFile $zip
+    } catch {
+        throw "下载失败（$DownloadUrl）：可能该版本尚未发布或平台不支持"
     }
 
-    $sumsUrl = $null
-    if ($Mirror) {
-        $sumsUrl = "$Mirror/$Tag/SHA256SUMS"
-    } elseif ($release) {
-        $sumsAsset = $release.assets | Where-Object { $_.name -eq 'SHA256SUMS' } | Select-Object -First 1
-        if ($sumsAsset) { $sumsUrl = $sumsAsset.browser_download_url }
+    try {
+        $sumsText = (Invoke-WebRequest -UseBasicParsing -Uri $SumsUrl).Content
+    } catch {
+        $sumsText = ''
     }
-    if ($sumsUrl) {
-        try {
-            $sumsText = (Invoke-WebRequest -UseBasicParsing -Uri $sumsUrl).Content
-        } catch {
-            $sumsText = ''
-        }
+    if ($sumsText) {
         $line = ($sumsText -split "`n" | Where-Object { $_ -match [regex]::Escape($AssetName) } | Select-Object -First 1)
         if ($line) {
             $expected = ($line -split '\s+')[0].ToLowerInvariant()
