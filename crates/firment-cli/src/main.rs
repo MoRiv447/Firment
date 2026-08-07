@@ -58,6 +58,11 @@ struct Cli {
     #[arg(short = 'y', long)]
     yes: bool,
 
+    /// Allow destructive shell commands (rm/del/git clean 等) even with -y.
+    /// Without this flag, the hard safety guard blocks them in one-shot mode.
+    #[arg(long)]
+    allow_dangerous: bool,
+
     /// List saved sessions.
     #[arg(long)]
     list: bool,
@@ -183,7 +188,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     if let Some(prompt) = &cli.prompt {
-        run_once(&config, session, prompt, cli.yes).await?;
+        run_once(&config, session, prompt, cli.yes, cli.allow_dangerous).await?;
     } else {
         firment_tui::run(config, config_path, session).await?;
     }
@@ -195,6 +200,7 @@ async fn run_once(
     session: Session,
     prompt: &str,
     yes: bool,
+    allow_dangerous: bool,
 ) -> anyhow::Result<()> {
     let provider = config.build_provider(Some(&session.provider), Some(&session.model))?;
     let registry = if session.mode == SessionMode::Plan {
@@ -219,6 +225,7 @@ async fn run_once(
         sink,
         config.max_iterations,
     );
+    agent.set_allow_dangerous(allow_dangerous);
     let text = agent.run_turn(prompt).await?;
     println!("{text}");
     Ok(())

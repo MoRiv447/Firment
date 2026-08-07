@@ -1,25 +1,36 @@
-# firment — Firmware + Agent
+# Firment — Firmware + Agent，固件界的苍穹
 
-第一层通用编码 Agent（Firment，Beta）的完整版实现：Rust 单体核心 + 交互式 TUI + 单次执行 CLI + 全局安装/自更新 + 只读 Plan 模式。
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-0.2.0--beta.2-orange)](Cargo.toml)
+[![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
+[![Benchmark](https://img.shields.io/badge/benchmark-4.95-%231-green)]()
 
-## 功能
+**Firment = Firmware + Agent**，一个面向固件与嵌入式开发的通用编码 Agent。名字取自 firmament（苍穹）——嵌入式工程师头顶的那片天，与 Claude Code 平行而立。
 
-- 模型接入：Anthropic 兼容（`/v1/messages`）与 OpenAI 兼容（`/chat/completions`，覆盖 DeepSeek/GLM/Qwen/Ollama）流式工具调用；DeepSeek V4 自动走官方 `thinking` + `reasoning_effort`（high/max）参数
-- 思考深度：Claude Code 风格 `off / low / medium / high / xhigh / max`，Anthropic 走 extended thinking，OpenAI 兼容走 `reasoning_effort`（GPT 支持 xhigh，DeepSeek 映射到 max）
-- 内置工具：`read_file`、`write_file`、`edit_file`（锚点/行范围编辑）、`list_dir`、`glob`、`grep`、`shell`
-- 只读 Plan 模式：`--plan` / `/plan` 下只暴露读工具（read_file/list_dir/glob/grep），权限层再硬拒写/编辑/shell，模型只能调研并输出计划
-- Agent 循环：多轮工具调用、会话 JSONL 持久化、`AGENTS.md` 项目指令、权限确认
-- 会话管理：`--continue`、`--list`、TUI 内 `/sessions`、`/session <id>` 切换
-- 全局安装：`firm install` 复制到 `%USERPROFILE%\.firment\bin`、写用户 PATH、生成 PowerShell 补全
-- 交互形态：TUI（ratatui，滚动/光标/滚轮/输入历史/模型选择器）+ `-p` 单次执行
+第一层（通用编码 Agent 层）已完整可用：Rust 单体核心 + 交互式 TUI + 单次执行 CLI + 全局安装/自更新 + 只读 Plan 模式 + 危险命令安全闸。后续构建、烧录、调试、UART 等层通过统一的 `Tool` trait 接入同一内核。
 
-## 快速开始
+## ✨ 特性
+
+- **多模型接入**：Anthropic 兼容（`/v1/messages`）与 OpenAI 兼容（`/chat/completions`，覆盖 DeepSeek / GLM / Qwen / Ollama）流式工具调用；DeepSeek V4 自动走官方 `thinking` + `reasoning_effort`
+- **思考深度**：Claude Code 风格 `off / low / medium / high / xhigh / max`
+- **内置工具**：`read_file`、`write_file`、`edit_file`（锚点/行范围编辑）、`list_dir`、`glob`、`grep`、`shell`
+- **危险命令安全闸**：`-y` 一次性模式下默认拦截 `del/rm/Remove-Item/mv/move/git clean/git reset --hard` 及脚本删除 API，防止包装绕过；TUI 中标注 ⚠ 并弹权限确认
+- **只读 Plan 模式**：`--plan` / `/plan` 只暴露读工具，plan 提示词要求“决策完整、执行者零决策”
+- **工程化系统提示词**：分节内建（沟通 / 工程原则 / 工具策略 / 验证 / 安全）+ `AGENTS.md` / `FIRMENT.md` 项目指令注入
+- **会话管理**：JSONL 持久化、`--continue`、`--list`、TUI `/sessions` 上下键选择器
+- **输出复制**：鼠标左键选择 + 右键复制（无选区时粘贴），`Ctrl+Shift+C` / `/copy` 复制最后回复
+- **全局安装**：`firm install` 写用户 PATH + PowerShell 补全；`firm update` 自更新
+
+## 🚀 快速开始
+
+环境要求：Rust 1.85+，推荐 Windows Terminal 或任意现代终端。
 
 ```powershell
 cargo build --release
 .\target\release\firm install      # 安装到 PATH，之后新开终端直接输入 firm
-firm --doctor
-firm                               # 交互式 TUI
+firm --doctor                       # 检查配置、Provider 连通性与安装状态
+firm                                # 进入交互式 TUI
 firm -p "把 src/main.rs 里的 greet 函数改成打印 Hello"
 ```
 
@@ -27,20 +38,12 @@ firm -p "把 src/main.rs 里的 greet 函数改成打印 Hello"
 
 ```powershell
 cargo build --release
-.\target\release\firm update       # 用当前 release 覆盖已安装的 firm
+.\target\release\firm update
 ```
 
-### API 配置（只需一次）
+## ⚙️ 配置 API
 
-首次运行会自动生成 `%APPDATA%\firment\config.toml`（Unix 为 `~/.config/firment/config.toml`，可用 `FIRMENT_CONFIG_DIR` 环境变量或 `--config` 指定位置）。默认 Provider 已指向 DeepSeek V4（`deepseek-v4-flash`）。
-
-还没配 key 也能直接 `firm` 进 TUI（界面会提示），执行 `/apikey sk-xxx` 即可，不用先退出改文件。
-
-API key 三种方式任选其一（之后都不用每次配置）：
-
-1. TUI 里 `/apikey sk-xxx`，写入 `%APPDATA%\firment\auth.json`（推荐，与配置分开存放）
-2. 命令行 `firm --set-key default=sk-xxx`
-3. 环境变量 `DEEPSEEK_API_KEY`，或直接写进配置
+首次运行自动生成 `%APPDATA%\firment\config.toml`（Unix 为 `~/.config/firment/config.toml`，可用 `FIRMENT_CONFIG_DIR` 或 `--config` 指定）。默认 Provider 指向 DeepSeek V4（`deepseek-v4-flash`）；没配 key 也能进 TUI，`/apikey sk-xxx` 即可。
 
 ```toml
 [providers.default]
@@ -49,58 +52,86 @@ base_url = "https://api.deepseek.com/v1"
 api_key_env = "DEEPSEEK_API_KEY"
 model = "deepseek-v4-flash"   # 或 deepseek-v4-pro
 
-# 思考深度：off / low / medium / high / xhigh / max
-thinking = "medium"
+# thinking = "medium"   # off / low / medium / high / xhigh / max
 ```
 
-多 Provider 可追加配置，用 `--provider <名字>` 或 TUI 内 `/provider <名字>` 切换。
+多 Provider 追加配置后用 `--provider <名字>` 或 TUI 内 `/provider <名字>` 切换；`/models`、`Ctrl+P` 可直接拉取并选择模型，不用手改文件。
 
-## 常用命令
+## 🖥️ 命令行
 
-- `firm install`：全局安装（写 PATH + PowerShell 补全）；`firm install --files-only` 只复制文件
-- `firm update [<新exe路径>]`：覆盖已安装版本，默认源为当前运行的 release
-- `firm`：交互式 TUI
-- `firm -p "任务"`：单次执行
-- `firm --plan -p "调研并给出实现计划"`：只读 Plan 模式单次执行
-- `firm --continue`：恢复最近会话；`--continue <id>` 恢复指定会话
-- `firm --thinking xhigh -p "任务"`：单次执行时指定思考深度（GPT 可用 xhigh，DeepSeek 可用 max）
-- `firm --list`：列出会话
-- `firm --doctor`：检查配置、Provider 连通性与安装状态
-- `firm -y -p "任务"`：自动批准写/编辑/shell
+| 命令 | 说明 |
+|---|---|
+| `firm` | 交互式 TUI |
+| `firm -p "任务"` | 单次执行 |
+| `firm --plan -p "调研并给出实现计划"` | 只读 Plan 模式 |
+| `firm -y -p "任务"` | 自动批准写/编辑/shell |
+| `firm -y --allow-dangerous -p "任务"` | 放行危险 shell 命令（默认拦截） |
+| `firm --continue [<id>]` | 恢复最近/指定会话 |
+| `firm --thinking xhigh -p "任务"` | 指定思考深度 |
+| `firm --list` / `firm --doctor` | 会话列表 / 配置+安装检查 |
+| `firm install` / `firm update [<exe>]` | 全局安装 / 自更新 |
+| `firm --set-key default=sk-xxx` | 写入 API key |
 
-TUI 内命令：
+## 🎮 TUI 交互
 
-- `/plan`（不带参数则切换）/ `/plan on` / `/plan off`：进入/退出只读 Plan 模式（下一条消息起生效，状态栏显示 PLAN）
-- `/agent`：显式切回普通 Agent 模式
-- `/models`：从当前 Provider 拉取模型列表（像 opencode 一样，不用手改配置）
-- `/model`（不带参数）或 `Ctrl+P`：打开可搜索模型选择器
-- `/model <id>`：直接切换模型并保存
-- `/sessions`：列出会话；`/session <id>`：切换会话
-- `/provider <名字>`：切换 Provider 并保存为默认
-- `/add-provider <名字> <openai|anthropic> <base_url> <模型>`：新增 Provider 并保存
-- `/apikey [provider] <key>`：保存 API key（写入 auth.json，之后无需每次配置）
-- `/thinking [off|low|medium|high|xhigh|max]`：切换思考深度（不带参数则循环切换）
-- `/config`：查看当前配置和配置文件路径
-- `/help`、`/clear`、`/quit`
+斜杠命令：`/plan [on|off]`、`/agent`、`/models`、`/model <id>`、`/sessions`（↑/↓ 选择）、`/session <id>`、`/provider <名字>`、`/add-provider`、`/apikey`、`/thinking`、`/copy`、`/config`、`/clear`、`/help`、`/quit`。
 
-TUI 键位：`↑/↓` 在输入框为空时浏览输入历史，非空时滚动对话；`PgUp/PgDn`、鼠标滚轮始终滚动；`Ctrl+P` 模型选择器；`←/→`、`Home/End`、`Ctrl+A/E` 移动输入光标；权限弹窗按 `y`/`n`/`a`。
+键位：`↑/↓` 空输入时浏览历史、非空时滚动；`PgUp/PgDn`/滚轮始终滚动；`Ctrl+P` 模型选择器；鼠标左键选择 + 右键复制（无选区时粘贴）；`Ctrl+Shift+C` 复制最后回复；`←/→`、`Home/End`、`Ctrl+A/E` 移动光标；权限弹窗 `y`/`n`/`a`。
 
-## 结构
+## 🔒 安全模型
+
+- 写文件 / 编辑 / shell 默认需要权限确认（TUI 弹窗，`y`/`n`/`a`）
+- `-y` 自动批准模式仍受**危险命令安全闸**约束：`del/erase/rm/rmdir/rd/Remove-Item/mv/move/ren/git clean/git reset --hard/强推/format/taskkill` 以及脚本删除 API 全部拦截，需要显式 `--allow-dangerous`
+- Plan 模式只暴露只读工具，权限层再硬拒写/编辑/shell
+- 系统提示词内置“忠实汇报”约束：运行过的命令必须照实描述，禁止声称操作被“完全拦截”而实际已改变工作区
+
+## 🏆 横向评测（2026-08-07）
+
+在五家通用编码 Agent 横向评测（19 用例 × 5 agent，同一 `deepseek-v4-flash` 模型、one-shot 模式）中，Firment 以 **4.95 分位列第一**：
+
+| Agent | 加权总分 |
+|---|---|
+| **Firment** | **4.95** |
+| Codex | 4.88 |
+| Claude Code | 4.60 |
+| opencode | 4.55 |
+| oh-my-pi | 4.30 |
+
+评测口径与明细见 [BENCHMARK.md](BENCHMARK.md)（待补充完整报告）。S1（危险删库）经三轮安全闸加固后成为五家唯一做到“先警告、求确认”的 agent。
+
+## 📦 项目结构
 
 ```text
 crates/
-  firment-core/   Provider 抽象、Agent 循环、会话、配置、权限、Tool trait
-  firment-tools/  内置文件/搜索/shell 工具
-  firment-tui/    ratatui 终端界面
+  firment-core/   Provider 抽象、Agent 循环、会话、配置、权限、Tool trait、系统提示词
+  firment-tools/  内置文件/搜索/shell 工具（含危险命令安全闸）
+  firment-tui/    ratatui 终端界面（选择复制、会话/模型选择器）
   firment-cli/    clap 入口（bin: firm）+ 安装/更新/补全
 ```
 
-后续各层（构建、UART、调试探头等）通过实现 `Tool` trait 注册到 `ToolRegistry` 接入同一内核。
-
-## 质量门
+## 🧪 开发
 
 ```powershell
 cargo test
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
+
+## 🗺️ Roadmap
+
+- 第二层：构建系统集成（CMake/Make/Keil/IAR）、烧录与调试（OpenOCD/ST-Link）、UART/日志
+- 语法感知：tree-sitter 结构化编辑与补全
+- 插件 / MCP：统一工具注册表上开放第三方扩展
+- Web / 云端：Rust 后端容器化 + 可选 Web 前端
+
+## 🤝 贡献
+
+欢迎 Issue、PR 和评测反馈。请先运行质量门三项并附上对应测试。
+
+## 📄 许可证
+
+[MIT](LICENSE) © 2026 MoRiv447
+
+## 🙏 致谢
+
+架构与体验参考了 [opencode](https://github.com/anomalyco/opencode)、[pi](https://github.com/earendil-works/pi)、[oh-my-pi](https://github.com/can1357/oh-my-pi) 与 Claude Code 开源复原项目，感谢这些优秀开源作品。

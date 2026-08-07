@@ -1,5 +1,5 @@
 use crate::provider::{Provider, ProviderError, ProviderEvent};
-use crate::session::SessionStore;
+use crate::session::{SessionStore, SessionSummary};
 use crate::tool::{ToolContext, ToolRegistry};
 use crate::types::{ChatMessage, ChatRequest, SessionMode, ThinkingLevel, ToolCall};
 use crate::{PermissionChecker, Session, system_prompt_for};
@@ -35,6 +35,10 @@ pub enum AgentEvent {
     },
     /// Model list fetched from the provider (for the model picker).
     Models(Vec<String>),
+    /// Saved sessions fetched for the session picker.
+    Sessions(Vec<SessionSummary>),
+    /// A session was loaded/switched; the UI should repopulate its transcript.
+    SessionLoaded(Session),
     Error(String),
 }
 
@@ -65,6 +69,7 @@ pub struct Agent {
     permission: Arc<dyn PermissionChecker>,
     sink: Arc<dyn EventSink>,
     max_iterations: usize,
+    allow_dangerous: bool,
 }
 
 impl Agent {
@@ -86,6 +91,7 @@ impl Agent {
             permission,
             sink,
             max_iterations,
+            allow_dangerous: false,
         }
     }
 
@@ -107,6 +113,10 @@ impl Agent {
 
     pub fn set_thinking(&mut self, level: ThinkingLevel) {
         self.session.thinking = level;
+    }
+
+    pub fn set_allow_dangerous(&mut self, allow: bool) {
+        self.allow_dangerous = allow;
     }
 
     /// Switch between agent and read-only plan mode. The caller supplies the
@@ -193,6 +203,7 @@ impl Agent {
             let ctx = ToolContext {
                 cwd: self.session.cwd.clone(),
                 permission: self.permission.clone(),
+                allow_dangerous: self.allow_dangerous,
             };
             for call in &tool_calls {
                 self.sink

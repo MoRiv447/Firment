@@ -1,15 +1,15 @@
 use async_trait::async_trait;
 use crossterm::event::{
     DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
-    MouseEventKind, read,
+    MouseButton, MouseEventKind, read,
 };
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use firment_core::{
-    Agent, AgentEvent, Config, EventSink, PermissionChecker, PermissionError, PlanModePermission,
-    ProviderConfig, Session, SessionMode, SessionStore, ThinkingLevel,
+    Agent, AgentEvent, ChatMessage, Config, EventSink, PermissionChecker, PermissionError,
+    PlanModePermission, ProviderConfig, Session, SessionMode, SessionStore, ThinkingLevel,
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
@@ -81,6 +81,10 @@ pub async fn run(
         sink.clone(),
         config.max_iterations,
     );
+    // Interactive TUI: the permission popup is the decision point, so
+    // dangerous shell commands are allowed to reach it (and are labeled ⚠).
+    agent.set_allow_dangerous(true);
+    let initial_messages = agent.session().messages.clone();
     let model = agent.session().model.clone();
     let cwd = agent.session().cwd.clone();
     let provider_name = agent.session().provider.clone();
@@ -175,36 +179,23 @@ pub async fn run(
                         }
                     }
                 }
-                AgentCmd::ListSessions => match store.list() {
-                    Ok(sessions) => {
-                        if sessions.is_empty() {
-                            agent.emit(AgentEvent::Info("暂无会话。".to_string())).await;
-                        } else {
-                            let mut msg = format!("会话列表（共 {}）:", sessions.len());
-                            for summary in sessions.iter().take(20) {
-                                let preview = store
+                AgentCmd::OpenSessionPicker => match store.list() {
+                    Ok(mut sessions) => {
+                        for summary in &mut sessions {
+                            if summary.preview.is_empty() {
+                                summary.preview = store
                                     .load(&summary.id)
                                     .map(|s| s.title())
                                     .unwrap_or_default();
-                                msg.push_str(&format!(
-                                    "\n{}  {}  {:<24}  {}  {}",
-                                    summary.id,
-                                    format_ts(summary.updated_at),
-                                    summary.model,
-                                    summary.cwd.display(),
-                                    preview
-                                ));
                             }
-                            if sessions.len() > 20 {
-                                msg.push_str(&format!("… 还有 {} 个", sessions.len() - 20));
-                            }
-                            agent.emit(AgentEvent::Info(msg)).await;
                         }
+                        agent.emit(AgentEvent::Sessions(sessions)).await;
                     }
                     Err(e) => {
                         agent
                             .emit(AgentEvent::Error(format!("列出会话失败: {e}")))
                             .await;
+                        agent.emit(AgentEvent::Sessions(Vec::new())).await;
                     }
                 },
                 AgentCmd::LoadSession(id) => match store.load(&id) {
@@ -244,10 +235,11 @@ pub async fn run(
                                 mode.label()
                             )))
                             .await;
+                        agent.emit(AgentEvent::SessionLoaded(loaded.clone())).await;
                         agent
                             .emit(AgentEvent::Settings {
-                                provider: Some(loaded.provider),
-                                model: Some(loaded.model),
+                                provider: Some(loaded.provider.clone()),
+                                model: Some(loaded.model.clone()),
                                 thinking: Some(loaded.thinking),
                                 mode: Some(mode),
                             })
@@ -410,6 +402,7 @@ pub async fn run(
         session_mode,
         config_path,
         startup_hint,
+        initial_messages,
     );
     let result = run_loop(&mut terminal, &mut app, event_rx, perm_rx, ui_rx).await;
     restore_terminal(&mut terminal)?;
@@ -443,7 +436,7 @@ enum AgentCmd {
     SetThinking(ThinkingLevel),
     SetMode(SessionMode),
     OpenModelPicker,
-    ListSessions,
+    OpenSessionPicker,
     LoadSession(String),
     SetProvider(String),
     SetApiKey {
@@ -535,6 +528,10 @@ struct App {
     thinking: ThinkingLevel,
     mode: SessionMode,
     model_picker: Option<ModelPicker>,
+    session_picker: Option<SessionPicker>,
+    transcript_rect: Rect,
+    content_width: usize,
+    selection: Option<Selection>,
     cwd: PathBuf,
     config_path: PathBuf,
     cmd_tx: mpsc::Sender<AgentCmd>,
@@ -584,6 +581,65 @@ impl ModelPicker {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Selection {
+    anchor_row: usize,
+    anchor_col: usize,
+    row: usize,
+    col: usize,
+}
+
+impl Selection {
+    fn normalized(self) -> ((usize, usize), (usize, usize)) {
+        if (self.anchor_row, self.anchor_col) <= (self.row, self.col) {
+            ((self.anchor_row, self.anchor_col), (self.row, self.col))
+        } else {
+            ((self.row, self.col), (self.anchor_row, self.anchor_col))
+        }
+    }
+}
+
+struct SessionPicker {
+    query: Vec<char>,
+    sessions: Vec<firment_core::SessionSummary>,
+    selected: usize,
+}
+
+impl SessionPicker {
+    fn new(sessions: Vec<firment_core::SessionSummary>) -> Self {
+        Self {
+            query: Vec::new(),
+            sessions,
+            selected: 0,
+        }
+    }
+
+    fn filtered(&self) -> Vec<&firment_core::SessionSummary> {
+        let query: String = self.query.iter().collect();
+        let query = query.to_lowercase();
+        if query.is_empty() {
+            return self.sessions.iter().collect();
+        }
+        self.sessions
+            .iter()
+            .filter(|s| {
+                s.id.to_lowercase().contains(&query)
+                    || s.model.to_lowercase().contains(&query)
+                    || s.preview.to_lowercase().contains(&query)
+            })
+            .collect()
+    }
+
+    fn clamp(&mut self) {
+        let count = self.filtered().len();
+        self.selected = if count == 0 {
+            0
+        } else {
+            self.selected.min(count - 1)
+        };
+    }
+}
+
 enum Item {
     User(String),
     Assistant(String),
@@ -609,6 +665,7 @@ impl App {
         mode: SessionMode,
         config_path: PathBuf,
         startup_hint: Option<String>,
+        initial_messages: Vec<ChatMessage>,
     ) -> Self {
         let mut app = Self {
             items: Vec::new(),
@@ -628,6 +685,10 @@ impl App {
             thinking,
             mode,
             model_picker: None,
+            session_picker: None,
+            transcript_rect: Rect::default(),
+            content_width: 0,
+            selection: None,
             cwd,
             config_path,
             cmd_tx,
@@ -637,7 +698,35 @@ impl App {
         if let Some(hint) = startup_hint {
             app.items.push(Item::System(hint));
         }
+        app.push_messages(&initial_messages);
         app
+    }
+
+    fn push_messages(&mut self, messages: &[ChatMessage]) {
+        for message in messages {
+            match message {
+                ChatMessage::User { content } => {
+                    self.items.push(Item::User(content.clone()));
+                }
+                ChatMessage::Assistant { content, .. } => {
+                    self.items.push(Item::Assistant(content.clone()));
+                }
+                ChatMessage::Tool { name, content, .. } => {
+                    let ok = !content.starts_with("Permission denied")
+                        && !content.starts_with("unknown tool")
+                        && !content.starts_with("危险命令");
+                    self.items.push(Item::Tool {
+                        name: name.clone(),
+                        running: false,
+                        ok,
+                        summary: content.clone(),
+                    });
+                }
+                ChatMessage::System { content } => {
+                    self.items.push(Item::System(content.clone()));
+                }
+            }
+        }
     }
 
     fn on_agent(&mut self, event: AgentEvent) {
@@ -716,6 +805,30 @@ impl App {
                     self.model_picker = Some(ModelPicker::new(models));
                 }
             },
+            AgentEvent::Sessions(sessions) => match &mut self.session_picker {
+                Some(picker) => {
+                    picker.sessions = sessions;
+                    picker.clamp();
+                }
+                None => {
+                    self.session_picker = Some(SessionPicker::new(sessions));
+                }
+            },
+            AgentEvent::SessionLoaded(session) => {
+                self.items.clear();
+                self.provider = session.provider.clone();
+                self.model = session.model.clone();
+                self.thinking = session.thinking;
+                self.mode = session.mode;
+                self.cwd = session.cwd.clone();
+                self.busy = false;
+                self.ai_thinking = false;
+                self.permission = None;
+                self.follow = true;
+                self.scroll = 0;
+                self.max_offset = 0;
+                self.push_messages(&session.messages);
+            }
             AgentEvent::Error(message) => {
                 self.items.push(Item::Error(message));
                 self.busy = false;
@@ -740,6 +853,35 @@ impl App {
                     self.scroll_down(3);
                     false
                 }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    self.selection =
+                        self.cell_to_content(mouse.column, mouse.row)
+                            .map(|(row, col)| Selection {
+                                anchor_row: row,
+                                anchor_col: col,
+                                row,
+                                col,
+                            });
+                    false
+                }
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    if let Some((row, col)) = self.cell_to_content(mouse.column, mouse.row)
+                        && let Some(selection) = &mut self.selection
+                    {
+                        selection.row = row;
+                        selection.col = col;
+                    }
+                    false
+                }
+                MouseEventKind::Up(MouseButton::Left) => false,
+                MouseEventKind::Down(MouseButton::Right) => {
+                    if self.selection.is_some() {
+                        self.copy_selection();
+                    } else {
+                        self.paste_clipboard();
+                    }
+                    false
+                }
                 _ => false,
             },
             _ => false,
@@ -753,7 +895,17 @@ impl App {
         if self.model_picker.is_some() {
             return self.on_picker_key(key);
         }
+        if self.session_picker.is_some() {
+            return self.on_session_picker_key(key);
+        }
         match key.code {
+            KeyCode::Char('c')
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && key.modifiers.contains(KeyModifiers::SHIFT) =>
+            {
+                self.copy_last_output();
+                false
+            }
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.quit = true;
                 true
@@ -969,6 +1121,227 @@ impl App {
         false
     }
 
+    fn open_session_picker(&mut self) {
+        if self.session_picker.is_some() {
+            return;
+        }
+        self.session_picker = Some(SessionPicker::new(Vec::new()));
+        let _ = self.cmd_tx.try_send(AgentCmd::OpenSessionPicker);
+    }
+
+    fn on_session_picker_key(&mut self, key: KeyEvent) -> bool {
+        let Some(picker) = self.session_picker.as_mut() else {
+            return false;
+        };
+        match key.code {
+            KeyCode::Esc => {
+                self.session_picker = None;
+            }
+            KeyCode::Up => {
+                if picker.selected > 0 {
+                    picker.selected -= 1;
+                }
+            }
+            KeyCode::Down => {
+                let count = picker.filtered().len();
+                if count > 0 && picker.selected + 1 < count {
+                    picker.selected += 1;
+                }
+            }
+            KeyCode::Home => picker.selected = 0,
+            KeyCode::End => {
+                let count = picker.filtered().len();
+                if count > 0 {
+                    picker.selected = count - 1;
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(session) = picker.filtered().get(picker.selected) {
+                    let id = session.id.clone();
+                    self.items.push(Item::System(format!("正在加载会话 {id}…")));
+                    let _ = self.cmd_tx.try_send(AgentCmd::LoadSession(id));
+                }
+                self.session_picker = None;
+            }
+            KeyCode::Backspace => {
+                picker.query.pop();
+                picker.clamp();
+            }
+            KeyCode::Char(ch) => {
+                picker.query.push(ch);
+                picker.clamp();
+            }
+            _ => {}
+        }
+        false
+    }
+
+    fn cell_to_content(&self, column: u16, row: u16) -> Option<(usize, usize)> {
+        let area = self.transcript_rect;
+        if area.width == 0 || area.height == 0 {
+            return None;
+        }
+        if row <= area.y || row >= area.y + area.height - 1 {
+            return None;
+        }
+        if column <= area.x || column >= area.x + area.width - 1 {
+            return None;
+        }
+        let visible = (row - area.y - 1) as usize;
+        let content_row = self.offset().saturating_add(visible);
+        Some((content_row, (column - area.x - 1) as usize))
+    }
+
+    fn offset(&self) -> usize {
+        if self.follow {
+            self.max_offset
+        } else {
+            self.max_offset.saturating_sub(self.scroll)
+        }
+    }
+
+    fn selection_text(&self, selection: Selection) -> String {
+        let width = self.content_width.max(1);
+        let rows = self.render_rows(width);
+        let ((r0, c0), (r1, c1)) = selection.normalized();
+        let mut out = Vec::new();
+        for row_idx in r0..=r1 {
+            let Some(row) = rows.get(row_idx) else {
+                break;
+            };
+            let text: String = row.spans.iter().map(|s| s.content.as_ref()).collect();
+            let (start, end) = if r0 == r1 {
+                (c0, c1)
+            } else if row_idx == r0 {
+                (c0, usize::MAX)
+            } else if row_idx == r1 {
+                (0, c1)
+            } else {
+                (0, usize::MAX)
+            };
+            let total_cells = cell_width(&text);
+            let start = start.min(total_cells);
+            let end = end.min(total_cells);
+            let char_start = char_index_at_cell(&text, start);
+            let char_end = char_index_at_cell(&text, end);
+            out.push(
+                text.chars()
+                    .skip(char_start)
+                    .take(char_end.saturating_sub(char_start))
+                    .collect::<String>(),
+            );
+        }
+        out.join("\n")
+    }
+
+    fn copy_selection(&mut self) {
+        let Some(selection) = self.selection.take() else {
+            return;
+        };
+        let text = self.selection_text(selection);
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        match copy_to_clipboard(text) {
+            Ok(()) => self.items.push(Item::System(format!(
+                "已复制选中内容（{} 字符）",
+                text.chars().count()
+            ))),
+            Err(e) => self.items.push(Item::System(format!("复制失败: {e}"))),
+        }
+    }
+
+    fn paste_clipboard(&mut self) {
+        let Ok(text) = arboard::Clipboard::new().and_then(|mut c| c.get_text()) else {
+            return;
+        };
+        let text: String = text.chars().filter(|c| *c != '\r').collect();
+        if text.is_empty() {
+            return;
+        }
+        for ch in text.chars() {
+            self.insert_char(ch);
+        }
+    }
+
+    fn last_output_text(&self) -> Option<String> {
+        self.items.iter().rev().find_map(|item| match item {
+            Item::Assistant(text) if !text.trim().is_empty() => Some(text.clone()),
+            _ => None,
+        })
+    }
+
+    fn copy_last_output(&mut self) {
+        match self.last_output_text() {
+            Some(text) => match copy_to_clipboard(&text) {
+                Ok(()) => self.items.push(Item::System(format!(
+                    "已复制最后一条回复（{} 字符）",
+                    text.chars().count()
+                ))),
+                Err(e) => self.items.push(Item::System(format!("复制失败: {e}"))),
+            },
+            None => self
+                .items
+                .push(Item::System("还没有可复制的回复".to_string())),
+        }
+    }
+
+    fn highlight_selection(&self, rows: &mut Vec<Line<'static>>) {
+        let Some(selection) = self.selection else {
+            return;
+        };
+        let ((r0, c0), (r1, c1)) = selection.normalized();
+        for row_idx in r0..=r1 {
+            let Some(row) = rows.get_mut(row_idx) else {
+                break;
+            };
+            let (start, end) = if r0 == r1 {
+                (c0, c1)
+            } else if row_idx == r0 {
+                (c0, usize::MAX)
+            } else if row_idx == r1 {
+                (0, c1)
+            } else {
+                (0, usize::MAX)
+            };
+            let mut col = 0usize;
+            let mut new_spans = Vec::new();
+            for span in std::mem::take(&mut row.spans) {
+                let content: String = span.content.into_owned();
+                let span_start = col;
+                let span_end = col + cell_width(&content);
+                let sel_start = span_start.max(start);
+                let sel_end = span_end.min(end);
+                if sel_start < sel_end {
+                    let char_start = char_index_at_cell(&content, sel_start - span_start);
+                    let char_end = char_index_at_cell(&content, sel_end - span_start);
+                    let before: String = content.chars().take(char_start).collect();
+                    let selected: String = content
+                        .chars()
+                        .skip(char_start)
+                        .take(char_end.saturating_sub(char_start))
+                        .collect();
+                    let after: String = content.chars().skip(char_end).collect();
+                    if !before.is_empty() {
+                        new_spans.push(Span::styled(before, span.style));
+                    }
+                    new_spans.push(Span::styled(
+                        selected,
+                        span.style.add_modifier(Modifier::REVERSED),
+                    ));
+                    if !after.is_empty() {
+                        new_spans.push(Span::styled(after, span.style));
+                    }
+                } else {
+                    new_spans.push(Span::styled(content, span.style));
+                }
+                col = span_end;
+            }
+            row.spans = new_spans;
+        }
+    }
+
     fn scroll_up(&mut self, amount: usize) {
         if self.max_offset == 0 {
             return;
@@ -1027,7 +1400,7 @@ impl App {
             .unwrap_or((command, ""));
         match name {
             "help" => self.items.push(Item::System(
-                "命令: /plan [on|off]  /agent  /models  /model <id>  /sessions  /session <id>  /provider <名字>  /add-provider <名字> <openai|anthropic> <base_url> <模型>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /config  /clear  /help  /quit\n键位: ↑/↓ 空输入时浏览历史，非空时滚动对话 · PgUp/PgDn/滚轮始终滚动 · Ctrl+P 模型选择器 · ←/→ 移动输入光标 · y/n/a 权限确认 · Ctrl-C 退出"
+                "命令: /plan [on|off]  /agent  /models  /model <id>  /sessions(上下键选择)  /session <id>  /copy  /provider <名字>  /add-provider <名字> <openai|anthropic> <base_url> <模型>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /config  /clear  /help  /quit\n键位: ↑/↓ 空输入时浏览历史，非空时滚动对话 · PgUp/PgDn/滚轮始终滚动 · Ctrl+P 模型选择器 · 左键拖动选择 · 右键复制选中（无选区时粘贴） · Ctrl+Shift+C 复制最后回复 · ←/→ 移动输入光标 · y/n/a 权限确认 · Ctrl-C 退出"
                     .to_string(),
             )),
             "plan" => {
@@ -1096,9 +1469,7 @@ impl App {
                 )));
             }
             "sessions" => {
-                let _ = self.cmd_tx.try_send(AgentCmd::ListSessions);
-                self.items
-                    .push(Item::System("正在列出会话…".to_string()));
+                self.open_session_picker();
             }
             "session" if !arg.is_empty() => {
                 let _ = self
@@ -1108,10 +1479,9 @@ impl App {
                     .push(Item::System(format!("正在加载会话 {arg}…")));
             }
             "session" => {
-                self.items.push(Item::System(
-                    "用法: /session <id>（先 /sessions 查看列表，/session <id> 切换）".to_string(),
-                ));
+                self.open_session_picker();
             }
+            "copy" => self.copy_last_output(),
             "apikey" | "key" if !arg.is_empty() => {
                 let (provider, key) = match arg.split_once(char::is_whitespace) {
                     Some((p, k)) => (Some(p.to_string()), k.to_string()),
@@ -1258,6 +1628,8 @@ impl App {
         .areas(frame.area());
 
         let content_width = transcript_area.width.saturating_sub(2) as usize;
+        self.transcript_rect = transcript_area;
+        self.content_width = content_width.max(1);
         let mut rows = self.render_rows(content_width.max(1));
         if self.ai_thinking {
             const SPINNER: [char; 4] = ['◐', '◓', '◑', '◒'];
@@ -1279,6 +1651,7 @@ impl App {
         } else {
             max_offset.saturating_sub(self.scroll)
         };
+        self.highlight_selection(&mut rows);
         let title = if self.follow {
             " Firment ".to_string()
         } else {
@@ -1334,7 +1707,7 @@ impl App {
             .border_style(Style::default().fg(Color::DarkGray));
         let content = if self.input.is_empty() {
             Paragraph::new(Line::from(Span::styled(
-                "输入任务，Enter 发送 · /help · ↑/↓ 空输入时浏览历史 · Ctrl+P 模型选择器 · Ctrl-C 退出",
+                "输入任务，Enter 发送 · /help · ↑/↓ 空输入时浏览历史 · Ctrl+P 模型 · 左键选择右键复制 · Ctrl-C 退出",
                 Style::default().fg(Color::DarkGray),
             )))
             .block(block)
@@ -1434,6 +1807,69 @@ impl App {
                         ("  ", Style::default().fg(Color::White))
                     };
                     lines.push(Line::from(Span::styled(format!("{marker}{model}"), style)));
+                }
+                if filtered.len() > 12 {
+                    lines.push(Line::from(Span::styled(
+                        format!("… 还有 {} 个", filtered.len() - 12),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+            }
+            frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+        }
+
+        if let Some(picker) = &self.session_picker {
+            let area = centered_rect(76, 52, frame.area());
+            frame.render_widget(Clear, area);
+            let block = Block::bordered()
+                .title(Span::styled(
+                    " 会话选择 ",
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ))
+                .border_style(Style::default().fg(Color::Magenta));
+            frame.render_widget(block, area);
+            let inner = area.inner(Margin {
+                horizontal: 2,
+                vertical: 1,
+            });
+            let mut lines = Vec::new();
+            let query: String = picker.query.iter().collect();
+            lines.push(Line::from(Span::styled(
+                format!("过滤: {query}（↑/↓ 选择 · Enter 进入 · Esc 关闭）"),
+                Style::default().fg(Color::DarkGray),
+            )));
+            if picker.sessions.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "正在加载会话列表…",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else {
+                let filtered = picker.filtered();
+                let start = picker.selected.saturating_sub(6);
+                for (idx, session) in filtered.iter().enumerate().skip(start).take(12) {
+                    let (marker, style) = if idx == picker.selected {
+                        (
+                            "❯ ",
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD),
+                        )
+                    } else {
+                        ("  ", Style::default().fg(Color::White))
+                    };
+                    let id_short: String = session.id.chars().take(8).collect();
+                    let preview = truncate_chars(&session.preview, 42);
+                    lines.push(Line::from(Span::styled(
+                        format!(
+                            "{marker}{}  {:<22}  {}  ({id_short})",
+                            format_ts(session.updated_at),
+                            session.model,
+                            preview
+                        ),
+                        style,
+                    )));
                 }
                 if filtered.len() > 12 {
                     lines.push(Line::from(Span::styled(
@@ -1562,6 +1998,31 @@ fn format_ts(secs: u64) -> String {
         .unwrap_or_else(|| secs.to_string())
 }
 
+fn copy_to_clipboard(text: &str) -> anyhow::Result<()> {
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| anyhow::anyhow!("{e}"))?;
+    clipboard
+        .set_text(text.to_string())
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(())
+}
+
+/// Display width of `text` in terminal cells (CJK chars count as 2).
+fn cell_width(text: &str) -> usize {
+    text.chars().map(|c| c.width().unwrap_or(0)).sum()
+}
+
+/// Character index whose starting cell is at or after `cell` (0-based cells).
+fn char_index_at_cell(text: &str, cell: usize) -> usize {
+    let mut width = 0usize;
+    for (idx, ch) in text.chars().enumerate() {
+        if width >= cell {
+            return idx;
+        }
+        width += ch.width().unwrap_or(0);
+    }
+    text.chars().count()
+}
+
 async fn run_loop(
     terminal: &mut Tui,
     app: &mut App,
@@ -1615,6 +2076,7 @@ mod tests {
             SessionMode::Agent,
             PathBuf::from("config.toml"),
             None,
+            Vec::new(),
         )
     }
 
@@ -1672,6 +2134,153 @@ mod tests {
         app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(app.model_picker.is_none());
         assert_eq!(app.model, "gpt-xhigh");
+    }
+
+    #[test]
+    fn mouse_selection_extracts_rendered_text() {
+        let mut app = test_app();
+        app.items.push(Item::Assistant("hello world".to_string()));
+        app.items.push(Item::Assistant("second line".to_string()));
+        app.transcript_rect = Rect {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 6,
+        };
+        app.content_width = 28;
+        app.max_offset = 0;
+        app.follow = true;
+
+        let across_rows = Selection {
+            anchor_row: 0,
+            anchor_col: 0,
+            row: 2,
+            col: 2,
+        };
+        assert_eq!(app.selection_text(across_rows), "hello world\n\nse");
+
+        let within_row = Selection {
+            anchor_row: 0,
+            anchor_col: 6,
+            row: 0,
+            col: 11,
+        };
+        assert_eq!(app.selection_text(within_row), "world");
+    }
+
+    #[test]
+    fn selection_uses_cell_widths_for_cjk() {
+        let mut app = test_app();
+        app.items.push(Item::Assistant("你好世界 ok".to_string()));
+        app.transcript_rect = Rect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 5,
+        };
+        app.content_width = 38;
+        app.max_offset = 0;
+        app.follow = true;
+
+        // 单元格：你(0-2) 好(2-4) 世(4-6) 界(6-8) 空格(8) o(9) k(10)
+        let first_four = Selection {
+            anchor_row: 0,
+            anchor_col: 0,
+            row: 0,
+            col: 8,
+        };
+        assert_eq!(app.selection_text(first_four), "你好世界");
+
+        let mixed = Selection {
+            anchor_row: 0,
+            anchor_col: 4,
+            row: 0,
+            col: 9,
+        };
+        assert_eq!(app.selection_text(mixed), "世界 ");
+    }
+
+    #[test]
+    fn session_picker_navigates_and_loads_selected() {
+        let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
+        let mut app = App::new(
+            cmd_tx,
+            Arc::new(Mutex::new(HashSet::new())),
+            "test-model".to_string(),
+            PathBuf::from("."),
+            "default".to_string(),
+            ThinkingLevel::Off,
+            SessionMode::Agent,
+            PathBuf::from("config.toml"),
+            None,
+            Vec::new(),
+        );
+        app.on_agent(AgentEvent::Sessions(vec![
+            firment_core::SessionSummary {
+                id: "11111111-aaaa".to_string(),
+                updated_at: 1,
+                model: "m1".to_string(),
+                cwd: PathBuf::from("."),
+                preview: "first".to_string(),
+            },
+            firment_core::SessionSummary {
+                id: "22222222-bbbb".to_string(),
+                updated_at: 2,
+                model: "m2".to_string(),
+                cwd: PathBuf::from("."),
+                preview: "second".to_string(),
+            },
+        ]));
+        assert!(app.session_picker.is_some());
+
+        app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.session_picker.is_none());
+        match cmd_rx.try_recv().unwrap() {
+            AgentCmd::LoadSession(id) => assert_eq!(id, "22222222-bbbb"),
+            _ => panic!("expected LoadSession"),
+        }
+    }
+
+    #[test]
+    fn last_output_text_returns_most_recent_assistant_message() {
+        let mut app = test_app();
+        assert!(app.last_output_text().is_none());
+        app.items.push(Item::Assistant("first".to_string()));
+        app.items.push(Item::System("note".to_string()));
+        app.items.push(Item::Assistant("second".to_string()));
+        assert_eq!(app.last_output_text().unwrap(), "second");
+    }
+
+    #[test]
+    fn session_loaded_repopulates_transcript() {
+        let mut app = test_app();
+        let mut session = Session::new(PathBuf::from("."), "default", "m");
+        session.push(ChatMessage::User {
+            content: "你好".to_string(),
+        });
+        session.push(ChatMessage::Assistant {
+            content: "回复".to_string(),
+            tool_calls: Vec::new(),
+        });
+        session.push(ChatMessage::Tool {
+            tool_call_id: "c1".to_string(),
+            name: "read_file".to_string(),
+            content: "ok".to_string(),
+        });
+
+        app.on_agent(AgentEvent::SessionLoaded(session));
+        assert!(matches!(&app.items[0], Item::User(t) if t == "你好"));
+        assert!(matches!(&app.items[1], Item::Assistant(t) if t == "回复"));
+        assert!(matches!(
+            &app.items[2],
+            Item::Tool {
+                name,
+                running: false,
+                ok: true,
+                ..
+            } if name == "read_file"
+        ));
     }
 
     #[test]
