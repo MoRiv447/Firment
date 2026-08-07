@@ -28,6 +28,22 @@
 
 环境要求：Rust 1.85+，推荐 Windows Terminal 或任意现代终端。
 
+一行安装（无需本地 Rust 工具链）：
+
+```powershell
+# Windows
+irm https://raw.githubusercontent.com/MoRiv447/Firment/main/install.ps1 | iex
+```
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | sh
+```
+
+国内加速：先设置镜像根地址再执行安装脚本（目录结构 `{mirror}/{tag}/{asset}`，例如阿里云 OSS）。
+
+从源码构建：
+
 ```powershell
 cargo build --release
 .\target\release\firm install      # 安装到 PATH，之后新开终端直接输入 firm
@@ -159,6 +175,22 @@ cargo fmt --check
 ### 🚀 Quick Start
 
 Requirements: Rust 1.85+; Windows Terminal or any modern terminal is recommended.
+
+One-line install (no local Rust toolchain needed):
+
+```powershell
+# Windows
+irm https://raw.githubusercontent.com/MoRiv447/Firment/main/install.ps1 | iex
+```
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | sh
+```
+
+For faster downloads in mainland China, set `FIRMENT_MIRROR` to a mirror base URL before running the installer (`{mirror}/{tag}/{asset}` layout, e.g. Alibaba Cloud OSS).
+
+Build from source:
 
 ```powershell
 cargo build --release
