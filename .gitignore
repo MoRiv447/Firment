@@ -2,6 +2,7 @@
 /target
 **/*.rs.bk
 *.pdb
+/dist
 
 # 注意：Cargo.lock 要提交（二进制项目锁定依赖版本），不要忽略
 

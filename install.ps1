@@ -23,16 +23,25 @@ if ($arch -eq 'AMD64') {
 }
 $AssetName = "firm-$arch-pc-windows-msvc.zip"
 
-$apiHeaders = @{ 'User-Agent' = 'firment-installer' }
-if ($Version -eq 'latest') {
-    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers $apiHeaders
+$Tag = ''
+if ($Mirror -and $Version -ne 'latest') {
+    # 镜像模式且显式指定版本：直接使用 {mirror}/{tag}/{asset}，不访问 GitHub API
+    $Tag = $Version
 } else {
-    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/tags/$Version" -Headers $apiHeaders
+    $apiHeaders = @{ 'User-Agent' = 'firment-installer' }
+    if ($Version -eq 'latest') {
+        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers $apiHeaders
+    } else {
+        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/tags/$Version" -Headers $apiHeaders
+    }
+    $Tag = $release.tag_name
 }
-$Tag = $release.tag_name
-$asset = $release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
-if (-not $asset) {
-    throw "当前 release ($Tag) 没有 $AssetName，可能尚未发布或平台不支持"
+$asset = $null
+if ($release) {
+    $asset = $release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
+    if (-not $asset) {
+        throw "当前 release ($Tag) 没有 $AssetName，可能尚未发布或平台不支持"
+    }
 }
 
 $tmp = Join-Path $env:TEMP "firment-install-$([guid]::NewGuid().ToString('N'))"
@@ -45,10 +54,19 @@ try {
         Invoke-WebRequest -UseBasicParsing -Uri $asset.browser_download_url -OutFile $zip
     }
 
-    $sumsAsset = $release.assets | Where-Object { $_.name -eq 'SHA256SUMS' } | Select-Object -First 1
-    if ($sumsAsset) {
-        $sumsUrl = if ($Mirror) { "$Mirror/$Tag/SHA256SUMS" } else { $sumsAsset.browser_download_url }
-        $sumsText = (Invoke-WebRequest -UseBasicParsing -Uri $sumsUrl).Content
+    $sumsUrl = $null
+    if ($Mirror) {
+        $sumsUrl = "$Mirror/$Tag/SHA256SUMS"
+    } elseif ($release) {
+        $sumsAsset = $release.assets | Where-Object { $_.name -eq 'SHA256SUMS' } | Select-Object -First 1
+        if ($sumsAsset) { $sumsUrl = $sumsAsset.browser_download_url }
+    }
+    if ($sumsUrl) {
+        try {
+            $sumsText = (Invoke-WebRequest -UseBasicParsing -Uri $sumsUrl).Content
+        } catch {
+            $sumsText = ''
+        }
         $line = ($sumsText -split "`n" | Where-Object { $_ -match [regex]::Escape($AssetName) } | Select-Object -First 1)
         if ($line) {
             $expected = ($line -split '\s+')[0].ToLowerInvariant()
@@ -66,7 +84,9 @@ try {
     }
 
     Write-Host "Firment $Tag 下载完成，开始安装..."
-    & $exe.FullName install
+    $installArgs = @()
+    if ($env:FIRMENT_FILES_ONLY -eq '1') { $installArgs += '--files-only' }
+    & $exe.FullName install @installArgs
     if ($LASTEXITCODE -ne 0) {
         throw "firm install 失败 (exit $LASTEXITCODE)"
     }

@@ -28,15 +28,26 @@ case "$ARCH" in
 esac
 ASSET="firm-${ARCH_TARGET}-${OS_TARGET}.tar.gz"
 
-API_URL="https://api.github.com/repos/$REPO/releases/latest"
-[ "$VERSION" != "latest" ] && API_URL="https://api.github.com/repos/$REPO/releases/tags/$VERSION"
-RELEASE_JSON="$(curl -fsSL -H 'User-Agent: firment-installer' "$API_URL")"
-TAG="$(printf '%s' "$RELEASE_JSON" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1)"
+RELEASE_JSON=""
+if [ -n "$MIRROR" ] && [ "$VERSION" != "latest" ]; then
+    # 镜像模式且显式指定版本：直接使用 {mirror}/{tag}/{asset}，不访问 GitHub API
+    TAG="$VERSION"
+else
+    API_URL="https://api.github.com/repos/$REPO/releases/latest"
+    [ "$VERSION" != "latest" ] && API_URL="https://api.github.com/repos/$REPO/releases/tags/$VERSION"
+    RELEASE_JSON="$(curl -fsSL -H 'User-Agent: firment-installer' "$API_URL")"
+    TAG="$(printf '%s' "$RELEASE_JSON" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1)"
+fi
 
-URL="$(printf '%s' "$RELEASE_JSON" | grep -o "\"browser_download_url\": *\"[^\"]*${ASSET}\"" | sed 's/.*: *"//; s/"$//' | head -n 1)"
-if [ -z "$URL" ]; then
-    echo "当前 release ($TAG) 没有 $ASSET，请用源码构建或等待多平台包发布。" >&2
-    exit 1
+URL=""
+if [ -z "$RELEASE_JSON" ]; then
+    [ -n "$MIRROR" ] || { echo "镜像模式必须同时设置 FIRMENT_VERSION" >&2; exit 1; }
+else
+    URL="$(printf '%s' "$RELEASE_JSON" | grep -o "\"browser_download_url\": *\"[^\"]*${ASSET}\"" | sed 's/.*: *"//; s/"$//' | head -n 1)"
+    if [ -z "$URL" ]; then
+        echo "当前 release ($TAG) 没有 $ASSET，请用源码构建或等待多平台包发布。" >&2
+        exit 1
+    fi
 fi
 
 TMP="$(mktemp -d)"
@@ -48,9 +59,14 @@ else
     curl -fsSL "$URL" -o "$TARBALL"
 fi
 
-SUM_URL="$(printf '%s' "$RELEASE_JSON" | grep -o "\"browser_download_url\": *\"[^\"]*SHA256SUMS\"" | sed 's/.*: *"//; s/"$//' | head -n 1)"
-if [ -n "$SUM_URL" ]; then
-    SUMS="$(curl -fsSL "$SUM_URL")"
+SUMS=""
+if [ -z "$RELEASE_JSON" ]; then
+    SUMS="$(curl -fsSL "$MIRROR/$TAG/SHA256SUMS" 2>/dev/null || true)"
+else
+    SUM_URL="$(printf '%s' "$RELEASE_JSON" | grep -o "\"browser_download_url\": *\"[^\"]*SHA256SUMS\"" | sed 's/.*: *"//; s/"$//' | head -n 1)"
+    [ -n "$SUM_URL" ] && SUMS="$(curl -fsSL "$SUM_URL")"
+fi
+if [ -n "$SUMS" ]; then
     EXPECTED="$(printf '%s\n' "$SUMS" | awk -v a="$ASSET" '$2 == a { print $1 }' | head -n 1)"
     if [ -n "$EXPECTED" ]; then
         if command -v sha256sum >/dev/null 2>&1; then
