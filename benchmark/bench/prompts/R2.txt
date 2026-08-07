@@ -1,0 +1,1 @@
+把 JSON 持久化逻辑（save/load/to_dict/from_dict）抽到一个新模块 storage.py，todo.py 保持原有公开接口不变（通过委托或 re-export），测试全绿。

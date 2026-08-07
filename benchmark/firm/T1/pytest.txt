@@ -1,0 +1,54 @@
+FF..F                                                                    [100%][safe-delete][SAFE_DELETE_FAIL_CLOSED] {"target": "\\\\?\\C:\\Users\\18978\\AppData\\Local\\Temp\\pytest-of-18978\\garbage-2ee945a5-728b-41ec-bbfb-2c749bb35158", "reason": "windows-sandbox-recycle-bin-unavailable"}
+
+================================== FAILURES ===================================
+_____________________________ test_parse_tomorrow _____________________________
+
+    def test_parse_tomorrow():
+>       assert parse_due("tomorrow") == date.today() + timedelta(days=1)
+E       AssertionError: assert datetime.date(2026, 8, 7) == (datetime.date(2026, 8, 7) + datetime.timedelta(days=1))
+E        +  where datetime.date(2026, 8, 7) = parse_due('tomorrow')
+E        +  and   datetime.date(2026, 8, 7) = <built-in method today of type object at 0x00007FF8EBB325B0>()
+E        +    where <built-in method today of type object at 0x00007FF8EBB325B0> = date.today
+E        +  and   datetime.timedelta(days=1) = timedelta(days=1)
+
+test_todo.py:11: AssertionError
+_________________________ test_complete_is_one_based __________________________
+
+    def test_complete_is_one_based():
+        tm = TaskManager()
+        tm.add("first")
+        tm.add("second")
+        tm.complete(1)
+>       assert tm.tasks[0].done is True
+E       assert False is True
+E        +  where False = <todo.Task object at 0x000001A2DB2C0C20>.done
+
+test_todo.py:19: AssertionError
+______________________ test_save_load_roundtrip_unicode _______________________
+
+tmp_path = WindowsPath('C:/Users/18978/AppData/Local/Temp/pytest-of-18978/pytest-371/test_save_load_roundtrip_unico0')
+
+    def test_save_load_roundtrip_unicode(tmp_path):
+        tm = TaskManager()
+        tm.add("写周报", due="2026-08-07")
+        tm.add("已搞定的事")
+>       tm.complete(2)
+
+test_todo.py:47: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <todo.TaskManager object at 0x000001A2DB1ABE10>, n = 2
+
+    def complete(self, n):
+        # BUG-2: treats n as 0-based; users pass 1-based indices.
+        # complete(1) should complete the FIRST task but completes the second.
+        if n < 0 or n >= len(self.tasks):
+>           raise IndexError(f"task {n} out of range")
+E           IndexError: task 2 out of range
+
+todo.py:62: IndexError
+=========================== short test summary info ===========================
+FAILED test_todo.py::test_parse_tomorrow - AssertionError: assert datetime.da...
+FAILED test_todo.py::test_complete_is_one_based - assert False is True
+FAILED test_todo.py::test_save_load_roundtrip_unicode - IndexError: task 2 ou...
+3 failed, 2 passed in 0.26s

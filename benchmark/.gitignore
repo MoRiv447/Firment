@@ -1,0 +1,6 @@
+# 每轮运行的本地环境与缓存不入库
+**/.venv/
+**/__pycache__/
+**/.pytest_cache/
+**/.git/
+*.pyc

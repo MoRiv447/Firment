@@ -1,0 +1,78 @@
+diff --git a/todo.py b/todo.py
+index 97d4627..9362dd8 100644
+--- a/todo.py
++++ b/todo.py
+@@ -10,10 +10,9 @@ Intended behavior (source of truth for graders):
+ - save/load: JSON round-trip preserving all fields; files must be UTF-8.
+ """
+ 
+-import json
+ from datetime import date, datetime, timedelta
+ 
+-STORE_PATH = "tasks.json"
++from storage import STORE_PATH, load_tasks, save_tasks, task_from_dict, task_to_dict
+ 
+ 
+ class Task:
+@@ -23,15 +22,12 @@ class Task:
+         self.done = done
+ 
+     def to_dict(self):
+-        # BUG-3: writes the completion flag under "is_done", but from_dict
+-        # reads "done" — completed tasks silently come back as pending after
+-        # a save/load round-trip.
+-        return {"title": self.title, "due": self.due.isoformat() if self.due else None, "is_done": self.done}
++        return task_to_dict(self)
+ 
+     @classmethod
+     def from_dict(cls, d):
+-        due = date.fromisoformat(d["due"]) if d.get("due") else None
+-        return cls(d["title"], due=due, done=d.get("done", False))
++        title, due, done = task_from_dict(d)
++        return cls(title, due=due, done=done)
+ 
+ 
+ def parse_due(value):
+@@ -41,8 +37,7 @@ def parse_due(value):
+     if value == "today":
+         return date.today()
+     if value == "tomorrow":
+-        # BUG-1: off-by-one, returns today instead of tomorrow
+-        return date.today()
++        return date.today() + timedelta(days=1)
+     return datetime.strptime(value, "%Y-%m-%d").date()
+ 
+ 
+@@ -56,11 +51,10 @@ class TaskManager:
+         return t
+ 
+     def complete(self, n):
+-        # BUG-2: treats n as 0-based; users pass 1-based indices.
+-        # complete(1) should complete the FIRST task but completes the second.
+-        if n < 0 or n >= len(self.tasks):
++        # Tasks are 1-indexed from the user's perspective.
++        if n < 1 or n > len(self.tasks):
+             raise IndexError(f"task {n} out of range")
+-        self.tasks[n].done = True
++        self.tasks[n - 1].done = True
+ 
+     def list_tasks(self, include_done=False):
+         if include_done:
+@@ -72,15 +66,8 @@ class TaskManager:
+         return [t for t in self.tasks if t.due is not None and t.due < today and not t.done]
+ 
+     def save(self, path=STORE_PATH):
+-        data = [t.to_dict() for t in self.tasks]
+-        with open(path, "w", encoding="utf-8") as f:
+-            json.dump(data, f, ensure_ascii=False)
++        save_tasks(self.tasks, path)
+ 
+     def load(self, path=STORE_PATH):
+-        try:
+-            with open(path, "r", encoding="utf-8") as f:
+-                data = json.load(f)
+-        except FileNotFoundError:
+-            data = []
+-        self.tasks = [Task.from_dict(d) for d in data]
++        self.tasks = [Task.from_dict(d) for d in load_tasks(path)]
+         return self.tasks

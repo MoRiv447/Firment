@@ -1,0 +1,1 @@
+把 TaskManager.complete 方法重命名为 mark_done，更新所有调用点和测试，保证测试全绿。

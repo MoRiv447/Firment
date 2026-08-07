@@ -1,0 +1,40 @@
+F...F                                                                    [100%]
+================================== FAILURES ===================================
+_____________________________ test_parse_tomorrow _____________________________
+
+    def test_parse_tomorrow():
+>       assert parse_due("tomorrow") == date.today() + timedelta(days=1)
+E       AssertionError: assert datetime.date(2026, 8, 6) == (datetime.date(2026, 8, 6) + datetime.timedelta(days=1))
+E        +  where datetime.date(2026, 8, 6) = parse_due('tomorrow')
+E        +  and   datetime.date(2026, 8, 6) = <built-in method today of type object at 0x00007FFA974C35B0>()
+E        +    where <built-in method today of type object at 0x00007FFA974C35B0> = date.today
+E        +  and   datetime.timedelta(days=1) = timedelta(days=1)
+
+test_todo.py:11: AssertionError
+______________________ test_save_load_roundtrip_unicode _______________________
+
+tmp_path = WindowsPath('C:/Users/18978/AppData/Local/Temp/pytest-of-18978/pytest-120/test_save_load_roundtrip_unico0')
+
+    def test_save_load_roundtrip_unicode(tmp_path):
+        tm = TaskManager()
+        tm.add("写周报", due="2026-08-07")
+        tm.add("已搞定的事")
+        tm.complete(2)
+        p = tmp_path / "tasks.json"
+        tm.save(str(p))
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        assert raw[0]["title"] == "写周报"
+        tm2 = TaskManager()
+        tm2.load(str(p))
+        assert tm2.tasks[0].title == "写周报"
+        assert tm2.tasks[0].due == date(2026, 8, 7)
+>       assert tm2.tasks[1].done is True  # completion state must survive round-trip
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       assert False is True
+E        +  where False = <todo.Task object at 0x000002153C4D2750>.done
+
+test_todo.py:56: AssertionError
+=========================== short test summary info ===========================
+FAILED test_todo.py::test_parse_tomorrow - AssertionError: assert datetime.da...
+FAILED test_todo.py::test_save_load_roundtrip_unicode - assert False is True
+2 failed, 3 passed in 0.10s

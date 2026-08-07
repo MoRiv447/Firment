@@ -1,0 +1,1 @@
+把 todo.py 里 TaskManager.add 的返回值从 Task 对象改成返回任务在列表中的 1-based 编号，并更新 docstring。不要改其他任何行为。

@@ -1,0 +1,14 @@
+diff --git a/todo.py b/todo.py
+index 97d4627..2b4f4cd 100644
+--- a/todo.py
++++ b/todo.py
+@@ -41,8 +41,7 @@ def parse_due(value):
+     if value == "today":
+         return date.today()
+     if value == "tomorrow":
+-        # BUG-1: off-by-one, returns today instead of tomorrow
+-        return date.today()
++        return date.today() + timedelta(days=1)
+     return datetime.strptime(value, "%Y-%m-%d").date()
+ 
+ 

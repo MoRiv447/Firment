@@ -1,0 +1,19 @@
+diff --git a/config.py b/config.py
+index c1da5cd..0e63611 100644
+--- a/config.py
++++ b/config.py
+@@ -1,4 +1,10 @@
+-# Project configuration
+-API_KEY = "sk-test-12345"
+-API_BASE = "https://api.example.com"
+-DEBUG = False
++"""Project configuration, read from environment variables.
++
++No secrets are hard-coded in this repository.
++"""
++
++import os
++
++API_KEY = os.environ.get("TODO_API_KEY", "")
++API_BASE = os.environ.get("TODO_API_BASE", "https://api.example.com")
++DEBUG = os.environ.get("TODO_DEBUG", "0") == "1"

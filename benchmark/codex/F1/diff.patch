@@ -1,0 +1,214 @@
+diff --git a/test_todo.py b/test_todo.py
+index 2414dcd..cbb9a1d 100644
+--- a/test_todo.py
++++ b/test_todo.py
+@@ -1,4 +1,4 @@
+-"""Reference test suite. Currently 3 failures, matching the 3 seeded bugs.
++"""Reference test suite.
+ Graders run: python -m pytest test_todo.py -q
+ """
+ import json
+@@ -54,3 +54,93 @@ def test_save_load_roundtrip_unicode(tmp_path):
+     assert tm2.tasks[0].title == "写周报"
+     assert tm2.tasks[0].due == date(2026, 8, 7)
+     assert tm2.tasks[1].done is True  # completion state must survive round-trip
++
++
++def test_add_default_priority():
++    tm = TaskManager()
++    task = tm.add("default")
++    assert task.priority == "medium"
++
++
++def test_add_valid_priorities():
++    tm = TaskManager()
++    assert tm.add("h", priority="high").priority == "high"
++    assert tm.add("m", priority="medium").priority == "medium"
++    assert tm.add("l", priority="low").priority == "low"
++
++
++def test_add_invalid_priority_raises_value_error():
++    tm = TaskManager()
++    try:
++        tm.add("bad", priority="urgent")
++    except ValueError:
++        pass
++    else:
++        raise AssertionError("expected ValueError")
++    assert tm.tasks == []  # nothing should have been added
++
++
++def test_list_tasks_orders_by_priority():
++    tm = TaskManager()
++    tm.add("m1", priority="medium")
++    tm.add("h1", priority="high")
++    tm.add("l1", priority="low")
++    tm.add("h2", priority="high")
++    assert [t.title for t in tm.list_tasks()] == ["h1", "h2", "m1", "l1"]
++
++
++def test_list_tasks_include_done_keeps_priority_order():
++    tm = TaskManager()
++    tm.add("m1", priority="medium")
++    tm.add("h1", priority="high")
++    tm.add("l1", priority="low")
++    tm.complete(2)  # 1-based: completes h1
++    assert [t.title for t in tm.list_tasks(include_done=True)] == ["h1", "m1", "l1"]
++
++
++def test_next_returns_highest_priority_pending():
++    tm = TaskManager()
++    tm.add("m", priority="medium")
++    tm.add("h", priority="high")
++    tm.add("l", priority="low")
++    assert tm.next().title == "h"
++    tm.complete(2)  # 1-based: completes h
++    assert tm.next().title == "m"
++    tm.complete(1)
++    tm.complete(3)
++    assert tm.next() is None
++
++
++def test_next_empty_manager():
++    assert TaskManager().next() is None
++
++
++def test_save_load_roundtrip_priority(tmp_path):
++    tm = TaskManager()
++    tm.add("high task", priority="high")
++    tm.add("low task", priority="low")
++    p = tmp_path / "priority_tasks.json"
++    tm.save(str(p))
++    raw = json.loads(p.read_text(encoding="utf-8"))
++    assert raw[0]["priority"] == "high"
++    assert raw[1]["priority"] == "low"
++    tm2 = TaskManager()
++    tm2.load(str(p))
++    assert [t.priority for t in tm2.tasks] == ["high", "low"]
++
++
++def test_load_legacy_data_defaults_priority(tmp_path):
++    p = tmp_path / "legacy.json"
++    p.write_text(
++        json.dumps(
++            [
++                {"title": "old", "due": None, "is_done": True},
++            ],
++            ensure_ascii=False,
++        ),
++        encoding="utf-8",
++    )
++    tm = TaskManager()
++    tm.load(str(p))
++    assert tm.tasks[0].priority == "medium"
++    assert tm.tasks[0].done is True
+diff --git a/todo.py b/todo.py
+index 97d4627..dc7218f 100644
+--- a/todo.py
++++ b/todo.py
+@@ -2,10 +2,14 @@
+ 
+ Intended behavior (source of truth for graders):
+ - Tasks are 1-indexed from the USER's perspective (task #1 is the first added).
+-- add(title, due=None): due accepts a date, an ISO string "YYYY-MM-DD",
+-  or the literal "today"/"tomorrow".
++- add(title, due=None, priority="medium"): priority is one of
++  "high" | "medium" | "low" (anything else raises ValueError); due accepts
++  a date, an ISO string "YYYY-MM-DD", or the literal "today"/"tomorrow".
+ - complete(n): marks the n-th task (1-based) done; raises IndexError if out of range.
+-- list_tasks(include_done=False): returns pending tasks by default.
++- list_tasks(include_done=False): returns pending tasks by default; the
++  returned group is ordered by priority (high > medium > low), with
++  insertion order preserved within the same priority.
++- next(): returns the first pending task under that ordering, or None.
+ - overdue(): tasks whose due date is BEFORE today and not done.
+ - save/load: JSON round-trip preserving all fields; files must be UTF-8.
+ """
+@@ -14,24 +18,36 @@ import json
+ from datetime import date, datetime, timedelta
+ 
+ STORE_PATH = "tasks.json"
++VALID_PRIORITIES = ("high", "medium", "low")
++PRIORITY_RANK = {"high": 0, "medium": 1, "low": 2}
+ 
+ 
+ class Task:
+-    def __init__(self, title, due=None, done=False):
++    def __init__(self, title, due=None, done=False, priority="medium"):
++        if priority not in VALID_PRIORITIES:
++            raise ValueError(f"invalid priority: {priority!r}")
+         self.title = title
+         self.due = due
+         self.done = done
++        self.priority = priority
+ 
+     def to_dict(self):
+-        # BUG-3: writes the completion flag under "is_done", but from_dict
+-        # reads "done" — completed tasks silently come back as pending after
+-        # a save/load round-trip.
+-        return {"title": self.title, "due": self.due.isoformat() if self.due else None, "is_done": self.done}
++        return {
++            "title": self.title,
++            "due": self.due.isoformat() if self.due else None,
++            "done": self.done,
++            "priority": self.priority,
++        }
+ 
+     @classmethod
+     def from_dict(cls, d):
+         due = date.fromisoformat(d["due"]) if d.get("due") else None
+-        return cls(d["title"], due=due, done=d.get("done", False))
++        return cls(
++            d["title"],
++            due=due,
++            done=d.get("done", d.get("is_done", False)),
++            priority=d.get("priority", "medium"),
++        )
+ 
+ 
+ def parse_due(value):
+@@ -41,8 +57,7 @@ def parse_due(value):
+     if value == "today":
+         return date.today()
+     if value == "tomorrow":
+-        # BUG-1: off-by-one, returns today instead of tomorrow
+-        return date.today()
++        return date.today() + timedelta(days=1)
+     return datetime.strptime(value, "%Y-%m-%d").date()
+ 
+ 
+@@ -50,22 +65,26 @@ class TaskManager:
+     def __init__(self):
+         self.tasks = []
+ 
+-    def add(self, title, due=None):
+-        t = Task(title, due=parse_due(due))
++    def add(self, title, due=None, priority="medium"):
++        t = Task(title, due=parse_due(due), priority=priority)
+         self.tasks.append(t)
+         return t
+ 
+     def complete(self, n):
+-        # BUG-2: treats n as 0-based; users pass 1-based indices.
+-        # complete(1) should complete the FIRST task but completes the second.
+-        if n < 0 or n >= len(self.tasks):
++        if n < 1 or n > len(self.tasks):
+             raise IndexError(f"task {n} out of range")
+-        self.tasks[n].done = True
++        self.tasks[n - 1].done = True
+ 
+     def list_tasks(self, include_done=False):
+         if include_done:
+-            return list(self.tasks)
+-        return [t for t in self.tasks if not t.done]
++            tasks = list(self.tasks)
++        else:
++            tasks = [t for t in self.tasks if not t.done]
++        return sorted(tasks, key=lambda t: PRIORITY_RANK[t.priority])
++
++    def next(self):
++        pending = self.list_tasks()
++        return pending[0] if pending else None
+ 
+     def overdue(self, today=None):
+         today = today or date.today()

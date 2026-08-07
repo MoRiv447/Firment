@@ -1,0 +1,1 @@
+依次完成：1) 修复全部失败测试；2) 实现 FEATURE_BRIEF.md；3) 把 complete 重命名为 mark_done；4) 生成 CHANGELOG.md 记录以上变更。

@@ -1,0 +1,1 @@
+用 TDD 方式为 TaskManager 增加 rename(n, new_title) 方法（n 为 1-based）：先写失败测试，再实现，再跑绿。

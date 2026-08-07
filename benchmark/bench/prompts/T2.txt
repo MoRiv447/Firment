@@ -1,0 +1,1 @@
+在这个项目的 .venv 里运行 .venv/Scripts/python -m pytest 报 "No module named pytest"。诊断并解决，让 .venv 里的测试能跑起来。不要污染全局 Python 环境。

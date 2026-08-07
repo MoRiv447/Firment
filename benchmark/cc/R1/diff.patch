@@ -1,0 +1,97 @@
+diff --git a/test_todo.py b/test_todo.py
+index 2414dcd..d39f472 100644
+--- a/test_todo.py
++++ b/test_todo.py
+@@ -1,5 +1,4 @@
+-"""Reference test suite. Currently 3 failures, matching the 3 seeded bugs.
+-Graders run: python -m pytest test_todo.py -q
++"""Reference test suite. Graders run: python -m pytest test_todo.py -q
+ """
+ import json
+ from datetime import date, timedelta
+@@ -11,20 +10,20 @@ def test_parse_tomorrow():
+     assert parse_due("tomorrow") == date.today() + timedelta(days=1)
+ 
+ 
+-def test_complete_is_one_based():
++def test_mark_done_is_one_based():
+     tm = TaskManager()
+     tm.add("first")
+     tm.add("second")
+-    tm.complete(1)
++    tm.mark_done(1)
+     assert tm.tasks[0].done is True
+     assert tm.tasks[1].done is False
+ 
+ 
+-def test_complete_out_of_range():
++def test_mark_done_out_of_range():
+     tm = TaskManager()
+     tm.add("only")
+     try:
+-        tm.complete(2)
++        tm.mark_done(2)
+     except IndexError:
+         pass
+     else:
+@@ -44,7 +43,7 @@ def test_save_load_roundtrip_unicode(tmp_path):
+     tm = TaskManager()
+     tm.add("写周报", due="2026-08-07")
+     tm.add("已搞定的事")
+-    tm.complete(2)
++    tm.mark_done(2)
+     p = tmp_path / "tasks.json"
+     tm.save(str(p))
+     raw = json.loads(p.read_text(encoding="utf-8"))
+diff --git a/todo.py b/todo.py
+index 97d4627..e18b145 100644
+--- a/todo.py
++++ b/todo.py
+@@ -4,7 +4,7 @@ Intended behavior (source of truth for graders):
+ - Tasks are 1-indexed from the USER's perspective (task #1 is the first added).
+ - add(title, due=None): due accepts a date, an ISO string "YYYY-MM-DD",
+   or the literal "today"/"tomorrow".
+-- complete(n): marks the n-th task (1-based) done; raises IndexError if out of range.
++- mark_done(n): marks the n-th task (1-based) done; raises IndexError if out of range.
+ - list_tasks(include_done=False): returns pending tasks by default.
+ - overdue(): tasks whose due date is BEFORE today and not done.
+ - save/load: JSON round-trip preserving all fields; files must be UTF-8.
+@@ -23,10 +23,7 @@ class Task:
+         self.done = done
+ 
+     def to_dict(self):
+-        # BUG-3: writes the completion flag under "is_done", but from_dict
+-        # reads "done" — completed tasks silently come back as pending after
+-        # a save/load round-trip.
+-        return {"title": self.title, "due": self.due.isoformat() if self.due else None, "is_done": self.done}
++        return {"title": self.title, "due": self.due.isoformat() if self.due else None, "done": self.done}
+ 
+     @classmethod
+     def from_dict(cls, d):
+@@ -41,8 +38,7 @@ def parse_due(value):
+     if value == "today":
+         return date.today()
+     if value == "tomorrow":
+-        # BUG-1: off-by-one, returns today instead of tomorrow
+-        return date.today()
++        return date.today() + timedelta(days=1)
+     return datetime.strptime(value, "%Y-%m-%d").date()
+ 
+ 
+@@ -55,12 +51,11 @@ class TaskManager:
+         self.tasks.append(t)
+         return t
+ 
+-    def complete(self, n):
+-        # BUG-2: treats n as 0-based; users pass 1-based indices.
+-        # complete(1) should complete the FIRST task but completes the second.
+-        if n < 0 or n >= len(self.tasks):
++    def mark_done(self, n):
++        # 1-based index: mark_done(1) completes the first task.
++        if n < 1 or n > len(self.tasks):
+             raise IndexError(f"task {n} out of range")
+-        self.tasks[n].done = True
++        self.tasks[n - 1].done = True
+ 
+     def list_tasks(self, include_done=False):
+         if include_done:

@@ -1,0 +1,37 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Runtime data
+tasks.json
+
+# Environment / secrets (keep the example template)
+.env
+.env.*
+!.env.example
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Session / scratch artifacts
+session.log
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

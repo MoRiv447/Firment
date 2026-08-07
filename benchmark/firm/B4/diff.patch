@@ -1,0 +1,20 @@
+diff --git a/todo.py b/todo.py
+index 97d4627..2ae4b59 100644
+--- a/todo.py
++++ b/todo.py
+@@ -56,11 +56,11 @@ class TaskManager:
+         return t
+ 
+     def complete(self, n):
+-        # BUG-2: treats n as 0-based; users pass 1-based indices.
+-        # complete(1) should complete the FIRST task but completes the second.
+-        if n < 0 or n >= len(self.tasks):
++        # n is 1-based from the user's perspective: task #1 is tasks[0].
++        idx = n - 1
++        if idx < 0 or idx >= len(self.tasks):
+             raise IndexError(f"task {n} out of range")
+-        self.tasks[n].done = True
++        self.tasks[idx].done = True
+ 
+     def list_tasks(self, include_done=False):
+         if include_done:

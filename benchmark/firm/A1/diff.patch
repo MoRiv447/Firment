@@ -1,0 +1,25 @@
+diff --git a/todo.py b/todo.py
+index 97d4627..82d8c8e 100644
+--- a/todo.py
++++ b/todo.py
+@@ -3,7 +3,7 @@
+ Intended behavior (source of truth for graders):
+ - Tasks are 1-indexed from the USER's perspective (task #1 is the first added).
+ - add(title, due=None): due accepts a date, an ISO string "YYYY-MM-DD",
+-  or the literal "today"/"tomorrow".
++  or the literal "today"/"tomorrow"; returns the task's 1-based number.
+ - complete(n): marks the n-th task (1-based) done; raises IndexError if out of range.
+ - list_tasks(include_done=False): returns pending tasks by default.
+ - overdue(): tasks whose due date is BEFORE today and not done.
+@@ -51,9 +51,10 @@ class TaskManager:
+         self.tasks = []
+ 
+     def add(self, title, due=None):
++        """Add a task and return its 1-based number in the list."""
+         t = Task(title, due=parse_due(due))
+         self.tasks.append(t)
+-        return t
++        return len(self.tasks)
+ 
+     def complete(self, n):
+         # BUG-2: treats n as 0-based; users pass 1-based indices.

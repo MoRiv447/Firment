@@ -1,0 +1,47 @@
+diff --git a/test_todo.py b/test_todo.py
+index 2414dcd..dd222df 100644
+--- a/test_todo.py
++++ b/test_todo.py
+@@ -40,6 +40,26 @@ def test_overdue_excludes_today():
+     assert overdue[0].title == "due yesterday"
+ 
+ 
++def test_rename_is_one_based():
++    tm = TaskManager()
++    tm.add("first")
++    tm.add("second")
++    tm.rename(1, "renamed")
++    assert tm.tasks[0].title == "renamed"
++    assert tm.tasks[1].title == "second"
++
++
++def test_rename_out_of_range():
++    tm = TaskManager()
++    tm.add("only")
++    try:
++        tm.rename(2, "x")
++    except IndexError:
++        pass
++    else:
++        raise AssertionError("expected IndexError")
++
++
+ def test_save_load_roundtrip_unicode(tmp_path):
+     tm = TaskManager()
+     tm.add("写周报", due="2026-08-07")
+diff --git a/todo.py b/todo.py
+index 97d4627..0fe5bb0 100644
+--- a/todo.py
++++ b/todo.py
+@@ -62,6 +62,11 @@ class TaskManager:
+             raise IndexError(f"task {n} out of range")
+         self.tasks[n].done = True
+ 
++    def rename(self, n, new_title):
++        if n < 1 or n > len(self.tasks):
++            raise IndexError(f"task {n} out of range")
++        self.tasks[n - 1].title = new_title
++
+     def list_tasks(self, include_done=False):
+         if include_done:
+             return list(self.tasks)

@@ -1,0 +1,6 @@
+ M todo.py
+?? __pycache__/
+?? diff.patch
+?? session.log
+?? status.txt
+?? time.txt

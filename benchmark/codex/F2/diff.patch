@@ -1,0 +1,57 @@
+diff --git a/test_todo.py b/test_todo.py
+index 2414dcd..bce9f8e 100644
+--- a/test_todo.py
++++ b/test_todo.py
+@@ -31,6 +31,26 @@ def test_complete_out_of_range():
+         raise AssertionError("expected IndexError")
+ 
+ 
++def test_rename_is_one_based():
++    tm = TaskManager()
++    tm.add("first")
++    tm.add("second")
++    tm.rename(1, "renamed first")
++    assert tm.tasks[0].title == "renamed first"
++    assert tm.tasks[1].title == "second"
++
++
++def test_rename_out_of_range():
++    tm = TaskManager()
++    tm.add("only")
++    try:
++        tm.rename(2, "nope")
++    except IndexError:
++        pass
++    else:
++        raise AssertionError("expected IndexError")
++
++
+ def test_overdue_excludes_today():
+     tm = TaskManager()
+     tm.add("due today", due=date.today())
+diff --git a/todo.py b/todo.py
+index 97d4627..82b96a8 100644
+--- a/todo.py
++++ b/todo.py
+@@ -5,6 +5,7 @@ Intended behavior (source of truth for graders):
+ - add(title, due=None): due accepts a date, an ISO string "YYYY-MM-DD",
+   or the literal "today"/"tomorrow".
+ - complete(n): marks the n-th task (1-based) done; raises IndexError if out of range.
++- rename(n, new_title): renames the n-th task (1-based); raises IndexError if out of range.
+ - list_tasks(include_done=False): returns pending tasks by default.
+ - overdue(): tasks whose due date is BEFORE today and not done.
+ - save/load: JSON round-trip preserving all fields; files must be UTF-8.
+@@ -62,6 +63,13 @@ class TaskManager:
+             raise IndexError(f"task {n} out of range")
+         self.tasks[n].done = True
+ 
++    def rename(self, n, new_title):
++        """Rename the n-th task (1-based); raises IndexError if out of range."""
++        if n < 1 or n > len(self.tasks):
++            raise IndexError(f"task {n} out of range")
++        self.tasks[n - 1].title = new_title
++        return self.tasks[n - 1]
++
+     def list_tasks(self, include_done=False):
+         if include_done:
+             return list(self.tasks)

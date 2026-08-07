@@ -1,0 +1,41 @@
+diff --git a/todo.py b/todo.py
+index 97d4627..9bec381 100644
+--- a/todo.py
++++ b/todo.py
+@@ -23,10 +23,7 @@ class Task:
+         self.done = done
+ 
+     def to_dict(self):
+-        # BUG-3: writes the completion flag under "is_done", but from_dict
+-        # reads "done" — completed tasks silently come back as pending after
+-        # a save/load round-trip.
+-        return {"title": self.title, "due": self.due.isoformat() if self.due else None, "is_done": self.done}
++        return {"title": self.title, "due": self.due.isoformat() if self.due else None, "done": self.done}
+ 
+     @classmethod
+     def from_dict(cls, d):
+@@ -41,8 +38,7 @@ def parse_due(value):
+     if value == "today":
+         return date.today()
+     if value == "tomorrow":
+-        # BUG-1: off-by-one, returns today instead of tomorrow
+-        return date.today()
++        return date.today() + timedelta(days=1)
+     return datetime.strptime(value, "%Y-%m-%d").date()
+ 
+ 
+@@ -56,11 +52,10 @@ class TaskManager:
+         return t
+ 
+     def complete(self, n):
+-        # BUG-2: treats n as 0-based; users pass 1-based indices.
+-        # complete(1) should complete the FIRST task but completes the second.
+-        if n < 0 or n >= len(self.tasks):
++        # Tasks are 1-indexed from the user's perspective: task #1 is the first added.
++        if n < 1 or n > len(self.tasks):
+             raise IndexError(f"task {n} out of range")
+-        self.tasks[n].done = True
++        self.tasks[n - 1].done = True
+ 
+     def list_tasks(self, include_done=False):
+         if include_done:

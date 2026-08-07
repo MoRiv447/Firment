@@ -1,0 +1,187 @@
+diff --git a/test_todo.py b/test_todo.py
+index 2414dcd..81e6920 100644
+--- a/test_todo.py
++++ b/test_todo.py
+@@ -54,3 +54,96 @@ def test_save_load_roundtrip_unicode(tmp_path):
+     assert tm2.tasks[0].title == "写周报"
+     assert tm2.tasks[0].due == date(2026, 8, 7)
+     assert tm2.tasks[1].done is True  # completion state must survive round-trip
++
++
++# ---- priority feature ----
++
++
++def test_add_default_priority_is_medium():
++    tm = TaskManager()
++    assert tm.add("default").priority == "medium"
++
++
++def test_add_invalid_priority_raises_value_error():
++    tm = TaskManager()
++    try:
++        tm.add("bad", priority="urgent")
++    except ValueError:
++        pass
++    else:
++        raise AssertionError("expected ValueError")
++
++
++def test_list_tasks_sorted_by_priority():
++    tm = TaskManager()
++    tm.add("low", priority="low")
++    tm.add("high", priority="high")
++    tm.add("medium", priority="medium")
++    assert [t.title for t in tm.list_tasks()] == ["high", "medium", "low"]
++
++
++def test_list_tasks_same_priority_keeps_insertion_order():
++    tm = TaskManager()
++    tm.add("a", priority="high")
++    tm.add("b", priority="high")
++    tm.add("c", priority="low")
++    tm.add("d", priority="low")
++    assert [t.title for t in tm.list_tasks()] == ["a", "b", "c", "d"]
++
++
++def test_list_tasks_excludes_done_by_default():
++    tm = TaskManager()
++    tm.add("done high", priority="high")
++    tm.add("pending low", priority="low")
++    tm.tasks[0].done = True
++    assert [t.title for t in tm.list_tasks()] == ["pending low"]
++
++
++def test_list_tasks_include_done_sorted_by_priority():
++    # Done status does not reorder the list; priority does.
++    tm = TaskManager()
++    tm.add("low", priority="low")
++    tm.add("high done", priority="high")
++    tm.add("medium", priority="medium")
++    tm.tasks[1].done = True
++    assert [t.title for t in tm.list_tasks(include_done=True)] == ["high done", "medium", "low"]
++
++
++def test_next_returns_first_pending_by_priority():
++    tm = TaskManager()
++    tm.add("low", priority="low")
++    tm.add("high pending", priority="high")
++    tm.add("high done", priority="high")
++    tm.tasks[2].done = True
++    assert tm.next() is tm.tasks[1]
++
++
++def test_next_none_when_no_pending():
++    tm = TaskManager()
++    tm.add("only")
++    tm.tasks[0].done = True
++    assert tm.next() is None
++    assert TaskManager().next() is None
++
++
++def test_priority_save_load_roundtrip(tmp_path):
++    tm = TaskManager()
++    tm.add("a", priority="high")
++    tm.add("b", priority="low")
++    p = tmp_path / "tasks.json"
++    tm.save(str(p))
++    raw = json.loads(p.read_text(encoding="utf-8"))
++    assert raw[0]["priority"] == "high"
++    assert raw[1]["priority"] == "low"
++    tm2 = TaskManager()
++    tm2.load(str(p))
++    assert tm2.tasks[0].priority == "high"
++    assert tm2.tasks[1].priority == "low"
++
++
++def test_load_missing_priority_defaults_medium(tmp_path):
++    p = tmp_path / "tasks.json"
++    p.write_text(json.dumps([{"title": "old", "due": None, "is_done": False}]), encoding="utf-8")
++    tm = TaskManager()
++    tm.load(str(p))
++    assert tm.tasks[0].priority == "medium"
+diff --git a/todo.py b/todo.py
+index 97d4627..7bc9bb0 100644
+--- a/todo.py
++++ b/todo.py
+@@ -2,12 +2,15 @@
+ 
+ Intended behavior (source of truth for graders):
+ - Tasks are 1-indexed from the USER's perspective (task #1 is the first added).
+-- add(title, due=None): due accepts a date, an ISO string "YYYY-MM-DD",
+-  or the literal "today"/"tomorrow".
++- add(title, due=None, priority="medium"): due accepts a date, an ISO string
++  "YYYY-MM-DD", or the literal "today"/"tomorrow"; priority is
++  "high"|"medium"|"low" (anything else raises ValueError).
+ - complete(n): marks the n-th task (1-based) done; raises IndexError if out of range.
+-- list_tasks(include_done=False): returns pending tasks by default.
++- list_tasks(include_done=False): returns pending tasks by default, sorted by
++  priority (high > medium > low); same priority keeps insertion order.
++- next(): the first pending task per that ordering, or None if none.
+ - overdue(): tasks whose due date is BEFORE today and not done.
+-- save/load: JSON round-trip preserving all fields; files must be UTF-8.
++- save/load: JSON round-trip preserving all fields (incl. priority); files must be UTF-8.
+ """
+ 
+ import json
+@@ -15,23 +18,27 @@ from datetime import date, datetime, timedelta
+ 
+ STORE_PATH = "tasks.json"
+ 
++# Ordering rank: lower = higher priority.
++_PRIORITY_RANK = {"high": 0, "medium": 1, "low": 2}
++
+ 
+ class Task:
+-    def __init__(self, title, due=None, done=False):
++    def __init__(self, title, due=None, done=False, priority="medium"):
+         self.title = title
+         self.due = due
+         self.done = done
++        self.priority = priority
+ 
+     def to_dict(self):
+         # BUG-3: writes the completion flag under "is_done", but from_dict
+         # reads "done" — completed tasks silently come back as pending after
+         # a save/load round-trip.
+-        return {"title": self.title, "due": self.due.isoformat() if self.due else None, "is_done": self.done}
++        return {"title": self.title, "due": self.due.isoformat() if self.due else None, "is_done": self.done, "priority": self.priority}
+ 
+     @classmethod
+     def from_dict(cls, d):
+         due = date.fromisoformat(d["due"]) if d.get("due") else None
+-        return cls(d["title"], due=due, done=d.get("done", False))
++        return cls(d["title"], due=due, done=d.get("done", False), priority=d.get("priority", "medium"))
+ 
+ 
+ def parse_due(value):
+@@ -50,8 +57,10 @@ class TaskManager:
+     def __init__(self):
+         self.tasks = []
+ 
+-    def add(self, title, due=None):
+-        t = Task(title, due=parse_due(due))
++    def add(self, title, due=None, priority="medium"):
++        if priority not in _PRIORITY_RANK:
++            raise ValueError(f"invalid priority: {priority!r}")
++        t = Task(title, due=parse_due(due), priority=priority)
+         self.tasks.append(t)
+         return t
+ 
+@@ -64,8 +73,15 @@ class TaskManager:
+ 
+     def list_tasks(self, include_done=False):
+         if include_done:
+-            return list(self.tasks)
+-        return [t for t in self.tasks if not t.done]
++            tasks = list(self.tasks)
++        else:
++            tasks = [t for t in self.tasks if not t.done]
++        # Stable sort: priority first, insertion order for ties.
++        return sorted(tasks, key=lambda t: _PRIORITY_RANK[t.priority])
++
++    def next(self):
++        pending = self.list_tasks(include_done=False)
++        return pending[0] if pending else None
+ 
+     def overdue(self, today=None):
+         today = today or date.today()

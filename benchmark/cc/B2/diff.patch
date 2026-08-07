@@ -1,0 +1,113 @@
+diff --git a/todo.py b/todo.py
+index 97d4627..96662a6 100644
+--- a/todo.py
++++ b/todo.py
+@@ -2,10 +2,14 @@
+ 
+ Intended behavior (source of truth for graders):
+ - Tasks are 1-indexed from the USER's perspective (task #1 is the first added).
+-- add(title, due=None): due accepts a date, an ISO string "YYYY-MM-DD",
+-  or the literal "today"/"tomorrow".
++- add(title, due=None, priority="medium"): due accepts a date, an ISO string
++  "YYYY-MM-DD", or the literal "today"/"tomorrow". priority must be one of
++  "high" | "medium" | "low" (anything else raises ValueError).
+ - complete(n): marks the n-th task (1-based) done; raises IndexError if out of range.
+-- list_tasks(include_done=False): returns pending tasks by default.
++- list_tasks(include_done=False): returns pending tasks by default. The returned
++  tasks are sorted by priority (high > medium > low); equal priorities keep
++  insertion order.
++- next(): returns the first not-done task under that same ordering, or None.
+ - overdue(): tasks whose due date is BEFORE today and not done.
+ - save/load: JSON round-trip preserving all fields; files must be UTF-8.
+ """
+@@ -15,23 +19,30 @@ from datetime import date, datetime, timedelta
+ 
+ STORE_PATH = "tasks.json"
+ 
++PRIORITY_RANK = {"high": 0, "medium": 1, "low": 2}
++PRIORITIES = frozenset(PRIORITY_RANK)
++
+ 
+ class Task:
+-    def __init__(self, title, due=None, done=False):
++    def __init__(self, title, due=None, done=False, priority="medium"):
+         self.title = title
+         self.due = due
+         self.done = done
++        self.priority = priority
+ 
+     def to_dict(self):
+-        # BUG-3: writes the completion flag under "is_done", but from_dict
+-        # reads "done" — completed tasks silently come back as pending after
+-        # a save/load round-trip.
+-        return {"title": self.title, "due": self.due.isoformat() if self.due else None, "is_done": self.done}
++        return {
++            "title": self.title,
++            "due": self.due.isoformat() if self.due else None,
++            "done": self.done,
++            "priority": self.priority,
++        }
+ 
+     @classmethod
+     def from_dict(cls, d):
+         due = date.fromisoformat(d["due"]) if d.get("due") else None
+-        return cls(d["title"], due=due, done=d.get("done", False))
++        return cls(d["title"], due=due, done=d.get("done", False),
++                   priority=d.get("priority", "medium"))
+ 
+ 
+ def parse_due(value):
+@@ -41,31 +52,43 @@ def parse_due(value):
+     if value == "today":
+         return date.today()
+     if value == "tomorrow":
+-        # BUG-1: off-by-one, returns today instead of tomorrow
+-        return date.today()
++        return date.today() + timedelta(days=1)
+     return datetime.strptime(value, "%Y-%m-%d").date()
+ 
+ 
++def _priority_key(task):
++    return PRIORITY_RANK.get(task.priority, 1)
++
++
+ class TaskManager:
+     def __init__(self):
+         self.tasks = []
+ 
+-    def add(self, title, due=None):
+-        t = Task(title, due=parse_due(due))
++    def add(self, title, due=None, priority="medium"):
++        if priority not in PRIORITIES:
++            raise ValueError(f"invalid priority: {priority!r}")
++        t = Task(title, due=parse_due(due), priority=priority)
+         self.tasks.append(t)
+         return t
+ 
+     def complete(self, n):
+-        # BUG-2: treats n as 0-based; users pass 1-based indices.
+-        # complete(1) should complete the FIRST task but completes the second.
+-        if n < 0 or n >= len(self.tasks):
++        # n is 1-based from the user's perspective.
++        if n < 1 or n > len(self.tasks):
+             raise IndexError(f"task {n} out of range")
+-        self.tasks[n].done = True
++        self.tasks[n - 1].done = True
+ 
+     def list_tasks(self, include_done=False):
+         if include_done:
+-            return list(self.tasks)
+-        return [t for t in self.tasks if not t.done]
++            tasks = list(self.tasks)
++        else:
++            tasks = [t for t in self.tasks if not t.done]
++        return sorted(tasks, key=_priority_key)
++
++    def next(self):
++        pending = [t for t in self.tasks if not t.done]
++        if not pending:
++            return None
++        return min(pending, key=_priority_key)
+ 
+     def overdue(self, today=None):
+         today = today or date.today()

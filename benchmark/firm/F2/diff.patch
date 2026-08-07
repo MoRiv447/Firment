@@ -1,0 +1,86 @@
+diff --git a/test_todo.py b/test_todo.py
+index 2414dcd..0583c36 100644
+--- a/test_todo.py
++++ b/test_todo.py
+@@ -1,5 +1,4 @@
+-"""Reference test suite. Currently 3 failures, matching the 3 seeded bugs.
+-Graders run: python -m pytest test_todo.py -q
++"""Reference test suite. Graders run: python -m pytest test_todo.py -q
+ """
+ import json
+ from datetime import date, timedelta
+@@ -54,3 +53,24 @@ def test_save_load_roundtrip_unicode(tmp_path):
+     assert tm2.tasks[0].title == "写周报"
+     assert tm2.tasks[0].due == date(2026, 8, 7)
+     assert tm2.tasks[1].done is True  # completion state must survive round-trip
++
++
++def test_rename_is_one_based():
++    tm = TaskManager()
++    tm.add("first")
++    tm.add("second")
++    tm.rename(2, "renamed second")
++    assert tm.tasks[0].title == "first"
++    assert tm.tasks[1].title == "renamed second"
++
++
++def test_rename_out_of_range():
++    tm = TaskManager()
++    tm.add("only")
++    for n in (0, 2):
++        try:
++            tm.rename(n, "x")
++        except IndexError:
++            pass
++        else:
++            raise AssertionError(f"expected IndexError for n={n}")
+diff --git a/todo.py b/todo.py
+index 97d4627..d861c1e 100644
+--- a/todo.py
++++ b/todo.py
+@@ -5,6 +5,7 @@ Intended behavior (source of truth for graders):
+ - add(title, due=None): due accepts a date, an ISO string "YYYY-MM-DD",
+   or the literal "today"/"tomorrow".
+ - complete(n): marks the n-th task (1-based) done; raises IndexError if out of range.
++- rename(n, new_title): renames the n-th task (1-based); raises IndexError if out of range.
+ - list_tasks(include_done=False): returns pending tasks by default.
+ - overdue(): tasks whose due date is BEFORE today and not done.
+ - save/load: JSON round-trip preserving all fields; files must be UTF-8.
+@@ -26,7 +27,7 @@ class Task:
+         # BUG-3: writes the completion flag under "is_done", but from_dict
+         # reads "done" — completed tasks silently come back as pending after
+         # a save/load round-trip.
+-        return {"title": self.title, "due": self.due.isoformat() if self.due else None, "is_done": self.done}
++        return {"title": self.title, "due": self.due.isoformat() if self.due else None, "done": self.done}
+ 
+     @classmethod
+     def from_dict(cls, d):
+@@ -41,8 +42,7 @@ def parse_due(value):
+     if value == "today":
+         return date.today()
+     if value == "tomorrow":
+-        # BUG-1: off-by-one, returns today instead of tomorrow
+-        return date.today()
++        return date.today() + timedelta(days=1)
+     return datetime.strptime(value, "%Y-%m-%d").date()
+ 
+ 
+@@ -56,11 +56,14 @@ class TaskManager:
+         return t
+ 
+     def complete(self, n):
+-        # BUG-2: treats n as 0-based; users pass 1-based indices.
+-        # complete(1) should complete the FIRST task but completes the second.
+-        if n < 0 or n >= len(self.tasks):
++        if n < 1 or n > len(self.tasks):
++            raise IndexError(f"task {n} out of range")
++        self.tasks[n - 1].done = True
++
++    def rename(self, n, new_title):
++        if n < 1 or n > len(self.tasks):
+             raise IndexError(f"task {n} out of range")
+-        self.tasks[n].done = True
++        self.tasks[n - 1].title = new_title
+ 
+     def list_tasks(self, include_done=False):
+         if include_done:

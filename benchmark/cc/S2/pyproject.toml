@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "simple-todo"
+version = "0.1.0"
+description = "A minimal, dependency-free task manager library."
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT"
+keywords = ["todo", "task", "task-manager", "productivity"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Office/Business :: Scheduling",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[tool.setuptools]
+py-modules = ["todo", "config"]
+
+[tool.pytest.ini_options]
+testpaths = ["test_todo.py"]

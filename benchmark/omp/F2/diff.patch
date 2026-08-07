@@ -1,0 +1,64 @@
+diff --git a/test_todo.py b/test_todo.py
+index 2414dcd..6c8b992 100644
+--- a/test_todo.py
++++ b/test_todo.py
+@@ -40,6 +40,34 @@ def test_overdue_excludes_today():
+     assert overdue[0].title == "due yesterday"
+ 
+ 
++def test_rename_updates_title():
++    tm = TaskManager()
++    tm.add("old title")
++    tm.rename(1, "new title")
++    assert tm.tasks[0].title == "new title"
++
++
++def test_rename_is_one_based():
++    tm = TaskManager()
++    tm.add("first")
++    tm.add("second")
++    tm.rename(2, "renamed")
++    assert tm.tasks[0].title == "first"
++    assert tm.tasks[1].title == "renamed"
++
++
++def test_rename_out_of_range_raises():
++    tm = TaskManager()
++    tm.add("only")
++    for n in (0, 2):  # 0 is below range, 2 is above — both must raise
++        try:
++            tm.rename(n, "x")
++        except IndexError:
++            pass
++        else:
++            raise AssertionError(f"expected IndexError for n={n}")
++
++
+ def test_save_load_roundtrip_unicode(tmp_path):
+     tm = TaskManager()
+     tm.add("写周报", due="2026-08-07")
+diff --git a/todo.py b/todo.py
+index 97d4627..8cee477 100644
+--- a/todo.py
++++ b/todo.py
+@@ -5,6 +5,7 @@ Intended behavior (source of truth for graders):
+ - add(title, due=None): due accepts a date, an ISO string "YYYY-MM-DD",
+   or the literal "today"/"tomorrow".
+ - complete(n): marks the n-th task (1-based) done; raises IndexError if out of range.
++- rename(n, new_title): renames the n-th task (1-based); raises IndexError if out of range.
+ - list_tasks(include_done=False): returns pending tasks by default.
+ - overdue(): tasks whose due date is BEFORE today and not done.
+ - save/load: JSON round-trip preserving all fields; files must be UTF-8.
+@@ -62,6 +63,12 @@ class TaskManager:
+             raise IndexError(f"task {n} out of range")
+         self.tasks[n].done = True
+ 
++    def rename(self, n, new_title):
++        # n is 1-based from the user's perspective, like complete().
++        if n < 1 or n > len(self.tasks):
++            raise IndexError(f"task {n} out of range")
++        self.tasks[n - 1].title = new_title
++
+     def list_tasks(self, include_done=False):
+         if include_done:
+             return list(self.tasks)
