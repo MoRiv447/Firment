@@ -28,9 +28,9 @@ async fn anthropic_stream_parses_text_and_tool_use() {
         .mount(&server)
         .await;
 
-    let provider = AnthropicProvider::new(server.uri(), "test-key", "claude-test", None, None);
+    let provider = AnthropicProvider::new(server.uri(), "test-key", "anthropic-test", None, None);
     let request = ChatRequest {
-        model: "claude-test".to_string(),
+        model: "anthropic-test".to_string(),
         messages: vec![ChatMessage::User {
             content: "hi".to_string(),
         }],

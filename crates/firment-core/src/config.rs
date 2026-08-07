@@ -322,7 +322,7 @@ model = "deepseek-v4-flash"
 
 # Max tool-calling rounds per turn.
 # max_iterations = 30
-# thinking = "medium"   # off / low / medium / high / xhigh / max（Claude 风格思考深度）
+# thinking = "medium"   # off / low / medium / high / xhigh / max（思考深度）
 "#
 }
 
