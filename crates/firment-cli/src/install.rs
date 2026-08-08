@@ -229,6 +229,7 @@ impl PathEnv for RegistryPathEnv {
     }
 
     fn write_user_path(&self, _value: &str) -> Result<()> {
+        broadcast_environment_change();
         Ok(())
     }
 }
