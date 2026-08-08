@@ -1,4 +1,4 @@
-# Firment — Firmware + Agent（固件界的苍穹）
+# Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-0.3.0--beta.1-orange)](Cargo.toml)
@@ -11,7 +11,7 @@
 > ⚠️ **状态：半成品，活跃开发中。**
 > Firment 目前还只是半成品。第一层（通用编码 Agent）已经能跑、也做了测试，但 TUI、配置格式和工具接口都还在快速演进，随时可能调整，暂时不建议用于生产或关键任务。欢迎拿来试用，遇到问题请告诉我们。
 
-**Firmware + Agent = Firment**，固件界的苍穹（firmament）——一个面向固件与嵌入式开发的通用编码 Agent。第一层（通用编码 Agent 层）当前可用，但整体仍是半成品；后续构建、烧录、调试、UART 等层通过统一的 `Tool` trait 接入同一内核。
+**Firmware + Agent = Firment**——一个面向固件与嵌入式开发的通用编码 Agent。第一层（通用编码 Agent 层）当前可用，但整体仍是半成品；后续构建、烧录、调试、UART 等层通过统一的 `Tool` trait 接入同一内核。
 
 ---
 
