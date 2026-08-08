@@ -1,9 +1,10 @@
+use crate::journal::EditJournal;
 use crate::{PermissionChecker, PermissionError, ToolSpec};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
 pub struct ToolContext {
@@ -14,6 +15,10 @@ pub struct ToolContext {
     /// popup stays the decision point; one-shot `-y` keeps it disabled unless
     /// the user passes `--allow-dangerous`.
     pub allow_dangerous: bool,
+    /// Per-turn edit journal: backups + rollback for write/edit tools.
+    pub journal: Arc<Mutex<EditJournal>>,
+    /// Configured verification command from `[tools] verify_command`.
+    pub verify_command: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +47,12 @@ pub trait Tool: Send + Sync {
 
     /// Return a human-readable reason if this invocation needs explicit approval.
     fn approval(&self, _args: &Value) -> Option<String> {
+        None
+    }
+
+    /// Optional unified-diff preview appended to the approval prompt (used by
+    /// write/edit tools so the user sees exactly what will change).
+    fn preview(&self, _args: &Value, _ctx: &ToolContext) -> Option<String> {
         None
     }
 
@@ -94,7 +105,13 @@ impl ToolRegistry {
         let tool = self
             .get(name)
             .ok_or_else(|| ToolError::new(format!("unknown tool: {name}")))?;
-        if let Some(reason) = tool.approval(&args) {
+        let mut reason = tool.approval(&args);
+        if let Some(preview) = tool.preview(&args, ctx)
+            && let Some(reason) = reason.as_mut()
+        {
+            reason.push_str(&format!("\n{preview}"));
+        }
+        if let Some(reason) = reason {
             match ctx.permission.confirm(tool.name(), &args, &reason).await {
                 Ok(()) => {}
                 Err(PermissionError::Denied(message)) => {

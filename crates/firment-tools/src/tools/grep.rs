@@ -56,16 +56,16 @@ impl Tool for Grep {
             .and_then(|g| g.as_str())
             .map(Glob::new)
             .transpose()
-            .map_err(|e| ToolError::new(format!("bad glob pattern: {e}")))?
+            .map_err(|e| ToolError::new(format!("[InvalidInput] bad glob pattern: {e}")))?
             .map(|g| g.compile_matcher());
         let regex = RegexBuilder::new(pattern)
             .case_insensitive(!case_sensitive)
             .build()
-            .map_err(|e| ToolError::new(format!("bad regex: {e}")))?;
+            .map_err(|e| ToolError::new(format!("[InvalidInput] bad regex: {e}")))?;
         let resolved = resolve(&ctx.cwd, path);
         if !resolved.is_dir() {
             return Err(ToolError::new(format!(
-                "{} is not a directory",
+                "[NotFound] {} is not a directory",
                 resolved.display()
             )));
         }

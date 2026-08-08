@@ -84,6 +84,7 @@ pub async fn run(
     // Interactive TUI: the permission popup is the decision point, so
     // dangerous shell commands are allowed to reach it (and are labeled ⚠).
     agent.set_allow_dangerous(true);
+    agent.set_context_budget_chars(config.context_budget_chars);
     let initial_messages = agent.session().messages.clone();
     let model = agent.session().model.clone();
     let cwd = agent.session().cwd.clone();
@@ -248,6 +249,16 @@ pub async fn run(
                     Err(e) => {
                         agent
                             .emit(AgentEvent::Error(format!("加载会话失败: {e}")))
+                            .await;
+                    }
+                },
+                AgentCmd::Undo => match agent.undo_last().await {
+                    Ok(summary) => {
+                        agent.emit(AgentEvent::Info(summary)).await;
+                    }
+                    Err(e) => {
+                        agent
+                            .emit(AgentEvent::Error(format!("撤销失败: {e}")))
                             .await;
                     }
                 },
@@ -438,6 +449,7 @@ enum AgentCmd {
     OpenModelPicker,
     OpenSessionPicker,
     LoadSession(String),
+    Undo,
     SetProvider(String),
     SetApiKey {
         provider: Option<String>,
@@ -1400,7 +1412,7 @@ impl App {
             .unwrap_or((command, ""));
         match name {
             "help" => self.items.push(Item::System(
-                "命令: /plan [on|off]  /agent  /models  /model <id>  /sessions(上下键选择)  /session <id>  /copy  /provider <名字>  /add-provider <名字> <openai|anthropic> <base_url> <模型>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /config  /clear  /help  /quit\n键位: ↑/↓ 空输入时浏览历史，非空时滚动对话 · PgUp/PgDn/滚轮始终滚动 · Ctrl+P 模型选择器 · 左键拖动选择 · 右键复制选中（无选区时粘贴） · Ctrl+Shift+C 复制最后回复 · ←/→ 移动输入光标 · y/n/a 权限确认 · Ctrl-C 退出"
+                "命令: /plan [on|off]  /agent  /models  /model <id>  /sessions(上下键选择)  /session <id>  /undo  /copy  /provider <名字>  /add-provider <名字> <openai|anthropic> <base_url> <模型>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /config  /clear  /help  /quit\n键位: ↑/↓ 空输入时浏览历史，非空时滚动对话 · PgUp/PgDn/滚轮始终滚动 · Ctrl+P 模型选择器 · 左键拖动选择 · 右键复制选中（无选区时粘贴） · Ctrl+Shift+C 复制最后回复 · ←/→ 移动输入光标 · y/n/a 权限确认 · Ctrl-C 退出"
                     .to_string(),
             )),
             "plan" => {
@@ -1480,6 +1492,12 @@ impl App {
             }
             "session" => {
                 self.open_session_picker();
+            }
+            "undo" => {
+                let _ = self.cmd_tx.try_send(AgentCmd::Undo);
+                self.items.push(Item::System(
+                    "正在撤销上一次已提交的编辑…".to_string(),
+                ));
             }
             "copy" => self.copy_last_output(),
             "apikey" | "key" if !arg.is_empty() => {

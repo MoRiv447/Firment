@@ -19,6 +19,19 @@ pub struct Config {
     pub max_iterations: usize,
     #[serde(default)]
     pub thinking: ThinkingLevel,
+    #[serde(default)]
+    pub tools: ToolsConfig,
+    /// Approximate character budget for session context; older messages are
+    /// compacted into a digest when exceeded.
+    #[serde(default = "default_context_budget")]
+    pub context_budget_chars: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ToolsConfig {
+    /// Command run by the `verify` tool (platform shell), e.g. `cargo check`.
+    #[serde(default)]
+    pub verify_command: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +83,8 @@ impl Config {
             auto_approve: Vec::new(),
             max_iterations: 30,
             thinking: ThinkingLevel::Off,
+            tools: ToolsConfig::default(),
+            context_budget_chars: default_context_budget(),
         }
     }
 
@@ -323,6 +338,13 @@ model = "deepseek-v4-flash"
 # Max tool-calling rounds per turn.
 # max_iterations = 30
 # thinking = "medium"   # off / low / medium / high / xhigh / max（思考深度）
+# context_budget_chars = 60000   # 会话上下文字符预算，超出后自动压缩早期对话
+
+[tools]
+# 代码改动后，agent 需先跑通 verify 再宣布完成；留空则 verify 工具不可用
+# verify_command = "cargo check"
+# 嵌入式示例：
+# verify_command = "cmake --build build"
 "#
 }
 
@@ -332,4 +354,8 @@ fn default_provider_name() -> String {
 
 fn default_max_iterations() -> usize {
     30
+}
+
+fn default_context_budget() -> usize {
+    60_000
 }

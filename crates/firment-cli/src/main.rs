@@ -209,7 +209,14 @@ async fn run_once(
         firment_tools::default_registry()
     };
     let store = SessionStore::default();
-    let base_permission = Arc::new(CliPermission::new(yes, config.auto_approve.clone()));
+    // The verify tool runs the user-configured command from config.toml; in
+    // one-shot mode it is part of the completion gate, so it is always
+    // auto-approved (the dangerous-command guard still applies).
+    let mut auto_approve = config.auto_approve.clone();
+    if !auto_approve.iter().any(|t| t == "verify") {
+        auto_approve.push("verify".to_string());
+    }
+    let base_permission = Arc::new(CliPermission::new(yes, auto_approve));
     let permission: Arc<dyn PermissionChecker> = if session.mode == SessionMode::Plan {
         Arc::new(PlanModePermission::new(base_permission))
     } else {
@@ -226,6 +233,8 @@ async fn run_once(
         config.max_iterations,
     );
     agent.set_allow_dangerous(allow_dangerous);
+    agent.set_verify_command(config.tools.verify_command.clone());
+    agent.set_context_budget_chars(config.context_budget_chars);
     let text = agent.run_turn(prompt).await?;
     println!("{text}");
     Ok(())

@@ -1,7 +1,7 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.2.0--beta.3-orange)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.3.0--beta.1-orange)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![Benchmark](https://img.shields.io/badge/benchmark-4.95-%231-green)]()
@@ -24,6 +24,14 @@
 - **Session management**: JSONL persistence, `--continue`, `--list`, and an interactive `/sessions` picker
 - **Copy support**: select with the left mouse button, copy with the right button (paste when nothing is selected); `Ctrl+Shift+C` / `/copy` copies the last reply
 - **Global install**: `firm install` adds itself to PATH with PowerShell completions; `firm update` self-updates
+- **Transactional edits + undo**: every write/edit in a turn is backed up and rolled back as a batch if any mutation fails; `/undo` restores the last committed batch (persisted per session)
+- **CAS protection**: write/edit re-checks the file before applying and aborts with a `[ConcurrentChange]` tag if it changed meanwhile
+- **Diff-first approval**: write/edit permission prompts show the exact unified diff before you approve
+- **Parallel tool calls**: independent calls run concurrently; same-file reads/writes and broad tools (shell/verify/grep) are ordered automatically
+- **Verify gate**: an optional `verify` tool runs your configured build/check command; the agent must pass it before declaring completion
+- **Context compaction**: long sessions auto-compact older messages into a digest (`context_budget_chars`)
+- **Symbols index**: ctags-level definition/reference lookup for C/C++, Rust, Python, JS/TS, Go, Java (also available in plan mode)
+- **Failure taxonomy**: tool errors carry tags such as `[NotFound]`, `[CompileError]`, `[Timeout]`, `[Permission]`, `[ConcurrentChange]`
 
 ### 🚀 Quick Start
 
@@ -72,6 +80,10 @@ api_key_env = "DEEPSEEK_API_KEY"
 model = "deepseek-v4-flash"   # or deepseek-v4-pro
 
 # thinking = "medium"   # off / low / medium / high / xhigh / max
+
+[tools]
+# verify_command = "cargo check"   # run this before declaring completion (e.g. cmake --build build)
+# context_budget_chars = 60000     # session context budget; older messages are compacted when exceeded
 ```
 
 Add more providers and switch with `--provider <name>` or `/provider <name>` in the TUI; `/models` and `Ctrl+P` fetch and pick models without editing files.
@@ -93,7 +105,7 @@ Add more providers and switch with `--provider <name>` or `/provider <name>` in 
 
 ### 🎮 TUI
 
-Slash commands: `/plan [on|off]`, `/agent`, `/models`, `/model <id>`, `/sessions` (↑/↓ to pick), `/session <id>`, `/provider <name>`, `/add-provider`, `/apikey`, `/thinking`, `/copy`, `/config`, `/clear`, `/help`, `/quit`.
+Slash commands: `/plan [on|off]`, `/agent`, `/models`, `/model <id>`, `/sessions` (↑/↓ to pick), `/session <id>`, `/undo`, `/provider <name>`, `/add-provider`, `/apikey`, `/thinking`, `/copy`, `/config`, `/clear`, `/help`, `/quit`.
 
 Keys: `↑/↓` browse history when the input is empty, otherwise scroll; `PgUp/PgDn` and the mouse wheel always scroll; `Ctrl+P` opens the model picker; left-drag to select and right-click to copy (paste when nothing is selected); `Ctrl+Shift+C` copies the last reply; `←/→`, `Home/End`, `Ctrl+A/E` move the cursor; permission popups accept `y`/`n`/`a`.
 

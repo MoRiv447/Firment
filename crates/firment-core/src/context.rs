@@ -46,14 +46,27 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          \n\
          # Tool usage\n\
          - Use the dedicated tools: read_file for reading, edit_file for surgical edits (exact \
-         old_text anchor or line range), write_file for create/overwrite, and list_dir/glob/grep \
-         for discovery. Reserve shell for commands that need it: builds, tests, git, toolchains.\n\
-         - Batch independent tool calls in parallel to save round trips.\n\
+         old_text anchor or line range), write_file for create/overwrite, list_dir/glob/grep for \
+         discovery, and symbols for definition/reference lookup in large codebases. Reserve \
+         shell for commands that need it: builds, tests, git, toolchains.\n\
+         - Batch independent tool calls in parallel to save round trips; dependent calls \
+         (editing then reading the same file) are ordered automatically.\n\
+         - Tool errors carry type tags such as [NotFound], [CompileError], [Timeout], \
+         [Permission], [ConcurrentChange], [InvalidInput] and [Io]. Adjust your strategy based \
+         on the tag: fix the anchor for [InvalidInput], re-run after fixing code for \
+         [CompileError], and never retry a [Permission] denial.\n\
          - When a tool fails, read the error and adjust the invocation or approach; do not \
          blindly retry the identical call. If the user denies a tool call, do not retry it — \
          adjust your approach.\n\
          - Verify your work: run the project's tests/build/lint when available and check the \
          actual result. Make small, verifiable edits instead of one large rewrite.\n\
+         \n\
+         # Verification\n\
+         - If the verify tool is available, run it after code changes and before declaring the \
+         task complete. A failed or non-zero exit means the task is NOT complete: fix the errors \
+         and re-verify.\n\
+         - Never claim a build, test, or check passed unless you actually ran it and saw exit \
+         code 0.\n\
          \n\
          # Safety\n\
          - Freely take local, reversible actions. Confirm before destructive or hard-to-reverse \
@@ -85,7 +98,7 @@ pub fn system_prompt_for(cwd: &Path, mode: SessionMode) -> String {
              instructions:\n\
              - You MUST NOT write, edit, delete, or rename files, and you MUST NOT run shell \
              commands or any state-changing tool.\n\
-             - Available tools are limited to: read_file, list_dir, glob, grep.\n\
+             - Available tools are limited to: read_file, list_dir, glob, grep, symbols.\n\
              - Ground every claim in what you actually read: inspect files before stating facts, \
              and mark anything you could not verify as \"unverified\".\n\
              - Ask the user only about preferences and tradeoffs that exploration cannot answer; \

@@ -1,7 +1,7 @@
 # Firment — Firmware + Agent（固件界的苍穹）
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.2.0--beta.3-orange)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.3.0--beta.1-orange)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![Benchmark](https://img.shields.io/badge/benchmark-4.95-%231-green)]()
@@ -26,6 +26,14 @@
 - **会话管理**：JSONL 持久化、`--continue`、`--list`、TUI `/sessions` 上下键选择器
 - **输出复制**：鼠标左键选择 + 右键复制（无选区时粘贴），`Ctrl+Shift+C` / `/copy` 复制最后回复
 - **全局安装**：`firm install` 写用户 PATH + PowerShell 补全；`firm update` 自更新
+- **事务编辑 + 撤销**：一个回合内的所有写/编辑统一备份，任一修改失败整批回滚；`/undo` 恢复上一次已提交的改动（按会话持久化）
+- **CAS 防并发覆盖**：写/编辑前重新校验文件，被并发改动时拒绝并返回 `[ConcurrentChange]`
+- **diff-first 批准**：写/编辑的权限弹窗直接展示 unified diff，批准前先看改动
+- **并行工具调用**：独立工具并发执行；同文件读写与 shell/verify/grep 等宽泛工具自动排序
+- **verify 门控**：可选 `verify` 工具执行配置的构建/检查命令，跑通前不允许宣布完成
+- **上下文压缩**：长会话自动把早期消息压缩成摘要（`context_budget_chars`）
+- **符号索引**：ctags 级定义/引用查找，支持 C/C++、Rust、Python、JS/TS、Go、Java（Plan 模式也可用）
+- **失败分类**：工具错误带 `[NotFound]`、`[CompileError]`、`[Timeout]`、`[Permission]`、`[ConcurrentChange]` 等标签
 
 ### 🚀 快速开始
 
@@ -74,6 +82,10 @@ api_key_env = "DEEPSEEK_API_KEY"
 model = "deepseek-v4-flash"   # 或 deepseek-v4-pro
 
 # thinking = "medium"   # off / low / medium / high / xhigh / max
+
+[tools]
+# verify_command = "cargo check"   # 改动后先跑通再宣布完成（如 cmake --build build）
+# context_budget_chars = 60000     # 会话上下文字符预算，超出自动压缩早期对话
 ```
 
 多 Provider 追加配置后用 `--provider <名字>` 或 TUI 内 `/provider <名字>` 切换；`/models`、`Ctrl+P` 可直接拉取并选择模型，不用手改文件。
@@ -95,7 +107,7 @@ model = "deepseek-v4-flash"   # 或 deepseek-v4-pro
 
 ### 🎮 TUI 交互
 
-斜杠命令：`/plan [on|off]`、`/agent`、`/models`、`/model <id>`、`/sessions`（↑/↓ 选择）、`/session <id>`、`/provider <名字>`、`/add-provider`、`/apikey`、`/thinking`、`/copy`、`/config`、`/clear`、`/help`、`/quit`。
+斜杠命令：`/plan [on|off]`、`/agent`、`/models`、`/model <id>`、`/sessions`（↑/↓ 选择）、`/session <id>`、`/undo`、`/provider <名字>`、`/add-provider`、`/apikey`、`/thinking`、`/copy`、`/config`、`/clear`、`/help`、`/quit`。
 
 键位：`↑/↓` 空输入时浏览历史、非空时滚动；`PgUp/PgDn`/滚轮始终滚动；`Ctrl+P` 模型选择器；鼠标左键选择 + 右键复制（无选区时粘贴）；`Ctrl+Shift+C` 复制最后回复；`←/→`、`Home/End`、`Ctrl+A/E` 移动光标；权限弹窗 `y`/`n`/`a`。
 

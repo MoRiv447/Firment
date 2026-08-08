@@ -35,7 +35,13 @@ impl Tool for ReadFile {
         let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         let resolved = resolve(&ctx.cwd, path);
-        let content = read_text(&resolved).map_err(ToolError::new)?;
+        let content = read_text(&resolved).map_err(|e| {
+            if resolved.exists() {
+                ToolError::new(format!("[Io] {e}"))
+            } else {
+                ToolError::new(format!("[NotFound] {e}"))
+            }
+        })?;
 
         let text = if offset > 0 || limit > 0 {
             let lines: Vec<&str> = content.split('\n').collect();
@@ -56,5 +62,34 @@ impl Tool for ReadFile {
             content
         };
         Ok(ToolOutput { text })
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use firment_core::{AutoApprove, EditJournal};
+    use serde_json::json;
+    use std::path::Path;
+    use std::sync::{Arc, Mutex};
+    use tempfile::tempdir;
+
+    fn ctx(dir: &Path) -> ToolContext {
+        ToolContext {
+            cwd: dir.to_path_buf(),
+            permission: Arc::new(AutoApprove::everything()),
+            allow_dangerous: false,
+            journal: Arc::new(Mutex::new(EditJournal::new(dir.join("undo")))),
+            verify_command: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_file_returns_not_found_tag() {
+        let dir = tempdir().unwrap();
+        let err = ReadFile
+            .run(json!({"path": "nope.txt"}), &ctx(dir.path()))
+            .await
+            .unwrap_err();
+        assert!(err.message.contains("[NotFound]"), "got: {}", err.message);
     }
 }

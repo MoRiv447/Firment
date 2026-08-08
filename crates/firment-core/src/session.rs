@@ -118,6 +118,11 @@ impl SessionStore {
         self.dir.join(format!("{id}.jsonl"))
     }
 
+    /// Directory holding undo backups for a session (next to its JSONL file).
+    pub fn undo_dir(&self, id: &str) -> PathBuf {
+        self.dir.join(format!("{id}.undo"))
+    }
+
     pub fn save(&self, session: &Session) -> Result<(), SessionError> {
         fs::create_dir_all(&self.dir)?;
         let content = serialize_session(session)?;

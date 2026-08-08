@@ -20,7 +20,10 @@ pub fn default_registry() -> Arc<ToolRegistry> {
 pub fn plan_registry() -> Arc<ToolRegistry> {
     let mut registry = ToolRegistry::new();
     for tool in tools::all() {
-        if matches!(tool.name(), "read_file" | "list_dir" | "glob" | "grep") {
+        if matches!(
+            tool.name(),
+            "read_file" | "list_dir" | "glob" | "grep" | "symbols"
+        ) {
             registry.register(tool);
         }
     }

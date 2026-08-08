@@ -107,6 +107,102 @@ impl Tool for WriteTool {
     }
 }
 
+struct JournalingWriteTool;
+
+#[async_trait]
+impl Tool for JournalingWriteTool {
+    fn name(&self) -> &'static str {
+        "write_file"
+    }
+
+    fn description(&self) -> &'static str {
+        "fake write tool that journals"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+
+    fn approval(&self, _args: &Value) -> Option<String> {
+        Some("write file".to_string())
+    }
+
+    async fn run(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+        let path = args
+            .get("path")
+            .and_then(|p| p.as_str())
+            .unwrap_or("out.txt");
+        let content = args.get("content").and_then(|c| c.as_str()).unwrap_or("");
+        let resolved = ctx.cwd.join(path);
+        ctx.journal
+            .lock()
+            .unwrap()
+            .begin(&resolved)
+            .map_err(ToolError::new)?;
+        if let Some(parent) = resolved.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| ToolError::new(e.to_string()))?;
+        }
+        std::fs::write(&resolved, content).map_err(|e| ToolError::new(e.to_string()))?;
+        Ok(ToolOutput {
+            text: "wrote".to_string(),
+        })
+    }
+}
+
+struct FailingEditTool;
+
+#[async_trait]
+impl Tool for FailingEditTool {
+    fn name(&self) -> &'static str {
+        "edit_file"
+    }
+
+    fn description(&self) -> &'static str {
+        "fake edit tool that always fails"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+
+    fn approval(&self, _args: &Value) -> Option<String> {
+        Some("edit file".to_string())
+    }
+
+    async fn run(&self, _args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+        Err(ToolError::new("anchor mismatch (fake failure)"))
+    }
+}
+
+struct ReadFileTool;
+
+#[async_trait]
+impl Tool for ReadFileTool {
+    fn name(&self) -> &'static str {
+        "read_file"
+    }
+
+    fn description(&self) -> &'static str {
+        "fake read tool"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+
+    async fn run(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+        let path = args
+            .get("path")
+            .and_then(|p| p.as_str())
+            .unwrap_or("out.txt");
+        let resolved = ctx.cwd.join(path);
+        match std::fs::read_to_string(&resolved) {
+            Ok(text) => Ok(ToolOutput { text }),
+            Err(e) => Err(ToolError::new(format!("[NotFound] {e}"))),
+        }
+    }
+}
+
 struct RecordingProvider {
     requests: Arc<Mutex<Vec<ChatRequest>>>,
 }
@@ -225,6 +321,7 @@ fn system_prompt_covers_core_guidance_and_plan_contract() {
         "shell",
         "path:line",
         "AGENTS.md",
+        "verify",
         "Report outcomes faithfully",
         "Use this board's HAL layer",
     ] {
@@ -519,4 +616,241 @@ async fn agent_without_provider_reports_clear_error() {
 
     let err = agent.run_turn("hi").await.unwrap_err();
     assert!(matches!(err, AgentError::NoProvider));
+}
+
+#[tokio::test]
+async fn parallel_calls_are_ordered_by_file_dependency() {
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_write".to_string(),
+                    name: "write_file".to_string(),
+                    arguments: json!({"path": "a.txt", "content": "hello"}),
+                }),
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_read".to_string(),
+                    name: "read_file".to_string(),
+                    arguments: json!({"path": "a.txt"}),
+                }),
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_echo".to_string(),
+                    name: "echo".to_string(),
+                    arguments: json!({"message": "parallel"}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            vec![
+                ProviderEvent::Text("done".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+        ]))),
+        model: "fake".to_string(),
+    };
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(vec![
+            Arc::new(JournalingWriteTool),
+            Arc::new(ReadFileTool),
+            Arc::new(EchoTool),
+        ]),
+        session,
+        store,
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(Arc::new(Mutex::new(Vec::new())))),
+        10,
+    );
+
+    let _ = agent.run_turn("write then read").await.unwrap();
+    let tool_messages: Vec<(&str, &str)> = agent
+        .session()
+        .messages
+        .iter()
+        .filter_map(|m| match m {
+            ChatMessage::Tool { name, content, .. } => Some((name.as_str(), content.as_str())),
+            _ => None,
+        })
+        .collect();
+    let names: Vec<&str> = tool_messages.iter().map(|(n, _)| *n).collect();
+    // read depends on the write to the same file; echo is independent and
+    // runs in the same wave as the write.
+    assert_eq!(
+        names,
+        vec!["write_file", "echo", "read_file"],
+        "got: {names:?}"
+    );
+    assert!(tool_messages[2].1.contains("hello"));
+}
+
+#[tokio::test]
+async fn context_compaction_replaces_old_messages_with_digest() {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let provider = RecordingProvider {
+        requests: requests.clone(),
+    };
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let mut session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    for i in 0..14 {
+        session.push(ChatMessage::User {
+            content: format!("message {i} {}", "x".repeat(200)),
+        });
+    }
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(Vec::new()),
+        session,
+        store,
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(Arc::new(Mutex::new(Vec::new())))),
+        10,
+    );
+    agent.set_context_budget_chars(1000);
+
+    let _ = agent.run_turn("hi").await.unwrap();
+    let requests = requests.lock().unwrap();
+    let messages = &requests[0].messages;
+    assert!(
+        messages.iter().any(
+            |m| matches!(m, ChatMessage::User { content } if content.contains("[早期对话已压缩]"))
+        ),
+        "expected a compaction marker"
+    );
+    assert!(messages.len() <= 12, "got {} messages", messages.len());
+    assert!(matches!(messages.last(), Some(ChatMessage::User { content }) if content == "hi"));
+}
+
+#[tokio::test]
+async fn mutation_batch_rolls_back_when_a_later_edit_fails() {
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_1".to_string(),
+                    name: "write_file".to_string(),
+                    arguments: json!({"path": "a.txt", "content": "hello"}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            vec![
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_2".to_string(),
+                    name: "edit_file".to_string(),
+                    arguments: json!({}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            vec![
+                ProviderEvent::Text("done".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+        ]))),
+        model: "fake".to_string(),
+    };
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(vec![
+            Arc::new(JournalingWriteTool),
+            Arc::new(FailingEditTool),
+        ]),
+        session,
+        store,
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(events.clone())),
+        10,
+    );
+
+    let text = agent.run_turn("write then edit").await.unwrap();
+    assert_eq!(text, "done");
+    assert!(
+        !dir.path().join("a.txt").exists(),
+        "created file must be rolled back"
+    );
+    let collected = events.lock().unwrap();
+    assert!(
+        collected
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Info(m) if m.contains("已回滚"))),
+        "expected a rollback info event"
+    );
+}
+
+#[tokio::test]
+async fn max_iterations_rolls_back_writes() {
+    let call = vec![
+        ProviderEvent::ToolCall(firment_core::ToolCall {
+            id: "call_1".to_string(),
+            name: "write_file".to_string(),
+            arguments: json!({"path": "b.txt", "content": "x"}),
+        }),
+        ProviderEvent::Stop(StopReason::ToolUse),
+    ];
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([call.clone(), call.clone()]))),
+        model: "fake".to_string(),
+    };
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(vec![Arc::new(JournalingWriteTool)]),
+        session,
+        store,
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(Arc::new(Mutex::new(Vec::new())))),
+        2,
+    );
+
+    let err = agent.run_turn("loop write").await.unwrap_err();
+    assert!(matches!(err, AgentError::MaxIterations(2)));
+    assert!(!dir.path().join("b.txt").exists());
+}
+
+#[tokio::test]
+async fn committed_turn_can_be_undone() {
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_1".to_string(),
+                    name: "write_file".to_string(),
+                    arguments: json!({"path": "c.txt", "content": "v1"}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            vec![
+                ProviderEvent::Text("done".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+        ]))),
+        model: "fake".to_string(),
+    };
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(vec![Arc::new(JournalingWriteTool)]),
+        session,
+        store.clone(),
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(Arc::new(Mutex::new(Vec::new())))),
+        10,
+    );
+
+    let _ = agent.run_turn("write c").await.unwrap();
+    let file = dir.path().join("c.txt");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "v1");
+
+    let summary = agent.undo_last().await.unwrap();
+    assert!(summary.contains("已恢复 1 个文件"));
+    assert!(!file.exists());
 }
