@@ -144,23 +144,17 @@ fn load_vendor_index_hint(cwd: &Path) -> Option<String> {
         let Some(index) = index else {
             continue;
         };
-        let cheatsheets = dir.join("docs").join("cheatsheets");
-        let hint = if cheatsheets.is_dir() {
-            format!(
-                "\n\n# Hardware knowledge base\n\
-                 本项目的硬件知识库位于 {}（含 docs/cheatsheets/ 速查表）。\n\
-                 涉及芯片、外设、寄存器、HAL 或硬件配置的问题，先 read_file / grep 查询知识库，\n\
-                 再结合项目代码作答；引用时说明来源文件。",
-                index.display()
-            )
-        } else {
-            format!(
-                "\n\n# Hardware knowledge base\n\
-                 本项目的硬件知识库位于 {}。\n\
-                 涉及芯片、外设、寄存器、HAL 或硬件配置的问题，先 read_file / grep 查询，再作答。",
-                index.display()
-            )
-        };
+        let index_text = std::fs::read_to_string(&index).unwrap_or_default();
+        let index_text: String = index_text.chars().take(6000).collect();
+        let hint = format!(
+            "\n\n# Hardware knowledge base\n\
+             本项目硬件知识库索引（{}）：\n\
+             {index_text}\n\
+             涉及芯片、外设、寄存器、HAL 或硬件配置的问题：先按上面的索引用 read_file 读取对应的\n\
+             docs/cheatsheets/ 速查表（如 cheatsheets/stm32f1-uart.toml），再结合项目代码作答；\n\
+             引用时说明来源文件。",
+            index.display()
+        );
         return Some(hint);
     }
     None

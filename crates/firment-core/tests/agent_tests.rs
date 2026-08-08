@@ -418,6 +418,10 @@ fn system_prompt_auto_discovers_vendor_index() {
     assert!(prompt.contains("Hardware knowledge base"), "got: {prompt}");
     assert!(prompt.contains("vendor-index.toml"), "got: {prompt}");
     assert!(prompt.contains("cheatsheets"), "got: {prompt}");
+    assert!(
+        prompt.contains("STM32F4xx"),
+        "index content must be embedded: {prompt}"
+    );
 }
 
 #[test]
