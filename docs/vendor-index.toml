@@ -1,14 +1,17 @@
-# Firment 硬件知识库 — 机器可读索引（seed KB）
-# 消费顺序（务必逐层，勿一次 read 整个 docs/，否则等于把知识库全量塞回 context）：
-#   1) read_file("docs/vendor-index.toml")            -> 找到目标 family / topic
-#   2) read_file("docs/cheatsheets/<file>.toml")       -> 取原创高频速查
-#   3) 仅当需具体位域/更深层细节，才按 reference_manual.url 拉官方手册做 RAG
-# 规则：只放可确认事实；速查内容必须原创，禁止搬运厂商文档原文。
-# 注：本 seed KB 随 Firment 发布；真实项目知识库应放在你的项目工作区 docs/（规则见 vendor-index.md）。
+# Firment hardware knowledge base — machine-readable index (seed KB)
+# Consumption order (go layer by layer; never read the whole docs/ at once,
+# or you will dump the entire KB back into context):
+#   1) read_file("docs/vendor-index.toml")        -> find the target family / topic
+#   2) read_file("docs/cheatsheets/<file>.toml")  -> original high-frequency cheatsheet
+#   3) only for bitfields / deeper detail, fetch the official manual via reference_manual.url
+# Rules: verifiable facts only; cheatsheet content must be original, never copy
+# vendor documentation verbatim.
+# Note: this seed KB ships with Firment; a real project KB lives in your project's
+# docs/ (see vendor-index.md for the rules).
 
 [meta]
 schema_version = "1"
-description = "轻量索引 + 结构化速查，给 firm 提供嵌入式领域特长。手册本身不入库，仅存官方入口 URL。"
+description = "Lightweight index + structured cheatsheets giving firm embedded-domain expertise. Manuals are not stored; only official entry URLs are kept."
 
 # ───────────────────────── STM32 ─────────────────────────
 [stm32.f4]
@@ -20,21 +23,21 @@ sdk_version = "STM32CubeF4 HAL v1.8.x"
 last_reviewed = "2026-08-08"
 
 [[stm32.f4.quickref]]
-topic = "DMA 配置"
+topic = "DMA configuration"
 cheatsheet = "cheatsheets/stm32-dma.toml"
 doc_section = "RM0090 Section 10.3"
 hal_functions = ["HAL_DMA_Init", "HAL_DMA_Start_IT", "HAL_DMA_Start", "HAL_DMA_Abort"]
 key_registers = ["DMA_SxCR", "DMA_SxNDTR", "DMA_SxPAR", "DMA_SxM0AR"]
 confidence = "verified"
-notes = "DMA1 主接口挂 AHB1（可经桥接访问 APB1/APB2 外设），DMA2 挂 AHB2（含 USB OTG HS / ETH / DCMI）。需 DMA 搬 USB/ETH/DCMI 数据必须用 DMA2 的 stream。"
+notes = "DMA1 master port sits on AHB1 (APB1/APB2 peripherals reachable via bridge), DMA2 sits on AHB2 (includes USB OTG HS / ETH / DCMI). USB/ETH/DCMI data must use a DMA2 stream."
 
 [[stm32.f4.quickref]]
-topic = "时钟树"
+topic = "Clock tree"
 cheatsheet = "cheatsheets/stm32-clock.toml"
 doc_section = "RM0090 Section 6.2"
 key_concepts = ["SYSCLK", "HCLK", "PCLK1", "PCLK2", "PLL"]
 confidence = "verified"
-common_mistake = ["APB1/APB2 上的定时器时钟在对应 APB 预分频 ≠ 1 时为 PCLK×2；按 PCLK1=42MHz 直接算 TIM 频率会少算一倍（实际 84MHz）。"]
+common_mistake = ["Timer clocks on APB1/APB2 are PCLK×2 when the corresponding APB prescaler ≠ 1; computing TIM frequency directly from PCLK1=42MHz halves it (actual 84MHz)."]
 
 # ───────────────────────── ESP32 ─────────────────────────
 [esp32]
@@ -50,7 +53,7 @@ cheatsheet = "cheatsheets/esp32-gpio.toml"
 doc_section = "ESP32 TRM Section 5 (GPIO and IOMUX)"
 key_registers = ["GPIO_OUT", "GPIO_IN", "GPIO_ENABLE", "GPIO_<n>_CFG"]
 confidence = "verified"
-common_mistake = ["GPIO 34-39 为输入专用，不能输出或内部上下拉；strapping 引脚（GPIO 0/2/4/5/12/15）上电电平决定启动模式与电压选择，强拉可能砖机或无法下载。"]
+common_mistake = ["GPIO 34-39 are input-only: no output or internal pull-up/pull-down; strapping pins (GPIO 0/2/4/5/12/15) sampled at reset determine boot mode and voltage selection — hard-driving them can brick the board or block flashing."]
 
 # ───────────────────────── STM32 F1 ─────────────────────────
 [stm32.f1]
@@ -67,7 +70,7 @@ doc_section = "RM0008 Section 18/22"
 hal_functions = ["HAL_UART_Transmit_DMA", "HAL_UART_Receive_DMA"]
 key_registers = ["USART_BRR", "DMA_CCR", "DMA_CNDTR"]
 confidence = "verified"
-notes = "F103 只有 DMA1（7 通道），USART1_TX=Ch4、RX=Ch5；USART2/3 用 PCLK1=36MHz 算波特率"
+notes = "F103 has only DMA1 (7 channels); USART1_TX=Ch4, RX=Ch5; USART2/3 baud is computed from PCLK1=36MHz"
 
 [[stm32.f1.quickref]]
 topic = "TIM / PWM"
@@ -76,15 +79,15 @@ doc_section = "RM0008 Section 13/14"
 hal_functions = ["HAL_TIM_PWM_Start", "__HAL_TIM_SET_COMPARE"]
 key_registers = ["TIMx_PSC", "TIMx_ARR", "TIMx_CCR1"]
 confidence = "verified"
-notes = "APB1 预分频≠1 时 TIM2-4 时钟 = PCLK1×2（典型 72MHz）；TIM1 互补输出需 MOE"
+notes = "When the APB1 prescaler ≠ 1, TIM2-4 clock = PCLK1×2 (typically 72MHz); TIM1 complementary outputs need MOE"
 
 [[stm32.f1.quickref]]
-topic = "时钟树"
+topic = "Clock tree"
 cheatsheet = "cheatsheets/stm32f1-clock.toml"
 doc_section = "RM0008 Section 7"
 key_concepts = ["SYSCLK", "HCLK", "PCLK1", "PCLK2", "PLL"]
 confidence = "verified"
-common_mistake = ["F103 上限 72MHz：APB1≤36MHz、APB2≤72MHz；72MHz 需 Flash latency=2"]
+common_mistake = ["F103 tops out at 72MHz: APB1≤36MHz, APB2≤72MHz; 72MHz requires Flash latency=2"]
 
 # ───────────────────────── STM32 G0 ─────────────────────────
 [stm32.g0]
@@ -98,9 +101,9 @@ last_reviewed = "2026-08-08"
 topic = "GPIO / EXTI"
 cheatsheet = "cheatsheets/stm32g0-gpio.toml"
 doc_section = "RM0444 GPIO/EXTI"
-key_concepts = ["5V 容忍（按 datasheet FT 标记）", "EXTI 唤醒"]
+key_concepts = ["5V tolerance (per datasheet FT marking)", "EXTI wake-up"]
 confidence = "verified"
-notes = "SYSCLK 最高 64MHz；STOP 唤醒需 EXTI 线路 + 时钟都使能"
+notes = "SYSCLK up to 64MHz; STOP wake-up needs both the EXTI line and its clock enabled"
 
 [[stm32.g0.quickref]]
 topic = "USART / LPUART"
@@ -108,7 +111,7 @@ cheatsheet = "cheatsheets/stm32g0-uart.toml"
 doc_section = "RM0444 USART/LPUART"
 hal_functions = ["HAL_UART_Init", "HAL_LPUART_Init"]
 confidence = "verified"
-common_mistake = ["LPUART 用 LSE 32.768kHz 时波特率受限；USART 时钟源（PCLK/HSI16/LSE）要先选对"]
+common_mistake = ["LPUART baud is limited when using LSE 32.768kHz; pick the right USART clock source (PCLK/HSI16/LSE) first"]
 
 # ───────────────────────── ESP32-S3 ─────────────────────────
 [esp32.s3]
@@ -122,9 +125,9 @@ last_reviewed = "2026-08-08"
 topic = "GPIO"
 cheatsheet = "cheatsheets/esp32s3-gpio.toml"
 doc_section = "ESP32-S3 TRM GPIO"
-key_pins = ["GPIO0/3/45/46 strapping", "GPIO19/20 USB-Serial/JTAG", "GPIO43/44 默认 UART0 console"]
+key_pins = ["GPIO0/3/45/46 strapping", "GPIO19/20 USB-Serial/JTAG", "GPIO43/44 default UART0 console"]
 confidence = "verified"
-notes = "45 个 GPIO（0-21、26-48）；多数不 5V 容忍；占用 43/44 会丢默认 console"
+notes = "45 GPIOs (0-21, 26-48); most are not 5V tolerant; using 43/44 loses the default console"
 
 [[esp32.s3.quickref]]
 topic = "UART / USB-Serial"
@@ -132,4 +135,4 @@ cheatsheet = "cheatsheets/esp32s3-uart.toml"
 doc_section = "ESP32-S3 TRM UART"
 hal_functions = ["uart_driver_install", "uart_write_bytes"]
 confidence = "verified"
-common_mistake = ["log 同时开 UART0 和 USB-CDC 输出混乱；monitor 默认 115200"]
+common_mistake = ["Enabling both UART0 and USB-CDC for logs at once produces garbled output; monitor defaults to 115200"]

@@ -9,7 +9,7 @@ pub fn validate_args(tool: &str, schema: &Value, args: &Value) -> Result<(), Str
     }
     if !args.is_object() {
         return Err(format!(
-            "[InvalidInput] {tool} 参数校验失败: 参数必须是对象"
+            "[InvalidInput] {tool} argument validation failed: arguments must be an object"
         ));
     }
     if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
@@ -17,7 +17,7 @@ pub fn validate_args(tool: &str, schema: &Value, args: &Value) -> Result<(), Str
             let name = name.as_str().unwrap_or_default();
             if args.get(name).is_none() {
                 return Err(format!(
-                    "[InvalidInput] {tool} 参数校验失败: 缺少必填字段 '{name}'"
+                    "[InvalidInput] {tool} argument validation failed: missing required field '{name}'"
                 ));
             }
         }
@@ -44,7 +44,8 @@ pub fn validate_args(tool: &str, schema: &Value, args: &Value) -> Result<(), Str
         });
         if !any_ok {
             return Err(format!(
-                "[InvalidInput] {tool} 参数校验失败: oneOf 互斥条件未满足（例如 edit_file 需要 old_text 或 start_line）"
+                "[InvalidInput] {tool} argument validation failed: oneOf exclusive condition not \
+                 met (e.g. edit_file requires old_text or start_line)"
             ));
         }
     }
@@ -64,7 +65,7 @@ fn validate_value(tool: &str, name: &str, prop: &Value, value: &Value) -> Result
         };
         if !ok {
             return Err(format!(
-                "[InvalidInput] {tool} 参数校验失败: 字段 '{name}' 应为 {expected}"
+                "[InvalidInput] {tool} argument validation failed: field '{name}' should be {expected}"
             ));
         }
     }
@@ -75,7 +76,7 @@ fn validate_value(tool: &str, name: &str, prop: &Value, value: &Value) -> Result
         };
         if below {
             return Err(format!(
-                "[InvalidInput] {tool} 参数校验失败: 字段 '{name}' 不能小于 {min}"
+                "[InvalidInput] {tool} argument validation failed: field '{name}' cannot be less than {min}"
             ));
         }
     }
@@ -107,7 +108,7 @@ mod tests {
             "required": ["path"]
         });
         let err = validate_args("read_file", &schema, &json!({"path": 42})).unwrap_err();
-        assert!(err.contains("应为 string"));
+        assert!(err.contains("should be string"));
     }
 
     #[test]
@@ -118,7 +119,7 @@ mod tests {
             "required": []
         });
         let err = validate_args("read_file", &schema, &json!({"limit": 0})).unwrap_err();
-        assert!(err.contains("不能小于 1"));
+        assert!(err.contains("cannot be less than 1"));
     }
 
     #[test]

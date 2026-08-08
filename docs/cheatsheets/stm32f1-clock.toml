@@ -1,28 +1,28 @@
-# stm32f1-clock.toml — STM32F1 RCC/时钟树 原创速查（工程经验 + RM0008 核对）
+# stm32f1-clock.toml — STM32F1 RCC/clock tree original cheatsheet (engineering experience + RM0008)
 [meta]
 family = "STM32F1xx (F103)"
-topic = "RCC / 时钟树"
+topic = "RCC / clock tree"
 confidence = "verified"
 last_reviewed = "2026-08-08"
-source = "工程经验 + RM0008 Section 7 核对"
+source = "Engineering experience cross-checked with RM0008 Section 7"
 
 [overview]
-sources = "HSI(8MHz RC) / HSE(4-16MHz 晶振) / PLL（典型 HSE×9=72MHz）"
-max_freq = "SYSCLK 上限 72MHz（F103）；AHB=72MHz，APB1≤36MHz，APB2≤72MHz"
+sources = "HSI (8MHz RC) / HSE (4-16MHz crystal) / PLL (typically HSE×9=72MHz)"
+max_freq = "SYSCLK up to 72MHz (F103); AHB=72MHz, APB1≤36MHz, APB2≤72MHz"
 
 [path]
-SYSCLK = "来自 HSI/HSE/PLL（RCC_CFGR.SW）"
-HCLK = "SYSCLK / AHB 预分频"
-PCLK1 = "HCLK / APB1 预分频，外设上限 36MHz"
-PCLK2 = "HCLK / APB2 预分频，外设上限 72MHz"
-timer_clock = "APB1/APB2 上的定时器：APB 预分频=1 时等于 PCLK，否则等于 PCLK×2"
+SYSCLK = "one of HSI/HSE/PLL (RCC_CFGR.SW)"
+HCLK = "SYSCLK / AHB prescaler"
+PCLK1 = "HCLK / APB1 prescaler; peripherals up to 36MHz"
+PCLK2 = "HCLK / APB2 prescaler; peripherals up to 72MHz"
+timer_clock = "Timers on APB1/APB2: equal to PCLK when the APB prescaler is 1, otherwise PCLK×2"
 
 [hal_flow]
 init = "HAL_RCC_OscConfig({HSEState on, PLL.PLLSource=HSE, PLLMUL=x9}) → HAL_RCC_ClockConfig({SYSCLKSource=PLLCLK, AHB=1, APB1=2, APB2=1, FlashLatency=2})"
-flash_latency = "72MHz 需 2 个等待周期（3.3V 下），否则取指 HardFault"
+flash_latency = "72MHz needs 2 wait states (at 3.3V) or instruction fetch HardFaults"
 
 common_mistake = [
-  "PCLK1 配到 >36MHz，USART/TIM2-4 等 APB1 外设行为异常",
-  "升频后忘了调 Flash latency",
-  "HSE 起振失败未检查 HAL_RCC_OscConfig 返回值，继续用无效 PLL",
+  "PCLK1 above 36MHz makes APB1 peripherals (USART, TIM2-4, ...) behave erratically",
+  "Forgetting to adjust Flash latency after overclocking",
+  "Not checking the HAL_RCC_OscConfig return value when HSE fails to start, then continuing with an invalid PLL",
 ]

@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 pub struct ToolContext {
     pub cwd: PathBuf,
     pub permission: Arc<dyn PermissionChecker>,
-    /// Allow destructive shell commands (rm/del/git clean 等) without the
+    /// Allow destructive shell commands (rm/del/git clean, etc.) without the
     /// hard guard. Interactive TUI enables this so the normal permission
     /// popup stays the decision point; one-shot `-y` keeps it disabled unless
     /// the user passes `--allow-dangerous`.

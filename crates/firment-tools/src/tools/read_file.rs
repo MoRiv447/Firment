@@ -172,7 +172,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            err.message.contains("超出工作区边界"),
+            err.message.contains("outside the workspace"),
             "got: {}",
             err.message
         );
@@ -182,7 +182,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            err.message.contains("超出工作区边界"),
+            err.message.contains("outside the workspace"),
             "got: {}",
             err.message
         );

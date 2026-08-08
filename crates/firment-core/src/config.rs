@@ -378,16 +378,16 @@ pub fn default_config_text() -> &'static str {
 [providers.default]
 type = "openai"
 base_url = "https://api.deepseek.com/v1"
-# key 配置三种方式任选其一：
-#   1. 环境变量 DEEPSEEK_API_KEY（推荐，避免明文落盘）
-#   2. TUI 里执行 /apikey sk-xxx（写入 %APPDATA%\firment\auth.json，持久保存）
-#   3. 直接填 api_key = "sk-..."（明文写在配置里，不推荐）
+# Set the key in one of three ways:
+#   1. Environment variable DEEPSEEK_API_KEY (recommended, no plaintext on disk)
+#   2. Run /apikey sk-xxx in the TUI (writes %APPDATA%\firment\auth.json, persisted)
+#   3. Set api_key = "sk-..." directly (plaintext in the config file, not recommended)
 api_key_env = "DEEPSEEK_API_KEY"
 model = "deepseek-v4-flash"
 # max_tokens = 8192
 # temperature = 0.2
 
-# 多 Provider 示例（TUI 里用 /provider claude 切换）
+# Multiple-provider example (switch in the TUI with /provider claude)
 # [providers.claude]
 # type = "anthropic"
 # base_url = "https://api.anthropic.com"
@@ -395,25 +395,25 @@ model = "deepseek-v4-flash"
 # model = "claude-sonnet-4-5"
 
 # Tools that skip confirmation prompts (write_file, edit_file, shell).
-# 默认 build 免确认（构建是用户配置的命令）；flash 始终需确认。
+# build is auto-approved by default (it runs a user-configured command); flash always asks.
 # auto_approve = ["build"]
 
 # Max tool-calling rounds per turn.
 # max_iterations = 30
-# thinking = "medium"   # off / low / medium / high / xhigh / max（思考深度）
-# context_budget_chars = 60000   # 会话上下文字符预算，超出后自动压缩早期对话
-# compaction_strategy = "summarize"   # 默认 summarize；可选 drop（超预算直接丢弃旧轮）/ off（不自动压缩）
+# thinking = "medium"   # off / low / medium / high / xhigh / max (reasoning depth)
+# context_budget_chars = 60000   # session context budget in chars; older messages are compacted past this
+# compaction_strategy = "summarize"   # default summarize; drop (discard old turns) / off (no auto-compaction)
 
 [tools]
-# 代码改动后，agent 需先跑通 verify 再宣布完成；留空则 verify 工具不可用
+# After code changes, the agent must pass verify before declaring completion; empty disables the tool
 # verify_command = "cargo check"
-# 嵌入式示例：
+# Embedded example:
 # verify_command = "cmake --build build"
-# symbols_backend = "auto"   # auto / ctags / regex（符号索引后端，auto=有 ctags 用 ctags）
-# build_command = "cmake --build build"   # build 工具执行的命令（Keil: uv4 -j0 -b project.uvprojx）
-# default_chip = "stm32f407vetx"          # flash 工具的默认芯片（probe-rs 芯片名）
-# monitor_port = "COM3"                   # firm monitor 默认串口
-# monitor_baud = 115200                   # firm monitor 默认波特率
+# symbols_backend = "auto"   # auto / ctags / regex (symbol index backend; auto uses ctags when available)
+# build_command = "cmake --build build"   # command run by the build tool (Keil: uv4 -j0 -b project.uvprojx)
+# default_chip = "stm32f407vetx"          # default chip for the flash tool (probe-rs chip name)
+# monitor_port = "COM3"                   # default serial port for firm monitor
+# monitor_baud = 115200                   # default baud rate for firm monitor
 "#
 }
 

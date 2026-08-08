@@ -40,7 +40,7 @@ impl Tool for Flash {
 
     fn approval(&self, args: &Value) -> Option<String> {
         let file = args.get("file").and_then(|f| f.as_str()).unwrap_or("?");
-        Some(format!("⚠ 烧录固件到设备（flash）：{file}"))
+        Some(format!("⚠ flash firmware to device: {file}"))
     }
 
     async fn run(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
@@ -57,7 +57,8 @@ impl Tool for Flash {
             .or_else(|| ctx.default_chip.clone())
             .ok_or_else(|| {
                 ToolError::new(
-                    "[InvalidInput] 缺少芯片参数：请在参数里给 chip，或在 config.toml 的 [tools] 设置 default_chip（如 stm32f407vetx）",
+                    "[InvalidInput] missing chip: pass a chip parameter or set default_chip in \
+                     [tools] of config.toml (e.g. stm32f407vetx)",
                 )
             })?;
         let probe = args.get("probe").and_then(|p| p.as_str());
@@ -73,7 +74,8 @@ impl Tool for Flash {
             .unwrap_or(false);
         if !probe_rs_ok {
             return Err(ToolError::new(
-                "[NotFound] probe-rs 未安装或不在 PATH：请用 `cargo install probe-rs-tools` 安装，或从 probe-rs GitHub Releases 下载",
+                "[NotFound] probe-rs is not installed or not on PATH: install it with \
+                 `cargo install probe-rs-tools` or download from the probe-rs GitHub Releases",
             ));
         }
 
@@ -87,7 +89,8 @@ impl Tool for Flash {
             ))),
             Ok((text, None)) => Err(ToolError::new(format!("[Timeout] flash timed out\n{text}"))),
             Err(e) if e.contains("spawn failed") => Err(ToolError::new(format!(
-                "[NotFound] probe-rs 未安装或不在 PATH：请用 `cargo install probe-rs-tools` 安装，或从 probe-rs GitHub Releases 下载（{e}）"
+                "[NotFound] probe-rs is not installed or not on PATH: install it with \
+                 `cargo install probe-rs-tools` or download from the probe-rs GitHub Releases ({e})"
             ))),
             Err(e) => Err(ToolError::new(format!("[Io] {e}"))),
         }
@@ -150,7 +153,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            err.message.contains("超出工作区边界"),
+            err.message.contains("outside the workspace"),
             "got: {}",
             err.message
         );
@@ -176,7 +179,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            err.message.contains("probe-rs 未安装"),
+            err.message.contains("probe-rs is not installed"),
             "got: {}",
             err.message
         );

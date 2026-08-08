@@ -32,7 +32,7 @@ pub(crate) fn resolve_within(
         });
     if !inside {
         return Err(format!(
-            "[Permission] 路径超出工作区边界: {}（工作区: {}）",
+            "[Permission] path is outside the workspace: {} (workspace: {})",
             target.display(),
             cwd_canon.display()
         ));
@@ -75,7 +75,7 @@ pub(crate) fn rel_str(root: &Path, path: &Path) -> String {
 }
 
 /// 8-hex prefix of the SHA-256 of a normalized line (no trailing CR/LF).
-/// `edit_file` 的 hashline 锚点与此一致（starts_with 匹配）。
+/// `edit_file` hashline anchors use the same prefix (matched with starts_with).
 pub(crate) fn line_hash_prefix(line: &str) -> String {
     firment_core::hash::sha256_hex(line.as_bytes())
         .chars()
@@ -196,7 +196,7 @@ mod tests {
         assert_eq!(inside, dir.path().join("a.txt"));
 
         let err = resolve_within(dir.path(), "../outside.txt", &[]).unwrap_err();
-        assert!(err.contains("超出工作区边界"), "got: {err}");
+        assert!(err.contains("outside the workspace"), "got: {err}");
 
         let extra = tempdir().unwrap();
         let target = extra.path().join("x.txt");

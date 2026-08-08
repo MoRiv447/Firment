@@ -191,7 +191,7 @@ async fn plan_mode_end_to_end_only_runs_read_tools() {
     );
 
     let text = agent
-        .run_turn("调研 sample.txt 并给出修改计划")
+        .run_turn("review sample.txt and propose a modification plan")
         .await
         .unwrap();
     assert_eq!(text, "Plan ready.");

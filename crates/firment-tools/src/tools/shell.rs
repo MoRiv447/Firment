@@ -107,7 +107,7 @@ impl Tool for Shell {
     fn approval(&self, args: &Value) -> Option<String> {
         let command = args.get("command").and_then(|c| c.as_str())?;
         Some(match dangerous_reason(command) {
-            Some(reason) => format!("⚠ 危险命令（{reason}）: {command}"),
+            Some(reason) => format!("⚠ dangerous command ({reason}): {command}"),
             None => format!("run shell command: {command}"),
         })
     }
@@ -121,11 +121,14 @@ impl Tool for Shell {
             && !ctx.allow_dangerous
         {
             return Err(ToolError::new(format!(
-                "[Permission] 危险命令已被安全闸拦截（{reason}）: {command}\n\
-                 当前是一次性/自动批准模式，默认不允许破坏性或改变布局的操作。\n\
-                 请改用更安全的操作；如确需执行，请用户加 --allow-dangerous 重新运行，\
-                 或先在交互式 TUI 中确认。\n\
-                 汇报前请先用 git status / list_dir 核实工作区实际状态，不要声称操作被完全拦截。"
+                "[Permission] Dangerous command blocked by the safety guard ({reason}): \
+                 {command}\n\
+                 You are in one-shot/auto-approve mode, which disallows destructive or \
+                 layout-changing operations by default.\n\
+                 Use a safer operation instead; if it is truly required, ask the user to \
+                 rerun with --allow-dangerous or confirm it in the interactive TUI.\n\
+                 Before reporting, verify the actual workspace state with git status / \
+                 list_dir; never claim an operation was fully blocked if it was not."
             )));
         }
         let cwd = args
@@ -235,7 +238,7 @@ mod tests {
             .run(json!({"command": "del todo.py test_todo.py"}), &ctx)
             .await;
         let err = result.unwrap_err();
-        assert!(err.message.contains("危险命令已被安全闸拦截"));
+        assert!(err.message.contains("Dangerous command blocked"));
     }
 
     #[tokio::test]
@@ -244,7 +247,7 @@ mod tests {
         let reason = tool
             .approval(&json!({"command": "git clean -fdx"}))
             .unwrap();
-        assert!(reason.contains("⚠ 危险命令"));
+        assert!(reason.contains("⚠ dangerous command"));
         let safe = tool.approval(&json!({"command": "git status"})).unwrap();
         assert!(!safe.contains("⚠"));
     }

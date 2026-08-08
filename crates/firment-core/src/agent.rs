@@ -201,12 +201,16 @@ impl Agent {
                 .save_pins(&id, &pins)
                 .map_err(|e| e.to_string())?;
         }
-        let mut message = format!("已固定 {}（压缩时保留全文）", path.display());
+        let mut message = format!(
+            "Pinned {} (full content kept during compaction)",
+            path.display()
+        );
         if let Ok(meta) = fs::metadata(&path) {
             let budget = self.context_budget_chars.max(1);
             if meta.len() as usize >= budget * 30 / 100 {
                 message.push_str(&format!(
-                    "\n⚠ 文件约 {} KB，已达上下文预算的 30% 以上；固定后可能挤占摘要空间，建议只固定关键源码文件",
+                    "\n⚠ File is about {} KB, over 30% of the context budget; pinning it may \
+                     crowd out summarized history — prefer pinning only key source files",
                     meta.len() / 1024
                 ));
             }
@@ -224,9 +228,9 @@ impl Agent {
             .save_pins(&id, &pins)
             .map_err(|e| e.to_string())?;
         if pins.len() == before {
-            Ok(format!("{} 不在固定列表", path.display()))
+            Ok(format!("{} is not in the pinned list", path.display()))
         } else {
-            Ok(format!("已取消固定 {}", path.display()))
+            Ok(format!("Unpinned {}", path.display()))
         }
     }
 
@@ -245,7 +249,7 @@ impl Agent {
             if fs::write(&path, text).is_ok() {
                 let excerpt: String = text.chars().take(EXCERPT).collect();
                 return format!(
-                    "[输出过长（{} 字符），完整内容已外溢到 {}；需要时用 read_file 查看]\n{}",
+                    "[output too long ({} chars); full content spilled to {}; use read_file to view]\n{}",
                     text.chars().count(),
                     path.display(),
                     excerpt
@@ -308,7 +312,9 @@ impl Agent {
         let mut cancel_rx = self.cancel_tx.subscribe();
         if *cancel_rx.borrow() {
             self.sink
-                .event(AgentEvent::Info("⏹ 已中断（尚未开始处理）".to_string()))
+                .event(AgentEvent::Info(
+                    "⏹ Interrupted (no work started yet)".to_string(),
+                ))
                 .await;
             self.sink
                 .event(AgentEvent::TurnEnd {
@@ -324,7 +330,7 @@ impl Agent {
             input.to_string()
         } else {
             self.ledger_seq_appended = last_seq;
-            format!("[最近改动台账]\n{delta}\n\n{input}")
+            format!("[change ledger]\n{delta}\n\n{input}")
         };
         self.session.push(ChatMessage::User { content: input });
         self.sink.event(AgentEvent::TurnStart).await;
@@ -341,7 +347,7 @@ impl Agent {
                 let summary = rollback_journal(&journal);
                 self.sink
                     .event(AgentEvent::Info(format!(
-                        "⏹ 已中断，已回滚本回合编辑: {summary}"
+                        "⏹ Interrupted; rolled back this turn's edits: {summary}"
                     )))
                     .await;
                 self.sink
@@ -360,7 +366,7 @@ impl Agent {
                     let summary = rollback_journal(&journal);
                     self.sink
                         .event(AgentEvent::Info(format!(
-                            "⏹ 已中断，已回滚本回合编辑: {summary}"
+                            "⏹ Interrupted; rolled back this turn's edits: {summary}"
                         )))
                         .await;
                     self.sink
@@ -389,7 +395,7 @@ impl Agent {
                         let summary = rollback_journal(&journal);
                         self.sink
                             .event(AgentEvent::Error(format!(
-                                "provider error; 已回滚本回合编辑: {summary}"
+                                "provider error; rolled back this turn's edits: {summary}"
                             )))
                             .await;
                         return Err(AgentError::Provider(e));
@@ -414,7 +420,7 @@ impl Agent {
                 let summary = rollback_journal(&journal);
                 self.sink
                     .event(AgentEvent::Info(format!(
-                        "⏹ 已中断，已回滚本回合编辑: {summary}"
+                        "⏹ Interrupted; rolled back this turn's edits: {summary}"
                     )))
                     .await;
                 self.sink
@@ -492,7 +498,9 @@ impl Agent {
                     } else {
                         self.sink
                             .event(AgentEvent::Info(
-                                "verify 硬门未通过：修复后重试，跑通前不会标记完成".to_string(),
+                                "verify gate failed: fix the errors and retry; completion is \
+                                 not accepted until verify passes"
+                                    .to_string(),
                             ))
                             .await;
                         continue;
@@ -506,14 +514,18 @@ impl Agent {
                     Ok(changes) if !changes.is_empty() => {
                         if let Err(e) = ledger.append(&changes) {
                             self.sink
-                                .event(AgentEvent::Info(format!("改动台账写入失败: {e}")))
+                                .event(AgentEvent::Info(format!(
+                                    "failed to append change ledger: {e}"
+                                )))
                                 .await;
                         }
                     }
                     Ok(_) => {}
                     Err(e) => {
                         self.sink
-                            .event(AgentEvent::Info(format!("编辑日志写入失败: {e}")))
+                            .event(AgentEvent::Info(format!(
+                                "failed to write edit journal: {e}"
+                            )))
                             .await;
                     }
                 }
@@ -536,7 +548,7 @@ impl Agent {
         let summary = rollback_journal(&journal);
         self.sink
             .event(AgentEvent::Info(format!(
-                "达到最大迭代次数，已回滚本回合编辑: {summary}"
+                "reached max iterations; rolled back this turn's edits: {summary}"
             )))
             .await;
         Err(AgentError::MaxIterations(self.max_iterations))
@@ -582,9 +594,12 @@ impl Agent {
             Some(summary) => summary,
             None => compact_summary(&old, DIGEST_CHARS),
         };
-        let mut content = format!("[对话已压缩] 摘要：\n{summary}");
+        let mut content = format!("[compacted context] summary:\n{summary}");
         if drop_until > 0 {
-            content.push_str("\n\n（更早的对话已按 drop 策略直接丢弃，不再保留摘要）");
+            content.push_str(
+                "\n\n(earlier conversation was dropped per the 'drop' strategy; no summary \
+                 retained)",
+            );
         }
         if let Some(files) = self.recent_read_files_text() {
             content.push_str(&format!("\n\n{files}"));
@@ -615,7 +630,9 @@ impl Agent {
         if out.is_empty() {
             None
         } else {
-            Some(format!("[已固定文件（压缩时保留全文）]\n{out}"))
+            Some(format!(
+                "[pinned files (full content kept during compaction)]\n{out}"
+            ))
         }
     }
 
@@ -682,7 +699,9 @@ impl Agent {
         if out.is_empty() {
             None
         } else {
-            Some(format!("[压缩后回填最近读取的文件]\n{out}"))
+            Some(format!(
+                "[re-injected recently read files after compaction]\n{out}"
+            ))
         }
     }
 
@@ -691,7 +710,7 @@ impl Agent {
         let dir = self.store.undo_dir(&self.session.id);
         let summary = EditJournal::undo_latest(&dir)?;
         Ok(format!(
-            "已恢复 {} 个文件: {}",
+            "Restored {} file(s): {}",
             summary.files,
             summary.restored.join(", ")
         ))
@@ -792,7 +811,9 @@ async fn execute_tool_calls(
             let summary = rollback_journal(journal);
             agent
                 .sink
-                .event(AgentEvent::Info(format!("编辑批次失败，已回滚: {summary}")))
+                .event(AgentEvent::Info(format!(
+                    "edit batch failed; rolled back: {summary}"
+                )))
                 .await;
         }
 
@@ -820,7 +841,8 @@ async fn execute_tool_calls(
                 let hash = simple_hash(&content);
                 if agent.read_hashes.get(&path) == Some(&hash) {
                     content = format!(
-                        "[文件未变化（内容同之前的 read_file 结果）：{}；如需最新内容请重新 read_file]",
+                        "[file unchanged (same content as the previous read_file result): {}; \
+                         re-read if you need the latest content]",
                         path.display()
                     );
                 } else {
@@ -922,10 +944,10 @@ fn compact_summary(messages: &[ChatMessage], max_chars: usize) -> String {
         match message {
             ChatMessage::System { .. } => {}
             ChatMessage::User { content } => {
-                parts.push(format!("用户: {}", truncate_chars(content, 120)));
+                parts.push(format!("User: {}", truncate_chars(content, 120)));
             }
             ChatMessage::Assistant { content, .. } => {
-                parts.push(format!("助手: {}", truncate_chars(content, 120)));
+                parts.push(format!("Assistant: {}", truncate_chars(content, 120)));
             }
             ChatMessage::Tool { name, content, .. } => {
                 parts.push(format!("{name}: {}", truncate_chars(content, 80)));
@@ -946,9 +968,9 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 
 fn rollback_journal(journal: &Arc<Mutex<EditJournal>>) -> String {
     match lock_journal(journal).rollback() {
-        Ok(files) if files.is_empty() => "没有已记录的文件改动".to_string(),
-        Ok(files) => format!("已恢复 {} 个文件: {}", files.len(), files.join(", ")),
-        Err(e) => format!("回滚不完整: {e}"),
+        Ok(files) if files.is_empty() => "no file changes were recorded".to_string(),
+        Ok(files) => format!("restored {} file(s): {}", files.len(), files.join(", ")),
+        Err(e) => format!("rollback incomplete: {e}"),
     }
 }
 

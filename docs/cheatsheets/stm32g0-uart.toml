@@ -1,21 +1,21 @@
-# stm32g0-uart.toml — STM32G0 USART/LPUART 原创速查（工程经验 + RM0444 核对）
+# stm32g0-uart.toml — STM32G0 USART/LPUART original cheatsheet (engineering experience + RM0444)
 [meta]
 family = "STM32G0xx"
 topic = "USART / LPUART"
 confidence = "verified"
 last_reviewed = "2026-08-08"
-source = "工程经验 + RM0444 核对"
+source = "Engineering experience cross-checked with RM0444"
 
 [overview]
-usarts = "按型号 2-4 个 USART；另有 LPUART1（低功耗，可 STOP 模式工作）"
-clock_src = "USART 时钟可选 PCLK / HSI16 / LSE（LPUART 常用 LSE 32.768kHz 实现极低功耗串口，波特率受限）"
+usarts = "2-4 USARTs depending on the part; plus LPUART1 (low power, can run in STOP mode)"
+clock_src = "USART clock can be PCLK / HSI16 / LSE (LPUART commonly uses LSE 32.768kHz for ultra-low-power serial; baud is then limited)"
 
 [hal_flow]
-init = "HAL_UART_Init / HAL_LPUART_Init 配置波特率与数据格式"
-low_power = "LPUART1 用 LSE 时钟时波特率上限低（常见 9600 档）；需 STOP 唤醒用 HAL_LPUART_Receive_IT + EXTI"
+init = "HAL_UART_Init / HAL_LPUART_Init configure baud and data format"
+low_power = "LPUART1 on LSE has a low baud ceiling (commonly 9600); for STOP wake-up use HAL_LPUART_Receive_IT + EXTI"
 
 common_mistake = [
-  "按 PCLK=64MHz 给 LPUART 算高波特率——LSE 时钟下算不出来",
-  "忘了在 RCC 里选 USART 时钟源（PCLK vs HSI16 vs LSE）",
-  "LPUART 唤醒只开中断没使能相关 EXTI/时钟，无法从 STOP 醒来",
+  "Computing a high LPUART baud from PCLK=64MHz — impossible on the LSE clock",
+  "Forgetting to select the USART clock source in RCC (PCLK vs HSI16 vs LSE)",
+  "Enabling only the LPUART interrupt for wake-up without the related EXTI/clock — cannot wake from STOP",
 ]

@@ -786,7 +786,10 @@ async fn long_tool_output_is_spilled_to_disk() {
             _ => None,
         })
         .unwrap();
-    assert!(tool_message.contains("已外溢到"), "got: {tool_message}");
+    assert!(
+        tool_message.contains("full content spilled to"),
+        "got: {tool_message}"
+    );
     let spill_dir = store.spill_dir(&agent.session().id);
     let spilled = std::fs::read_dir(&spill_dir).unwrap().count();
     assert_eq!(spilled, 1);
@@ -845,8 +848,8 @@ async fn ledger_records_changes_and_is_injected_into_prompt() {
     match &requests[0].messages[0] {
         ChatMessage::System { content } => {
             assert!(
-                !content.contains("本会话改动台账"),
-                "ledger leaked into system prompt"
+                !content.contains("c.txt"),
+                "ledger delta leaked into system prompt"
             );
         }
         _ => panic!("expected a system message"),
@@ -862,7 +865,7 @@ async fn ledger_records_changes_and_is_injected_into_prompt() {
     assert!(
         user_texts
             .iter()
-            .any(|c| c.contains("[最近改动台账]") && c.contains("c.txt")),
+            .any(|c| c.contains("[change ledger]") && c.contains("c.txt")),
         "ledger delta missing from user message, got: {user_texts:?}"
     );
 }
@@ -906,7 +909,7 @@ async fn model_based_compaction_uses_provider_summary() {
     match first {
         ChatMessage::User { content } => {
             assert!(content.contains("MODEL SUMMARY CONTENT"), "got: {content}");
-            assert!(content.contains("[对话已压缩]"), "got: {content}");
+            assert!(content.contains("[compacted context]"), "got: {content}");
         }
         _ => panic!("expected a compaction summary message"),
     }
@@ -967,7 +970,7 @@ async fn duplicate_read_results_are_stubbed() {
         tool_texts[0]
     );
     assert!(
-        tool_texts[1].contains("[文件未变化"),
+        tool_texts[1].contains("[file unchanged"),
         "second read should be stubbed, got: {}",
         tool_texts[1]
     );
@@ -1006,13 +1009,13 @@ async fn pinned_files_survive_compaction() {
     assert!(
         messages
             .iter()
-            .any(|m| matches!(m, ChatMessage::User { content } if content.contains("[已固定文件") && content.contains("critical register map"))),
+            .any(|m| matches!(m, ChatMessage::User { content } if content.contains("[pinned files") && content.contains("critical register map"))),
         "pinned file must be re-injected, got first: {:?}",
         messages.first()
     );
 
     let summary = agent.unpin_path(pinned.clone()).unwrap();
-    assert!(summary.contains("已取消固定"), "got: {summary}");
+    assert!(summary.contains("Unpinned"), "got: {summary}");
 }
 
 #[tokio::test]
@@ -1046,7 +1049,7 @@ async fn compaction_strategy_off_disables_auto_compaction() {
     assert_eq!(messages.len(), 16);
     assert!(
         !messages.iter().any(
-            |m| matches!(m, ChatMessage::User { content } if content.contains("[对话已压缩]"))
+            |m| matches!(m, ChatMessage::User { content } if content.contains("[compacted context]"))
         ),
         "compaction must be disabled"
     );
@@ -1083,7 +1086,7 @@ async fn compaction_strategy_drop_discards_oldest_rounds() {
     assert!(
         messages
             .iter()
-            .any(|m| matches!(m, ChatMessage::User { content } if content.contains("drop 策略"))),
+            .any(|m| matches!(m, ChatMessage::User { content } if content.contains("per the 'drop' strategy"))),
         "drop marker missing"
     );
     // summary message + last 3 rounds verbatim
@@ -1215,7 +1218,11 @@ async fn invalid_arguments_are_rejected_before_tool_runs() {
         allowed_roots: Vec::new(),
     };
     let err = registry.run("flag", json!({}), &ctx).await.unwrap_err();
-    assert!(err.message.contains("参数校验失败"), "got: {}", err.message);
+    assert!(
+        err.message.contains("argument validation failed"),
+        "got: {}",
+        err.message
+    );
     assert!(
         !ran.load(Ordering::SeqCst),
         "tool must not run on invalid args"
@@ -1321,7 +1328,7 @@ async fn context_compaction_replaces_old_messages_with_digest() {
     let messages = &requests[1].messages;
     assert!(
         messages.iter().any(
-            |m| matches!(m, ChatMessage::User { content } if content.contains("[对话已压缩]"))
+            |m| matches!(m, ChatMessage::User { content } if content.contains("[compacted context]"))
         ),
         "expected a compaction marker"
     );
@@ -1383,7 +1390,7 @@ async fn mutation_batch_rolls_back_when_a_later_edit_fails() {
     assert!(
         collected
             .iter()
-            .any(|e| matches!(e, AgentEvent::Info(m) if m.contains("已回滚"))),
+            .any(|e| matches!(e, AgentEvent::Info(m) if m.contains("rolled back"))),
         "expected a rollback info event"
     );
 }
@@ -1457,6 +1464,6 @@ async fn committed_turn_can_be_undone() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "v1");
 
     let summary = agent.undo_last().await.unwrap();
-    assert!(summary.contains("已恢复 1 个文件"));
+    assert!(summary.contains("Restored 1 file(s)"));
     assert!(!file.exists());
 }

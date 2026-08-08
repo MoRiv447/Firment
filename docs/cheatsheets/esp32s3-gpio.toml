@@ -1,22 +1,22 @@
-# esp32s3-gpio.toml — ESP32-S3 GPIO 原创速查（工程经验 + ESP32-S3 TRM 核对）
+# esp32s3-gpio.toml — ESP32-S3 GPIO original cheatsheet (engineering experience + ESP32-S3 TRM)
 [meta]
 family = "ESP32-S3"
 topic = "GPIO"
 confidence = "verified"
 last_reviewed = "2026-08-08"
-source = "工程经验 + ESP32-S3 Technical Reference Manual 核对"
+source = "Engineering experience cross-checked with the ESP32-S3 Technical Reference Manual"
 
 [overview]
-gpios = "45 个 GPIO：GPIO0-21 与 GPIO26-48；3.3V 逻辑，多数不 5V 容忍（以数据手册为准）"
-matrix = "GPIO matrix 可把任意外设信号路由到任意引脚；IOMUX 直连延迟更低"
-usb = "内置 USB-Serial/JTAG：默认 GPIO19(D-) / GPIO20(D+)"
+gpios = "45 GPIOs: GPIO0-21 and GPIO26-48; 3.3V logic, most are not 5V tolerant (check the datasheet)"
+matrix = "The GPIO matrix routes any peripheral signal to any pin; direct IOMUX has lower latency"
+usb = "Built-in USB-Serial/JTAG: default GPIO19(D-) / GPIO20(D+)"
 
 [key_pins]
-strapping = "GPIO0（下载模式）/ GPIO3 / GPIO45 / GPIO46 为 strapping 引脚，上电电平决定启动行为"
-console = "默认 UART0 console：GPIO43(TX) / GPIO44(RX)"
+strapping = "GPIO0 (download mode) / GPIO3 / GPIO45 / GPIO46 are strapping pins; reset levels decide boot behavior"
+console = "Default UART0 console: GPIO43(TX) / GPIO44(RX)"
 
 common_mistake = [
-  "把 3.3V 引脚当 5V 容忍直接接 5V——S3 多数引脚不是 5V 容忍",
-  "占用了 GPIO43/44 导致默认 console 无输出",
-  "强拉 strapping 引脚（尤其 GPIO0）导致无法进入下载模式",
+  "Driving 3.3V pins with 5V as if they were tolerant — most S3 pins are not 5V tolerant",
+  "Occupying GPIO43/44 silences the default console",
+  "Hard-driving strapping pins (especially GPIO0) blocks download mode",
 ]

@@ -31,7 +31,8 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          prior state. If a command you ran moved or renamed files, say exactly that — never claim \
          a destructive action was \"fully blocked\" when earlier commands already changed the \
          workspace.\n\
-         - Respond in the same language the user uses. Do not use emojis unless asked.\n\
+         - Respond in English unless the user explicitly asks for another language. Do not use \
+         emojis unless asked.\n\
          \n\
          # Engineering principles\n\
          - Understand the codebase before changing it: read the relevant files, respect existing \
@@ -53,12 +54,14 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          hunk (enclosing function/while/if structure), especially inside loops; after editing, \
          read_file the affected region and confirm the change landed in the right place before \
          continuing. If it did not, fix it with another edit instead of moving on.\n\
-         - read_file 会在输出末尾附 `[file-sha256: ...]`（整文件哈希）。担心文件被并发改动时，\
-         把该值传给 edit_file / write_file 的 expected_sha256 做前置校验；不匹配会返回 \
-         [ConcurrentChange] 和当前哈希，重新 read_file 再改即可。\n\
-         - 大文件或高风险改动优先用 hashline：read_file 加 hashlines=true 拿到每行的 \
-         [8位内容哈希]，edit_file 用 hashline / end_hashline 精确定位；哈希不存在说明文件已 \
-         变化（[ConcurrentChange]），先重读再改，不要盲试。\n\
+         - read_file appends `[file-sha256: ...]` (full-file hash) to its output. If you worry \
+         the file may have changed concurrently, pass that value to edit_file / write_file as \
+         expected_sha256; a mismatch returns [ConcurrentChange] with the current hash — \
+         re-read the file and retry.\n\
+         - For large files or high-risk edits, prefer hashline: call read_file with \
+         hashlines=true to get an [8-hex content hash] per line, then target edit_file with \
+         hashline / end_hashline. If the hash is missing the file changed \
+         ([ConcurrentChange]); re-read first, never guess.\n\
          - Batch independent tool calls in parallel to save round trips; dependent calls \
          (editing then reading the same file) are ordered automatically.\n\
          - Tool errors carry type tags such as [NotFound], [CompileError], [Timeout], \
@@ -80,7 +83,7 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          code 0.\n\
          - A change ledger may be attached to this session; use it as ground truth when \
          describing what changed.\n\
-         - Sections marked [对话已压缩] or [最近改动台账] are system-generated context: treat \
+         - Sections marked [compacted context] or [change ledger] are system-generated: treat \
          the summary as authoritative, and re-read files if you need details beyond what is \
          quoted.\n\
          \n\
@@ -101,18 +104,21 @@ pub fn default_system_prompt(cwd: &Path) -> String {
         prompt.push_str(&instructions);
     }
     prompt.push_str(
-        "\n         - 构建/烧录/串口配置可写在项目根目录 `.firment.toml`（或 firment.toml）的 [tools]：\
-         build_command / default_chip / verify_command / monitor_port / monitor_baud。\
-         需要构建烧录时，先 read_file 该项目配置，缺什么就询问用户或用 write_file 补齐，再调用 build / flash / run。\
-         全局配置可用 /config 查看。\n",
+        "\n         - Build/flash/serial settings can live in `.firment.toml` (or firment.toml) \
+         at the project root under [tools]: build_command / default_chip / verify_command / \
+         monitor_port / monitor_baud. When the task needs a build or flash, read_file that \
+         project config first; ask the user or write_file to fill in anything missing, then \
+         call build / flash / run. Use /config to inspect global configuration.\n",
     );
     let seed = crate::kb::seed_index_text();
     let seed: String = seed.chars().take(12000).collect();
     prompt.push_str(&format!(
         "\n\n# Hardware knowledge base (built-in seed)\n\
-         系统内置硬件知识库索引：\n{seed}\n\
-         可随时用 read_file 读取 {} 下的速查表（如 cheatsheets/stm32f1-uart.toml）获取细节。\n\
-         涉及芯片、外设、寄存器、HAL 或硬件配置的问题，先查知识库再作答；引用时说明来源。",
+         A built-in hardware knowledge base index is available:\n{seed}\n\
+         Read cheatsheets under {} (for example cheatsheets/stm32f1-uart.toml) with read_file \
+         whenever you need details.\n\
+         For questions about chips, peripherals, registers, HAL, or hardware configuration, \
+         consult the knowledge base first and cite the source file.",
         crate::kb::seed_kb_dir().display()
     ));
     if let Some(hint) = load_vendor_index_hint(cwd) {
@@ -173,11 +179,11 @@ fn load_vendor_index_hint(cwd: &Path) -> Option<String> {
         let index_text: String = index_text.chars().take(6000).collect();
         let hint = format!(
             "\n\n# Hardware knowledge base\n\
-             本项目硬件知识库索引（{}）：\n\
+             This project has a hardware knowledge base index ({}):\n\
              {index_text}\n\
-             涉及芯片、外设、寄存器、HAL 或硬件配置的问题：先按上面的索引用 read_file 读取对应的\n\
-             docs/cheatsheets/ 速查表（如 cheatsheets/stm32f1-uart.toml），再结合项目代码作答；\n\
-             引用时说明来源文件。",
+             For questions about chips, peripherals, registers, HAL, or hardware configuration, \
+             follow the index and read the matching docs/cheatsheets/ file with read_file (for \
+             example cheatsheets/stm32f1-uart.toml) before answering, and cite the source file.",
             index.display()
         );
         return Some(hint);

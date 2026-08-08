@@ -156,7 +156,7 @@ monitor_port = "COM3"
 
 ### 🎮 TUI 交互
 
-斜杠命令：`/plan [on|off]`、`/agent`、`/models`、`/model <id>`、`/sessions`（↑/↓ 选择）、`/session <id>`、`/undo`、`/ledger`、`/pin <路径>`、`/unpin <路径>`、`/provider <名字>`、`/add-provider`、`/apikey`、`/thinking`、`/copy`、`/config`、`/clear`、`/help`、`/quit`。
+斜杠命令：`/new`、`/plan [on|off]`、`/agent`、`/models`、`/model <id>`、`/sessions`（↑/↓ 选择）、`/session <id>`、`/undo`、`/ledger`、`/pin <路径>`、`/unpin <路径>`、`/provider <名字>`、`/add-provider`、`/apikey`、`/thinking`、`/copy`、`/config`、`/clear`、`/help`、`/quit`。
 
 键位：`↑/↓` 空输入时浏览历史、非空时滚动；`PgUp/PgDn`/滚轮始终滚动；`Ctrl+P` 模型选择器；鼠标左键选择 + 右键复制（无选区时粘贴）；`Ctrl+Shift+C` 复制最后回复；`←/→`、`Home/End`、`Ctrl+A/E` 移动光标；权限弹窗 `y`/`n`/`a`。
 

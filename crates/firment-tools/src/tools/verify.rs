@@ -31,14 +31,16 @@ impl Tool for Verify {
     async fn run(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let command = ctx.verify_command.clone().ok_or_else(|| {
             ToolError::new(
-                "[InvalidInput] verify 工具未配置：请在 config.toml 的 [tools] 中设置 verify_command（例如 verify_command = \"cargo check\"）",
+                "[InvalidInput] verify tool is not configured: set verify_command in [tools] of \
+                 config.toml (e.g. verify_command = \"cargo check\")",
             )
         })?;
         if let Some(reason) = dangerous_reason(&command)
             && !ctx.allow_dangerous
         {
             return Err(ToolError::new(format!(
-                "[Permission] verify 命令命中危险命令安全闸（{reason}），已拒绝执行: {command}"
+                "[Permission] verify command was blocked by the dangerous-command guard \
+                 ({reason}); refusing to run: {command}"
             )));
         }
         let timeout_ms = args
@@ -126,6 +128,6 @@ mod tests {
         };
         let (ctx, _dir) = ctx_with(Some(cmd));
         let err = Verify.run(json!({}), &ctx).await.unwrap_err();
-        assert!(err.message.contains("安全闸"));
+        assert!(err.message.contains("dangerous-command guard"));
     }
 }

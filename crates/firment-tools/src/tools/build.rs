@@ -31,14 +31,16 @@ impl Tool for Build {
     async fn run(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let command = ctx.build_command.clone().ok_or_else(|| {
             ToolError::new(
-                "[InvalidInput] build 工具未配置：请在 config.toml 的 [tools] 中设置 build_command（例如 build_command = \"cmake --build build\"）",
+                "[InvalidInput] build tool is not configured: set build_command in [tools] of \
+                 config.toml (e.g. build_command = \"cmake --build build\")",
             )
         })?;
         if let Some(reason) = dangerous_reason(&command)
             && !ctx.allow_dangerous
         {
             return Err(ToolError::new(format!(
-                "[Permission] build 命令命中危险命令安全闸（{reason}），已拒绝执行: {command}"
+                "[Permission] build command was blocked by the dangerous-command guard \
+                 ({reason}); refusing to run: {command}"
             )));
         }
         let timeout_ms = args

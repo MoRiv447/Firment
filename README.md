@@ -154,7 +154,7 @@ monitor_port = "COM3"
 
 ### 🎮 TUI
 
-Slash commands: `/plan [on|off]`, `/agent`, `/models`, `/model <id>`, `/sessions` (↑/↓ to pick), `/session <id>`, `/undo`, `/ledger`, `/pin <path>`, `/unpin <path>`, `/provider <name>`, `/add-provider`, `/apikey`, `/thinking`, `/copy`, `/config`, `/clear`, `/help`, `/quit`.
+Slash commands: `/new`, `/plan [on|off]`, `/agent`, `/models`, `/model <id>`, `/sessions` (↑/↓ to pick), `/session <id>`, `/undo`, `/ledger`, `/pin <path>`, `/unpin <path>`, `/provider <name>`, `/add-provider`, `/apikey`, `/thinking`, `/copy`, `/config`, `/clear`, `/help`, `/quit`.
 
 Keys: `↑/↓` browse history when the input is empty, otherwise scroll; `PgUp/PgDn` and the mouse wheel always scroll; `Ctrl+P` opens the model picker; left-drag to select and right-click to copy (paste when nothing is selected); `Ctrl+Shift+C` copies the last reply; `←/→`, `Home/End`, `Ctrl+A/E` move the cursor; permission popups accept `y`/`n`/`a`.
 

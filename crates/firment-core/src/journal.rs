@@ -108,7 +108,7 @@ impl Ledger {
         for entry in &new_entries[start..] {
             for change in &entry.changes {
                 out.push_str(&format!(
-                    "- {}（{} 行 -> {} 行）\n{}",
+                    "- {} ({} lines -> {} lines)\n{}",
                     change.path.display(),
                     change.old_lines,
                     change.new_lines,
@@ -133,7 +133,7 @@ impl Ledger {
         for entry in &entries[start..] {
             for change in &entry.changes {
                 out.push_str(&format!(
-                    "- {}（{} 行 -> {} 行）\n{}",
+                    "- {} ({} lines -> {} lines)\n{}",
                     change.path.display(),
                     change.old_lines,
                     change.new_lines,
@@ -212,7 +212,7 @@ impl EditJournal {
         if errors.is_empty() {
             Ok(restored)
         } else {
-            Err(format!("回滚不完整: {}", errors.join("; ")))
+            Err(format!("rollback incomplete: {}", errors.join("; ")))
         }
     }
 
@@ -253,9 +253,9 @@ impl EditJournal {
             }
         }
         candidates.sort();
-        let latest = candidates
-            .last()
-            .ok_or_else(|| "没有可撤销的编辑（本会话还没有提交过文件改动）".to_string())?;
+        let latest = candidates.last().ok_or_else(|| {
+            "nothing to undo (no file changes committed in this session)".to_string()
+        })?;
         let text = fs::read_to_string(latest).map_err(|e| e.to_string())?;
         let record: IndexRecord = serde_json::from_str(&text).map_err(|e| e.to_string())?;
         let mut restored = Vec::new();
@@ -267,7 +267,7 @@ impl EditJournal {
             }
         }
         if !errors.is_empty() {
-            return Err(format!("撤销不完整: {}", errors.join("; ")));
+            return Err(format!("undo incomplete: {}", errors.join("; ")));
         }
         fs::remove_file(latest).map_err(|e| e.to_string())?;
         for entry in &record.entries {
@@ -500,6 +500,6 @@ mod tests {
         assert!(summary.contains("a.txt"), "got: {summary}");
         assert!(summary.contains("b.txt"), "got: {summary}");
         assert!(summary.contains("+hello"), "got: {summary}");
-        assert!(summary.contains("1 行 -> 2 行"), "got: {summary}");
+        assert!(summary.contains("1 lines -> 2 lines"), "got: {summary}");
     }
 }

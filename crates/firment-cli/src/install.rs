@@ -21,35 +21,41 @@ pub fn exe_name() -> &'static str {
 }
 
 pub fn install(to: Option<PathBuf>, files_only: bool) -> Result<()> {
-    let source = std::env::current_exe().context("无法确定当前可执行文件路径（current_exe）")?;
+    let source = std::env::current_exe()
+        .context("cannot determine the current executable path (current_exe)")?;
     let dir = to.unwrap_or_else(default_bin_dir);
     let (target, completions) = install_files(&source, &dir)?;
 
     if !files_only {
         match add_user_path(&dir) {
-            Ok(true) => println!("已把 {} 加入用户 PATH", dir.display()),
-            Ok(false) => println!("用户 PATH 已包含 {}，跳过", dir.display()),
-            Err(e) => eprintln!("⚠ 更新用户 PATH 失败: {e:#}"),
+            Ok(true) => println!("Added {} to the user PATH", dir.display()),
+            Ok(false) => println!("User PATH already contains {}; skipped", dir.display()),
+            Err(e) => eprintln!("⚠ Failed to update the user PATH: {e:#}"),
         }
         match discover_profile() {
             Some(profile) => match ensure_profile_completion(&profile, &completions) {
-                Ok(true) => println!("已把补全注册到 PowerShell profile: {}", profile.display()),
-                Ok(false) => println!("PowerShell profile 已包含补全，跳过"),
-                Err(e) => eprintln!("⚠ 写入 PowerShell profile 失败: {e:#}"),
+                Ok(true) => println!(
+                    "Registered completions in the PowerShell profile: {}",
+                    profile.display()
+                ),
+                Ok(false) => println!("PowerShell profile already has completions; skipped"),
+                Err(e) => eprintln!("⚠ Failed to write the PowerShell profile: {e:#}"),
             },
-            None => eprintln!("⚠ 找不到 PowerShell profile，补全未注册（不影响 firm 本身）"),
+            None => eprintln!(
+                "⚠ Could not find a PowerShell profile; completions not registered (firm itself still works)"
+            ),
         }
     }
 
     println!(
-        "已安装: {}\n补全: {}",
+        "Installed: {}\nCompletions: {}",
         target.display(),
         completions.display()
     );
     if files_only {
-        println!("（files-only：未修改 PATH 与 PowerShell profile）");
+        println!("(files-only: PATH and PowerShell profile were not modified)");
     } else {
-        println!("请新开一个终端，之后直接输入 firm 即可唤起。");
+        println!("Open a new terminal; from now on you can launch firm directly.");
     }
     Ok(())
 }
@@ -61,7 +67,7 @@ pub fn install_files(source: &Path, dir: &Path) -> Result<(PathBuf, PathBuf)> {
     let target = dir.join(exe_name());
     fs::copy(source, &target).with_context(|| {
         format!(
-            "复制 {} -> {} 失败（如果目标正在运行，请先退出）",
+            "failed to copy {} -> {} (if the target is running, exit it first)",
             source.display(),
             target.display()
         )
@@ -80,7 +86,7 @@ pub fn install_files(source: &Path, dir: &Path) -> Result<(PathBuf, PathBuf)> {
 
 pub fn update(source: Option<PathBuf>, to: Option<PathBuf>) -> Result<()> {
     let source = source.unwrap_or_else(|| {
-        std::env::current_exe().expect("无法确定当前可执行文件路径（current_exe）")
+        std::env::current_exe().expect("cannot determine the current executable path (current_exe)")
     });
     let dir = to.unwrap_or_else(default_bin_dir);
     let target = dir.join(exe_name());
@@ -90,10 +96,15 @@ pub fn update(source: Option<PathBuf>, to: Option<PathBuf>) -> Result<()> {
     let output = std::process::Command::new(&target)
         .arg("--version")
         .output()
-        .with_context(|| format!("校验新版本失败（{} 无法执行 --version）", target.display()))?;
+        .with_context(|| {
+            format!(
+                "failed to verify the new version ({} cannot run --version)",
+                target.display()
+            )
+        })?;
     let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
     println!(
-        "已更新: {} -> {}\n新版本: {}",
+        "Updated: {} -> {}\nNew version: {}",
         source.display(),
         target.display(),
         version
@@ -104,13 +115,14 @@ pub fn update(source: Option<PathBuf>, to: Option<PathBuf>) -> Result<()> {
 pub fn update_impl(source: &Path, target: &Path, current: &Path) -> Result<()> {
     if same_file(current, target) {
         bail!(
-            "当前运行的就是已安装的 firm（{}）。\n请从构建目录运行，例如: .\\target\\release\\firm update",
+            "The running executable is already the installed firm ({}).\nRun from the build \
+             directory instead, e.g.: .\\target\\release\\firm update",
             target.display()
         );
     }
     let parent = target
         .parent()
-        .ok_or_else(|| anyhow::anyhow!("安装目录无效: {}", target.display()))?;
+        .ok_or_else(|| anyhow::anyhow!("invalid install directory: {}", target.display()))?;
     fs::create_dir_all(parent)?;
     replace_file(source, target)?;
     Ok(())
@@ -119,11 +131,11 @@ pub fn update_impl(source: &Path, target: &Path, current: &Path) -> Result<()> {
 fn replace_file(source: &Path, target: &Path) -> Result<()> {
     let parent = target
         .parent()
-        .ok_or_else(|| anyhow::anyhow!("目标没有父目录: {}", target.display()))?;
+        .ok_or_else(|| anyhow::anyhow!("target has no parent directory: {}", target.display()))?;
     let tmp = parent.join(format!(".firm.update.{}.tmp", std::process::id()));
     fs::copy(source, &tmp).with_context(|| {
         format!(
-            "复制更新文件失败: {} -> {}",
+            "failed to copy the update file: {} -> {}",
             source.display(),
             tmp.display()
         )
@@ -155,7 +167,7 @@ fn replace_file(source: &Path, target: &Path) -> Result<()> {
         if ok == 0 {
             let _ = fs::remove_file(&tmp);
             bail!(
-                "替换 {} 失败（错误码 {}；如果目标正在运行，请先退出再更新）",
+                "failed to replace {} (error {}; if the target is running, exit it before updating)",
                 target.display(),
                 std::io::Error::last_os_error()
             );
@@ -403,7 +415,7 @@ mod tests {
         assert_eq!(fs::read(&target).unwrap(), b"new-bytes");
 
         let err = update_impl(&source, &target, &target).unwrap_err();
-        assert!(err.to_string().contains("当前运行的就是已安装"));
+        assert!(err.to_string().contains("already the installed firm"));
     }
 
     #[test]

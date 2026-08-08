@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.4.0-beta.1 (2026-08-08) — English UI + `/new`
+
+- **Full English pass**: all TUI/CLI output, permission cards, status bar, help text,
+  tool errors, system prompt, and the bundled hardware knowledge base (index + cheatsheets)
+  are now English; the agent replies in English by default unless asked otherwise
+- **New `/new` command**: starts a fresh conversation in the TUI (keeps the current
+  provider/model), replacing the session without restarting
+- README slash-command list updated with `/new`; seed KB version stamp bumped so the
+  English knowledge base re-materializes
+
 ## v0.4.0-beta.1 粘贴误发送修复（2026-08-08）
 
 - **Ctrl+V 粘贴修复**：Windows 终端会把粘贴内容作为快速按键流注入（末尾 Enter 触发提交），新增粘贴爆发检测——35ms 内连续涌入的纯文本键识别为一次粘贴，期间 Enter 视为换行，静默后整体走折叠粘贴

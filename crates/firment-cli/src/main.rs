@@ -58,7 +58,7 @@ struct Cli {
     #[arg(short = 'y', long)]
     yes: bool,
 
-    /// Allow destructive shell commands (rm/del/git clean 等) even with -y.
+    /// Allow destructive shell commands (rm/del/git clean, etc.) even with -y.
     /// Without this flag, the hard safety guard blocks them in one-shot mode.
     #[arg(long)]
     allow_dangerous: bool,
@@ -227,7 +227,7 @@ async fn main() -> anyhow::Result<()> {
                     .or(config.tools.monitor_port.clone())
                     .ok_or_else(|| {
                         anyhow::anyhow!(
-                            "缺少串口：用 --port COMx 或在 config.toml 设置 monitor_port"
+                            "missing serial port: use --port COMx or set monitor_port in config.toml"
                         )
                     })?;
                 let baud = if *baud > 0 {
@@ -630,7 +630,7 @@ fn run_monitor(
     let mut reader = serialport::new(port, baud)
         .timeout(Duration::from_millis(500))
         .open()
-        .map_err(|e| anyhow::anyhow!("打开串口 {port} 失败: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("failed to open serial port {port}: {e}"))?;
     let elf = elf.as_deref();
     let mut buf = [0u8; 4096];
     let mut line_buf = String::new();
@@ -658,7 +658,7 @@ fn run_monitor(
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::TimedOut => continue,
-            Err(e) => return Err(anyhow::anyhow!("串口读取失败: {e}")),
+            Err(e) => return Err(anyhow::anyhow!("serial read failed: {e}")),
         }
     }
     if !line_buf.is_empty() {

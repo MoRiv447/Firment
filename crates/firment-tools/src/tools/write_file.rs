@@ -72,7 +72,8 @@ impl Tool for WriteFile {
             let current = firment_core::hash::sha256_hex(original);
             if current != expected {
                 return Err(ToolError::new(format!(
-                    "[ConcurrentChange] 文件哈希不匹配（期望 {expected}，当前 {current}）：请重新 read_file 后重试"
+                    "[ConcurrentChange] file hash mismatch (expected {expected}, current \
+                     {current}): re-read the file with read_file and retry"
                 )));
             }
         }

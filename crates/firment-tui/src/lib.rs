@@ -40,7 +40,7 @@ pub async fn run(
             Err(e) => (
                 None,
                 Some(format!(
-                    "⚠ {e}（在 TUI 里执行 /apikey sk-xxx 即可配置，无需退出）"
+                    "⚠ {e} (run /apikey sk-xxx inside the TUI to configure it without exiting)"
                 )),
             ),
         };
@@ -118,7 +118,7 @@ pub async fn run(
                     let _ = task_config.save(&task_config_path);
                     let _ = agent.save_session();
                     agent
-                        .emit(AgentEvent::Info(format!("model -> {model}（已保存）")))
+                        .emit(AgentEvent::Info(format!("model -> {model} (saved)")))
                         .await;
                     agent
                         .emit(AgentEvent::Settings {
@@ -136,7 +136,7 @@ pub async fn run(
                     let _ = agent.save_session();
                     agent
                         .emit(AgentEvent::Info(format!(
-                            "thinking -> {}（已保存）",
+                            "thinking -> {} (saved)",
                             level.label()
                         )))
                         .await;
@@ -164,7 +164,7 @@ pub async fn run(
                     let _ = agent.save_session();
                     agent
                         .emit(AgentEvent::Info(format!(
-                            "mode -> {}（下一条消息起生效）",
+                            "mode -> {} (takes effect from the next message)",
                             mode.label()
                         )))
                         .await;
@@ -183,7 +183,9 @@ pub async fn run(
                         Ok(models) => agent.emit(AgentEvent::Models(models)).await,
                         Err(e) => {
                             agent
-                                .emit(AgentEvent::Error(format!("获取模型列表失败: {e}")))
+                                .emit(AgentEvent::Error(format!(
+                                    "failed to fetch the model list: {e}"
+                                )))
                                 .await;
                             agent.emit(AgentEvent::Models(Vec::new())).await;
                         }
@@ -203,11 +205,37 @@ pub async fn run(
                     }
                     Err(e) => {
                         agent
-                            .emit(AgentEvent::Error(format!("列出会话失败: {e}")))
+                            .emit(AgentEvent::Error(format!("failed to list sessions: {e}")))
                             .await;
                         agent.emit(AgentEvent::Sessions(Vec::new())).await;
                     }
                 },
+                AgentCmd::NewSession => {
+                    let fresh = Session::new(
+                        agent.session().cwd.clone(),
+                        agent.session().provider.clone(),
+                        agent.session().model.clone(),
+                    );
+                    let registry = default_registry.clone();
+                    let permission: Arc<dyn PermissionChecker> = tui_permission.clone();
+                    agent.replace_session(fresh.clone());
+                    agent.set_mode(SessionMode::Agent, registry, permission);
+                    let _ = agent.save_session();
+                    agent
+                        .emit(AgentEvent::Info(
+                            "Started a new conversation (current provider/model kept)".to_string(),
+                        ))
+                        .await;
+                    agent.emit(AgentEvent::SessionLoaded(fresh)).await;
+                    agent
+                        .emit(AgentEvent::Settings {
+                            provider: None,
+                            model: None,
+                            thinking: None,
+                            mode: Some(SessionMode::Agent),
+                        })
+                        .await;
+                }
                 AgentCmd::LoadSession(id) => match store.load(&id) {
                     Ok(loaded) => {
                         let mode = loaded.mode;
@@ -219,7 +247,7 @@ pub async fn run(
                             Err(e) => {
                                 agent
                                     .emit(AgentEvent::Error(format!(
-                                        "会话已切换，但重建 provider 失败: {e}"
+                                        "session switched, but rebuilding the provider failed: {e}"
                                     )))
                                     .await;
                             }
@@ -238,7 +266,7 @@ pub async fn run(
                         let _ = agent.save_session();
                         agent
                             .emit(AgentEvent::Info(format!(
-                                "已切换到会话 {}（{} · {} · {}）",
+                                "Switched to session {} ({} · {} · {})",
                                 loaded.id,
                                 loaded.provider,
                                 loaded.model,
@@ -257,7 +285,7 @@ pub async fn run(
                     }
                     Err(e) => {
                         agent
-                            .emit(AgentEvent::Error(format!("加载会话失败: {e}")))
+                            .emit(AgentEvent::Error(format!("failed to load session: {e}")))
                             .await;
                     }
                 },
@@ -267,7 +295,7 @@ pub async fn run(
                     }
                     Err(e) => {
                         agent
-                            .emit(AgentEvent::Error(format!("撤销失败: {e}")))
+                            .emit(AgentEvent::Error(format!("undo failed: {e}")))
                             .await;
                     }
                 },
@@ -275,11 +303,15 @@ pub async fn run(
                     let summary = agent.ledger_summary();
                     if summary.is_empty() {
                         agent
-                            .emit(AgentEvent::Info("本会话还没有已提交的编辑".to_string()))
+                            .emit(AgentEvent::Info(
+                                "No committed edits in this session yet".to_string(),
+                            ))
                             .await;
                     } else {
                         agent
-                            .emit(AgentEvent::Info(format!("最近改动台账:\n{summary}")))
+                            .emit(AgentEvent::Info(format!(
+                                "Recent change ledger:\n{summary}"
+                            )))
                             .await;
                     }
                 }
@@ -289,7 +321,7 @@ pub async fn run(
                     }
                     Err(e) => {
                         agent
-                            .emit(AgentEvent::Error(format!("固定失败: {e}")))
+                            .emit(AgentEvent::Error(format!("pin failed: {e}")))
                             .await;
                     }
                 },
@@ -300,7 +332,7 @@ pub async fn run(
                         }
                         Err(e) => {
                             agent
-                                .emit(AgentEvent::Error(format!("取消固定失败: {e}")))
+                                .emit(AgentEvent::Error(format!("unpin failed: {e}")))
                                 .await;
                         }
                     }
@@ -317,7 +349,7 @@ pub async fn run(
                             let _ = agent.save_session();
                             agent
                                 .emit(AgentEvent::Info(format!(
-                                    "provider -> {name} · model -> {configured_model}（已保存）"
+                                    "provider -> {name} · model -> {configured_model} (saved)"
                                 )))
                                 .await;
                             agent
@@ -331,7 +363,7 @@ pub async fn run(
                         }
                         Err(e) => {
                             agent
-                                .emit(AgentEvent::Error(format!("切换 provider 失败: {e}")))
+                                .emit(AgentEvent::Error(format!("failed to switch provider: {e}")))
                                 .await;
                         }
                     }
@@ -347,7 +379,8 @@ pub async fn run(
                                     agent.set_provider(new_provider);
                                     agent
                                         .emit(AgentEvent::Info(format!(
-                                            "{provider_name} 的 API key 已保存到 {}（无需每次配置）",
+                                            "API key for {provider_name} saved to {} (no \
+                                             further setup needed)",
                                             firment_core::auth_path().display()
                                         )))
                                         .await;
@@ -355,7 +388,7 @@ pub async fn run(
                                 Err(e) => {
                                     agent
                                         .emit(AgentEvent::Error(format!(
-                                            "保存后重建 provider 失败: {e}"
+                                            "rebuilding the provider after saving failed: {e}"
                                         )))
                                         .await;
                                 }
@@ -363,7 +396,7 @@ pub async fn run(
                         }
                         Err(e) => {
                             agent
-                                .emit(AgentEvent::Error(format!("保存 API key 失败: {e}")))
+                                .emit(AgentEvent::Error(format!("failed to save API key: {e}")))
                                 .await;
                         }
                     }
@@ -375,23 +408,25 @@ pub async fn run(
                             let providers: Vec<String> =
                                 task_config.providers.keys().cloned().collect();
                             let mut msg = format!(
-                                "已配置 provider: {}（当前: {}）\n可用模型:",
+                                "Configured providers: {} (current: {})\nAvailable models:",
                                 providers.join(", "),
                                 provider_name
                             );
                             if models.is_empty() {
-                                msg.push_str("\n  （接口未返回模型，可 /model <id> 手动指定）");
+                                msg.push_str("\n  (the API returned no models; set one manually with /model <id>)");
                             } else {
                                 for model in models {
                                     msg.push_str(&format!("\n  {model}"));
                                 }
                             }
-                            msg.push_str("\n切换: /model <id> 或 /provider <名字>");
+                            msg.push_str("\nSwitch: /model <id> or /provider <name>");
                             agent.emit(AgentEvent::Info(msg)).await;
                         }
                         Err(e) => {
                             agent
-                                .emit(AgentEvent::Error(format!("获取模型列表失败: {e}")))
+                                .emit(AgentEvent::Error(format!(
+                                    "failed to fetch the model list: {e}"
+                                )))
                                 .await;
                         }
                     }
@@ -421,13 +456,14 @@ pub async fn run(
                         Ok(()) => {
                             agent
                                 .emit(AgentEvent::Info(format!(
-                                    "provider {name} 已保存，接下来用 /apikey {name} sk-xxx 设置密钥"
+                                    "provider {name} saved; next run /apikey {name} sk-xxx to set \
+                                     the key"
                                 )))
                                 .await;
                         }
                         Err(e) => {
                             agent
-                                .emit(AgentEvent::Error(format!("保存 provider 失败: {e}")))
+                                .emit(AgentEvent::Error(format!("failed to save provider: {e}")))
                                 .await;
                         }
                     }
@@ -466,7 +502,7 @@ pub async fn run(
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
 
-/// 输入框最大高度（含上下边框）：边框 2 行 + 最多 5 行文字。
+/// Maximum input box height (borders included): 2 border rows + up to 5 text rows.
 const MAX_INPUT_HEIGHT: usize = 7;
 
 fn init_terminal() -> anyhow::Result<Tui> {
@@ -501,6 +537,7 @@ enum AgentCmd {
     SetMode(SessionMode),
     OpenModelPicker,
     OpenSessionPicker,
+    NewSession,
     LoadSession(String),
     Undo,
     Ledger,
@@ -586,9 +623,9 @@ struct App {
     items: Vec<Item>,
     input: Vec<char>,
     cursor: usize,
-    /// 输入框内选区 (anchor 字符下标, 当前字符下标)
+    /// Selection inside the input box (anchor char index, current char index)
     input_sel: Option<(usize, usize)>,
-    /// 粘贴的大段文本折叠块：占位符文本 + 原始文本
+    /// Collapsed paste blocks: placeholder text + original text
     paste_blocks: Vec<PasteBlock>,
     paste_burst: PasteBurst,
     history: Vec<String>,
@@ -625,37 +662,41 @@ struct PasteBlock {
     text: String,
 }
 
-/// 粘贴爆发检测。
+/// Paste-burst detection.
 ///
-/// Windows 终端在未启用 bracketed paste 时，会把粘贴内容作为一串快速按键
-/// 注入输入框（末尾常带 Enter）。`PasteBurst` 把 35ms 内连续涌入的纯文本
-/// 按键识别为一次粘贴：期间 Enter 视为换行而非提交，静默后整体走一次
-/// 折叠粘贴，避免多行内容被逐键注入后误发送。
+/// When bracketed paste is not enabled, Windows terminals inject pasted text
+/// as a rapid stream of keystrokes (often ending with Enter). `PasteBurst`
+/// recognizes plain-text keys arriving within 35ms as one paste: Enter counts
+/// as a newline instead of submit during the burst, and the whole buffer is
+/// collapsed into one paste after it goes quiet.
 #[derive(Debug, Default)]
 struct PasteBurst {
-    /// 上一个纯文本字符到达时间，用于判断是否构成爆发。
+    /// Arrival time of the previous plain-text char, used to detect a burst.
     last_char_time: Option<Instant>,
-    /// 最近一次被直接插入输入框的字符及其插入位置（供 retro-capture）。
+    /// Most recent char inserted directly into the input, with its position
+    /// (used for retro-capture).
     last_inserted: Option<(usize, char)>,
-    /// 正在 hold 的首个 ASCII 字符，等待第二个字符确认是否爆发。
+    /// First ASCII char being held while waiting for a second char to confirm
+    /// a burst.
     held: Option<(char, Instant)>,
-    /// 已确认的粘贴缓冲。
+    /// Confirmed paste buffer.
     buffer: Option<String>,
-    /// 缓冲最后一次写入时间。
+    /// Last write time of the buffer.
     buffer_last_update: Option<Instant>,
-    /// 该时间之前到达的 Enter 一律视为换行（爆发结束后的保护窗口）。
+    /// Enters arriving before this time are treated as newlines (protection
+    /// window after a burst flushes).
     suppress_enter_until: Option<Instant>,
-    /// 等待 App 执行的输出。
+    /// Outputs waiting to be applied by the App.
     out: VecDeque<PasteOut>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PasteOut {
-    /// 作为普通字符插入输入框。
+    /// Insert into the input as a normal char.
     InsertChar(char),
-    /// 从输入框移除该位置字符（收回 retro-capture 的前缀）。
+    /// Remove the char at this position (reclaim the retro-captured prefix).
     RemoveAt(usize, char),
-    /// 整体作为一次粘贴插入（自动折叠）。
+    /// Insert as one paste (auto-collapsed).
     HandlePaste(String),
 }
 
@@ -672,19 +713,20 @@ impl PasteBurst {
     const FLUSH_DELAY: Duration = Duration::from_millis(80);
     const SUPPRESS_WINDOW: Duration = Duration::from_millis(120);
 
-    /// 处理一个无修饰的普通字符。`cursor` 是该字符将要插入的位置。
+    /// Handle a plain char with no modifiers. `cursor` is where it will be
+    /// inserted.
     fn on_plain_char(&mut self, c: char, now: Instant, cursor: usize) {
         let prev_time = self.last_char_time;
         self.last_char_time = Some(now);
 
-        // 爆发已确认：继续追加到缓冲。
+        // Burst confirmed: keep appending to the buffer.
         if let Some(buf) = &mut self.buffer {
             buf.push(c);
             self.buffer_last_update = Some(now);
             return;
         }
 
-        // 有 hold 中的首字符：第二个字符快速到达 → 确认爆发。
+        // A first char is held: a second char arriving quickly confirms a burst.
         if let Some((held, at)) = self.held.take() {
             if now.duration_since(at) <= Self::HOLD_DELAY {
                 let mut buf = String::with_capacity(2);
@@ -695,12 +737,13 @@ impl PasteBurst {
                 self.last_inserted = None;
                 return;
             }
-            // hold 超时：旧字符作为普通输入发出。
+            // Hold timed out: emit the old char as normal input.
             self.out.push_back(PasteOut::InsertChar(held));
         }
 
-        // retro-capture：非 ASCII 首字符已直接插入，第二个字符快速到达时
-        // 收回该前缀并一起进入缓冲（避免中文粘贴首字残留）。
+        // Retro-capture: a non-ASCII first char was inserted immediately; when
+        // a second char arrives quickly, reclaim that prefix into the buffer
+        // (so pasted CJK text does not leave a stray first char).
         if let (Some(at), Some((pos, prev))) = (prev_time, self.last_inserted)
             && now.duration_since(at) <= Self::BURST_INTERVAL
         {
@@ -715,21 +758,24 @@ impl PasteBurst {
         }
 
         if c.is_ascii() {
-            // ASCII 先短暂 hold：既能识别爆发，又避免单键输入闪烁。
+            // Hold ASCII briefly: detects bursts without flicker on single keys.
             self.held = Some((c, now));
             self.last_inserted = None;
         } else {
-            // 非 ASCII（IME/中文）不 hold，立即插入并记录位置。
+            // Non-ASCII (IME/CJK) is not held; insert immediately and record
+            // the position.
             self.last_inserted = Some((cursor, c));
             self.out.push_back(PasteOut::InsertChar(c));
         }
     }
 
-    /// Enter：爆发激活或保护窗口内返回换行，否则提交。
+    /// Enter: returns Newline while a burst is active or within the protection
+    /// window, otherwise Submit.
     fn on_enter(&mut self, now: Instant) -> EnterAction {
         if let Some((held, _)) = self.held.take() {
-            // 首字符还在 hold：先放行到输入框，Enter 一律当换行，
-            // 避免单字符粘贴末尾的回车触发提交。
+            // The first char is still held: release it into the input and treat
+            // Enter as a newline, so a trailing Enter in a single-char paste
+            // cannot submit.
             self.out.push_back(PasteOut::InsertChar(held));
             return EnterAction::Newline;
         }
@@ -746,7 +792,8 @@ impl PasteBurst {
         }
     }
 
-    /// Shift+Enter：爆发期间同样并入缓冲，否则交给普通换行逻辑。
+    /// Shift+Enter: merged into the buffer during a burst, otherwise normal
+    /// newline behavior.
     fn on_shift_enter(&mut self, now: Instant) -> EnterAction {
         if let Some(buf) = &mut self.buffer {
             buf.push('\n');
@@ -757,7 +804,8 @@ impl PasteBurst {
         }
     }
 
-    /// 到期处理：hold 超时的字符按普通输入发出；静默超时的缓冲整体作为粘贴。
+    /// Due-time handling: a held char past its timeout is emitted as normal
+    /// input; a buffer idle past its timeout is flushed as one paste.
     fn flush_if_due(&mut self, now: Instant) {
         if let Some((c, at)) = self.held
             && now.duration_since(at) >= Self::HOLD_DELAY
@@ -776,7 +824,8 @@ impl PasteBurst {
         }
     }
 
-    /// 清空爆发状态；hold 中的字符不能丢，先排入输出。
+    /// Clear burst state; a held char must not be lost, so queue it as output
+    /// first.
     fn clear(&mut self) {
         if let Some((c, _)) = self.held.take() {
             self.out.push_back(PasteOut::InsertChar(c));
@@ -903,7 +952,8 @@ enum Item {
         ok: bool,
         summary: String,
     },
-    /// 权限确认以对话内卡片形式展示（CC 风格），不再弹窗遮挡上下文。
+    /// Permission confirmations render as inline cards in the transcript
+    /// instead of popups covering the context.
     Permission {
         tool: String,
         reason: String,
@@ -980,7 +1030,7 @@ impl App {
                 ChatMessage::Tool { name, content, .. } => {
                     let ok = !content.starts_with("Permission denied")
                         && !content.starts_with("unknown tool")
-                        && !content.starts_with("危险命令");
+                        && !content.starts_with("[Permission] Dangerous command");
                     self.items.push(Item::Tool {
                         name: name.clone(),
                         running: false,
@@ -1114,7 +1164,7 @@ impl App {
             tool: request.tool.clone(),
             reason: request.reason.clone(),
         });
-        // 内联确认必须出现在视野里，强制回到对话底部
+        // The inline card must be visible; force the view back to the bottom.
         self.follow = true;
         self.scroll = 0;
         self.permission = Some(request);
@@ -1187,7 +1237,8 @@ impl App {
         }
     }
 
-    /// 按键入口：先做粘贴爆发检测，再交给原有按键逻辑。
+    /// Key entry point: runs paste-burst detection first, then falls back to
+    /// the original key handling.
     fn on_key_with_burst(&mut self, key: KeyEvent) -> bool {
         if self.permission.is_some() || self.model_picker.is_some() || self.session_picker.is_some()
         {
@@ -1196,7 +1247,7 @@ impl App {
         self.on_key_burst(key, Instant::now())
     }
 
-    /// 带粘贴爆发检测的按键处理；`now` 供测试注入时间。
+    /// Key handling with paste-burst detection; `now` lets tests inject time.
     fn on_key_burst(&mut self, key: KeyEvent, now: Instant) -> bool {
         self.paste_burst.flush_if_due(now);
         match key.code {
@@ -1240,7 +1291,8 @@ impl App {
         }
     }
 
-    /// 执行粘贴爆发排出的输出，返回是否有内容被应用。
+    /// Apply outputs queued by the paste burst; returns whether anything was
+    /// applied.
     fn apply_burst_outputs_at(&mut self, now: Instant) -> bool {
         self.paste_burst.flush_if_due(now);
         let mut applied = false;
@@ -1399,11 +1451,12 @@ impl App {
         self.interrupting = true;
         let _ = self.cmd_tx.try_send(AgentCmd::Cancel);
         self.items
-            .push(Item::System("⏹ 已发送中断请求…".to_string()));
+            .push(Item::System("⏹ Interrupt request sent…".to_string()));
     }
 
-    /// 把输入按显示宽度软换行，返回 (每行文本, 每行起始字符下标, 光标所在行, 光标所在列)。
-    /// 光标位置按字符索引换算，兼容 CJK 宽字符。
+    /// Soft-wrap the input to the display width; returns (lines, line start
+    /// char indexes, cursor line, cursor column). Cursor positions are char
+    /// indexes and account for CJK wide chars.
     fn input_layout(&self, width: usize) -> (Vec<String>, Vec<usize>, usize, usize) {
         let chars = &self.input;
         let mut lines: Vec<String> = Vec::new();
@@ -1471,11 +1524,7 @@ impl App {
         }
         self.items.push(Item::System(format!(
             "{}: {}",
-            if allowed {
-                "✓ 已允许"
-            } else {
-                "✗ 已拒绝"
-            },
+            if allowed { "✓ Allowed" } else { "✗ Denied" },
             prompt.tool
         )));
         false
@@ -1523,7 +1572,8 @@ impl App {
         }
     }
 
-    /// 光标左移；折叠占位符视为一个整体，从尾部一次跳到头部。
+    /// Move the cursor left; a collapsed placeholder is treated as one unit
+    /// (jump from its tail to its head).
     fn move_cursor_left(&mut self) {
         self.input_sel = None;
         if let Some((start, _end, _)) = self.placeholder_range_with_end(self.cursor) {
@@ -1534,7 +1584,8 @@ impl App {
         self.cursor = self.snap_cursor(self.cursor);
     }
 
-    /// 光标右移；折叠占位符视为一个整体，从头部一次跳到尾部。
+    /// Move the cursor right; a collapsed placeholder is treated as one unit
+    /// (jump from its head to its tail).
     fn move_cursor_right(&mut self) {
         self.input_sel = None;
         if let Some((_start, end, _)) = self.placeholder_range_with_start(self.cursor) {
@@ -1545,7 +1596,8 @@ impl App {
         self.cursor = self.snap_cursor(self.cursor);
     }
 
-    /// 输入框内上下移动光标（按显示行），保持列位置。
+    /// Move the cursor up/down inside the input (by display line), keeping the
+    /// column position.
     fn move_input_cursor(&mut self, delta: isize) {
         if self.input.is_empty() {
             return;
@@ -1576,7 +1628,8 @@ impl App {
         self.input_layout(self.input_width.max(1)).0.len()
     }
 
-    /// 当前输入中所有折叠占位符的位置（按输入顺序）。
+    /// Positions of all collapsed placeholders in the current input (in input
+    /// order).
     fn placeholder_ranges(&self) -> Vec<(usize, usize, usize)> {
         let mut ranges = Vec::new();
         let mut search_from = 0usize;
@@ -1602,7 +1655,7 @@ impl App {
             .find(|(start, _, _)| *start == cursor)
     }
 
-    /// 光标如果落在折叠占位符内部，跳到占位符末尾。
+    /// If the cursor lands inside a collapsed placeholder, jump to its end.
     fn snap_cursor(&self, cursor: usize) -> usize {
         for (start, end, _) in self.placeholder_ranges() {
             if start < cursor && cursor < end {
@@ -1612,7 +1665,8 @@ impl App {
         cursor
     }
 
-    /// 把输入展开成完整文本：折叠占位符替换回原始粘贴内容。
+    /// Expand the input to full text: placeholders are replaced by their
+    /// original pasted content.
     fn expand_input(&self) -> String {
         let chars = &self.input;
         let mut out = String::new();
@@ -1626,7 +1680,7 @@ impl App {
         out
     }
 
-    /// 输入框选区的完整文本（折叠块展开）。
+    /// Full text of the input selection (with collapsed blocks expanded).
     fn input_selection_text(&self) -> Option<String> {
         let (a, b) = self.input_sel?;
         let (s0, s1) = if a <= b { (a, b) } else { (b, a) };
@@ -1657,7 +1711,8 @@ impl App {
         if out.is_empty() { None } else { Some(out) }
     }
 
-    /// 在光标处插入文本；`collapse` 为 true 时大段文本折叠成占位符。
+    /// Insert text at the cursor; with `collapse` true, large text is folded
+    /// into a placeholder.
     fn insert_text_at_cursor(&mut self, text: &str, collapse: bool) {
         let text: String = text.chars().filter(|c| *c != '\r').collect();
         if text.is_empty() {
@@ -1694,7 +1749,7 @@ impl App {
         let mut label = if line_count > 1 {
             format!("【line 1-{line_count}】")
         } else {
-            format!("【已折叠 {} 字符】", text.chars().count())
+            format!("【collapsed {} chars】", text.chars().count())
         };
         let mut id = 1usize;
         while existing.iter().any(|b| b.placeholder == label) {
@@ -1702,7 +1757,7 @@ impl App {
             label = if line_count > 1 {
                 format!("【line 1-{line_count}#{id}】")
             } else {
-                format!("【已折叠 {} 字符#{id}】", text.chars().count())
+                format!("【collapsed {} chars#{id}】", text.chars().count())
             };
         }
         label
@@ -1718,14 +1773,14 @@ impl App {
         }
         match copy_to_clipboard(text) {
             Ok(()) => self.items.push(Item::System(format!(
-                "已复制输入框选中内容（{} 字符）",
+                "Copied input selection ({} chars)",
                 text.chars().count()
             ))),
-            Err(e) => self.items.push(Item::System(format!("复制失败: {e}"))),
+            Err(e) => self.items.push(Item::System(format!("Copy failed: {e}"))),
         }
     }
 
-    /// Ctrl+C 优先级：输入框选区 > 对话选区 > 最后一条回复。
+    /// Ctrl+C priority: input selection > transcript selection > last reply.
     fn copy_primary_selection(&mut self) {
         if self.input_sel.is_some() && self.input_selection_text().is_some() {
             self.copy_input_selection();
@@ -1734,10 +1789,10 @@ impl App {
         } else if let Some(text) = self.last_output_text() {
             match copy_to_clipboard(&text) {
                 Ok(()) => self.items.push(Item::System(format!(
-                    "已复制最后一条回复（{} 字符）",
+                    "Copied the last reply ({} chars)",
                     text.chars().count()
                 ))),
-                Err(e) => self.items.push(Item::System(format!("复制失败: {e}"))),
+                Err(e) => self.items.push(Item::System(format!("Copy failed: {e}"))),
             }
         }
     }
@@ -1815,7 +1870,7 @@ impl App {
                 if let Some(model) = picker.selected_model() {
                     self.model = model.clone();
                     self.items
-                        .push(Item::System(format!("model -> {model}（切换中…）")));
+                        .push(Item::System(format!("model -> {model} (switching…)")));
                     let _ = self.cmd_tx.try_send(AgentCmd::SetModel(model));
                 }
                 self.model_picker = None;
@@ -1870,7 +1925,8 @@ impl App {
             KeyCode::Enter => {
                 if let Some(session) = picker.filtered().get(picker.selected) {
                     let id = session.id.clone();
-                    self.items.push(Item::System(format!("正在加载会话 {id}…")));
+                    self.items
+                        .push(Item::System(format!("Loading session {id}…")));
                     let _ = self.cmd_tx.try_send(AgentCmd::LoadSession(id));
                 }
                 self.session_picker = None;
@@ -1904,7 +1960,8 @@ impl App {
         Some((content_row, (column - area.x - 1) as usize))
     }
 
-    /// 终端单元格 → 输入框字符下标（点击/拖动选择输入框文字用）。
+    /// Terminal cell → input char index (for click/drag selection in the input
+    /// box).
     fn cell_to_input(&self, column: u16, row: u16) -> Option<usize> {
         let area = self.input_rect;
         if area.width == 0 || area.height == 0 {
@@ -1981,10 +2038,10 @@ impl App {
         }
         match copy_to_clipboard(text) {
             Ok(()) => self.items.push(Item::System(format!(
-                "已复制选中内容（{} 字符）",
+                "Copied selection ({} chars)",
                 text.chars().count()
             ))),
-            Err(e) => self.items.push(Item::System(format!("复制失败: {e}"))),
+            Err(e) => self.items.push(Item::System(format!("Copy failed: {e}"))),
         }
     }
 
@@ -2006,14 +2063,14 @@ impl App {
         match self.last_output_text() {
             Some(text) => match copy_to_clipboard(&text) {
                 Ok(()) => self.items.push(Item::System(format!(
-                    "已复制最后一条回复（{} 字符）",
+                    "Copied the last reply ({} chars)",
                     text.chars().count()
                 ))),
-                Err(e) => self.items.push(Item::System(format!("复制失败: {e}"))),
+                Err(e) => self.items.push(Item::System(format!("Copy failed: {e}"))),
             },
             None => self
                 .items
-                .push(Item::System("还没有可复制的回复".to_string())),
+                .push(Item::System("No reply to copy yet".to_string())),
         }
     }
 
@@ -2132,9 +2189,20 @@ impl App {
             .unwrap_or((command, ""));
         match name {
             "help" => self.items.push(Item::System(
-                "命令: /plan [on|off]  /agent  /models  /model <id>  /sessions(上下键选择)  /session <id>  /undo  /ledger  /pin <路径>  /unpin <路径>  /copy  /provider <名字>  /add-provider <名字> <openai|anthropic> <base_url> <模型>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /config  /clear  /help  /quit\n键位: ↑/↓ 空输入时浏览历史，多行输入时移动输入光标，单行时滚动对话 · Shift+Enter 手动换行 · PgUp/PgDn/滚轮始终滚动 · Ctrl+P 模型选择器 · 左键拖动选择 · 右键复制选中（无选区时粘贴） · Ctrl+C 复制选区（无选区时复制最后回复） · Ctrl+V 粘贴 · Ctrl+Shift+C 复制最后回复 · ←/→ 移动输入光标 · y/n/a 权限确认 · Esc 中断 AI 输出（空闲时清空输入） · Ctrl+Q 退出\n输入框: 自动换行自适应高度，最长显示 5 行；超出部分可滚动，粘贴大段文本自动折叠为【line x-y】，发送前会在标题提示未显示/折叠行数"
+                "Commands: /new  /plan [on|off]  /agent  /models  /model <id>  /sessions (use ↑/↓ to select)  /session <id>  /undo  /ledger  /pin <path>  /unpin <path>  /copy  /provider <name>  /add-provider <name> <openai|anthropic> <base_url> <model>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /config  /clear  /help  /quit\nKeys: ↑/↓ browse history when input is empty, move the input cursor on multi-line input, scroll the transcript on single-line input · Shift+Enter manual newline · PgUp/PgDn/wheel always scroll · Ctrl+P model picker · drag with left mouse to select · right-click copies the selection (pastes when there is no selection) · Ctrl+C copies the selection (copies the last reply when there is none) · Ctrl+V paste · Ctrl+Shift+C copy last reply · ←/→ move the input cursor · y/n/a permission answers · Esc interrupts AI output (clears input when idle) · Ctrl+Q quit\nInput box: auto-wraps and grows to up to 5 lines; taller content scrolls, large pastes collapse into 【line x-y】, and the title shows hidden/collapsed line counts before sending"
                     .to_string(),
             )),
+            "new" => {
+                self.paste_burst.clear();
+                self.apply_burst_outputs();
+                self.input.clear();
+                self.cursor = 0;
+                self.input_sel = None;
+                self.paste_blocks.clear();
+                let _ = self.cmd_tx.try_send(AgentCmd::NewSession);
+                self.items
+                    .push(Item::System("Starting a new conversation…".to_string()));
+            }
             "plan" => {
                 let mode = match arg {
                     "on" => SessionMode::Plan,
@@ -2144,7 +2212,7 @@ impl App {
                 };
                 self.mode = mode;
                 let _ = self.cmd_tx.try_send(AgentCmd::SetMode(mode));
-                let queued = if self.busy { "（当前回合结束后生效）" } else { "" };
+                let queued = if self.busy { " (takes effect after the current turn)" } else { "" };
                 self.items.push(Item::System(format!(
                     "mode -> {}{queued}",
                     mode.label()
@@ -2153,7 +2221,7 @@ impl App {
             "agent" => {
                 self.mode = SessionMode::Agent;
                 let _ = self.cmd_tx.try_send(AgentCmd::SetMode(SessionMode::Agent));
-                let queued = if self.busy { "（当前回合结束后生效）" } else { "" };
+                let queued = if self.busy { " (takes effect after the current turn)" } else { "" };
                 self.items
                     .push(Item::System(format!("mode -> agent{queued}")));
             }
@@ -2165,7 +2233,7 @@ impl App {
                         Ok(level) => level,
                         Err(_) => {
                             self.items.push(Item::System(
-                                "无效级别，可用: off / low / medium / high / xhigh / max"
+                                "invalid level; use: off / low / medium / high / xhigh / max"
                                     .to_string(),
                             ));
                             return;
@@ -2182,7 +2250,7 @@ impl App {
                     .cmd_tx
                     .try_send(AgentCmd::SetProvider(arg.to_string()));
                 self.items
-                    .push(Item::System(format!("切换到 provider {arg}…")));
+                    .push(Item::System(format!("Switching to provider {arg}…")));
             }
             "model" if !arg.is_empty() => {
                 self.model = arg.to_string();
@@ -2196,7 +2264,7 @@ impl App {
             "models" => {
                 let _ = self.cmd_tx.try_send(AgentCmd::ListModels);
                 self.items.push(Item::System(format!(
-                    "正在获取 {} 的模型列表…",
+                    "Fetching model list for {}…",
                     self.provider
                 )));
             }
@@ -2208,7 +2276,7 @@ impl App {
                     .cmd_tx
                     .try_send(AgentCmd::LoadSession(arg.to_string()));
                 self.items
-                    .push(Item::System(format!("正在加载会话 {arg}…")));
+                    .push(Item::System(format!("Loading session {arg}…")));
             }
             "session" => {
                 self.open_session_picker();
@@ -2216,23 +2284,24 @@ impl App {
             "undo" => {
                 let _ = self.cmd_tx.try_send(AgentCmd::Undo);
                 self.items.push(Item::System(
-                    "正在撤销上一次已提交的编辑…".to_string(),
+                    "Undoing the last committed edit…".to_string(),
                 ));
             }
             "ledger" => {
                 let _ = self.cmd_tx.try_send(AgentCmd::Ledger);
-                self.items.push(Item::System("正在读取改动台账…".to_string()));
+                self.items.push(Item::System("Reading the change ledger…".to_string()));
             }
             "pin" if !arg.is_empty() => {
                 let _ = self
                     .cmd_tx
                     .try_send(AgentCmd::Pin { path: arg.to_string() });
                 self.items
-                    .push(Item::System(format!("固定 {arg}…")));
+                    .push(Item::System(format!("Pinning {arg}…")));
             }
             "pin" => {
                 self.items.push(Item::System(
-                    "用法: /pin <路径>（压缩时保留该文件全文）".to_string(),
+                    "Usage: /pin <path> (keeps the file's full content during compaction)"
+                        .to_string(),
                 ));
             }
             "unpin" if !arg.is_empty() => {
@@ -2240,10 +2309,10 @@ impl App {
                     .cmd_tx
                     .try_send(AgentCmd::Unpin { path: arg.to_string() });
                 self.items
-                    .push(Item::System(format!("取消固定 {arg}…")));
+                    .push(Item::System(format!("Unpinning {arg}…")));
             }
             "unpin" => {
-                self.items.push(Item::System("用法: /unpin <路径>".to_string()));
+                self.items.push(Item::System("Usage: /unpin <path>".to_string()));
             }
             "copy" => self.copy_last_output(),
             "apikey" | "key" if !arg.is_empty() => {
@@ -2253,11 +2322,12 @@ impl App {
                 };
                 let _ = self.cmd_tx.try_send(AgentCmd::SetApiKey { provider, key });
                 self.items
-                    .push(Item::System("正在保存 API key…".to_string()));
+                    .push(Item::System("Saving API key…".to_string()));
             }
             "apikey" | "key" => {
                 self.items.push(Item::System(
-                    "用法: /apikey <key>（当前 provider）或 /apikey <provider> <key>；保存后写入 auth.json，之后无需每次配置"
+                    "Usage: /apikey <key> (current provider) or /apikey <provider> <key>; saved \
+                     to auth.json so you won't need to configure it again"
                         .to_string(),
                 ));
             }
@@ -2265,7 +2335,9 @@ impl App {
                 let parts: Vec<&str> = arg.split_whitespace().collect();
                 if parts.len() != 4 {
                     self.items.push(Item::System(
-                        "用法: /add-provider <名字> <openai|anthropic> <base_url> <模型>\n示例: /add-provider deepseek openai https://api.deepseek.com/v1 deepseek-v4-flash"
+                        "Usage: /add-provider <name> <openai|anthropic> <base_url> <model>\n\
+                         Example: /add-provider deepseek openai https://api.deepseek.com/v1 \
+                         deepseek-v4-flash"
                             .to_string(),
                     ));
                     return;
@@ -2278,7 +2350,7 @@ impl App {
                     model: model.to_string(),
                 });
                 self.items
-                    .push(Item::System(format!("正在保存 provider {name}…")));
+                    .push(Item::System(format!("Saving provider {name}…")));
             }
             "config" => {
                 self.items.push(Item::System(format!(
@@ -2363,25 +2435,25 @@ impl App {
                 }
                 Item::Permission { tool, reason } => {
                     rows.push(Line::from(Span::styled(
-                        "⚠ 需要权限确认",
+                        "⚠ Permission required",
                         Style::default()
                             .fg(Color::Yellow)
                             .add_modifier(Modifier::BOLD),
                     )));
-                    for seg in wrap_text(&format!("工具: {tool}"), width.saturating_sub(1)) {
+                    for seg in wrap_text(&format!("Tool: {tool}"), width.saturating_sub(1)) {
                         rows.push(Line::from(Span::styled(
                             seg,
                             Style::default().fg(Color::Yellow),
                         )));
                     }
-                    for seg in wrap_text(&format!("原因: {reason}"), width.saturating_sub(1)) {
+                    for seg in wrap_text(&format!("Reason: {reason}"), width.saturating_sub(1)) {
                         rows.push(Line::from(Span::styled(
                             seg,
                             Style::default().fg(Color::White),
                         )));
                     }
                     rows.push(Line::from(Span::styled(
-                        "[y] 允许    [a] 本次会话总是允许    [n] / Esc 拒绝",
+                        "[y] allow    [a] always allow for this session    [n] / Esc deny",
                         Style::default().fg(Color::Green),
                     )));
                     rows.push(Line::from(""));
@@ -2433,7 +2505,7 @@ impl App {
             const SPINNER: [char; 4] = ['◐', '◓', '◑', '◒'];
             let ch = SPINNER[(self.frame as usize) % SPINNER.len()];
             rows.push(Line::from(Span::styled(
-                format!(" {ch} 思考中…"),
+                format!(" {ch} thinking…"),
                 Style::default().fg(Color::Yellow),
             )));
         }
@@ -2469,15 +2541,15 @@ impl App {
             "•".to_string()
         };
         let state = if self.permission.is_some() {
-            "等待确认"
+            "waiting for approval"
         } else if self.interrupting {
-            "中断中…"
+            "interrupting…"
         } else if self.ai_thinking {
-            "思考中"
+            "thinking"
         } else if self.busy {
-            "工作中"
+            "working"
         } else {
-            "就绪"
+            "ready"
         };
         let mut cwd_str = self.cwd.display().to_string();
         if cwd_str.width() > 36 {
@@ -2492,7 +2564,7 @@ impl App {
             cwd_str
         );
         let right = if self.busy && !self.interrupting {
-            format!(" {} · {state} · Esc 中断 ", spinner)
+            format!(" {} · {state} · Esc interrupt ", spinner)
         } else {
             format!(" {} · {state} ", spinner)
         };
@@ -2512,9 +2584,9 @@ impl App {
             .map(|b| b.text.lines().count().max(1))
             .sum();
         let title = if hidden_lines > 0 {
-            format!(" input · ↑{hidden_lines} 行未显示（Enter 会发送全部） ")
+            format!(" input · ↑{hidden_lines} lines hidden (Enter sends everything) ")
         } else if collapsed_lines > 0 {
-            format!(" input · 折叠 {collapsed_lines} 行（Enter 发送完整文本） ")
+            format!(" input · {collapsed_lines} lines collapsed (Enter sends full text) ")
         } else {
             " input ".to_string()
         };
@@ -2524,7 +2596,7 @@ impl App {
         let content = if self.input.is_empty() {
             self.input_scroll = 0;
             Paragraph::new(Line::from(Span::styled(
-                "输入任务，Enter 发送 · Shift+Enter 换行 · Esc 中断/清空 · Ctrl+C 复制 · Ctrl+V 粘贴 · Ctrl+P 模型 · Ctrl+Q 退出 · /help",
+                "Type a task, Enter to send · Shift+Enter newline · Esc interrupt/clear · Ctrl+C copy · Ctrl+V paste · Ctrl+P model · Ctrl+Q quit · /help",
                 Style::default().fg(Color::DarkGray),
             )))
             .block(block)
@@ -2581,8 +2653,9 @@ impl App {
             Paragraph::new(shown).block(block)
         };
         frame.render_widget(content, input_area);
-        // 权限确认现在是对话内卡片，不再弹窗；输入框始终保持光标，
-        // 空输入时也把光标钉在输入框起点，避免 IME/首字符画到框外。
+        // Permission cards are inline now, so the input always keeps the
+        // cursor; even with empty input, pin it to the input start so IME/first
+        // chars are not drawn outside the box.
         let modal_open = self.model_picker.is_some() || self.session_picker.is_some();
         if !modal_open {
             let cursor_x = input_area.x + 1 + cursor_col as u16;
@@ -2596,7 +2669,7 @@ impl App {
                 frame.render_widget(Clear, area);
                 let block = Block::bordered()
                     .title(Span::styled(
-                        " 模型选择 ",
+                        " Model picker ",
                         Style::default()
                             .fg(Color::Cyan)
                             .add_modifier(Modifier::BOLD),
@@ -2610,12 +2683,12 @@ impl App {
                 let mut lines = Vec::new();
                 let query: String = picker.query.iter().collect();
                 lines.push(Line::from(Span::styled(
-                    format!("过滤: {query}（Enter 选择 · Esc 关闭）"),
+                    format!("Filter: {query} (Enter select · Esc close)"),
                     Style::default().fg(Color::DarkGray),
                 )));
                 if picker.models.is_empty() {
                     lines.push(Line::from(Span::styled(
-                        "正在获取模型列表…",
+                        "Fetching model list…",
                         Style::default().fg(Color::DarkGray),
                     )));
                 } else {
@@ -2635,7 +2708,7 @@ impl App {
                     }
                     if filtered.len() > 12 {
                         lines.push(Line::from(Span::styled(
-                            format!("… 还有 {} 个", filtered.len() - 12),
+                            format!("… {} more", filtered.len() - 12),
                             Style::default().fg(Color::DarkGray),
                         )));
                     }
@@ -2648,7 +2721,7 @@ impl App {
                 frame.render_widget(Clear, area);
                 let block = Block::bordered()
                     .title(Span::styled(
-                        " 会话选择 ",
+                        " Session picker ",
                         Style::default()
                             .fg(Color::Magenta)
                             .add_modifier(Modifier::BOLD),
@@ -2662,12 +2735,12 @@ impl App {
                 let mut lines = Vec::new();
                 let query: String = picker.query.iter().collect();
                 lines.push(Line::from(Span::styled(
-                    format!("过滤: {query}（↑/↓ 选择 · Enter 进入 · Esc 关闭）"),
+                    format!("Filter: {query} (↑/↓ select · Enter open · Esc close)"),
                     Style::default().fg(Color::DarkGray),
                 )));
                 if picker.sessions.is_empty() {
                     lines.push(Line::from(Span::styled(
-                        "正在加载会话列表…",
+                        "Loading session list…",
                         Style::default().fg(Color::DarkGray),
                     )));
                 } else {
@@ -2698,7 +2771,7 @@ impl App {
                     }
                     if filtered.len() > 12 {
                         lines.push(Line::from(Span::styled(
-                            format!("… 还有 {} 个", filtered.len() - 12),
+                            format!("… {} more", filtered.len() - 12),
                             Style::default().fg(Color::DarkGray),
                         )));
                     }
@@ -2820,7 +2893,8 @@ fn char_index_at_cell(text: &str, cell: usize) -> usize {
     text.chars().count()
 }
 
-/// 在字符切片中查找子串（从 `from` 开始），返回起始下标。
+/// Find a subslice in a char slice (starting at `from`); returns the start
+/// index.
 fn find_subslice(haystack: &[char], needle: &[char], from: usize) -> Option<usize> {
     if needle.is_empty() || needle.len() > haystack.len() {
         return None;
@@ -2837,7 +2911,7 @@ async fn run_loop(
     mut perm_rx: mpsc::Receiver<PermissionRequest>,
     mut ui_rx: mpsc::Receiver<Event>,
 ) -> anyhow::Result<()> {
-    // 25ms 粒度足够让粘贴爆发缓冲按时落地，也不会拖慢动画。
+    // A 25ms tick lands paste-burst buffers on time without slowing animations.
     let mut ticker = tokio::time::interval(Duration::from_millis(25));
     let mut dirty = true;
     loop {
@@ -2866,13 +2940,15 @@ async fn run_loop(
             }
             _ = ticker.tick() => {
                 spinner_tick = true;
-                // hold/缓冲到期的字符在这里落地（例如粘贴流结束后没有更多按键）。
+                // Held/buffered chars land here when due (e.g. after a paste
+                // stream ends with no further keys).
                 if app.apply_burst_outputs() {
                     dirty = true;
                 }
             }
         }
-        // 等待权限确认时没有动画可播，停止 25ms 定时重绘，避免屏闪
+        // No animation plays while waiting for approval; stop the 25ms
+        // redraws to avoid flicker.
         let animate = (app.busy || app.ai_thinking) && app.permission.is_none();
         if dirty || (animate && spinner_tick) {
             terminal.draw(|frame| app.render(frame))?;
@@ -2953,18 +3029,18 @@ mod tests {
             Vec::new(),
         );
         app.busy = true;
-        app.input = "草稿".chars().collect();
+        app.input = "draft".chars().collect();
         app.cursor = app.input.len();
 
         app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(app.interrupting);
-        assert_eq!(app.input.iter().collect::<String>(), "草稿");
+        assert_eq!(app.input.iter().collect::<String>(), "draft");
         match cmd_rx.try_recv().unwrap() {
             AgentCmd::Cancel => {}
             _ => panic!("expected Cancel"),
         }
 
-        // 中断请求只能发一次
+        // The interrupt request can only be sent once.
         app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(cmd_rx.try_recv().is_err());
     }
@@ -2985,7 +3061,7 @@ mod tests {
         let (tx, mut rx) = oneshot::channel();
         app.on_permission(PermissionRequest {
             tool: "write_file".to_string(),
-            reason: "需要写文件".to_string(),
+            reason: "need to write a file".to_string(),
             reply: tx,
         });
         assert!(matches!(
@@ -2998,7 +3074,7 @@ mod tests {
             .iter()
             .flat_map(|line| line.spans.iter().map(|s| s.content.as_ref()))
             .collect();
-        assert!(text.contains("[y] 允许"));
+        assert!(text.contains("[y] allow"));
 
         app.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
         assert_eq!(rx.try_recv(), Ok(true));
@@ -3009,7 +3085,7 @@ mod tests {
         );
         assert!(matches!(
             app.items.last(),
-            Some(Item::System(text)) if text.starts_with("✓ 已允许")
+            Some(Item::System(text)) if text.starts_with("✓ Allowed")
         ));
     }
 
@@ -3019,7 +3095,7 @@ mod tests {
         let (tx, mut rx) = oneshot::channel();
         app.on_permission(PermissionRequest {
             tool: "shell".to_string(),
-            reason: "测试".to_string(),
+            reason: "test".to_string(),
             reply: tx,
         });
         app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
@@ -3034,7 +3110,8 @@ mod tests {
     #[test]
     fn input_layout_wraps_long_text_and_tracks_cursor() {
         let mut app = test_app();
-        // 12 个 ASCII + 2 个 CJK：宽度 = 12 + 4 = 16，4 列宽换行时每行 4 字符
+        // 12 ASCII + 2 CJK chars: width = 12 + 4 = 16, so a 4-column wrap puts
+        // 4 chars per line.
         app.input = "abcdefghijkl你好".chars().collect();
         app.cursor = app.input.len();
         let (lines, line_starts, cursor_line, cursor_col) = app.input_layout(4);
@@ -3043,9 +3120,9 @@ mod tests {
         assert_eq!(cursor_line, 3);
         assert_eq!(cursor_col, 4);
 
-        // 光标停在中间字符时，列按单元格宽度计算
+        // Cursor in the middle: column counts cell widths.
         app.input = "你abc".chars().collect();
-        app.cursor = 3; // 你(2) + a(1) + b(1) → 列 4
+        app.cursor = 3; // CJK char 你(width 2) + a(1) + b(1) → col 4
         let (_, _, cursor_line, cursor_col) = app.input_layout(10);
         assert_eq!(cursor_line, 0);
         assert_eq!(cursor_col, 4);
@@ -3056,14 +3133,14 @@ mod tests {
         let mut app = test_app();
         app.input_width = 4;
         app.input = "abcdefghijkl".chars().collect();
-        app.cursor = app.input.len(); // 行: abcd / efgh / ijkl，光标在第 2 行末尾
+        app.cursor = app.input.len(); // lines: abcd / efgh / ijkl, cursor at end of line 2
 
         app.move_input_cursor(-1);
-        assert_eq!(app.cursor, 8); // 上一行 efgh 末尾
+        assert_eq!(app.cursor, 8); // end of previous line (efgh)
         app.move_input_cursor(-1);
-        assert_eq!(app.cursor, 4); // 再上一行 abcd 末尾
+        assert_eq!(app.cursor, 4); // end of the line before that (abcd)
         app.move_input_cursor(1);
-        assert_eq!(app.cursor, 8); // 回到 efgh 末尾
+        assert_eq!(app.cursor, 8); // back to the end of efgh
     }
 
     #[test]
@@ -3075,13 +3152,14 @@ mod tests {
         assert_eq!(app.expand_input(), text);
         assert_eq!(app.cursor, "【line 1-4】".chars().count());
 
-        // 光标从占位符尾部左移会跳过整个占位符，右移同理
+        // Moving left from the placeholder tail skips the whole placeholder;
+        // the same applies to the right.
         app.move_cursor_left();
         assert_eq!(app.cursor, 0);
         app.move_cursor_right();
         assert_eq!(app.cursor, "【line 1-4】".chars().count());
 
-        // Backspace 在占位符末尾会整体删除
+        // Backspace at the placeholder tail deletes it as a whole.
         app.backspace();
         assert!(app.input.is_empty());
         assert!(app.paste_blocks.is_empty());
@@ -3102,7 +3180,8 @@ mod tests {
         let ch = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
         let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
 
-        // 模拟 Windows 终端把多行粘贴注入为快速按键流（末尾带回车）。
+        // Simulate Windows Terminal injecting a multi-line paste as a fast
+        // keystroke stream (ending with Enter).
         app.on_key_burst(ch('a'), t0);
         app.on_key_burst(ch('b'), t0 + Duration::from_millis(10));
         app.on_key_burst(enter, t0 + Duration::from_millis(20));
@@ -3110,11 +3189,13 @@ mod tests {
         app.on_key_burst(enter, t0 + Duration::from_millis(40));
         app.on_key_burst(ch('d'), t0 + Duration::from_millis(50));
 
-        // 缓冲未结束：不提交，输入框也不出现半截文本。
+        // Before the buffer flushes: nothing is submitted and no partial text
+        // appears in the input.
         assert!(app.items.is_empty());
         assert!(app.input.is_empty());
 
-        // 静默超时后整体走折叠粘贴。
+        // After the idle timeout, the whole buffer goes through collapsed
+        // paste.
         app.apply_burst_outputs_at(t0 + Duration::from_millis(300));
         assert_eq!(app.input.iter().collect::<String>(), "【line 1-3】");
         assert_eq!(app.expand_input(), "ab\nc\nd");
@@ -3141,7 +3222,7 @@ mod tests {
         let ch = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
 
         app.on_key_burst(ch('a'), t0);
-        assert!(app.input.is_empty()); // 首个 ASCII 在 hold
+        assert!(app.input.is_empty()); // first ASCII char is held
         assert!(app.apply_burst_outputs_at(t0 + Duration::from_millis(50)));
         assert_eq!(app.input.iter().collect::<String>(), "a");
 
@@ -3163,7 +3244,8 @@ mod tests {
         app.on_key_burst(KeyEvent::new(KeyCode::Char('你'), KeyModifiers::NONE), t0);
         assert_eq!(app.input.iter().collect::<String>(), "A你B");
 
-        // 第二个字符快速到达 → 收回已插入的“你”，整体进缓冲。
+        // A second char arriving quickly reclaims the inserted first char and
+        // moves both into the buffer.
         app.on_key_burst(
             KeyEvent::new(KeyCode::Char('好'), KeyModifiers::NONE),
             t0 + Duration::from_millis(10),
@@ -3187,12 +3269,12 @@ mod tests {
         assert!(app.apply_burst_outputs_at(t0 + Duration::from_millis(200)));
         assert_eq!(app.input.iter().collect::<String>(), "ab");
 
-        // flush 后 100ms 内按 Enter：视为换行，不发送。
+        // Enter within 100ms after flush: treated as a newline, not sent.
         app.on_key_burst(enter, t0 + Duration::from_millis(250));
         assert!(app.items.is_empty());
         assert_eq!(app.input.iter().collect::<String>(), "ab\n");
 
-        // 保护窗口过后 Enter 正常提交。
+        // After the protection window, Enter submits normally.
         app.on_key_burst(enter, t0 + Duration::from_millis(500));
         assert!(app.input.is_empty());
         assert!(matches!(
@@ -3206,7 +3288,7 @@ mod tests {
         let mut app = test_app();
         let t0 = Instant::now() - Duration::from_millis(1000);
         app.on_key_burst(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE), t0);
-        // Ctrl+P 不走爆发，且会清掉 hold 中的字符。
+        // Ctrl+P bypasses the burst and flushes the held char.
         let quit = app.on_key_burst(
             KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
             t0 + Duration::from_millis(5),
@@ -3227,6 +3309,35 @@ mod tests {
         );
         assert_eq!(app.input.iter().collect::<String>(), "a");
         assert_eq!(app.cursor, 0);
+    }
+
+    #[test]
+    fn new_command_clears_input_and_starts_fresh_session() {
+        let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
+        let mut app = App::new(
+            cmd_tx,
+            Arc::new(Mutex::new(HashSet::new())),
+            "test-model".to_string(),
+            PathBuf::from("."),
+            "default".to_string(),
+            ThinkingLevel::Off,
+            SessionMode::Agent,
+            PathBuf::from("config.toml"),
+            None,
+            Vec::new(),
+        );
+        app.input = "old draft".chars().collect();
+        app.cursor = app.input.len();
+        app.items.push(Item::User("old message".to_string()));
+
+        app.run_command("new");
+        assert!(app.input.is_empty());
+        assert_eq!(app.cursor, 0);
+        assert!(app.paste_blocks.is_empty());
+        match cmd_rx.try_recv().unwrap() {
+            AgentCmd::NewSession => {}
+            _ => panic!("expected NewSession"),
+        }
     }
 
     #[test]
@@ -3322,7 +3433,7 @@ mod tests {
         app.max_offset = 0;
         app.follow = true;
 
-        // 单元格：你(0-2) 好(2-4) 世(4-6) 界(6-8) 空格(8) o(9) k(10)
+        // Cells: 你(0-2) 好(2-4) 世(4-6) 界(6-8) space(8) o(9) k(10)
         let first_four = Selection {
             anchor_row: 0,
             anchor_col: 0,
@@ -3397,10 +3508,10 @@ mod tests {
         let mut app = test_app();
         let mut session = Session::new(PathBuf::from("."), "default", "m");
         session.push(ChatMessage::User {
-            content: "你好".to_string(),
+            content: "hello".to_string(),
         });
         session.push(ChatMessage::Assistant {
-            content: "回复".to_string(),
+            content: "reply".to_string(),
             tool_calls: Vec::new(),
         });
         session.push(ChatMessage::Tool {
@@ -3410,8 +3521,8 @@ mod tests {
         });
 
         app.on_agent(AgentEvent::SessionLoaded(session));
-        assert!(matches!(&app.items[0], Item::User(t) if t == "你好"));
-        assert!(matches!(&app.items[1], Item::Assistant(t) if t == "回复"));
+        assert!(matches!(&app.items[0], Item::User(t) if t == "hello"));
+        assert!(matches!(&app.items[1], Item::Assistant(t) if t == "reply"));
         assert!(matches!(
             &app.items[2],
             Item::Tool {

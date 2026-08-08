@@ -73,14 +73,17 @@ impl Tool for EditFile {
             let current = firment_core::hash::sha256_hex(&original_bytes);
             if current != expected {
                 return Err(ToolError::new(format!(
-                    "[ConcurrentChange] 文件哈希不匹配（期望 {expected}，当前 {current}）：请重新 read_file 后重试"
+                    "[ConcurrentChange] file hash mismatch (expected {expected}, current \
+                     {current}): re-read the file with read_file and retry"
                 )));
             }
         }
         let new_content = compute_edit(&resolved, &original, &args)?;
         if new_content == original {
             return Err(ToolError::new(
-                "[InvalidInput] 编辑未产生任何变化（目标内容与替换内容一致）。问题可能在别处：请先 read_file 核对，不要扩大锚点或重复提交同一编辑。",
+                "[InvalidInput] the edit produced no change (target content equals replacement \
+                 content). The problem is likely elsewhere: re-read the file first; do not \
+                 widen the anchor or resubmit the same edit.",
             ));
         }
 
@@ -192,10 +195,12 @@ fn edit_by_hashline(
         match matches.len() {
             1 => Ok(matches[0]),
             0 => Err(ToolError::new(format!(
-                "[ConcurrentChange] 锚点哈希 {anchor} 在文件中不存在：文件可能已变化，请重新 read_file 后重试"
+                "[ConcurrentChange] anchor hash {anchor} not found in the file: it may have \
+                 changed; re-read with read_file and retry"
             ))),
             _ => Err(ToolError::new(format!(
-                "[InvalidInput] 锚点哈希 {anchor} 对应 {} 行，不唯一：请 read_file hashlines=true 刷新后使用更长的哈希",
+                "[InvalidInput] anchor hash {anchor} matches {} line(s), not unique: re-read \
+                 with read_file hashlines=true and use a longer hash",
                 matches.len()
             ))),
         }
@@ -206,7 +211,7 @@ fn edit_by_hashline(
             let end = find(end)?;
             if end < start {
                 return Err(ToolError::new(
-                    "[InvalidInput] end_hashline 位于 hashline 之前，区间无效",
+                    "[InvalidInput] end_hashline is before hashline; invalid range",
                 ));
             }
             end
@@ -329,7 +334,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(err.message.contains("不唯一"), "got: {}", err.message);
+        assert!(err.message.contains("not unique"), "got: {}", err.message);
     }
 
     #[tokio::test]
@@ -343,11 +348,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(
-            err.message.contains("未产生任何变化"),
-            "got: {}",
-            err.message
-        );
+        assert!(err.message.contains("no change"), "got: {}", err.message);
     }
 
     #[tokio::test]
@@ -367,7 +368,7 @@ mod tests {
             "got: {}",
             err.message
         );
-        assert!(err.message.contains("当前"), "got: {}", err.message);
+        assert!(err.message.contains("current"), "got: {}", err.message);
 
         let ok = EditFile
             .run(
