@@ -12,6 +12,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use tokio::sync::watch;
 
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
@@ -73,6 +74,7 @@ pub struct Agent {
     store: SessionStore,
     permission: Arc<dyn PermissionChecker>,
     sink: Arc<dyn EventSink>,
+    cancel_tx: watch::Sender<bool>,
     max_iterations: usize,
     allow_dangerous: bool,
     verify_command: Option<String>,
@@ -107,6 +109,7 @@ impl Agent {
             store,
             permission,
             sink,
+            cancel_tx: watch::channel(false).0,
             max_iterations,
             allow_dangerous: false,
             verify_command: None,
@@ -139,6 +142,17 @@ impl Agent {
 
     pub fn set_thinking(&mut self, level: ThinkingLevel) {
         self.session.thinking = level;
+    }
+
+    /// Request cancellation of the currently running turn. The agent stops at
+    /// the next safe checkpoint (provider stream boundary / iteration start).
+    pub fn cancel(&self) {
+        let _ = self.cancel_tx.send(true);
+    }
+
+    /// Clear a pending cancellation request before starting a new turn.
+    pub fn reset_cancel(&self) {
+        let _ = self.cancel_tx.send(false);
     }
 
     pub fn set_allow_dangerous(&mut self, allow: bool) {
@@ -291,6 +305,19 @@ impl Agent {
     }
 
     pub async fn run_turn(&mut self, input: &str) -> Result<String, AgentError> {
+        let mut cancel_rx = self.cancel_tx.subscribe();
+        if *cancel_rx.borrow() {
+            self.sink
+                .event(AgentEvent::Info("⏹ 已中断（尚未开始处理）".to_string()))
+                .await;
+            self.sink
+                .event(AgentEvent::TurnEnd {
+                    text: String::new(),
+                })
+                .await;
+            let _ = self.store.save(&self.session);
+            return Ok(String::new());
+        }
         let (delta, last_seq) = Ledger::new(self.store.ledger_path(&self.session.id))
             .delta_text(self.ledger_seq_appended, 5);
         let input = if delta.is_empty() {
@@ -310,13 +337,52 @@ impl Agent {
 
         for _ in 0..self.max_iterations {
             self.compact_if_needed().await;
+            if *cancel_rx.borrow() {
+                let summary = rollback_journal(&journal);
+                self.sink
+                    .event(AgentEvent::Info(format!(
+                        "⏹ 已中断，已回滚本回合编辑: {summary}"
+                    )))
+                    .await;
+                self.sink
+                    .event(AgentEvent::TurnEnd {
+                        text: String::new(),
+                    })
+                    .await;
+                let _ = self.store.save(&self.session);
+                return Ok(String::new());
+            }
             let request = self.build_request();
             let provider = self.provider.as_ref().ok_or(AgentError::NoProvider)?;
-            let mut stream = provider.stream(request).await?;
+            let mut stream = tokio::select! {
+                result = provider.stream(request) => result?,
+                _ = cancel_rx.changed() => {
+                    let summary = rollback_journal(&journal);
+                    self.sink
+                        .event(AgentEvent::Info(format!(
+                            "⏹ 已中断，已回滚本回合编辑: {summary}"
+                        )))
+                        .await;
+                    self.sink
+                        .event(AgentEvent::TurnEnd {
+                            text: String::new(),
+                        })
+                        .await;
+                    let _ = self.store.save(&self.session);
+                    return Ok(String::new());
+                }
+            };
             let mut content = String::new();
             let mut tool_calls: Vec<ToolCall> = Vec::new();
+            let mut cancelled = false;
 
-            while let Some(event) = stream.next().await {
+            while let Some(event) = tokio::select! {
+                next = stream.next() => next,
+                _ = cancel_rx.changed() => {
+                    cancelled = true;
+                    None
+                }
+            } {
                 let event = match event {
                     Ok(event) => event,
                     Err(e) => {
@@ -343,6 +409,22 @@ impl Agent {
                 content: content.clone(),
                 tool_calls: tool_calls.clone(),
             });
+
+            if cancelled {
+                let summary = rollback_journal(&journal);
+                self.sink
+                    .event(AgentEvent::Info(format!(
+                        "⏹ 已中断，已回滚本回合编辑: {summary}"
+                    )))
+                    .await;
+                self.sink
+                    .event(AgentEvent::TurnEnd {
+                        text: content.clone(),
+                    })
+                    .await;
+                let _ = self.store.save(&self.session);
+                return Ok(content);
+            }
 
             let ctx = ToolContext {
                 cwd: self.session.cwd.clone(),

@@ -101,9 +101,13 @@ pub async fn run(
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
                 AgentCmd::User(text) => {
+                    agent.reset_cancel();
                     if let Err(e) = agent.run_turn(&text).await {
                         agent.emit(AgentEvent::Error(e.to_string())).await;
                     }
+                }
+                AgentCmd::Cancel => {
+                    agent.cancel();
                 }
                 AgentCmd::SetModel(model) => {
                     agent.set_model(model.clone());
@@ -462,6 +466,9 @@ pub async fn run(
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
 
+/// 输入框最大高度（含上下边框）：边框 2 行 + 最多 5 行文字。
+const MAX_INPUT_HEIGHT: usize = 7;
+
 fn init_terminal() -> anyhow::Result<Tui> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -482,6 +489,7 @@ fn restore_terminal(terminal: &mut Tui) -> anyhow::Result<()> {
 
 enum AgentCmd {
     User(String),
+    Cancel,
     SetModel(String),
     SetThinking(ThinkingLevel),
     SetMode(SessionMode),
@@ -577,9 +585,11 @@ struct App {
     busy: bool,
     ai_thinking: bool,
     permission: Option<PermissionRequest>,
+    interrupting: bool,
     scroll: usize,
     max_offset: usize,
     follow: bool,
+    input_scroll: usize,
     quit: bool,
     model: String,
     provider: String,
@@ -734,9 +744,11 @@ impl App {
             busy: false,
             ai_thinking: false,
             permission: None,
+            interrupting: false,
             scroll: 0,
             max_offset: 0,
             follow: true,
+            input_scroll: 0,
             quit: false,
             model,
             provider,
@@ -833,6 +845,7 @@ impl App {
             AgentEvent::TurnEnd { .. } => {
                 self.busy = false;
                 self.ai_thinking = false;
+                self.interrupting = false;
             }
             AgentEvent::Info(message) => self.items.push(Item::System(message)),
             AgentEvent::Settings {
@@ -885,12 +898,15 @@ impl App {
                 self.follow = true;
                 self.scroll = 0;
                 self.max_offset = 0;
+                self.input_scroll = 0;
+                self.interrupting = false;
                 self.push_messages(&session.messages);
             }
             AgentEvent::Error(message) => {
                 self.items.push(Item::Error(message));
                 self.busy = false;
                 self.ai_thinking = false;
+                self.interrupting = false;
             }
         }
     }
@@ -1038,12 +1054,69 @@ impl App {
                 false
             }
             KeyCode::Esc => {
-                self.input.clear();
-                self.cursor = 0;
+                if self.busy {
+                    self.request_interrupt();
+                } else {
+                    self.input.clear();
+                    self.cursor = 0;
+                }
                 false
             }
             _ => false,
         }
+    }
+
+    fn request_interrupt(&mut self) {
+        if self.interrupting {
+            return;
+        }
+        self.interrupting = true;
+        let _ = self.cmd_tx.try_send(AgentCmd::Cancel);
+        self.items
+            .push(Item::System("⏹ 已发送中断请求…".to_string()));
+    }
+
+    /// 把输入按显示宽度软换行，返回 (每行文本, 光标所在行, 光标所在列)。
+    /// 光标位置按字符索引换算，兼容 CJK 宽字符。
+    fn input_layout(&self, width: usize) -> (Vec<String>, usize, usize) {
+        let chars = &self.input;
+        let mut lines: Vec<String> = Vec::new();
+        let mut line_starts: Vec<usize> = Vec::new();
+        let mut line_start = 0usize;
+        let mut current = String::new();
+        let mut current_w = 0usize;
+        for (pos, &ch) in chars.iter().enumerate() {
+            if ch == '\n' {
+                lines.push(std::mem::take(&mut current));
+                line_starts.push(line_start);
+                current_w = 0;
+                line_start = pos + 1;
+                continue;
+            }
+            let w = ch.width().unwrap_or(0);
+            if current_w + w > width && !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+                line_starts.push(line_start);
+                line_start = pos;
+                current_w = 0;
+            }
+            current.push(ch);
+            current_w += w;
+        }
+        if !current.is_empty() || lines.is_empty() {
+            lines.push(current);
+            line_starts.push(line_start);
+        }
+        let cursor = self.cursor.min(chars.len());
+        let cursor_line = line_starts
+            .iter()
+            .rposition(|&start| cursor >= start)
+            .unwrap_or(0);
+        let cursor_col: usize = chars[line_starts[cursor_line]..cursor]
+            .iter()
+            .map(|c| c.width().unwrap_or(0))
+            .sum();
+        (lines, cursor_line, cursor_col)
     }
 
     fn on_permission_key(&mut self, key: KeyEvent) -> bool {
@@ -1458,7 +1531,7 @@ impl App {
             .unwrap_or((command, ""));
         match name {
             "help" => self.items.push(Item::System(
-                "命令: /plan [on|off]  /agent  /models  /model <id>  /sessions(上下键选择)  /session <id>  /undo  /ledger  /pin <路径>  /unpin <路径>  /copy  /provider <名字>  /add-provider <名字> <openai|anthropic> <base_url> <模型>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /config  /clear  /help  /quit\n键位: ↑/↓ 空输入时浏览历史，非空时滚动对话 · PgUp/PgDn/滚轮始终滚动 · Ctrl+P 模型选择器 · 左键拖动选择 · 右键复制选中（无选区时粘贴） · Ctrl+Shift+C 复制最后回复 · ←/→ 移动输入光标 · y/n/a 权限确认 · Ctrl-C 退出"
+                "命令: /plan [on|off]  /agent  /models  /model <id>  /sessions(上下键选择)  /session <id>  /undo  /ledger  /pin <路径>  /unpin <路径>  /copy  /provider <名字>  /add-provider <名字> <openai|anthropic> <base_url> <模型>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /config  /clear  /help  /quit\n键位: ↑/↓ 空输入时浏览历史，非空时滚动对话 · PgUp/PgDn/滚轮始终滚动 · Ctrl+P 模型选择器 · 左键拖动选择 · 右键复制选中（无选区时粘贴） · Ctrl+Shift+C 复制最后回复 · ←/→ 移动输入光标 · y/n/a 权限确认 · Esc 中断 AI 输出（空闲时清空输入） · Ctrl-C 退出\n输入框: 自动换行自适应高度，最长显示 5 行"
                     .to_string(),
             )),
             "plan" => {
@@ -1710,10 +1783,17 @@ impl App {
 
     fn render(&mut self, frame: &mut Frame) {
         self.frame = self.frame.wrapping_add(1);
+        let frame_width = frame.area().width.saturating_sub(2) as usize;
+        let (input_lines, cursor_line, cursor_col) = if self.input.is_empty() {
+            (Vec::<String>::new(), 0, 0)
+        } else {
+            self.input_layout(frame_width.max(1))
+        };
+        let input_height = (input_lines.len() + 2).clamp(3, MAX_INPUT_HEIGHT) as u16;
         let [transcript_area, status_area, input_area] = Layout::vertical([
             Constraint::Min(3),
             Constraint::Length(1),
-            Constraint::Length(3),
+            Constraint::Length(input_height),
         ])
         .areas(frame.area());
 
@@ -1762,6 +1842,8 @@ impl App {
         };
         let state = if self.permission.is_some() {
             "等待确认"
+        } else if self.interrupting {
+            "中断中…"
         } else if self.ai_thinking {
             "思考中"
         } else if self.busy {
@@ -1781,7 +1863,11 @@ impl App {
             self.thinking.label(),
             cwd_str
         );
-        let right = format!(" {} · {state} ", spinner);
+        let right = if self.busy && !self.interrupting {
+            format!(" {} · {state} · Esc 中断 ", spinner)
+        } else {
+            format!(" {} · {state} ", spinner)
+        };
         let pad = (status_area.width as usize).saturating_sub(left.width() + right.width());
         let status_line = Line::from(vec![
             Span::styled(left, Style::default().fg(Color::Cyan)),
@@ -1790,35 +1876,169 @@ impl App {
         ]);
         frame.render_widget(Paragraph::new(status_line), status_area);
 
-        let input_width = input_area.width.saturating_sub(2) as usize;
-        let (visible, visible_cursor) = input_window(&self.input, self.cursor, input_width);
         let block = Block::bordered()
             .title(Span::styled(" input ", Style::default().fg(Color::Cyan)))
             .border_style(Style::default().fg(Color::DarkGray));
         let content = if self.input.is_empty() {
+            self.input_scroll = 0;
             Paragraph::new(Line::from(Span::styled(
-                "输入任务，Enter 发送 · /help · ↑/↓ 空输入时浏览历史 · Ctrl+P 模型 · 左键选择右键复制 · Ctrl-C 退出",
+                "输入任务，Enter 发送 · Esc 中断/清空 · /help · ↑/↓ 空输入时浏览历史 · Ctrl+P 模型 · 左键选择右键复制 · Ctrl-C 退出",
                 Style::default().fg(Color::DarkGray),
             )))
             .block(block)
         } else {
-            Paragraph::new(Line::from(Span::styled(
-                &visible,
-                Style::default().fg(Color::White),
-            )))
-            .block(block)
+            let visible_text_height = input_area.height.saturating_sub(2) as usize;
+            let max_scroll = input_lines.len().saturating_sub(visible_text_height.max(1));
+            if cursor_line < self.input_scroll {
+                self.input_scroll = cursor_line;
+            }
+            if visible_text_height > 0 && cursor_line >= self.input_scroll + visible_text_height {
+                self.input_scroll = cursor_line + 1 - visible_text_height;
+            }
+            self.input_scroll = self.input_scroll.min(max_scroll);
+            let shown = input_lines
+                .iter()
+                .skip(self.input_scroll)
+                .take(visible_text_height.max(1))
+                .map(|line| {
+                    Line::from(Span::styled(
+                        line.clone(),
+                        Style::default().fg(Color::White),
+                    ))
+                })
+                .collect::<Vec<_>>();
+            Paragraph::new(shown).block(block)
         };
         frame.render_widget(content, input_area);
-        let prefix: usize = visible
-            .chars()
-            .take(visible_cursor)
-            .map(|c| c.width().unwrap_or(0))
-            .sum();
-        let cursor_x = input_area.x + 1 + prefix as u16;
-        frame.set_cursor_position((cursor_x, input_area.y + 1));
+        let modal_open = self.permission.is_some()
+            || self.model_picker.is_some()
+            || self.session_picker.is_some();
+        if !modal_open && !self.input.is_empty() {
+            let cursor_x = input_area.x + 1 + cursor_col as u16;
+            let cursor_y = input_area.y + 1 + cursor_line.saturating_sub(self.input_scroll) as u16;
+            frame.set_cursor_position((cursor_x, cursor_y));
+        }
 
+        if self.permission.is_none() {
+            if let Some(picker) = &self.model_picker {
+                let area = centered_rect(60, 48, frame.area());
+                frame.render_widget(Clear, area);
+                let block = Block::bordered()
+                    .title(Span::styled(
+                        " 模型选择 ",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ))
+                    .border_style(Style::default().fg(Color::Cyan));
+                frame.render_widget(block, area);
+                let inner = area.inner(Margin {
+                    horizontal: 2,
+                    vertical: 1,
+                });
+                let mut lines = Vec::new();
+                let query: String = picker.query.iter().collect();
+                lines.push(Line::from(Span::styled(
+                    format!("过滤: {query}（Enter 选择 · Esc 关闭）"),
+                    Style::default().fg(Color::DarkGray),
+                )));
+                if picker.models.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        "正在获取模型列表…",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                } else {
+                    let filtered = picker.filtered();
+                    for (idx, model) in filtered.iter().take(12).enumerate() {
+                        let (marker, style) = if idx == picker.selected {
+                            (
+                                "❯ ",
+                                Style::default()
+                                    .fg(Color::Yellow)
+                                    .add_modifier(Modifier::BOLD),
+                            )
+                        } else {
+                            ("  ", Style::default().fg(Color::White))
+                        };
+                        lines.push(Line::from(Span::styled(format!("{marker}{model}"), style)));
+                    }
+                    if filtered.len() > 12 {
+                        lines.push(Line::from(Span::styled(
+                            format!("… 还有 {} 个", filtered.len() - 12),
+                            Style::default().fg(Color::DarkGray),
+                        )));
+                    }
+                }
+                frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+            }
+
+            if let Some(picker) = &self.session_picker {
+                let area = centered_rect(76, 52, frame.area());
+                frame.render_widget(Clear, area);
+                let block = Block::bordered()
+                    .title(Span::styled(
+                        " 会话选择 ",
+                        Style::default()
+                            .fg(Color::Magenta)
+                            .add_modifier(Modifier::BOLD),
+                    ))
+                    .border_style(Style::default().fg(Color::Magenta));
+                frame.render_widget(block, area);
+                let inner = area.inner(Margin {
+                    horizontal: 2,
+                    vertical: 1,
+                });
+                let mut lines = Vec::new();
+                let query: String = picker.query.iter().collect();
+                lines.push(Line::from(Span::styled(
+                    format!("过滤: {query}（↑/↓ 选择 · Enter 进入 · Esc 关闭）"),
+                    Style::default().fg(Color::DarkGray),
+                )));
+                if picker.sessions.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        "正在加载会话列表…",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                } else {
+                    let filtered = picker.filtered();
+                    let start = picker.selected.saturating_sub(6);
+                    for (idx, session) in filtered.iter().enumerate().skip(start).take(12) {
+                        let (marker, style) = if idx == picker.selected {
+                            (
+                                "❯ ",
+                                Style::default()
+                                    .fg(Color::Yellow)
+                                    .add_modifier(Modifier::BOLD),
+                            )
+                        } else {
+                            ("  ", Style::default().fg(Color::White))
+                        };
+                        let id_short: String = session.id.chars().take(8).collect();
+                        let preview = truncate_chars(&session.preview, 42);
+                        lines.push(Line::from(Span::styled(
+                            format!(
+                                "{marker}{}  {:<22}  {}  ({id_short})",
+                                format_ts(session.updated_at),
+                                session.model,
+                                preview
+                            ),
+                            style,
+                        )));
+                    }
+                    if filtered.len() > 12 {
+                        lines.push(Line::from(Span::styled(
+                            format!("… 还有 {} 个", filtered.len() - 12),
+                            Style::default().fg(Color::DarkGray),
+                        )));
+                    }
+                }
+                frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+            }
+        }
+
+        // 权限弹窗最后绘制，保证永远在最顶层、选项不被其它界面覆盖。
         if let Some(prompt) = &self.permission {
-            let area = centered_rect(72, 34, frame.area());
+            let area = centered_rect(76, 52, frame.area());
             frame.render_widget(Clear, area);
             let block = Block::bordered()
                 .title(Span::styled(
@@ -1849,125 +2069,10 @@ impl App {
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
-                    "[y] 允许    [n] 拒绝    [a] 本次会话总是允许",
+                    "[y] 允许    [a] 本次会话总是允许    [n] / Esc 拒绝",
                     Style::default().fg(Color::Green),
                 )),
             ];
-            frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
-        }
-
-        if let Some(picker) = &self.model_picker {
-            let area = centered_rect(60, 48, frame.area());
-            frame.render_widget(Clear, area);
-            let block = Block::bordered()
-                .title(Span::styled(
-                    " 模型选择 ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ))
-                .border_style(Style::default().fg(Color::Cyan));
-            frame.render_widget(block, area);
-            let inner = area.inner(Margin {
-                horizontal: 2,
-                vertical: 1,
-            });
-            let mut lines = Vec::new();
-            let query: String = picker.query.iter().collect();
-            lines.push(Line::from(Span::styled(
-                format!("过滤: {query}（Enter 选择 · Esc 关闭）"),
-                Style::default().fg(Color::DarkGray),
-            )));
-            if picker.models.is_empty() {
-                lines.push(Line::from(Span::styled(
-                    "正在获取模型列表…",
-                    Style::default().fg(Color::DarkGray),
-                )));
-            } else {
-                let filtered = picker.filtered();
-                for (idx, model) in filtered.iter().take(12).enumerate() {
-                    let (marker, style) = if idx == picker.selected {
-                        (
-                            "❯ ",
-                            Style::default()
-                                .fg(Color::Yellow)
-                                .add_modifier(Modifier::BOLD),
-                        )
-                    } else {
-                        ("  ", Style::default().fg(Color::White))
-                    };
-                    lines.push(Line::from(Span::styled(format!("{marker}{model}"), style)));
-                }
-                if filtered.len() > 12 {
-                    lines.push(Line::from(Span::styled(
-                        format!("… 还有 {} 个", filtered.len() - 12),
-                        Style::default().fg(Color::DarkGray),
-                    )));
-                }
-            }
-            frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
-        }
-
-        if let Some(picker) = &self.session_picker {
-            let area = centered_rect(76, 52, frame.area());
-            frame.render_widget(Clear, area);
-            let block = Block::bordered()
-                .title(Span::styled(
-                    " 会话选择 ",
-                    Style::default()
-                        .fg(Color::Magenta)
-                        .add_modifier(Modifier::BOLD),
-                ))
-                .border_style(Style::default().fg(Color::Magenta));
-            frame.render_widget(block, area);
-            let inner = area.inner(Margin {
-                horizontal: 2,
-                vertical: 1,
-            });
-            let mut lines = Vec::new();
-            let query: String = picker.query.iter().collect();
-            lines.push(Line::from(Span::styled(
-                format!("过滤: {query}（↑/↓ 选择 · Enter 进入 · Esc 关闭）"),
-                Style::default().fg(Color::DarkGray),
-            )));
-            if picker.sessions.is_empty() {
-                lines.push(Line::from(Span::styled(
-                    "正在加载会话列表…",
-                    Style::default().fg(Color::DarkGray),
-                )));
-            } else {
-                let filtered = picker.filtered();
-                let start = picker.selected.saturating_sub(6);
-                for (idx, session) in filtered.iter().enumerate().skip(start).take(12) {
-                    let (marker, style) = if idx == picker.selected {
-                        (
-                            "❯ ",
-                            Style::default()
-                                .fg(Color::Yellow)
-                                .add_modifier(Modifier::BOLD),
-                        )
-                    } else {
-                        ("  ", Style::default().fg(Color::White))
-                    };
-                    let id_short: String = session.id.chars().take(8).collect();
-                    let preview = truncate_chars(&session.preview, 42);
-                    lines.push(Line::from(Span::styled(
-                        format!(
-                            "{marker}{}  {:<22}  {}  ({id_short})",
-                            format_ts(session.updated_at),
-                            session.model,
-                            preview
-                        ),
-                        style,
-                    )));
-                }
-                if filtered.len() > 12 {
-                    lines.push(Line::from(Span::styled(
-                        format!("… 还有 {} 个", filtered.len() - 12),
-                        Style::default().fg(Color::DarkGray),
-                    )));
-                }
-            }
             frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
         }
     }
@@ -2037,35 +2142,6 @@ fn next_thinking(level: ThinkingLevel) -> ThinkingLevel {
     }
 }
 
-fn input_window(chars: &[char], cursor: usize, width: usize) -> (String, usize) {
-    let cursor = cursor.min(chars.len());
-    let total: usize = chars.iter().map(|c| c.width().unwrap_or(0)).sum();
-    if width == 0 || total <= width {
-        return (chars.iter().collect(), cursor);
-    }
-    let mut start = cursor;
-    let mut used = 0;
-    while start > 0 {
-        let w = chars[start - 1].width().unwrap_or(0);
-        if used + w > width {
-            break;
-        }
-        used += w;
-        start -= 1;
-    }
-    let mut end = cursor;
-    while end < chars.len() {
-        let w = chars[end].width().unwrap_or(0);
-        if used + w > width {
-            break;
-        }
-        used += w;
-        end += 1;
-    }
-    let visible: String = chars[start..end].iter().collect();
-    (visible, cursor.saturating_sub(start))
-}
-
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     let vertical = Layout::vertical([
         Constraint::Percentage((100 - percent_y) / 2),
@@ -2121,28 +2197,38 @@ async fn run_loop(
     mut ui_rx: mpsc::Receiver<Event>,
 ) -> anyhow::Result<()> {
     let mut ticker = tokio::time::interval(Duration::from_millis(100));
+    let mut dirty = true;
     loop {
+        let mut spinner_tick = false;
         tokio::select! {
             event = event_rx.recv() => {
                 if let Some(event) = event {
                     app.on_agent(event);
+                    dirty = true;
                 }
             }
             request = perm_rx.recv() => {
                 if let Some(request) = request {
                     app.on_permission(request);
+                    dirty = true;
                 }
             }
             ui_event = ui_rx.recv() => {
-                if let Some(ui_event) = ui_event
-                    && app.on_ui(ui_event)
-                {
-                    break;
+                if let Some(ui_event) = ui_event {
+                    let quit = app.on_ui(ui_event);
+                    dirty = true;
+                    if quit {
+                        break;
+                    }
                 }
             }
-            _ = ticker.tick() => {}
+            _ = ticker.tick() => spinner_tick = true,
         }
-        terminal.draw(|frame| app.render(frame))?;
+        let animate = app.busy || app.ai_thinking;
+        if dirty || (animate && spinner_tick) {
+            terminal.draw(|frame| app.render(frame))?;
+            dirty = false;
+        }
         if app.quit {
             break;
         }
@@ -2200,6 +2286,67 @@ mod tests {
         app.on_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         assert_eq!(app.scroll, 1);
         assert_eq!(app.input.iter().collect::<String>(), "abc");
+    }
+
+    #[test]
+    fn esc_while_busy_requests_cancel_and_keeps_input() {
+        let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
+        let mut app = App::new(
+            cmd_tx,
+            Arc::new(Mutex::new(HashSet::new())),
+            "test-model".to_string(),
+            PathBuf::from("."),
+            "default".to_string(),
+            ThinkingLevel::Off,
+            SessionMode::Agent,
+            PathBuf::from("config.toml"),
+            None,
+            Vec::new(),
+        );
+        app.busy = true;
+        app.input = "草稿".chars().collect();
+        app.cursor = app.input.len();
+
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.interrupting);
+        assert_eq!(app.input.iter().collect::<String>(), "草稿");
+        match cmd_rx.try_recv().unwrap() {
+            AgentCmd::Cancel => {}
+            _ => panic!("expected Cancel"),
+        }
+
+        // 中断请求只能发一次
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(cmd_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn esc_when_idle_clears_input() {
+        let mut app = test_app();
+        app.input = "abc".chars().collect();
+        app.cursor = 1;
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.input.is_empty());
+        assert_eq!(app.cursor, 0);
+    }
+
+    #[test]
+    fn input_layout_wraps_long_text_and_tracks_cursor() {
+        let mut app = test_app();
+        // 12 个 ASCII + 2 个 CJK：宽度 = 12 + 4 = 16，4 列宽换行时每行 4 字符
+        app.input = "abcdefghijkl你好".chars().collect();
+        app.cursor = app.input.len();
+        let (lines, cursor_line, cursor_col) = app.input_layout(4);
+        assert_eq!(lines, vec!["abcd", "efgh", "ijkl", "你好"]);
+        assert_eq!(cursor_line, 3);
+        assert_eq!(cursor_col, 4);
+
+        // 光标停在中间字符时，列按单元格宽度计算
+        app.input = "你abc".chars().collect();
+        app.cursor = 3; // 你(2) + a(1) + b(1) → 列 4
+        let (_, cursor_line, cursor_col) = app.input_layout(10);
+        assert_eq!(cursor_line, 0);
+        assert_eq!(cursor_col, 4);
     }
 
     #[test]
