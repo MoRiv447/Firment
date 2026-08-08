@@ -12,6 +12,7 @@ firment-core = { path = "../firment-core" }
 firment-tools = { path = "../firment-tools" }
 firment-tui = { path = "../firment-tui" }
 anyhow.workspace = true
+serialport.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
 clap.workspace = true

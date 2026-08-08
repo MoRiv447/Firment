@@ -26,7 +26,9 @@ dirs = "5"
 futures = "0.3"
 globset = "0.4"
 ignore = "0.4"
+object = "0.36"
 ratatui = "0.29"
+serialport = "4"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }

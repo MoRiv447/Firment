@@ -139,19 +139,23 @@ pub(crate) async fn run_command(
     let mut read_stdout = Box::pin(read_stdout);
     let mut read_stderr = Box::pin(read_stderr);
 
-    let status = tokio::select! {
-        status = child.wait() => status,
-        _ = tokio::time::sleep(Duration::from_millis(timeout_ms)) => {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-            let _ = (&mut read_stdout).await;
-            let _ = (&mut read_stderr).await;
-            return Ok((
-                format!(
-                    "command: {command}\ntimed out after {timeout_ms} ms and was killed (child processes may survive)"
-                ),
-                None,
-            ));
+    let status = if timeout_ms == 0 {
+        child.wait().await
+    } else {
+        tokio::select! {
+            status = child.wait() => status,
+            _ = tokio::time::sleep(Duration::from_millis(timeout_ms)) => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                let _ = (&mut read_stdout).await;
+                let _ = (&mut read_stderr).await;
+                return Ok((
+                    format!(
+                        "command: {command}\ntimed out after {timeout_ms} ms and was killed (child processes may survive)"
+                    ),
+                    None,
+                ));
+            }
         }
     };
     let _ = (&mut read_stdout).await;

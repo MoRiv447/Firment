@@ -44,6 +44,12 @@ pub struct ToolsConfig {
     /// Default target chip for the `flash` tool (e.g. `stm32f407vetx`).
     #[serde(default)]
     pub default_chip: Option<String>,
+    /// Serial port for `firm monitor` (e.g. `COM3`).
+    #[serde(default)]
+    pub monitor_port: Option<String>,
+    /// Default baud rate for `firm monitor`.
+    #[serde(default = "default_monitor_baud")]
+    pub monitor_baud: u32,
 }
 
 /// Auto-compaction strategy: `summarize` (default) summarizes all old rounds;
@@ -373,6 +379,8 @@ model = "deepseek-v4-flash"
 # symbols_backend = "auto"   # auto / ctags / regex（符号索引后端，auto=有 ctags 用 ctags）
 # build_command = "cmake --build build"   # build 工具执行的命令（Keil: uv4 -j0 -b project.uvprojx）
 # default_chip = "stm32f407vetx"          # flash 工具的默认芯片（probe-rs 芯片名）
+# monitor_port = "COM3"                   # firm monitor 默认串口
+# monitor_baud = 115200                   # firm monitor 默认波特率
 "#
 }
 
@@ -382,6 +390,10 @@ fn default_provider_name() -> String {
 
 fn default_max_iterations() -> usize {
     30
+}
+
+fn default_monitor_baud() -> u32 {
+    115_200
 }
 
 fn default_context_budget() -> usize {

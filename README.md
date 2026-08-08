@@ -50,8 +50,8 @@
 
 **Layer 2 — Embedded-specific (basic build/flash available, rest in development)**
 
-- Build & flash: `firm build` (CMake/Make/Keil/IAR via config) and `firm flash` (probe-rs backend) are available now
-- Debugging & RTT (probe-rs), UART / serial log analysis with ELF symbol decoding
+- Build / flash / run / monitor: `firm build`, `firm flash`, `firm run` (RTT logs via probe-rs) and `firm monitor` (serial + ELF symbol decoding) are available now
+- Debugging (probe-rs), UART / serial log analysis with ELF symbol decoding
 - MCU auto-detection (`.ioc` / CubeMX database)
 - Register / peripheral awareness (chip register maps, `.ioc`, device trees)
 ### 🚀 Quick Start
@@ -110,6 +110,8 @@ model = "deepseek-v4-flash"   # or deepseek-v4-pro
 # symbols_backend = "auto"         # auto / ctags / regex (symbol index backend)
 # build_command = "cmake --build build"   # build tool (Keil: uv4 -j0 -b project.uvprojx)
 # default_chip = "stm32f407vetx"          # default probe-rs chip for `firm flash`
+# monitor_port = "COM3"                   # default serial port for `firm monitor`
+# monitor_baud = 115200                   # default baud rate for `firm monitor`
 ```
 
 Add more providers and switch with `--provider <name>` or `/provider <name>` in the TUI; `/models` and `Ctrl+P` fetch and pick models without editing files.
@@ -133,6 +135,8 @@ Add more providers and switch with `--provider <name>` or `/provider <name>` in 
 | `firm install` / `firm update [<exe>]` | Global install / self-update |
 | `firm build` | Run the configured build command (`[tools] build_command`, e.g. CMake/Make/Keil/IAR CLI) |
 | `firm flash [--chip <chip>] <elf>` | Flash a firmware ELF via probe-rs (ST-Link / J-Link / CMSIS-DAP / DFU) |
+| `firm run [--chip <chip>] [--timeout <secs>] <elf>` | Flash, reset and run the target, streaming RTT logs |
+| `firm monitor [--port <COMx>] [--baud <n>] [--elf <elf>]` | Monitor a serial port; decodes stack addresses with `--elf` |
 | `firm --set-key default=sk-xxx` | Store an API key |
 
 ### 🎮 TUI

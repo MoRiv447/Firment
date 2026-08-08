@@ -1,3 +1,4 @@
+pub mod decode;
 pub mod tools;
 
 use firment_core::{Tool, ToolRegistry};

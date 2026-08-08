@@ -112,6 +112,35 @@ enum Command {
         #[arg(long)]
         probe: Option<String>,
     },
+    /// Flash and run the target via probe-rs, streaming RTT logs.
+    Run {
+        /// Path to the firmware ELF.
+        file: PathBuf,
+        /// Target chip (defaults to config [tools] default_chip).
+        #[arg(long)]
+        chip: Option<String>,
+        /// Probe serial/id to use.
+        #[arg(long)]
+        probe: Option<String>,
+        /// Timeout in seconds (0 = wait until Ctrl-C, default).
+        #[arg(long, default_value_t = 0)]
+        timeout: u64,
+    },
+    /// Monitor a serial port with optional ELF symbol decoding.
+    Monitor {
+        /// Serial port, e.g. COM3 (defaults to config [tools] monitor_port).
+        #[arg(long)]
+        port: Option<String>,
+        /// Baud rate (0 = config [tools] monitor_baud, default).
+        #[arg(long, default_value_t = 0)]
+        baud: u32,
+        /// ELF file for decoding hex code addresses in log lines.
+        #[arg(long)]
+        elf: Option<PathBuf>,
+        /// Timeout in seconds (0 = run until Ctrl-C).
+        #[arg(long, default_value_t = 30)]
+        timeout: u64,
+    },
 }
 
 #[tokio::main]
@@ -142,6 +171,55 @@ async fn main() -> anyhow::Result<()> {
                     serde_json::Value::Object(args),
                 )
                 .await?;
+            }
+            Command::Run {
+                file,
+                chip,
+                probe,
+                timeout,
+            } => {
+                let config = load_config(&cli)?;
+                let mut args = serde_json::Map::new();
+                args.insert("file".to_string(), serde_json::json!(file));
+                if let Some(chip) = chip {
+                    args.insert("chip".to_string(), serde_json::json!(chip));
+                }
+                if let Some(probe) = probe {
+                    args.insert("probe".to_string(), serde_json::json!(probe));
+                }
+                args.insert(
+                    "timeout_ms".to_string(),
+                    serde_json::json!(timeout.saturating_mul(1000)),
+                );
+                run_direct_tool(
+                    &config,
+                    cli.cwd.clone(),
+                    "run",
+                    serde_json::Value::Object(args),
+                )
+                .await?;
+            }
+            Command::Monitor {
+                port,
+                baud,
+                elf,
+                timeout,
+            } => {
+                let config = load_config(&cli)?;
+                let port = port
+                    .clone()
+                    .or(config.tools.monitor_port.clone())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "缺少串口：用 --port COMx 或在 config.toml 设置 monitor_port"
+                        )
+                    })?;
+                let baud = if *baud > 0 {
+                    *baud
+                } else {
+                    config.tools.monitor_baud
+                };
+                run_monitor(&port, baud, elf.clone(), *timeout)?;
             }
         }
         return Ok(());
@@ -520,6 +598,56 @@ async fn run_direct_tool(
         }
         Err(e) => Err(anyhow::anyhow!("{}", e.message)),
     }
+}
+
+/// Read a serial port and print lines, optionally decoding hex code
+/// addresses against an ELF symbol table. Blocking CLI helper.
+fn run_monitor(
+    port: &str,
+    baud: u32,
+    elf: Option<PathBuf>,
+    timeout_secs: u64,
+) -> anyhow::Result<()> {
+    use std::io::Read;
+    use std::time::{Duration, Instant};
+    let mut reader = serialport::new(port, baud)
+        .timeout(Duration::from_millis(500))
+        .open()
+        .map_err(|e| anyhow::anyhow!("打开串口 {port} 失败: {e}"))?;
+    let elf = elf.as_deref();
+    let mut buf = [0u8; 4096];
+    let mut line_buf = String::new();
+    let deadline = if timeout_secs > 0 {
+        Some(Instant::now() + Duration::from_secs(timeout_secs))
+    } else {
+        None
+    };
+    loop {
+        if let Some(deadline) = deadline
+            && Instant::now() >= deadline
+        {
+            break;
+        }
+        match reader.read(&mut buf) {
+            Ok(0) => continue,
+            Ok(n) => {
+                for ch in String::from_utf8_lossy(&buf[..n]).chars() {
+                    if ch == '\n' {
+                        println!("{}", firment_tools::decode::decode_line(&line_buf, elf));
+                        line_buf.clear();
+                    } else {
+                        line_buf.push(ch);
+                    }
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => continue,
+            Err(e) => return Err(anyhow::anyhow!("串口读取失败: {e}")),
+        }
+    }
+    if !line_buf.is_empty() {
+        println!("{}", firment_tools::decode::decode_line(&line_buf, elf));
+    }
+    Ok(())
 }
 
 fn parse_thinking(s: &str) -> Result<ThinkingLevel, std::io::Error> {

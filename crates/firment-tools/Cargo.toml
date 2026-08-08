@@ -8,6 +8,7 @@ firment-core = { path = "../firment-core" }
 async-trait.workspace = true
 globset.workspace = true
 ignore.workspace = true
+object.workspace = true
 regex.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

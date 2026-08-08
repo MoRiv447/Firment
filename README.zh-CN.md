@@ -52,8 +52,8 @@
 
 **第二层 — 嵌入式专属（编译/烧录已可用，其余开发中）**
 
-- 编译与烧录：`firm build`（CMake/Make/Keil/IAR 经配置分发）与 `firm flash`（probe-rs 后端）现已可用
-- 调试与 RTT（probe-rs）、UART / 串口日志分析（含 ELF 符号解码栈回溯）
+- 编译 / 烧录 / 运行 / 监控：`firm build`、`firm flash`、`firm run`（probe-rs RTT 日志）与 `firm monitor`（串口 + ELF 符号解码）现已可用
+- 调试（probe-rs）、UART / 串口日志分析（含 ELF 符号解码栈回溯）
 - MCU 自动识别（`.ioc` / CubeMX 芯片库）
 - 寄存器 / 外设感知（芯片寄存器映射、`.ioc`、设备树）
 ### 🚀 快速开始
@@ -112,6 +112,8 @@ model = "deepseek-v4-flash"   # 或 deepseek-v4-pro
 # symbols_backend = "auto"         # auto / ctags / regex（符号索引后端）
 # build_command = "cmake --build build"   # build 工具（Keil: uv4 -j0 -b project.uvprojx）
 # default_chip = "stm32f407vetx"          # firm flash 默认芯片（probe-rs 芯片名）
+# monitor_port = "COM3"                   # firm monitor 默认串口
+# monitor_baud = 115200                   # firm monitor 默认波特率
 ```
 
 多 Provider 追加配置后用 `--provider <名字>` 或 TUI 内 `/provider <名字>` 切换；`/models`、`Ctrl+P` 可直接拉取并选择模型，不用手改文件。
@@ -135,6 +137,8 @@ model = "deepseek-v4-flash"   # 或 deepseek-v4-pro
 | `firm install` / `firm update [<exe>]` | 全局安装 / 自更新 |
 | `firm build` | 执行配置的构建命令（`[tools] build_command`，如 CMake/Make/Keil/IAR 命令行） |
 | `firm flash [--chip <芯片>] <elf>` | 用 probe-rs 烧录固件（ST-Link / J-Link / CMSIS-DAP / DFU） |
+| `firm run [--chip <芯片>] [--timeout <秒>] <elf>` | 烧录并复位运行目标，流式输出 RTT 日志 |
+| `firm monitor [--port <COMx>] [--baud <波特率>] [--elf <elf>]` | 串口监控；带 `--elf` 时对日志中的栈地址做符号解码 |
 | `firm --set-key default=sk-xxx` | 写入 API key |
 
 ### 🎮 TUI 交互
