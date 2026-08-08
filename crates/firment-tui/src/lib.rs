@@ -1118,6 +1118,10 @@ impl App {
                 self.scroll_down(10);
                 false
             }
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.insert_char('\n');
+                false
+            }
             KeyCode::Enter => {
                 self.submit();
                 false
@@ -1877,7 +1881,7 @@ impl App {
             .unwrap_or((command, ""));
         match name {
             "help" => self.items.push(Item::System(
-                "命令: /plan [on|off]  /agent  /models  /model <id>  /sessions(上下键选择)  /session <id>  /undo  /ledger  /pin <路径>  /unpin <路径>  /copy  /provider <名字>  /add-provider <名字> <openai|anthropic> <base_url> <模型>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /config  /clear  /help  /quit\n键位: ↑/↓ 空输入时浏览历史，多行输入时移动输入光标，单行时滚动对话 · PgUp/PgDn/滚轮始终滚动 · Ctrl+P 模型选择器 · 左键拖动选择 · 右键复制选中（无选区时粘贴） · Ctrl+C 复制选区（无选区时复制最后回复） · Ctrl+V 粘贴 · Ctrl+Shift+C 复制最后回复 · ←/→ 移动输入光标 · y/n/a 权限确认 · Esc 中断 AI 输出（空闲时清空输入） · Ctrl+Q 退出\n输入框: 自动换行自适应高度，最长显示 5 行；粘贴大段文本自动折叠为【line x-y】"
+                "命令: /plan [on|off]  /agent  /models  /model <id>  /sessions(上下键选择)  /session <id>  /undo  /ledger  /pin <路径>  /unpin <路径>  /copy  /provider <名字>  /add-provider <名字> <openai|anthropic> <base_url> <模型>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /config  /clear  /help  /quit\n键位: ↑/↓ 空输入时浏览历史，多行输入时移动输入光标，单行时滚动对话 · Shift+Enter 手动换行 · PgUp/PgDn/滚轮始终滚动 · Ctrl+P 模型选择器 · 左键拖动选择 · 右键复制选中（无选区时粘贴） · Ctrl+C 复制选区（无选区时复制最后回复） · Ctrl+V 粘贴 · Ctrl+Shift+C 复制最后回复 · ←/→ 移动输入光标 · y/n/a 权限确认 · Esc 中断 AI 输出（空闲时清空输入） · Ctrl+Q 退出\n输入框: 自动换行自适应高度，最长显示 5 行；超出部分可滚动，粘贴大段文本自动折叠为【line x-y】，发送前会在标题提示未显示/折叠行数"
                     .to_string(),
             )),
             "plan" => {
@@ -2249,18 +2253,31 @@ impl App {
         ]);
         frame.render_widget(Paragraph::new(status_line), status_area);
 
+        let visible_text_height = input_area.height.saturating_sub(2) as usize;
+        let hidden_lines = input_lines.len().saturating_sub(visible_text_height.max(1));
+        let collapsed_lines: usize = self
+            .paste_blocks
+            .iter()
+            .map(|b| b.text.lines().count().max(1))
+            .sum();
+        let title = if hidden_lines > 0 {
+            format!(" input · ↑{hidden_lines} 行未显示（Enter 会发送全部） ")
+        } else if collapsed_lines > 0 {
+            format!(" input · 折叠 {collapsed_lines} 行（Enter 发送完整文本） ")
+        } else {
+            " input ".to_string()
+        };
         let block = Block::bordered()
-            .title(Span::styled(" input ", Style::default().fg(Color::Cyan)))
+            .title(Span::styled(title, Style::default().fg(Color::Cyan)))
             .border_style(Style::default().fg(Color::DarkGray));
         let content = if self.input.is_empty() {
             self.input_scroll = 0;
             Paragraph::new(Line::from(Span::styled(
-                "输入任务，Enter 发送 · Esc 中断/清空 · Ctrl+C 复制 · Ctrl+V 粘贴 · Ctrl+P 模型 · Ctrl+Q 退出 · /help",
+                "输入任务，Enter 发送 · Shift+Enter 换行 · Esc 中断/清空 · Ctrl+C 复制 · Ctrl+V 粘贴 · Ctrl+P 模型 · Ctrl+Q 退出 · /help",
                 Style::default().fg(Color::DarkGray),
             )))
             .block(block)
         } else {
-            let visible_text_height = input_area.height.saturating_sub(2) as usize;
             let max_scroll = input_lines.len().saturating_sub(visible_text_height.max(1));
             if cursor_line < self.input_scroll {
                 self.input_scroll = cursor_line;
@@ -2597,7 +2614,8 @@ async fn run_loop(
             }
             _ = ticker.tick() => spinner_tick = true,
         }
-        let animate = app.busy || app.ai_thinking;
+        // 等待权限确认时没有动画可播，停止 100ms 定时重绘，避免屏闪
+        let animate = (app.busy || app.ai_thinking) && app.permission.is_none();
         if dirty || (animate && spinner_tick) {
             terminal.draw(|frame| app.render(frame))?;
             dirty = false;
@@ -2817,6 +2835,17 @@ mod tests {
         app.insert_text_at_cursor("hello", true);
         assert_eq!(app.input.iter().collect::<String>(), "hello");
         assert!(app.paste_blocks.is_empty());
+    }
+
+    #[test]
+    fn shift_enter_inserts_newline_instead_of_sending() {
+        let mut app = test_app();
+        app.input = "abc".chars().collect();
+        app.cursor = app.input.len();
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+        assert_eq!(app.input.iter().collect::<String>(), "abc\n");
+        assert!(!app.busy);
+        assert!(app.items.is_empty());
     }
 
     #[test]
