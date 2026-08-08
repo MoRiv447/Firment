@@ -1,0 +1,31 @@
+# stm32-clock.toml — STM32F4 RCC / 时钟树原创速查（无版权风险）
+[meta]
+family = "STM32F4xx"
+topic = "RCC / 时钟树"
+confidence = "verified"
+last_reviewed = "2026-08-08"
+source = "工程经验 + RM0090 Section 6 核对"
+
+[overview]
+sources = "HSI(16MHz 内部RC) / HSE(外部晶振, 常用 8/25MHz) / PLL(倍频)"
+max_freq = "SYSCLK 上限 168MHz（F405/407/415/417）；其它 F4 变种以对应 RM 为准"
+buses = "AHB1 / AHB2 / AHB3(FSMC/FMC) + APB1 + APB2"
+
+[path]
+SYSCLK = "来自 HSI/HSE/PLL 之一（RCC_CFGR.SW）"
+HCLK = "SYSCLK / AHB prescaler (RCC_CFGR.HPRE)，驱动 CPU 与 AHB 总线"
+PCLK1 = "HCLK / APB1 prescaler (PPRE1)，外设最高 42MHz"
+PCLK2 = "HCLK / APB2 prescaler (PPRE2)，外设最高 84MHz"
+timer_clock = "APB1/APB2 上的定时器：对应 APB 预分频=1 时等于 PCLK，否则等于 PCLK×2"
+
+[hal_flow]
+init = "HAL_RCC_OscConfig({HSEState/HSIState on, PLL.PLLM/PLLN/PLLP/PLLQ}) -> HAL_RCC_ClockConfig({AHBCLKDivider, APB1CLKDivider, APB2CLKDivider, FlashLatency})"
+flash_latency = "168MHz 需 FLASH_LATENCY_5；频率越高 latency 越大，否则取指进 HardFault"
+periph_clock = "用 __HAL_RCC_xxx_CLK_ENABLE() 开具体外设时钟，否则写寄存器无效"
+
+common_mistake = [
+  "算定时器频率忘了 ×2：APB1 PCLK1=42MHz 时 TIM 时钟实际 84MHz",
+  "PLL 输入分频 PLLM 把 HSE 分太低导致 PLL 输入 <1MHz 不稳；PLLN 倍频后 VCO 须落在 192-432MHz",
+  "改时钟后未同步调 Flash latency，高频下取指 HardFault",
+  "忘了 __HAL_RCC_xxx_CLK_ENABLE()，外设寄存器写入静默无效",
+]

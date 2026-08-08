@@ -1,0 +1,30 @@
+# stm32f1-uart.toml — STM32F1 USART/DMA 原创速查（工程经验 + RM0008 核对）
+[meta]
+family = "STM32F1xx (F103)"
+topic = "USART / DMA"
+confidence = "verified"
+last_reviewed = "2026-08-08"
+source = "工程经验 + RM0008 核对"
+
+[overview]
+usarts = "F103 典型 3 个 USART：USART1 挂 APB2（72MHz），USART2/3 挂 APB1（36MHz）；F105/107 另有 UART4/5"
+clock = "波特率由外设时钟决定：USART1 用 PCLK2=72MHz，USART2/3 用 PCLK1=36MHz"
+
+[hal_flow]
+init = "MX_USARTx_UART_Init / HAL_UART_Init 配置波特率、字长、停止位；发送用 HAL_UART_Transmit(_IT/_DMA)"
+dma_tx = "HAL_UART_Transmit_DMA(huart, buf, len)；开启传输完成中断用 __HAL_DMA_ENABLE_IT(TC)"
+dma_rx = "HAL_UART_Receive_DMA() 固定长度；变长接收常用空闲中断（IDLE）配合 DMA 剩余计数"
+
+[dma_channels]
+note = "F103 只有 DMA1（7 通道），映射表按外设固定，接错不工作"
+USART1_TX = "DMA1 Channel 4"
+USART1_RX = "DMA1 Channel 5"
+USART2_TX = "DMA1 Channel 7"
+USART2_RX = "DMA1 Channel 6"
+USART3_TX = "DMA1 Channel 2"
+USART3_RX = "DMA1 Channel 3"
+
+[common_mistake]
+baud_clock = "USART2/3 波特率用 72MHz 算——实际 PCLK1=36MHz"
+dma_channel = "USART1_TX 是 Ch4 不是 Ch5，接反后 DMA 不触发"
+clock_enable = "开了 DMA 却忘了 __HAL_RCC_DMA1_CLK_ENABLE()，寄存器静默无效"

@@ -1,0 +1,20 @@
+# stm32g0-uart.toml — STM32G0 USART/LPUART 原创速查（工程经验 + RM0444 核对）
+[meta]
+family = "STM32G0xx"
+topic = "USART / LPUART"
+confidence = "verified"
+last_reviewed = "2026-08-08"
+source = "工程经验 + RM0444 核对"
+
+[overview]
+usarts = "按型号 2-4 个 USART；另有 LPUART1（低功耗，可 STOP 模式工作）"
+clock_src = "USART 时钟可选 PCLK / HSI16 / LSE（LPUART 常用 LSE 32.768kHz 实现极低功耗串口，波特率受限）"
+
+[hal_flow]
+init = "HAL_UART_Init / HAL_LPUART_Init 配置波特率与数据格式"
+low_power = "LPUART1 用 LSE 时钟时波特率上限低（常见 9600 档）；需 STOP 唤醒用 HAL_LPUART_Receive_IT + EXTI"
+
+[common_mistake]
+baud = "按 PCLK=64MHz 给 LPUART 算高波特率——LSE 时钟下算不出来"
+clock_sel = "忘了在 RCC 里选 USART 时钟源（PCLK vs HSI16 vs LSE）"
+wakeup = "LPUART 唤醒只开中断没使能相关 EXTI/时钟，无法从 STOP 醒来"

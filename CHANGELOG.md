@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.3.0-beta.7（2026-08-08）
+
+- **硬件知识库（seed）**：新增 STM32 F1（RM0008）、STM32 G0（RM0444）、ESP32-S3 三个 family 与 7 张原创速查表（USART/DMA、TIM/PWM、时钟树、GPIO/EXTI、LPUART、USB-Serial 等）
+- **知识库自动发现**：项目含 `docs/vendor-index.toml` 时自动注入提示词，要求 agent 涉及硬件问题先查再答
+- **知识库完整性测试**：校验索引/速查表 TOML 可解析、`quickref.cheatsheet` 链接有效、`meta.schema_version` 存在
+- 修正 esp32-gpio strapping 引脚清单（0/2/4/5/12/15；GPIO6-11 为 SPI flash 脚）
+- 移除过时 .example 模板，README/说明链接指向正式索引
+# Changelog
+
 ## v0.3.0-beta.6（2026-08-08）
 
 - README：补名字彩蛋——Firment 取自 *firmament*（苍穹），故意少一个 **a** 融合 firmware + agent（中英文同步）

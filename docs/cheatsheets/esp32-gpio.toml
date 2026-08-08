@@ -1,0 +1,29 @@
+# esp32-gpio.toml — ESP32 GPIO / IOMUX 原创速查（无版权风险，工程经验整理）
+[meta]
+family = "ESP32 (ESP32-D0WD / ESP32-D0WDQ6)"
+topic = "GPIO"
+confidence = "verified"
+last_reviewed = "2026-08-08"
+source = "工程经验 + ESP32 TRM Section 5 核对"
+
+[overview]
+physical = "共 40 个 GPIO pad（标号 0-39），其中 34-39 为输入专用"
+matrix = "GPIO matrix 可把任意 peripheral 信号路由到任意 GPIO；部分信号直连 IOMUX 延迟更低"
+strapping = "GPIO 0 / 2 / 4 / 5 / 12 / 15 上电为 strapping 引脚，决定下载/启动模式（GPIO4=MTDI 同时选择 VDD_SDIO 电压；GPIO 6-11 是 SPI flash 脚，不属于 strapping）"
+
+[key_pins]
+input_only = "GPIO 34,35,36,37,38,39 —— 只能输入，不能输出也不能内部上下拉"
+uart0 = "GPIO 1(TX)/3(RX) 为默认 console，调试打印占用"
+spi_flash = "GPIO 6-11 默认接 SPI flash，作普通 GPIO 会塌机（除非改用 octal flash 释放部分脚）"
+
+[hal_flow]
+init = "gpio_config({pin_bit_mask, mode(INPUT/OUTPUT), pull_up_en/pull_down_en, intr_type})；ESP-IDF 下 gpio_set_level() / gpio_get_level()"
+matrix_route = "peripheral 驱动自动走 GPIO matrix；特殊需要时 gpio_matrix_out() / gpio_matrix_in()"
+pwm = "用 LEDC 产生 PWM（ledc_timer_config + ledc_channel_config），不要靠定时器翻转 GPIO"
+
+common_mistake = [
+  "把 GPIO 34-39 当输出用——硬件不支持，配置静默失败",
+  "强拉 strapping 引脚导致无法重新进入下载模式（需手动复位时保持正确电平）",
+  "输入专用脚配置上拉无效，浮空读数噪声大",
+  "IO_MUX 与 GPIO matrix 混用导致路由冲突",
+]

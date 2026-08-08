@@ -1,7 +1,7 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.3.0--beta.6-orange)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.3.0--beta.7-orange)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![Benchmark](https://img.shields.io/badge/benchmark-4.95-%231-green)]()
@@ -113,6 +113,10 @@ model = "deepseek-v4-flash"   # 或 deepseek-v4-pro
 ```
 
 多 Provider 追加配置后用 `--provider <名字>` 或 TUI 内 `/provider <名字>` 切换；`/models`、`Ctrl+P` 可直接拉取并选择模型，不用手改文件。
+
+### 📚 硬件知识库（可选）
+
+在固件项目里放 `docs/vendor-index.toml`（外加 `docs/cheatsheets/` 原创速查表），Firment 会自动发现，并在提示词里要求 agent 优先查询；涉及芯片/外设/寄存器/HAL 的问题会先查知识库再作答。模板见 [docs/vendor-index.toml](docs/vendor-index.toml)，说明见 [docs/vendor-index.md](docs/vendor-index.md)。
 
 ### 🖥️ 命令行
 

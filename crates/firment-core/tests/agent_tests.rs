@@ -406,6 +406,21 @@ fn session_mode_roundtrip_with_plan() {
 }
 
 #[test]
+fn system_prompt_auto_discovers_vendor_index() {
+    let dir = tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("docs/cheatsheets")).unwrap();
+    std::fs::write(
+        dir.path().join("docs/vendor-index.toml"),
+        "[stm32.f4]\nfamily = \"STM32F4xx\"\n",
+    )
+    .unwrap();
+    let prompt = firment_core::default_system_prompt(dir.path());
+    assert!(prompt.contains("Hardware knowledge base"), "got: {prompt}");
+    assert!(prompt.contains("vendor-index.toml"), "got: {prompt}");
+    assert!(prompt.contains("cheatsheets"), "got: {prompt}");
+}
+
+#[test]
 fn system_prompt_covers_core_guidance_and_plan_contract() {
     let dir = tempdir().unwrap();
     std::fs::write(

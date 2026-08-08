@@ -20,4 +20,5 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+toml.workspace = true
 wiremock.workspace = true

@@ -90,6 +90,9 @@ pub fn default_system_prompt(cwd: &Path) -> String {
         prompt.push_str("\n# Project instructions (AGENTS.md)\n");
         prompt.push_str(&instructions);
     }
+    if let Some(hint) = load_vendor_index_hint(cwd) {
+        prompt.push_str(&hint);
+    }
     prompt
 }
 
@@ -125,6 +128,42 @@ fn shell_name() -> &'static str {
     } else {
         "sh"
     }
+}
+
+/// Auto-detect a project hardware knowledge base (`docs/vendor-index.toml`
+/// or `vendor-index.toml` under cwd/ancestors) and tell the agent to consult
+/// it before answering hardware-related questions.
+fn load_vendor_index_hint(cwd: &Path) -> Option<String> {
+    for dir in cwd.ancestors() {
+        let index = [
+            dir.join("vendor-index.toml"),
+            dir.join("docs").join("vendor-index.toml"),
+        ]
+        .into_iter()
+        .find(|p| p.is_file());
+        let Some(index) = index else {
+            continue;
+        };
+        let cheatsheets = dir.join("docs").join("cheatsheets");
+        let hint = if cheatsheets.is_dir() {
+            format!(
+                "\n\n# Hardware knowledge base\n\
+                 本项目的硬件知识库位于 {}（含 docs/cheatsheets/ 速查表）。\n\
+                 涉及芯片、外设、寄存器、HAL 或硬件配置的问题，先 read_file / grep 查询知识库，\n\
+                 再结合项目代码作答；引用时说明来源文件。",
+                index.display()
+            )
+        } else {
+            format!(
+                "\n\n# Hardware knowledge base\n\
+                 本项目的硬件知识库位于 {}。\n\
+                 涉及芯片、外设、寄存器、HAL 或硬件配置的问题，先 read_file / grep 查询，再作答。",
+                index.display()
+            )
+        };
+        return Some(hint);
+    }
+    None
 }
 
 pub fn load_project_instructions(cwd: &Path) -> Option<String> {

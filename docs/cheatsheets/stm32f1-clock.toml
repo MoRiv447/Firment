@@ -1,0 +1,27 @@
+# stm32f1-clock.toml — STM32F1 RCC/时钟树 原创速查（工程经验 + RM0008 核对）
+[meta]
+family = "STM32F1xx (F103)"
+topic = "RCC / 时钟树"
+confidence = "verified"
+last_reviewed = "2026-08-08"
+source = "工程经验 + RM0008 Section 7 核对"
+
+[overview]
+sources = "HSI(8MHz RC) / HSE(4-16MHz 晶振) / PLL（典型 HSE×9=72MHz）"
+max_freq = "SYSCLK 上限 72MHz（F103）；AHB=72MHz，APB1≤36MHz，APB2≤72MHz"
+
+[path]
+SYSCLK = "来自 HSI/HSE/PLL（RCC_CFGR.SW）"
+HCLK = "SYSCLK / AHB 预分频"
+PCLK1 = "HCLK / APB1 预分频，外设上限 36MHz"
+PCLK2 = "HCLK / APB2 预分频，外设上限 72MHz"
+timer_clock = "APB1/APB2 上的定时器：APB 预分频=1 时等于 PCLK，否则等于 PCLK×2"
+
+[hal_flow]
+init = "HAL_RCC_OscConfig({HSEState on, PLL.PLLSource=HSE, PLLMUL=x9}) → HAL_RCC_ClockConfig({SYSCLKSource=PLLCLK, AHB=1, APB1=2, APB2=1, FlashLatency=2})"
+flash_latency = "72MHz 需 2 个等待周期（3.3V 下），否则取指 HardFault"
+
+[common_mistake]
+apb1_over = "PCLK1 配到 >36MHz，USART/TIM2-4 等 APB1 外设行为异常"
+latency = "升频后忘了调 Flash latency"
+hse_wait = "HSE 起振失败未检查 HAL_RCC_OscConfig 返回值，继续用无效 PLL"

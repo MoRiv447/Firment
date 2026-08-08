@@ -1,0 +1,21 @@
+# stm32g0-gpio.toml — STM32G0 GPIO/EXTI 原创速查（工程经验 + RM0444 核对）
+[meta]
+family = "STM32G0xx"
+topic = "GPIO / EXTI"
+confidence = "verified"
+last_reviewed = "2026-08-08"
+source = "工程经验 + RM0444 核对"
+
+[overview]
+clock = "SYSCLK 最高 64MHz（G0B1/G0C1 等，以型号为准）；AHB/APB 同频"
+gpio = "端口 PA/PB/PC/PD（按型号）；大部分引脚 5V 容忍，个别模拟/USB 相关引脚例外——以数据手册为准"
+exti = "每条 GPIO 线可独立选择上升/下降/双边沿触发，用于唤醒与中断"
+
+[hal_flow]
+init = "HAL_GPIO_Init(GPIOx, &GPIO_InitStruct{Mode, Pull, Speed})；EXTI 中断回调 HAL_GPIO_EXTI_Callback(GPIO_Pin)"
+wakeup = "STOP 模式唤醒需对应 EXTI 线使能并在 RCC 里保持外设时钟"
+
+[common_mistake]
+tolerance = "把非 5V 容忍脚直接接 5V 逻辑——先查 datasheet 的 FT 标记"
+pull = "输入专用/浮空脚未配上下拉，读数噪声大"
+wakeup = "唤醒只开了中断没使能对应时钟/线路，STOP 睡死"

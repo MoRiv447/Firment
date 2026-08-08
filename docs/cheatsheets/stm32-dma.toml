@@ -1,0 +1,35 @@
+# stm32-dma.toml — STM32F4 DMA 原创速查（无版权风险，作者工程经验整理）
+[meta]
+family = "STM32F4xx"
+topic = "DMA"
+confidence = "verified"
+last_reviewed = "2026-08-08"
+source = "工程经验 + RM0090 核对"
+
+[overview]
+controllers = "2 个 DMA（DMA1 / DMA2），各 8 个 stream（S0-S7）"
+channel = "每 stream 通过 DMA_SxCR.CHSEL 选 1/8 个 channel 请求（外设源）；stream 与 channel 组合需查 RM 的 DMA 请求映射表"
+transfer = "peripheral<->memory / memory<->memory；支持 FIFO 模式与直接模式；支持 circular（CIRC）与 double-buffer（DBM）"
+width = "PSIZE/MSIZE 可独立设 byte/half-word/word；源/目标宽度不匹配时硬件按目标宽度打包，注意对齐避免总线错误"
+
+[key_registers]
+DMA_SxCR = "stream 控制：EN / DIR / PINC / MINC / CIRC / DBM / PL[1:0] / CHSEL / TCIE / HTIE / TEIE"
+DMA_SxNDTR = "传输剩余项数；写 0 不会自启动，需 EN=1；减到 0 触发 TC 中断"
+DMA_SxPAR = "外设地址（peripheral-to-memory 时为源）"
+DMA_SxM0AR = "内存地址 0（双缓冲时 DMA_SxM1AR 为 buffer1）"
+
+[hal_flow]
+init = "填 DMA_HandleTypeDef（Instance=DMAx_Streamy, Channel=CHSEL, Direction, PINC/MINC, ...）-> HAL_DMA_Init() -> 外设驱动用 HAL_xxx_Transmit_DMA / Receive_DMA / ADC_Start_DMA 等关联 handle"
+interrupt = "HAL_DMA_Start_IT() 启动并开 TC/HT/TE 中断；完成回调 HAL_DMA_XferCpltCallback()"
+link_to_peripheral = "DMA 自身只搬数；请求由外设（UART/ADC/TIM）发出，需外设时钟与 DMA 时钟同时使能"
+
+common_mistake = [
+  "同一 stream 被两个外设同时占用会硬件冲突——先查 RM 的 DMA 请求映射表再选 stream/channel",
+  "改 NDTR 或重启传输前必须先 EN=0 并轮询读到 EN==0（EN 位硬件清零有延迟），否则配置不生效",
+  "DMA1 访问不到 AHB2 外设（USB OTG HS / ETH / DCMI），这类必须用 DMA2",
+  "外设地址未对齐到其位宽（如半字外设用奇数地址）会进 BusFault",
+]
+
+[gotchas]
+bus_matrix = "DMA1->AHB1, DMA2->AHB2；APB1/APB2 外设经桥接可被 DMA1 访问，AHB2 专属外设仅 DMA2"
+cache = "F4 无 D-Cache（F7/H7 有），F4 一般无需 DMA 缓冲区回刷；扩展到 H7 时需 SCB_Clean/Invalidate DCache"
