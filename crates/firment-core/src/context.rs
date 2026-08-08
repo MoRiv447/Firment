@@ -69,6 +69,9 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          code 0.\n\
          - A change ledger may be attached to this session; use it as ground truth when \
          describing what changed.\n\
+         - Sections marked [对话已压缩] or [最近改动台账] are system-generated context: treat \
+         the summary as authoritative, and re-read files if you need details beyond what is \
+         quoted.\n\
          \n\
          # Safety\n\
          - Freely take local, reversible actions. Confirm before destructive or hard-to-reverse \

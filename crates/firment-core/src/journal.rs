@@ -87,6 +87,34 @@ impl Ledger {
         .map_err(|e| e.to_string())
     }
 
+    /// Entries with `seq > since_seq` (capped), plus the latest seq seen.
+    /// Used to merge only the new change-ledger delta into the next turn.
+    pub fn delta_text(&self, since_seq: u64, max_entries: usize) -> (String, u64) {
+        let Ok(text) = fs::read_to_string(&self.path) else {
+            return (String::new(), since_seq);
+        };
+        let entries: Vec<LedgerLine> = text
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        let last_seq = entries.iter().map(|e| e.seq).max().unwrap_or(since_seq);
+        let new_entries: Vec<&LedgerLine> = entries.iter().filter(|e| e.seq > since_seq).collect();
+        let start = new_entries.len().saturating_sub(max_entries);
+        let mut out = String::new();
+        for entry in &new_entries[start..] {
+            for change in &entry.changes {
+                out.push_str(&format!(
+                    "- {}（{} 行 -> {} 行）\n{}",
+                    change.path.display(),
+                    change.old_lines,
+                    change.new_lines,
+                    change.hunks
+                ));
+            }
+        }
+        (truncate_chars(&out, 3000), last_seq)
+    }
+
     /// Most recent entries, formatted for injection into the system prompt.
     pub fn summary(&self, max_entries: usize, max_chars: usize) -> String {
         let Ok(text) = fs::read_to_string(&self.path) else {
@@ -403,6 +431,34 @@ mod tests {
         let mut journal = EditJournal::new(undo_dir.clone());
         journal.commit().unwrap();
         assert!(EditJournal::undo_latest(&undo_dir).is_err());
+    }
+
+    #[test]
+    fn ledger_delta_text_returns_only_new_entries() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::new(dir.path().join("ledger.jsonl"));
+        ledger
+            .append(&[LedgerChange {
+                path: PathBuf::from("a.txt"),
+                old_lines: 0,
+                new_lines: 1,
+                hunks: "+a\n".to_string(),
+            }])
+            .unwrap();
+        ledger
+            .append(&[LedgerChange {
+                path: PathBuf::from("b.txt"),
+                old_lines: 0,
+                new_lines: 1,
+                hunks: "+b\n".to_string(),
+            }])
+            .unwrap();
+        let (delta, last) = ledger.delta_text(1, 5);
+        assert_eq!(last, 2);
+        assert!(delta.contains("b.txt"), "got: {delta}");
+        assert!(!delta.contains("a.txt"), "got: {delta}");
+        let (delta2, _) = ledger.delta_text(2, 5);
+        assert!(delta2.is_empty());
     }
 
     #[test]

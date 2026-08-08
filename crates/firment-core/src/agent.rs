@@ -7,6 +7,7 @@ use crate::{PermissionChecker, Session, system_prompt_for};
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::Value;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -75,6 +76,12 @@ pub struct Agent {
     allow_dangerous: bool,
     verify_command: Option<String>,
     context_budget_chars: usize,
+    /// Highest ledger sequence already merged into the conversation.
+    ledger_seq_appended: u64,
+    /// Hash of the last read result per path, for unchanged-read dedup.
+    read_hashes: HashMap<PathBuf, String>,
+    /// Recently read paths (most recent last), for post-compact re-injection.
+    recent_read_paths: VecDeque<PathBuf>,
 }
 
 impl Agent {
@@ -99,6 +106,9 @@ impl Agent {
             allow_dangerous: false,
             verify_command: None,
             context_budget_chars: 60_000,
+            ledger_seq_appended: 0,
+            read_hashes: HashMap::new(),
+            recent_read_paths: VecDeque::new(),
         }
     }
 
@@ -195,16 +205,10 @@ impl Agent {
     }
 
     fn build_request(&self) -> ChatRequest {
-        let mut system_content = system_prompt_for(&self.session.cwd, self.session.mode);
-        let ledger_summary =
-            Ledger::new(self.store.ledger_path(&self.session.id)).summary(20, 4000);
-        if !ledger_summary.is_empty() {
-            system_content.push_str(&format!(
-                "\n\n# 本会话改动台账（最近已提交编辑）\n{ledger_summary}"
-            ));
-        }
+        // Keep the system prompt byte-stable so provider prefix caching keeps
+        // hitting; dynamic state (change ledger) is merged into user messages.
         let mut messages = vec![ChatMessage::System {
-            content: system_content,
+            content: system_prompt_for(&self.session.cwd, self.session.mode),
         }];
         messages.extend(self.session.messages.clone());
         ChatRequest {
@@ -218,9 +222,15 @@ impl Agent {
     }
 
     pub async fn run_turn(&mut self, input: &str) -> Result<String, AgentError> {
-        self.session.push(ChatMessage::User {
-            content: input.to_string(),
-        });
+        let (delta, last_seq) = Ledger::new(self.store.ledger_path(&self.session.id))
+            .delta_text(self.ledger_seq_appended, 5);
+        let input = if delta.is_empty() {
+            input.to_string()
+        } else {
+            self.ledger_seq_appended = last_seq;
+            format!("[最近改动台账]\n{delta}\n\n{input}")
+        };
+        self.session.push(ChatMessage::User { content: input });
         self.sink.event(AgentEvent::TurnStart).await;
 
         let journal = Arc::new(Mutex::new(EditJournal::new(
@@ -229,7 +239,7 @@ impl Agent {
         let ledger = Ledger::new(self.store.ledger_path(&self.session.id));
 
         for _ in 0..self.max_iterations {
-            self.compact_if_needed();
+            self.compact_if_needed().await;
             let request = self.build_request();
             let provider = self.provider.as_ref().ok_or(AgentError::NoProvider)?;
             let mut stream = provider.stream(request).await?;
@@ -311,8 +321,7 @@ impl Agent {
 
     /// Approximate character budget for session context; older messages are
     /// compacted into a digest when exceeded.
-    fn compact_if_needed(&mut self) {
-        const KEEP_LAST: usize = 10;
+    async fn compact_if_needed(&mut self) {
         const DIGEST_CHARS: usize = 6000;
         let total: usize = self
             .session
@@ -320,17 +329,91 @@ impl Agent {
             .iter()
             .map(|m| message_text(m).chars().count())
             .sum();
-        if total <= self.context_budget_chars || self.session.messages.len() <= KEEP_LAST {
+        if total <= self.context_budget_chars {
             return;
         }
-        let cut = self.session.messages.len() - KEEP_LAST;
+        let Some(cut) = round_cut_index(&self.session.messages) else {
+            return;
+        };
         let old = self.session.messages.drain(..cut).collect::<Vec<_>>();
-        let digest = compact_summary(&old, DIGEST_CHARS);
-        let mut messages = vec![ChatMessage::User {
-            content: format!("[早期对话已压缩] 摘要：\n{digest}"),
-        }];
+        let summary = match self.summarize_messages(&old).await {
+            Some(summary) => summary,
+            None => compact_summary(&old, DIGEST_CHARS),
+        };
+        let mut content = format!("[对话已压缩] 摘要：\n{summary}");
+        if let Some(files) = self.recent_read_files_text() {
+            content.push_str(&format!("\n\n{files}"));
+        }
+        let mut messages = vec![ChatMessage::User { content }];
         messages.extend(self.session.messages.iter().cloned());
         self.session.messages = messages;
+    }
+
+    /// Ask the main provider to summarize the given messages (CC-style).
+    async fn summarize_messages(&self, messages: &[ChatMessage]) -> Option<String> {
+        let provider = self.provider.as_ref()?;
+        let request = ChatRequest {
+            model: self.session.model.clone(),
+            messages: vec![
+                ChatMessage::System {
+                    content: "You are a helpful assistant tasked with summarizing conversations."
+                        .to_string(),
+                },
+                ChatMessage::User {
+                    content: "Summarize the conversation so far, in the language the user is \
+                              using. Preserve: the user's goals and requirements; decisions and \
+                              tradeoffs; files read with their key contents; files edited and \
+                              exactly what changed; errors and fixes; commands run and outcomes; \
+                              open questions and next steps. Be concrete and compact, prefer \
+                              bullet points. The original messages will be removed from context, \
+                              so keep enough detail to continue without re-reading everything."
+                        .to_string(),
+                },
+            ]
+            .into_iter()
+            .chain(messages.iter().cloned())
+            .collect(),
+            tools: Vec::new(),
+            max_tokens: Some(2048),
+            temperature: None,
+            thinking: None,
+        };
+        let mut stream = provider.stream(request).await.ok()?;
+        let mut text = String::new();
+        while let Some(event) = stream.next().await {
+            if let Ok(ProviderEvent::Text(part)) = event {
+                text.push_str(&part);
+            }
+        }
+        if text.trim().is_empty() {
+            None
+        } else {
+            Some(text)
+        }
+    }
+
+    /// Recently read files (paths only), re-read fresh and capped, to re-inject
+    /// after compaction so the model does not lose file contents (CC-style).
+    fn recent_read_files_text(&self) -> Option<String> {
+        const MAX_FILES: usize = 3;
+        const MAX_CHARS: usize = 4000;
+        let mut out = String::new();
+        let mut count = 0;
+        for path in self.recent_read_paths.iter().rev() {
+            if count >= MAX_FILES {
+                break;
+            }
+            if let Ok(text) = fs::read_to_string(path) {
+                let text: String = text.chars().take(MAX_CHARS).collect();
+                out.push_str(&format!("### {}\n{text}\n\n", path.display()));
+                count += 1;
+            }
+        }
+        if out.is_empty() {
+            None
+        } else {
+            Some(format!("[压缩后回填最近读取的文件]\n{out}"))
+        }
     }
 
     /// Restore the most recently committed edit batch for this session.
@@ -442,7 +525,28 @@ async fn execute_tool_calls(
                 Ok(output) => (true, output.text.clone()),
                 Err(e) => (false, e.message.clone()),
             };
-            let summary = summarize(&text);
+            let mut content = text.clone();
+            let read_path = if ok && call.name == "read_file" && !content.is_empty() {
+                resolved_tool_path(ctx, call)
+            } else {
+                None
+            };
+            if let Some(path) = read_path {
+                let hash = simple_hash(&content);
+                if agent.read_hashes.get(&path) == Some(&hash) {
+                    content = format!(
+                        "[文件未变化（内容同之前的 read_file 结果）：{}；如需最新内容请重新 read_file]",
+                        path.display()
+                    );
+                } else {
+                    agent.read_hashes.insert(path.clone(), hash);
+                    agent.recent_read_paths.push_back(path);
+                    if agent.recent_read_paths.len() > 5 {
+                        agent.recent_read_paths.pop_front();
+                    }
+                }
+            }
+            let summary = summarize(&content);
             agent
                 .sink
                 .event(AgentEvent::ToolEnd {
@@ -454,7 +558,7 @@ async fn execute_tool_calls(
             agent.session.push(ChatMessage::Tool {
                 tool_call_id: call.id.clone(),
                 name: call.name.clone(),
-                content: agent.spill_text(&text),
+                content: agent.spill_text(&content),
             });
             done[i] = true;
             remaining -= 1;
@@ -466,6 +570,44 @@ fn lock_journal(journal: &Arc<Mutex<EditJournal>>) -> std::sync::MutexGuard<'_, 
     journal
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Find the earliest message index to keep such that eviction never splits an
+/// API round: cuts only at User-message round boundaries, keeping the last
+/// `ROUNDS_TO_KEEP` rounds verbatim.
+fn round_cut_index(messages: &[ChatMessage]) -> Option<usize> {
+    const ROUNDS_TO_KEEP: usize = 3;
+    let round_starts: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| matches!(m, ChatMessage::User { .. }))
+        .map(|(i, _)| i)
+        .collect();
+    if round_starts.len() <= ROUNDS_TO_KEEP {
+        return None;
+    }
+    let keep_from = round_starts[round_starts.len() - ROUNDS_TO_KEEP];
+    if keep_from == 0 {
+        None
+    } else {
+        Some(keep_from)
+    }
+}
+
+fn resolved_tool_path(ctx: &ToolContext, call: &ToolCall) -> Option<PathBuf> {
+    let path = tool_path(call)?;
+    Some(if path.is_absolute() {
+        path
+    } else {
+        ctx.cwd.join(path)
+    })
+}
+
+fn simple_hash(text: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 fn message_text(message: &ChatMessage) -> &str {

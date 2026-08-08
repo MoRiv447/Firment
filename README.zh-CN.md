@@ -1,7 +1,7 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.3.0--beta.2-orange)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.3.0--beta.3-orange)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![Benchmark](https://img.shields.io/badge/benchmark-4.95-%231-green)]()
@@ -37,6 +37,9 @@
 - **工具输出外溢**：超长工具输出自动落盘到会话外溢目录，对话里只留短摘录 + `read_file` 路径指针
 - **参数 schema 校验**：工具参数在执行前按 JSON Schema 校验，非法参数以 `[InvalidInput]` 拒绝
 - **改动台账**：每回合已提交的改动（路径/行数/hunk）写入会话台账，恢复时注入上下文；`/ledger` 查看
+- **模型摘要压缩**：超预算时由主模型把旧轮次压成摘要（本地摘要兜底），最近 3 轮逐字保留，绝不拆散工具调用配对
+- **缓存稳定前缀**：系统提示词保持字节不变以命中 Provider 前缀缓存；动态状态（改动台账）以增量合并进用户消息
+- **重复读取去重**：未变化的文件重复读取时返回桩引用而非重复内容；压缩后自动回填最近读取的文件
 
 ### 🚀 快速开始
 

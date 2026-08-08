@@ -1,7 +1,7 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.3.0--beta.2-orange)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.3.0--beta.3-orange)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![Benchmark](https://img.shields.io/badge/benchmark-4.95-%231-green)]()
@@ -35,6 +35,9 @@
 - **Tool output spill**: outputs over a size threshold are saved to the session's spill directory, keeping only a short excerpt + `read_file` pointer in the conversation
 - **Argument schema validation**: tool arguments are validated against their JSON Schema before execution; malformed calls are rejected with a `[InvalidInput]` tag
 - **Change ledger**: every committed turn appends path/line/hunk entries to a per-session ledger, injected into context on resume; `/ledger` shows it
+- **Model-summarized compaction**: when the context budget is exceeded, older rounds are summarized by the main model (with a local fallback), the last 3 rounds stay verbatim, and tool-call pairs are never split
+- **Cache-stable prefix**: the system prompt stays byte-identical for provider prefix caching; dynamic state (change ledger) is merged into user messages as deltas
+- **Unchanged-read dedup**: re-reading an unchanged file returns a stub instead of repeating content; recently read files are re-injected after compaction
 
 ### 🚀 Quick Start
 

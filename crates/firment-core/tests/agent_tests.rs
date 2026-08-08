@@ -768,13 +768,137 @@ async fn ledger_records_changes_and_is_injected_into_prompt() {
     }));
     let _ = agent.run_turn("second").await.unwrap();
     let requests = requests.lock().unwrap();
+    // System prompt stays byte-stable (cache-friendly): the ledger delta must
+    // be merged into the turn's user message instead.
     match &requests[0].messages[0] {
         ChatMessage::System { content } => {
-            assert!(content.contains("改动台账"), "got: {content}");
-            assert!(content.contains("c.txt"), "got: {content}");
+            assert!(
+                !content.contains("本会话改动台账"),
+                "ledger leaked into system prompt"
+            );
         }
         _ => panic!("expected a system message"),
     }
+    let user_texts: Vec<&str> = requests[0]
+        .messages
+        .iter()
+        .filter_map(|m| match m {
+            ChatMessage::User { content } => Some(content.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        user_texts
+            .iter()
+            .any(|c| c.contains("[最近改动台账]") && c.contains("c.txt")),
+        "ledger delta missing from user message, got: {user_texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn model_based_compaction_uses_provider_summary() {
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::Text("MODEL SUMMARY CONTENT".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+            vec![
+                ProviderEvent::Text("done2".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+        ]))),
+        model: "fake".to_string(),
+    };
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().join("sessions"));
+    let mut session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    for i in 0..14 {
+        session.push(ChatMessage::User {
+            content: format!("message {i} {}", "x".repeat(200)),
+        });
+    }
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(Vec::new()),
+        session,
+        store,
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(Arc::new(Mutex::new(Vec::new())))),
+        10,
+    );
+    agent.set_context_budget_chars(1000);
+
+    let _ = agent.run_turn("final").await.unwrap();
+    let first = &agent.session().messages[0];
+    match first {
+        ChatMessage::User { content } => {
+            assert!(content.contains("MODEL SUMMARY CONTENT"), "got: {content}");
+            assert!(content.contains("[对话已压缩]"), "got: {content}");
+        }
+        _ => panic!("expected a compaction summary message"),
+    }
+}
+
+#[tokio::test]
+async fn duplicate_read_results_are_stubbed() {
+    let dir = tempdir().unwrap();
+    std::fs::write(dir.path().join("a.txt"), "hello world").unwrap();
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_r1".to_string(),
+                    name: "read_file".to_string(),
+                    arguments: json!({"path": "a.txt"}),
+                }),
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_r2".to_string(),
+                    name: "read_file".to_string(),
+                    arguments: json!({"path": "a.txt"}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            vec![
+                ProviderEvent::Text("done".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+        ]))),
+        model: "fake".to_string(),
+    };
+    let store = SessionStore::new(dir.path().join("sessions"));
+    let session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(vec![Arc::new(ReadFileTool)]),
+        session,
+        store,
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(Arc::new(Mutex::new(Vec::new())))),
+        10,
+    );
+
+    let _ = agent.run_turn("read twice").await.unwrap();
+    let tool_texts: Vec<&str> = agent
+        .session()
+        .messages
+        .iter()
+        .filter_map(|m| match m {
+            ChatMessage::Tool { content, .. } => Some(content.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(tool_texts.len(), 2);
+    assert!(
+        tool_texts[0].contains("hello world"),
+        "got: {}",
+        tool_texts[0]
+    );
+    assert!(
+        tool_texts[1].contains("[文件未变化"),
+        "second read should be stubbed, got: {}",
+        tool_texts[1]
+    );
 }
 
 #[tokio::test]
@@ -893,10 +1017,12 @@ async fn context_compaction_replaces_old_messages_with_digest() {
 
     let _ = agent.run_turn("hi").await.unwrap();
     let requests = requests.lock().unwrap();
-    let messages = &requests[0].messages;
+    // requests[0] is the summarization call; the main request follows it.
+    assert!(requests.len() >= 2, "expected summary + main requests");
+    let messages = &requests[1].messages;
     assert!(
         messages.iter().any(
-            |m| matches!(m, ChatMessage::User { content } if content.contains("[早期对话已压缩]"))
+            |m| matches!(m, ChatMessage::User { content } if content.contains("[对话已压缩]"))
         ),
         "expected a compaction marker"
     );
