@@ -336,7 +336,10 @@ impl Agent {
                 allow_dangerous: self.allow_dangerous,
                 journal: journal.clone(),
                 verify_command: self.verify_command.clone(),
-                allowed_roots: vec![self.store.spill_dir(&self.session.id)],
+                allowed_roots: vec![
+                    self.store.spill_dir(&self.session.id),
+                    crate::kb::seed_kb_dir(),
+                ],
                 symbols_backend: self.symbols_backend.clone(),
             };
 

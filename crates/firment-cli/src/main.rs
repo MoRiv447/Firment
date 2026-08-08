@@ -114,6 +114,7 @@ async fn main() -> anyhow::Result<()> {
 
     let config_path = cli.config.clone().unwrap_or_else(config_path);
     let config = Config::load_or_create(&config_path)?;
+    let _ = firment_core::kb::ensure_seed_kb();
 
     if let Some(kv) = &cli.set_key {
         let (name, key) = kv

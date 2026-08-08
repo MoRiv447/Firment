@@ -2,6 +2,7 @@ pub mod agent;
 pub mod config;
 pub mod context;
 pub mod journal;
+pub mod kb;
 pub mod permission;
 pub mod provider;
 pub mod schema;

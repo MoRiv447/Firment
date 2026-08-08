@@ -90,6 +90,15 @@ pub fn default_system_prompt(cwd: &Path) -> String {
         prompt.push_str("\n# Project instructions (AGENTS.md)\n");
         prompt.push_str(&instructions);
     }
+    let seed = crate::kb::seed_index_text();
+    let seed: String = seed.chars().take(12000).collect();
+    prompt.push_str(&format!(
+        "\n\n# Hardware knowledge base (built-in seed)\n\
+         系统内置硬件知识库索引：\n{seed}\n\
+         可随时用 read_file 读取 {} 下的速查表（如 cheatsheets/stm32f1-uart.toml）获取细节。\n\
+         涉及芯片、外设、寄存器、HAL 或硬件配置的问题，先查知识库再作答；引用时说明来源。",
+        crate::kb::seed_kb_dir().display()
+    ));
     if let Some(hint) = load_vendor_index_hint(cwd) {
         prompt.push_str(&hint);
     }

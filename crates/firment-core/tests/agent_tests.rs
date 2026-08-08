@@ -422,6 +422,10 @@ fn system_prompt_auto_discovers_vendor_index() {
         prompt.contains("STM32F4xx"),
         "index content must be embedded: {prompt}"
     );
+    assert!(
+        prompt.contains(&dir.path().to_string_lossy().to_string()),
+        "project index path must appear: {prompt}"
+    );
 }
 
 #[test]
@@ -442,6 +446,8 @@ fn system_prompt_covers_core_guidance_and_plan_contract() {
         "path:line",
         "AGENTS.md",
         "verify",
+        "Hardware knowledge base (built-in seed)",
+        "STM32F4xx",
         "Report outcomes faithfully",
         "Use this board's HAL layer",
     ] {
