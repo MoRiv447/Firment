@@ -717,6 +717,11 @@ enum Item {
         ok: bool,
         summary: String,
     },
+    /// 权限确认以对话内卡片形式展示（CC 风格），不再弹窗遮挡上下文。
+    Permission {
+        tool: String,
+        reason: String,
+    },
     System(String),
     Error(String),
 }
@@ -912,6 +917,13 @@ impl App {
     }
 
     fn on_permission(&mut self, request: PermissionRequest) {
+        self.items.push(Item::Permission {
+            tool: request.tool.clone(),
+            reason: request.reason.clone(),
+        });
+        // 内联确认必须出现在视野里，强制回到对话底部
+        self.follow = true;
+        self.scroll = 0;
         self.permission = Some(request);
     }
 
@@ -1123,21 +1135,35 @@ impl App {
         let Some(prompt) = self.permission.take() else {
             return false;
         };
-        match key.code {
-            KeyCode::Char('y') | KeyCode::Char('Y') => {
-                let _ = prompt.reply.send(true);
-            }
-            KeyCode::Char('a') | KeyCode::Char('A') => {
-                self.always.lock().unwrap().insert(prompt.tool.clone());
-                let _ = prompt.reply.send(true);
-            }
-            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                let _ = prompt.reply.send(false);
-            }
+        let (allowed, always) = match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => (true, false),
+            KeyCode::Char('a') | KeyCode::Char('A') => (true, true),
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => (false, false),
             _ => {
                 self.permission = Some(prompt);
+                return false;
             }
+        };
+        if always {
+            self.always.lock().unwrap().insert(prompt.tool.clone());
         }
+        let _ = prompt.reply.send(allowed);
+        if let Some(idx) = self
+            .items
+            .iter()
+            .rposition(|item| matches!(item, Item::Permission { .. }))
+        {
+            self.items.remove(idx);
+        }
+        self.items.push(Item::System(format!(
+            "{}: {}",
+            if allowed {
+                "✓ 已允许"
+            } else {
+                "✗ 已拒绝"
+            },
+            prompt.tool
+        )));
         false
     }
 
@@ -1760,6 +1786,31 @@ impl App {
                         rows.push(Line::from(Span::styled(seg, Style::default().fg(color))));
                     }
                 }
+                Item::Permission { tool, reason } => {
+                    rows.push(Line::from(Span::styled(
+                        "⚠ 需要权限确认",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    )));
+                    for seg in wrap_text(&format!("工具: {tool}"), width.saturating_sub(1)) {
+                        rows.push(Line::from(Span::styled(
+                            seg,
+                            Style::default().fg(Color::Yellow),
+                        )));
+                    }
+                    for seg in wrap_text(&format!("原因: {reason}"), width.saturating_sub(1)) {
+                        rows.push(Line::from(Span::styled(
+                            seg,
+                            Style::default().fg(Color::White),
+                        )));
+                    }
+                    rows.push(Line::from(Span::styled(
+                        "[y] 允许    [a] 本次会话总是允许    [n] / Esc 拒绝",
+                        Style::default().fg(Color::Green),
+                    )));
+                    rows.push(Line::from(""));
+                }
                 Item::System(text) => {
                     for seg in wrap_text(text, width.saturating_sub(1)) {
                         rows.push(Line::from(Span::styled(
@@ -1910,10 +1961,10 @@ impl App {
             Paragraph::new(shown).block(block)
         };
         frame.render_widget(content, input_area);
-        let modal_open = self.permission.is_some()
-            || self.model_picker.is_some()
-            || self.session_picker.is_some();
-        if !modal_open && !self.input.is_empty() {
+        // 权限确认现在是对话内卡片，不再弹窗；输入框始终保持光标，
+        // 空输入时也把光标钉在输入框起点，避免 IME/首字符画到框外。
+        let modal_open = self.model_picker.is_some() || self.session_picker.is_some();
+        if !modal_open {
             let cursor_x = input_area.x + 1 + cursor_col as u16;
             let cursor_y = input_area.y + 1 + cursor_line.saturating_sub(self.input_scroll) as u16;
             frame.set_cursor_position((cursor_x, cursor_y));
@@ -2034,46 +2085,6 @@ impl App {
                 }
                 frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
             }
-        }
-
-        // 权限弹窗最后绘制，保证永远在最顶层、选项不被其它界面覆盖。
-        if let Some(prompt) = &self.permission {
-            let area = centered_rect(76, 52, frame.area());
-            frame.render_widget(Clear, area);
-            let block = Block::bordered()
-                .title(Span::styled(
-                    " 权限确认 ",
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                ))
-                .border_style(Style::default().fg(Color::Yellow));
-            frame.render_widget(block, area);
-            let inner = area.inner(Margin {
-                horizontal: 2,
-                vertical: 1,
-            });
-            let lines = vec![
-                Line::from(Span::styled("工具", Style::default().fg(Color::DarkGray))),
-                Line::from(Span::styled(
-                    prompt.tool.clone(),
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                )),
-                Line::from(""),
-                Line::from(Span::styled("原因", Style::default().fg(Color::DarkGray))),
-                Line::from(Span::styled(
-                    prompt.reason.clone(),
-                    Style::default().fg(Color::White),
-                )),
-                Line::from(""),
-                Line::from(Span::styled(
-                    "[y] 允许    [a] 本次会话总是允许    [n] / Esc 拒绝",
-                    Style::default().fg(Color::Green),
-                )),
-            ];
-            frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
         }
     }
 }
@@ -2328,6 +2339,58 @@ mod tests {
         app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(app.input.is_empty());
         assert_eq!(app.cursor, 0);
+    }
+
+    #[test]
+    fn permission_card_is_inline_and_answer_removes_it() {
+        let mut app = test_app();
+        let (tx, mut rx) = oneshot::channel();
+        app.on_permission(PermissionRequest {
+            tool: "write_file".to_string(),
+            reason: "需要写文件".to_string(),
+            reply: tx,
+        });
+        assert!(matches!(
+            app.items.last(),
+            Some(Item::Permission { tool, .. }) if tool == "write_file"
+        ));
+
+        let rows = app.render_rows(80);
+        let text: String = rows
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+        assert!(text.contains("[y] 允许"));
+
+        app.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        assert_eq!(rx.try_recv(), Ok(true));
+        assert!(
+            !app.items
+                .iter()
+                .any(|item| matches!(item, Item::Permission { .. }))
+        );
+        assert!(matches!(
+            app.items.last(),
+            Some(Item::System(text)) if text.starts_with("✓ 已允许")
+        ));
+    }
+
+    #[test]
+    fn permission_esc_denies_inline_card() {
+        let mut app = test_app();
+        let (tx, mut rx) = oneshot::channel();
+        app.on_permission(PermissionRequest {
+            tool: "shell".to_string(),
+            reason: "测试".to_string(),
+            reply: tx,
+        });
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(rx.try_recv(), Ok(false));
+        assert!(
+            !app.items
+                .iter()
+                .any(|item| matches!(item, Item::Permission { .. }))
+        );
     }
 
     #[test]
