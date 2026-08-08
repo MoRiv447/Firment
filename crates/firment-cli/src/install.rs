@@ -347,25 +347,36 @@ mod tests {
 
     #[test]
     fn path_append_is_case_insensitive_and_deduplicated() {
-        let dir = PathBuf::from(r"C:\Users\me\.firment\bin");
+        // Windows-style paths exercise case-insensitive dedup; Unix-style
+        // paths exercise exact dedup on non-Windows CI runners.
+        let dir = if cfg!(windows) {
+            PathBuf::from(r"C:\Users\me\.firment\bin")
+        } else {
+            PathBuf::from("/home/me/.firment/bin")
+        };
+        let existing = if cfg!(windows) {
+            r"C:\Windows;C:\Users\ME\.FIRMENT\BIN\".to_string()
+        } else {
+            "/usr/bin;/home/me/.firment/bin/".to_string()
+        };
         let env = MemoryPathEnv {
-            value: Arc::new(Mutex::new(
-                r"C:\Windows;C:\Users\ME\.FIRMENT\BIN\".to_string(),
-            )),
+            value: Arc::new(Mutex::new(existing.clone())),
         };
         assert!(!add_user_path_impl(&env, &dir).unwrap());
-        assert_eq!(
-            *env.value.lock().unwrap(),
-            r"C:\Windows;C:\Users\ME\.FIRMENT\BIN\"
-        );
+        assert_eq!(*env.value.lock().unwrap(), existing);
 
+        let base = if cfg!(windows) {
+            "C:\\Windows".to_string()
+        } else {
+            "/usr/bin".to_string()
+        };
         let env = MemoryPathEnv {
-            value: Arc::new(Mutex::new("C:\\Windows".to_string())),
+            value: Arc::new(Mutex::new(base.clone())),
         };
         assert!(add_user_path_impl(&env, &dir).unwrap());
         assert_eq!(
             *env.value.lock().unwrap(),
-            format!(r"C:\Windows;{}", dir.display())
+            format!("{base};{}", dir.display())
         );
     }
 
