@@ -643,6 +643,13 @@ struct App {
     provider: String,
     thinking: ThinkingLevel,
     mode: SessionMode,
+    /// Set by `/new`: the transcript was cleared locally; events from the old
+    /// turn are suppressed until `SessionLoaded` for the fresh session arrives.
+    pending_new_session: bool,
+    /// Items index captured by `/new`; messages added after it (e.g. a message
+    /// typed and sent while the fresh session is still loading) survive the
+    /// transcript clear in `SessionLoaded`.
+    pending_new_baseline: usize,
     model_picker: Option<ModelPicker>,
     session_picker: Option<SessionPicker>,
     transcript_rect: Rect,
@@ -998,6 +1005,8 @@ impl App {
             provider,
             thinking,
             mode,
+            pending_new_session: false,
+            pending_new_baseline: 0,
             model_picker: None,
             session_picker: None,
             transcript_rect: Rect::default(),
@@ -1046,6 +1055,12 @@ impl App {
     }
 
     fn on_agent(&mut self, event: AgentEvent) {
+        // While `/new` is in flight, ignore events from the old turn (stream
+        // deltas, tool cards, interrupt/rollback messages) so they cannot leak
+        // into the fresh conversation.
+        if self.pending_new_session && !matches!(&event, AgentEvent::SessionLoaded(_)) {
+            return;
+        }
         match event {
             AgentEvent::TurnStart => {
                 self.busy = true;
@@ -1132,6 +1147,15 @@ impl App {
                 }
             },
             AgentEvent::SessionLoaded(session) => {
+                let was_new = self.pending_new_session;
+                self.pending_new_session = false;
+                // Keep anything the user added after `/new` (e.g. a message
+                // typed and sent while the fresh session was loading).
+                let keep = if was_new {
+                    self.items.split_off(self.pending_new_baseline)
+                } else {
+                    Vec::new()
+                };
                 self.items.clear();
                 self.provider = session.provider.clone();
                 self.model = session.model.clone();
@@ -1148,6 +1172,11 @@ impl App {
                 self.input_sel = None;
                 self.paste_blocks.clear();
                 self.interrupting = false;
+                if was_new {
+                    self.items
+                        .push(Item::System("New conversation started".to_string()));
+                }
+                self.items.extend(keep);
                 self.push_messages(&session.messages);
             }
             AgentEvent::Error(message) => {
@@ -2199,9 +2228,25 @@ impl App {
                 self.cursor = 0;
                 self.input_sel = None;
                 self.paste_blocks.clear();
+                // Clear the transcript immediately and stop any running turn,
+                // so the previous conversation cannot linger on screen while
+                // the agent task processes the fresh session.
+                let was_busy = self.busy;
+                self.items.clear();
+                self.busy = false;
+                self.ai_thinking = false;
+                self.interrupting = false;
+                self.permission = None;
+                self.follow = true;
+                self.scroll = 0;
+                self.pending_new_session = true;
+                if was_busy {
+                    let _ = self.cmd_tx.try_send(AgentCmd::Cancel);
+                }
                 let _ = self.cmd_tx.try_send(AgentCmd::NewSession);
                 self.items
                     .push(Item::System("Starting a new conversation…".to_string()));
+                self.pending_new_baseline = self.items.len();
             }
             "plan" => {
                 let mode = match arg {
@@ -3329,15 +3374,82 @@ mod tests {
         app.input = "old draft".chars().collect();
         app.cursor = app.input.len();
         app.items.push(Item::User("old message".to_string()));
+        app.busy = true;
 
         app.run_command("new");
         assert!(app.input.is_empty());
         assert_eq!(app.cursor, 0);
         assert!(app.paste_blocks.is_empty());
+        assert!(app.items.iter().any(|i| matches!(
+            i,
+            Item::System(text) if text == "Starting a new conversation…"
+        )));
+        assert!(!app.busy);
+        assert!(app.pending_new_session);
+        // A running turn is cancelled first so the fresh session is processed
+        // without waiting for the old turn to finish.
+        match cmd_rx.try_recv().unwrap() {
+            AgentCmd::Cancel => {}
+            _ => panic!("expected Cancel"),
+        }
         match cmd_rx.try_recv().unwrap() {
             AgentCmd::NewSession => {}
             _ => panic!("expected NewSession"),
         }
+    }
+
+    #[test]
+    fn new_command_suppresses_old_turn_events_until_session_loaded() {
+        let (cmd_tx, _cmd_rx) = mpsc::channel(16);
+        let mut app = App::new(
+            cmd_tx,
+            Arc::new(Mutex::new(HashSet::new())),
+            "test-model".to_string(),
+            PathBuf::from("."),
+            "default".to_string(),
+            ThinkingLevel::Off,
+            SessionMode::Agent,
+            PathBuf::from("config.toml"),
+            None,
+            Vec::new(),
+        );
+        app.items.push(Item::User("old blue message".to_string()));
+        app.items.push(Item::Assistant("old reply".to_string()));
+
+        app.run_command("new");
+        // Old-turn events arriving before the fresh session must not leak back
+        // into the cleared transcript.
+        app.on_agent(AgentEvent::TextDelta("stale delta".to_string()));
+        app.on_agent(AgentEvent::Info("stale info".to_string()));
+        app.on_agent(AgentEvent::ToolStart {
+            name: "read_file".to_string(),
+            args: serde_json::json!({}),
+        });
+        assert_eq!(app.items.len(), 1); // only the "Starting…" hint
+        assert!(matches!(
+            app.items.last(),
+            Some(Item::System(text)) if text == "Starting a new conversation…"
+        ));
+
+        // A message typed and sent while the fresh session is loading must
+        // survive the transcript clear.
+        app.input = "new message".chars().collect();
+        app.cursor = app.input.len();
+        app.submit();
+        assert!(matches!(app.items.last(), Some(Item::User(text)) if text == "new message"));
+
+        let fresh = Session::new(PathBuf::from("."), "default", "m");
+        app.on_agent(AgentEvent::SessionLoaded(fresh));
+        assert!(!app.pending_new_session);
+        assert_eq!(app.items.len(), 2); // confirmation + the user's new message
+        assert!(matches!(
+            app.items[0],
+            Item::System(ref text) if text == "New conversation started"
+        ));
+        assert!(matches!(
+            app.items[1],
+            Item::User(ref text) if text == "new message"
+        ));
     }
 
     #[test]
