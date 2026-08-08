@@ -17,12 +17,12 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::io::{self, Stdout};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -590,6 +590,7 @@ struct App {
     input_sel: Option<(usize, usize)>,
     /// 粘贴的大段文本折叠块：占位符文本 + 原始文本
     paste_blocks: Vec<PasteBlock>,
+    paste_burst: PasteBurst,
     history: Vec<String>,
     history_pos: Option<usize>,
     busy: bool,
@@ -622,6 +623,174 @@ struct App {
 struct PasteBlock {
     placeholder: String,
     text: String,
+}
+
+/// 粘贴爆发检测。
+///
+/// Windows 终端在未启用 bracketed paste 时，会把粘贴内容作为一串快速按键
+/// 注入输入框（末尾常带 Enter）。`PasteBurst` 把 35ms 内连续涌入的纯文本
+/// 按键识别为一次粘贴：期间 Enter 视为换行而非提交，静默后整体走一次
+/// 折叠粘贴，避免多行内容被逐键注入后误发送。
+#[derive(Debug, Default)]
+struct PasteBurst {
+    /// 上一个纯文本字符到达时间，用于判断是否构成爆发。
+    last_char_time: Option<Instant>,
+    /// 最近一次被直接插入输入框的字符及其插入位置（供 retro-capture）。
+    last_inserted: Option<(usize, char)>,
+    /// 正在 hold 的首个 ASCII 字符，等待第二个字符确认是否爆发。
+    held: Option<(char, Instant)>,
+    /// 已确认的粘贴缓冲。
+    buffer: Option<String>,
+    /// 缓冲最后一次写入时间。
+    buffer_last_update: Option<Instant>,
+    /// 该时间之前到达的 Enter 一律视为换行（爆发结束后的保护窗口）。
+    suppress_enter_until: Option<Instant>,
+    /// 等待 App 执行的输出。
+    out: VecDeque<PasteOut>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PasteOut {
+    /// 作为普通字符插入输入框。
+    InsertChar(char),
+    /// 从输入框移除该位置字符（收回 retro-capture 的前缀）。
+    RemoveAt(usize, char),
+    /// 整体作为一次粘贴插入（自动折叠）。
+    HandlePaste(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnterAction {
+    Submit,
+    Newline,
+    BufferNewline,
+}
+
+impl PasteBurst {
+    const BURST_INTERVAL: Duration = Duration::from_millis(35);
+    const HOLD_DELAY: Duration = Duration::from_millis(30);
+    const FLUSH_DELAY: Duration = Duration::from_millis(80);
+    const SUPPRESS_WINDOW: Duration = Duration::from_millis(120);
+
+    /// 处理一个无修饰的普通字符。`cursor` 是该字符将要插入的位置。
+    fn on_plain_char(&mut self, c: char, now: Instant, cursor: usize) {
+        let prev_time = self.last_char_time;
+        self.last_char_time = Some(now);
+
+        // 爆发已确认：继续追加到缓冲。
+        if let Some(buf) = &mut self.buffer {
+            buf.push(c);
+            self.buffer_last_update = Some(now);
+            return;
+        }
+
+        // 有 hold 中的首字符：第二个字符快速到达 → 确认爆发。
+        if let Some((held, at)) = self.held.take() {
+            if now.duration_since(at) <= Self::HOLD_DELAY {
+                let mut buf = String::with_capacity(2);
+                buf.push(held);
+                buf.push(c);
+                self.buffer = Some(buf);
+                self.buffer_last_update = Some(now);
+                self.last_inserted = None;
+                return;
+            }
+            // hold 超时：旧字符作为普通输入发出。
+            self.out.push_back(PasteOut::InsertChar(held));
+        }
+
+        // retro-capture：非 ASCII 首字符已直接插入，第二个字符快速到达时
+        // 收回该前缀并一起进入缓冲（避免中文粘贴首字残留）。
+        if let (Some(at), Some((pos, prev))) = (prev_time, self.last_inserted)
+            && now.duration_since(at) <= Self::BURST_INTERVAL
+        {
+            let mut buf = String::with_capacity(2);
+            buf.push(prev);
+            buf.push(c);
+            self.buffer = Some(buf);
+            self.buffer_last_update = Some(now);
+            self.last_inserted = None;
+            self.out.push_back(PasteOut::RemoveAt(pos, prev));
+            return;
+        }
+
+        if c.is_ascii() {
+            // ASCII 先短暂 hold：既能识别爆发，又避免单键输入闪烁。
+            self.held = Some((c, now));
+            self.last_inserted = None;
+        } else {
+            // 非 ASCII（IME/中文）不 hold，立即插入并记录位置。
+            self.last_inserted = Some((cursor, c));
+            self.out.push_back(PasteOut::InsertChar(c));
+        }
+    }
+
+    /// Enter：爆发激活或保护窗口内返回换行，否则提交。
+    fn on_enter(&mut self, now: Instant) -> EnterAction {
+        if let Some((held, _)) = self.held.take() {
+            // 首字符还在 hold：先放行到输入框，Enter 一律当换行，
+            // 避免单字符粘贴末尾的回车触发提交。
+            self.out.push_back(PasteOut::InsertChar(held));
+            return EnterAction::Newline;
+        }
+        if self.buffer.is_some() || self.suppress_enter_until.is_some_and(|t| now <= t) {
+            if let Some(buf) = &mut self.buffer {
+                buf.push('\n');
+                self.buffer_last_update = Some(now);
+                EnterAction::BufferNewline
+            } else {
+                EnterAction::Newline
+            }
+        } else {
+            EnterAction::Submit
+        }
+    }
+
+    /// Shift+Enter：爆发期间同样并入缓冲，否则交给普通换行逻辑。
+    fn on_shift_enter(&mut self, now: Instant) -> EnterAction {
+        if let Some(buf) = &mut self.buffer {
+            buf.push('\n');
+            self.buffer_last_update = Some(now);
+            EnterAction::BufferNewline
+        } else {
+            EnterAction::Newline
+        }
+    }
+
+    /// 到期处理：hold 超时的字符按普通输入发出；静默超时的缓冲整体作为粘贴。
+    fn flush_if_due(&mut self, now: Instant) {
+        if let Some((c, at)) = self.held
+            && now.duration_since(at) >= Self::HOLD_DELAY
+        {
+            self.held = None;
+            self.out.push_back(PasteOut::InsertChar(c));
+        }
+        let ready = self
+            .buffer_last_update
+            .is_some_and(|at| now.duration_since(at) >= Self::FLUSH_DELAY);
+        if ready && let Some(text) = self.buffer.take() {
+            self.buffer_last_update = None;
+            self.last_inserted = None;
+            self.out.push_back(PasteOut::HandlePaste(text));
+            self.suppress_enter_until = Some(now + Self::SUPPRESS_WINDOW);
+        }
+    }
+
+    /// 清空爆发状态；hold 中的字符不能丢，先排入输出。
+    fn clear(&mut self) {
+        if let Some((c, _)) = self.held.take() {
+            self.out.push_back(PasteOut::InsertChar(c));
+        }
+        self.last_char_time = None;
+        self.last_inserted = None;
+        self.buffer = None;
+        self.buffer_last_update = None;
+        self.suppress_enter_until = None;
+    }
+
+    fn drain_outputs(&mut self) -> Vec<PasteOut> {
+        self.out.drain(..).collect()
+    }
 }
 
 struct ModelPicker {
@@ -763,6 +932,7 @@ impl App {
             cursor: 0,
             input_sel: None,
             paste_blocks: Vec::new(),
+            paste_burst: PasteBurst::default(),
             history: Vec::new(),
             history_pos: None,
             busy: false,
@@ -952,8 +1122,10 @@ impl App {
 
     fn on_ui(&mut self, event: Event) -> bool {
         match event {
-            Event::Key(key) if key.kind == KeyEventKind::Press => self.on_key(key),
+            Event::Key(key) if key.kind == KeyEventKind::Press => self.on_key_with_burst(key),
             Event::Paste(text) => {
+                self.paste_burst.clear();
+                self.apply_burst_outputs();
                 self.insert_text_at_cursor(&text, true);
                 false
             }
@@ -1013,6 +1185,85 @@ impl App {
             },
             _ => false,
         }
+    }
+
+    /// 按键入口：先做粘贴爆发检测，再交给原有按键逻辑。
+    fn on_key_with_burst(&mut self, key: KeyEvent) -> bool {
+        if self.permission.is_some() || self.model_picker.is_some() || self.session_picker.is_some()
+        {
+            return self.on_key(key);
+        }
+        self.on_key_burst(key, Instant::now())
+    }
+
+    /// 带粘贴爆发检测的按键处理；`now` 供测试注入时间。
+    fn on_key_burst(&mut self, key: KeyEvent, now: Instant) -> bool {
+        self.paste_burst.flush_if_due(now);
+        match key.code {
+            KeyCode::Char(ch)
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT)
+                    && !key.modifiers.contains(KeyModifiers::SUPER) =>
+            {
+                self.paste_burst.on_plain_char(ch, now, self.cursor);
+                self.apply_burst_outputs_at(now);
+                false
+            }
+            KeyCode::Enter
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                let action = if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    self.paste_burst.on_shift_enter(now)
+                } else {
+                    self.paste_burst.on_enter(now)
+                };
+                match action {
+                    EnterAction::Submit => {
+                        self.paste_burst.clear();
+                        self.apply_burst_outputs_at(now);
+                        self.submit();
+                    }
+                    EnterAction::Newline => {
+                        self.apply_burst_outputs_at(now);
+                        self.insert_char('\n');
+                    }
+                    EnterAction::BufferNewline => {}
+                }
+                false
+            }
+            _ => {
+                self.paste_burst.clear();
+                self.apply_burst_outputs_at(now);
+                self.on_key(key)
+            }
+        }
+    }
+
+    /// 执行粘贴爆发排出的输出，返回是否有内容被应用。
+    fn apply_burst_outputs_at(&mut self, now: Instant) -> bool {
+        self.paste_burst.flush_if_due(now);
+        let mut applied = false;
+        for out in self.paste_burst.drain_outputs() {
+            match out {
+                PasteOut::InsertChar(c) => self.insert_char(c),
+                PasteOut::RemoveAt(pos, expected) => {
+                    if pos < self.input.len() && self.input[pos] == expected {
+                        self.input.remove(pos);
+                        if self.cursor > pos {
+                            self.cursor -= 1;
+                        }
+                    }
+                }
+                PasteOut::HandlePaste(text) => self.insert_text_at_cursor(&text, true),
+            }
+            applied = true;
+        }
+        applied
+    }
+
+    fn apply_burst_outputs(&mut self) -> bool {
+        self.apply_burst_outputs_at(Instant::now())
     }
 
     fn on_key(&mut self, key: KeyEvent) -> bool {
@@ -2586,7 +2837,8 @@ async fn run_loop(
     mut perm_rx: mpsc::Receiver<PermissionRequest>,
     mut ui_rx: mpsc::Receiver<Event>,
 ) -> anyhow::Result<()> {
-    let mut ticker = tokio::time::interval(Duration::from_millis(100));
+    // 25ms 粒度足够让粘贴爆发缓冲按时落地，也不会拖慢动画。
+    let mut ticker = tokio::time::interval(Duration::from_millis(25));
     let mut dirty = true;
     loop {
         let mut spinner_tick = false;
@@ -2612,9 +2864,15 @@ async fn run_loop(
                     }
                 }
             }
-            _ = ticker.tick() => spinner_tick = true,
+            _ = ticker.tick() => {
+                spinner_tick = true;
+                // hold/缓冲到期的字符在这里落地（例如粘贴流结束后没有更多按键）。
+                if app.apply_burst_outputs() {
+                    dirty = true;
+                }
+            }
         }
-        // 等待权限确认时没有动画可播，停止 100ms 定时重绘，避免屏闪
+        // 等待权限确认时没有动画可播，停止 25ms 定时重绘，避免屏闪
         let animate = (app.busy || app.ai_thinking) && app.permission.is_none();
         if dirty || (animate && spinner_tick) {
             terminal.draw(|frame| app.render(frame))?;
@@ -2835,6 +3093,140 @@ mod tests {
         app.insert_text_at_cursor("hello", true);
         assert_eq!(app.input.iter().collect::<String>(), "hello");
         assert!(app.paste_blocks.is_empty());
+    }
+
+    #[test]
+    fn paste_burst_multi_line_flow_is_collapsed_not_submitted() {
+        let mut app = test_app();
+        let t0 = Instant::now() - Duration::from_millis(1000);
+        let ch = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+
+        // 模拟 Windows 终端把多行粘贴注入为快速按键流（末尾带回车）。
+        app.on_key_burst(ch('a'), t0);
+        app.on_key_burst(ch('b'), t0 + Duration::from_millis(10));
+        app.on_key_burst(enter, t0 + Duration::from_millis(20));
+        app.on_key_burst(ch('c'), t0 + Duration::from_millis(30));
+        app.on_key_burst(enter, t0 + Duration::from_millis(40));
+        app.on_key_burst(ch('d'), t0 + Duration::from_millis(50));
+
+        // 缓冲未结束：不提交，输入框也不出现半截文本。
+        assert!(app.items.is_empty());
+        assert!(app.input.is_empty());
+
+        // 静默超时后整体走折叠粘贴。
+        app.apply_burst_outputs_at(t0 + Duration::from_millis(300));
+        assert_eq!(app.input.iter().collect::<String>(), "【line 1-3】");
+        assert_eq!(app.expand_input(), "ab\nc\nd");
+        assert!(app.items.is_empty());
+    }
+
+    #[test]
+    fn paste_burst_single_char_enter_does_not_submit() {
+        let mut app = test_app();
+        let t0 = Instant::now() - Duration::from_millis(1000);
+        app.on_key_burst(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE), t0);
+        app.on_key_burst(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            t0 + Duration::from_millis(10),
+        );
+        assert!(app.items.is_empty());
+        assert_eq!(app.input.iter().collect::<String>(), "x\n");
+    }
+
+    #[test]
+    fn paste_burst_slow_typing_inserts_normally() {
+        let mut app = test_app();
+        let t0 = Instant::now() - Duration::from_millis(1000);
+        let ch = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+
+        app.on_key_burst(ch('a'), t0);
+        assert!(app.input.is_empty()); // 首个 ASCII 在 hold
+        assert!(app.apply_burst_outputs_at(t0 + Duration::from_millis(50)));
+        assert_eq!(app.input.iter().collect::<String>(), "a");
+
+        app.on_key_burst(ch('b'), t0 + Duration::from_millis(100));
+        app.on_key_burst(ch('c'), t0 + Duration::from_millis(200));
+        assert_eq!(app.input.iter().collect::<String>(), "ab");
+        assert!(app.apply_burst_outputs_at(t0 + Duration::from_millis(250)));
+        assert_eq!(app.input.iter().collect::<String>(), "abc");
+        assert!(app.paste_blocks.is_empty());
+    }
+
+    #[test]
+    fn paste_burst_non_ascii_retro_captures_inserted_prefix() {
+        let mut app = test_app();
+        let t0 = Instant::now() - Duration::from_millis(1000);
+        app.input = "AB".chars().collect();
+        app.cursor = 1;
+
+        app.on_key_burst(KeyEvent::new(KeyCode::Char('你'), KeyModifiers::NONE), t0);
+        assert_eq!(app.input.iter().collect::<String>(), "A你B");
+
+        // 第二个字符快速到达 → 收回已插入的“你”，整体进缓冲。
+        app.on_key_burst(
+            KeyEvent::new(KeyCode::Char('好'), KeyModifiers::NONE),
+            t0 + Duration::from_millis(10),
+        );
+        assert_eq!(app.input.iter().collect::<String>(), "AB");
+
+        app.apply_burst_outputs_at(t0 + Duration::from_millis(300));
+        assert_eq!(app.input.iter().collect::<String>(), "A你好B");
+        assert!(app.items.is_empty());
+    }
+
+    #[test]
+    fn paste_burst_enter_after_flush_is_newline_within_window() {
+        let mut app = test_app();
+        let t0 = Instant::now() - Duration::from_millis(1000);
+        let ch = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+
+        app.on_key_burst(ch('a'), t0);
+        app.on_key_burst(ch('b'), t0 + Duration::from_millis(10));
+        assert!(app.apply_burst_outputs_at(t0 + Duration::from_millis(200)));
+        assert_eq!(app.input.iter().collect::<String>(), "ab");
+
+        // flush 后 100ms 内按 Enter：视为换行，不发送。
+        app.on_key_burst(enter, t0 + Duration::from_millis(250));
+        assert!(app.items.is_empty());
+        assert_eq!(app.input.iter().collect::<String>(), "ab\n");
+
+        // 保护窗口过后 Enter 正常提交。
+        app.on_key_burst(enter, t0 + Duration::from_millis(500));
+        assert!(app.input.is_empty());
+        assert!(matches!(
+            app.items.last(),
+            Some(Item::User(text)) if text == "ab"
+        ));
+    }
+
+    #[test]
+    fn paste_burst_modified_keys_pass_through_and_clear_state() {
+        let mut app = test_app();
+        let t0 = Instant::now() - Duration::from_millis(1000);
+        app.on_key_burst(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE), t0);
+        // Ctrl+P 不走爆发，且会清掉 hold 中的字符。
+        let quit = app.on_key_burst(
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+            t0 + Duration::from_millis(5),
+        );
+        assert!(!quit);
+        assert!(app.model_picker.is_some());
+        assert_eq!(app.input.iter().collect::<String>(), "a");
+    }
+
+    #[test]
+    fn paste_burst_held_char_is_not_lost_on_other_keys() {
+        let mut app = test_app();
+        let t0 = Instant::now() - Duration::from_millis(1000);
+        app.on_key_burst(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE), t0);
+        app.on_key_burst(
+            KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
+            t0 + Duration::from_millis(5),
+        );
+        assert_eq!(app.input.iter().collect::<String>(), "a");
+        assert_eq!(app.cursor, 0);
     }
 
     #[test]
