@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.0-beta.7 知识库维护补丁（2026-08-08）
+
+- 修正 esp32-gpio strapping 引脚清单为 0/2/5/12(MTDI)/15(MTDO)（GPIO4 非 boot 模式脚；原 beta.7 误含 GPIO4）
+- 统一知识库 `common_mistake` 为数组格式（消除索引标量 / 速查数组 / 带标签表三种混用），TOML 全量校验通过
+- vendor-index.md 的「自动发现」说明经代码核验已实现（`load_vendor_index_hint` 注入提示词），恢复为原准确表述
+
 ## v0.3.0-beta.7（2026-08-08）
 
 - **硬件知识库（seed）**：新增 STM32 F1（RM0008）、STM32 G0（RM0444）、ESP32-S3 三个 family 与 7 张原创速查表（USART/DMA、TIM/PWM、时钟树、GPIO/EXTI、LPUART、USB-Serial 等）
@@ -7,7 +13,6 @@
 - **知识库完整性测试**：校验索引/速查表 TOML 可解析、`quickref.cheatsheet` 链接有效、`meta.schema_version` 存在
 - 修正 esp32-gpio strapping 引脚清单（0/2/4/5/12/15；GPIO6-11 为 SPI flash 脚）
 - 移除过时 .example 模板，README/说明链接指向正式索引
-# Changelog
 
 ## v0.3.0-beta.6（2026-08-08）
 
