@@ -9,7 +9,7 @@ source = "工程经验 + ESP32 TRM Section 5 核对"
 [overview]
 physical = "共 40 个 GPIO pad（标号 0-39），其中 34-39 为输入专用"
 matrix = "GPIO matrix 可把任意 peripheral 信号路由到任意 GPIO；部分信号直连 IOMUX 延迟更低"
-strapping = "GPIO 0 / 2 / 5 / 12(MTDI) / 15(MTDO) 上电为 strapping 引脚，决定下载/启动模式（GPIO12=MTDI 选择 VDD_SDIO 电压 1.8V/3.3V；GPIO 6-11 是 SPI flash 脚，不属于 strapping）"
+strapping = "GPIO 0 / 2 / 4 / 5 / 12(MTDI) / 15(MTDO) 上电为 strapping 引脚：GPIO0/2/5/12/15 影响启动/下载模式与日志输出；GPIO4 选择 VDD_SDIO 电压，GPIO12(MTDI) 选择 flash 电压；GPIO 6-11 是 SPI flash 脚，不属于 strapping"
 
 [key_pins]
 input_only = "GPIO 34,35,36,37,38,39 —— 只能输入，不能输出也不能内部上下拉"

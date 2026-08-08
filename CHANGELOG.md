@@ -2,7 +2,7 @@
 
 ## v0.3.0-beta.7 知识库维护补丁（2026-08-08）
 
-- 修正 esp32-gpio strapping 引脚清单为 0/2/5/12(MTDI)/15(MTDO)（GPIO4 非 boot 模式脚；原 beta.7 误含 GPIO4）
+- 修正 esp32-gpio strapping 说明：strapping 引脚为 GPIO 0/2/4/5/12(MTDI)/15(MTDO)；GPIO4 选择 VDD_SDIO 电压、GPIO12(MTDI) 选择 flash 电压（此前误删 GPIO4 并将 VDD_SDIO 错标到 GPIO12）
 - 统一知识库 `common_mistake` 为数组格式（消除索引标量 / 速查数组 / 带标签表三种混用），TOML 全量校验通过
 - vendor-index.md 的「自动发现」说明经代码核验已实现（`load_vendor_index_hint` 注入提示词），恢复为原准确表述
 

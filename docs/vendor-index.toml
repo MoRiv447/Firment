@@ -50,7 +50,7 @@ cheatsheet = "cheatsheets/esp32-gpio.toml"
 doc_section = "ESP32 TRM Section 5 (GPIO and IOMUX)"
 key_registers = ["GPIO_OUT", "GPIO_IN", "GPIO_ENABLE", "GPIO_<n>_CFG"]
 confidence = "verified"
-common_mistake = ["GPIO 34-39 为输入专用，不能输出或内部上下拉；strapping 引脚（GPIO 0/2/5/12/15 等）上电电平决定启动模式，强拉可能砖机或无法下载。"]
+common_mistake = ["GPIO 34-39 为输入专用，不能输出或内部上下拉；strapping 引脚（GPIO 0/2/4/5/12/15）上电电平决定启动模式与电压选择，强拉可能砖机或无法下载。"]
 
 # ───────────────────────── STM32 F1 ─────────────────────────
 [stm32.f1]
