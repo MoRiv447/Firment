@@ -14,7 +14,8 @@ console = "默认 log 走 UART0（GPIO43/44）；也可把 console 改到 USB-Se
 init = "ESP-IDF：uart_driver_install() + uart_param_config() + uart_write_bytes()"
 usb = "USB-CDC 用 usb_serial_jtag 驱动，注意与 JTAG 复用同一物理口"
 
-[common_mistake]
-conflict = "log 同时开 UART0 和 USB-CDC 导致输出混乱——二选一"
-baud = "UART 波特率与工具不匹配（monitor 默认 115200）"
-rx_tx = "RX/TX 接反或与 USB 口混用"
+common_mistake = [
+  "log 同时开 UART0 和 USB-CDC 导致输出混乱——二选一",
+  "UART 波特率与工具不匹配（monitor 默认 115200）",
+  "RX/TX 接反或与 USB 口混用",
+]

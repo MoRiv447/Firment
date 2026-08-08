@@ -34,7 +34,7 @@ cheatsheet = "cheatsheets/stm32-clock.toml"
 doc_section = "RM0090 Section 6.2"
 key_concepts = ["SYSCLK", "HCLK", "PCLK1", "PCLK2", "PLL"]
 confidence = "verified"
-common_mistake = "APB1/APB2 上的定时器时钟在对应 APB 预分频 ≠ 1 时为 PCLK×2；按 PCLK1=42MHz 直接算 TIM 频率会少算一倍（实际 84MHz）。"
+common_mistake = ["APB1/APB2 上的定时器时钟在对应 APB 预分频 ≠ 1 时为 PCLK×2；按 PCLK1=42MHz 直接算 TIM 频率会少算一倍（实际 84MHz）。"]
 
 # ───────────────────────── ESP32 ─────────────────────────
 [esp32]
@@ -50,7 +50,7 @@ cheatsheet = "cheatsheets/esp32-gpio.toml"
 doc_section = "ESP32 TRM Section 5 (GPIO and IOMUX)"
 key_registers = ["GPIO_OUT", "GPIO_IN", "GPIO_ENABLE", "GPIO_<n>_CFG"]
 confidence = "verified"
-common_mistake = "GPIO 34-39 为输入专用，不能输出或内部上下拉；strapping 引脚（GPIO 0/2/5/12/15 等）上电电平决定启动模式，强拉可能砖机或无法下载。"
+common_mistake = ["GPIO 34-39 为输入专用，不能输出或内部上下拉；strapping 引脚（GPIO 0/2/5/12/15 等）上电电平决定启动模式，强拉可能砖机或无法下载。"]
 
 # ───────────────────────── STM32 F1 ─────────────────────────
 [stm32.f1]
@@ -84,7 +84,7 @@ cheatsheet = "cheatsheets/stm32f1-clock.toml"
 doc_section = "RM0008 Section 7"
 key_concepts = ["SYSCLK", "HCLK", "PCLK1", "PCLK2", "PLL"]
 confidence = "verified"
-common_mistake = "F103 上限 72MHz：APB1≤36MHz、APB2≤72MHz；72MHz 需 Flash latency=2"
+common_mistake = ["F103 上限 72MHz：APB1≤36MHz、APB2≤72MHz；72MHz 需 Flash latency=2"]
 
 # ───────────────────────── STM32 G0 ─────────────────────────
 [stm32.g0]
@@ -108,7 +108,7 @@ cheatsheet = "cheatsheets/stm32g0-uart.toml"
 doc_section = "RM0444 USART/LPUART"
 hal_functions = ["HAL_UART_Init", "HAL_LPUART_Init"]
 confidence = "verified"
-common_mistake = "LPUART 用 LSE 32.768kHz 时波特率受限；USART 时钟源（PCLK/HSI16/LSE）要先选对"
+common_mistake = ["LPUART 用 LSE 32.768kHz 时波特率受限；USART 时钟源（PCLK/HSI16/LSE）要先选对"]
 
 # ───────────────────────── ESP32-S3 ─────────────────────────
 [esp32.s3]
@@ -132,4 +132,4 @@ cheatsheet = "cheatsheets/esp32s3-uart.toml"
 doc_section = "ESP32-S3 TRM UART"
 hal_functions = ["uart_driver_install", "uart_write_bytes"]
 confidence = "verified"
-common_mistake = "log 同时开 UART0 和 USB-CDC 输出混乱；monitor 默认 115200"
+common_mistake = ["log 同时开 UART0 和 USB-CDC 输出混乱；monitor 默认 115200"]

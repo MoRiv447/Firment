@@ -15,7 +15,8 @@ usb = "内置 USB-Serial/JTAG：默认 GPIO19(D-) / GPIO20(D+)"
 strapping = "GPIO0（下载模式）/ GPIO3 / GPIO45 / GPIO46 为 strapping 引脚，上电电平决定启动行为"
 console = "默认 UART0 console：GPIO43(TX) / GPIO44(RX)"
 
-[common_mistake]
-voltage = "把 3.3V 引脚当 5V 容忍直接接 5V——S3 多数引脚不是 5V 容忍"
-console = "占用了 GPIO43/44 导致默认 console 无输出"
-strapping = "强拉 strapping 引脚（尤其 GPIO0）导致无法进入下载模式"
+common_mistake = [
+  "把 3.3V 引脚当 5V 容忍直接接 5V——S3 多数引脚不是 5V 容忍",
+  "占用了 GPIO43/44 导致默认 console 无输出",
+  "强拉 strapping 引脚（尤其 GPIO0）导致无法进入下载模式",
+]

@@ -21,7 +21,8 @@ timer_clock = "APB1/APB2 上的定时器：APB 预分频=1 时等于 PCLK，否�
 init = "HAL_RCC_OscConfig({HSEState on, PLL.PLLSource=HSE, PLLMUL=x9}) → HAL_RCC_ClockConfig({SYSCLKSource=PLLCLK, AHB=1, APB1=2, APB2=1, FlashLatency=2})"
 flash_latency = "72MHz 需 2 个等待周期（3.3V 下），否则取指 HardFault"
 
-[common_mistake]
-apb1_over = "PCLK1 配到 >36MHz，USART/TIM2-4 等 APB1 外设行为异常"
-latency = "升频后忘了调 Flash latency"
-hse_wait = "HSE 起振失败未检查 HAL_RCC_OscConfig 返回值，继续用无效 PLL"
+common_mistake = [
+  "PCLK1 配到 >36MHz，USART/TIM2-4 等 APB1 外设行为异常",
+  "升频后忘了调 Flash latency",
+  "HSE 起振失败未检查 HAL_RCC_OscConfig 返回值，继续用无效 PLL",
+]

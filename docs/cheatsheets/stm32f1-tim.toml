@@ -16,7 +16,8 @@ init = "HAL_TIM_PWM_Init + HAL_TIM_PWM_Start(htim, TIM_CHANNEL_x)"
 set = "__HAL_TIM_SET_COMPARE(htim, TIM_CHANNEL_x, value)"
 advanced = "TIM1 互补输出用 HAL_TIMEx_PWMN_Start()，且需使能主输出 __HAL_TIM_MOE_ENABLE()"
 
-[common_mistake]
-apb1_x2 = "用 PCLK1=36MHz 直接算 TIM2-4——实际是 72MHz"
-range = "PSC/ARR 都是 16 位（上限 65535），低频要求高 ARR 时记得提 PSC"
-moe = "TIM1 只调 COMPARE 不动 MOE，互补通道无输出"
+common_mistake = [
+  "用 PCLK1=36MHz 直接算 TIM2-4——实际是 72MHz",
+  "PSC/ARR 都是 16 位（上限 65535），低频要求高 ARR 时记得提 PSC",
+  "TIM1 只调 COMPARE 不动 MOE，互补通道无输出",
+]

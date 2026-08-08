@@ -24,7 +24,8 @@ USART2_RX = "DMA1 Channel 6"
 USART3_TX = "DMA1 Channel 2"
 USART3_RX = "DMA1 Channel 3"
 
-[common_mistake]
-baud_clock = "USART2/3 波特率用 72MHz 算——实际 PCLK1=36MHz"
-dma_channel = "USART1_TX 是 Ch4 不是 Ch5，接反后 DMA 不触发"
-clock_enable = "开了 DMA 却忘了 __HAL_RCC_DMA1_CLK_ENABLE()，寄存器静默无效"
+common_mistake = [
+  "USART2/3 波特率用 72MHz 算——实际 PCLK1=36MHz",
+  "USART1_TX 是 Ch4 不是 Ch5，接反后 DMA 不触发",
+  "开了 DMA 却忘了 __HAL_RCC_DMA1_CLK_ENABLE()，寄存器静默无效",
+]
