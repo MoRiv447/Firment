@@ -81,6 +81,8 @@ pub struct Agent {
     ledger_seq_appended: u64,
     compaction_strategy: CompactionStrategy,
     symbols_backend: Option<String>,
+    build_command: Option<String>,
+    default_chip: Option<String>,
     /// Hash of the last read result per path, for unchanged-read dedup.
     read_hashes: HashMap<PathBuf, String>,
     /// Recently read paths (most recent last), for post-compact re-injection.
@@ -112,6 +114,8 @@ impl Agent {
             ledger_seq_appended: 0,
             compaction_strategy: CompactionStrategy::default(),
             symbols_backend: None,
+            build_command: None,
+            default_chip: None,
             read_hashes: HashMap::new(),
             recent_read_paths: VecDeque::new(),
         }
@@ -160,6 +164,16 @@ impl Agent {
     /// Set the symbol index backend override (auto / ctags / regex).
     pub fn set_symbols_backend(&mut self, backend: Option<String>) {
         self.symbols_backend = backend;
+    }
+
+    /// Set the configured build command exposed to the build tool.
+    pub fn set_build_command(&mut self, command: Option<String>) {
+        self.build_command = command;
+    }
+
+    /// Set the default target chip for the flash tool.
+    pub fn set_default_chip(&mut self, chip: Option<String>) {
+        self.default_chip = chip;
     }
 
     /// Pin a file so compaction always re-injects its full content. Warns when
@@ -341,6 +355,8 @@ impl Agent {
                     crate::kb::seed_kb_dir(),
                 ],
                 symbols_backend: self.symbols_backend.clone(),
+                build_command: self.build_command.clone(),
+                default_chip: self.default_chip.clone(),
             };
 
             if tool_calls.is_empty() {

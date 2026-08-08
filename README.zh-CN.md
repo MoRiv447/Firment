@@ -50,11 +50,11 @@
 - **参数 schema 校验**：工具参数在执行前按 JSON Schema 校验，非法参数以 `[InvalidInput]` 拒绝
 - **失败分类**：工具错误带 `[NotFound]`、`[CompileError]`、`[Timeout]`、`[Permission]`、`[ConcurrentChange]` 等标签
 
-**第二层 — 嵌入式专属（开发中）**
+**第二层 — 嵌入式专属（编译/烧录已可用，其余开发中）**
 
-- 构建系统集成（CMake / Make / Keil / IAR）
-- 烧录与调试（OpenOCD / ST-Link）
-- UART / 串口日志分析
+- 编译与烧录：`firm build`（CMake/Make/Keil/IAR 经配置分发）与 `firm flash`（probe-rs 后端）现已可用
+- 调试与 RTT（probe-rs）、UART / 串口日志分析（含 ELF 符号解码栈回溯）
+- MCU 自动识别（`.ioc` / CubeMX 芯片库）
 - 寄存器 / 外设感知（芯片寄存器映射、`.ioc`、设备树）
 ### 🚀 快速开始
 
@@ -110,6 +110,8 @@ model = "deepseek-v4-flash"   # 或 deepseek-v4-pro
 [tools]
 # verify_command = "cargo check"   # 改动后先跑通再宣布完成（如 cmake --build build）
 # symbols_backend = "auto"         # auto / ctags / regex（符号索引后端）
+# build_command = "cmake --build build"   # build 工具（Keil: uv4 -j0 -b project.uvprojx）
+# default_chip = "stm32f407vetx"          # firm flash 默认芯片（probe-rs 芯片名）
 ```
 
 多 Provider 追加配置后用 `--provider <名字>` 或 TUI 内 `/provider <名字>` 切换；`/models`、`Ctrl+P` 可直接拉取并选择模型，不用手改文件。
@@ -131,6 +133,8 @@ model = "deepseek-v4-flash"   # 或 deepseek-v4-pro
 | `firm --thinking xhigh -p "任务"` | 指定思考深度 |
 | `firm --list` / `firm --doctor` | 会话列表 / 配置+安装检查 |
 | `firm install` / `firm update [<exe>]` | 全局安装 / 自更新 |
+| `firm build` | 执行配置的构建命令（`[tools] build_command`，如 CMake/Make/Keil/IAR 命令行） |
+| `firm flash [--chip <芯片>] <elf>` | 用 probe-rs 烧录固件（ST-Link / J-Link / CMSIS-DAP / DFU） |
 | `firm --set-key default=sk-xxx` | 写入 API key |
 
 ### 🎮 TUI 交互

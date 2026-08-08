@@ -20,6 +20,8 @@ model = "x"
 
 [tools]
 symbols_backend = "ctags"
+build_command = "cmake --build build"
+default_chip = "stm32f407vetx"
 "#;
     let config: firment_core::Config = toml::from_str(text).unwrap();
     assert_eq!(
@@ -27,6 +29,11 @@ symbols_backend = "ctags"
         firment_core::CompactionStrategy::Drop
     );
     assert_eq!(config.tools.symbols_backend.as_deref(), Some("ctags"));
+    assert_eq!(
+        config.tools.build_command.as_deref(),
+        Some("cmake --build build")
+    );
+    assert_eq!(config.tools.default_chip.as_deref(), Some("stm32f407vetx"));
 
     let empty: firment_core::Config =
         toml::from_str("[providers.default]\ntype=\"openai\"\nmodel=\"x\"\n").unwrap();

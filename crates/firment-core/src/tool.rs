@@ -24,6 +24,10 @@ pub struct ToolContext {
     pub allowed_roots: Vec<PathBuf>,
     /// Symbol index backend override: `auto` / `ctags` / `regex`.
     pub symbols_backend: Option<String>,
+    /// Configured build command from `[tools] build_command`.
+    pub build_command: Option<String>,
+    /// Default target chip for the flash tool from `[tools] default_chip`.
+    pub default_chip: Option<String>,
 }
 
 #[derive(Debug, Clone)]

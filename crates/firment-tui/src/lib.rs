@@ -87,6 +87,8 @@ pub async fn run(
     agent.set_context_budget_chars(config.context_budget_chars);
     agent.set_compaction_strategy(config.compaction_strategy);
     agent.set_symbols_backend(config.tools.symbols_backend.clone());
+    agent.set_build_command(config.tools.build_command.clone());
+    agent.set_default_chip(config.tools.default_chip.clone());
     let initial_messages = agent.session().messages.clone();
     let model = agent.session().model.clone();
     let cwd = agent.session().cwd.clone();

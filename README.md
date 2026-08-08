@@ -48,11 +48,11 @@
 - **Argument schema validation**: tool arguments are validated against their JSON Schema before execution; malformed calls are rejected with a `[InvalidInput]` tag
 - **Failure taxonomy**: tool errors carry tags such as `[NotFound]`, `[CompileError]`, `[Timeout]`, `[Permission]`, `[ConcurrentChange]`
 
-**Layer 2 — Embedded-specific (coming, in development)**
+**Layer 2 — Embedded-specific (basic build/flash available, rest in development)**
 
-- Build system integration (CMake / Make / Keil / IAR)
-- Flashing & debugging (OpenOCD / ST-Link)
-- UART / serial log analysis
+- Build & flash: `firm build` (CMake/Make/Keil/IAR via config) and `firm flash` (probe-rs backend) are available now
+- Debugging & RTT (probe-rs), UART / serial log analysis with ELF symbol decoding
+- MCU auto-detection (`.ioc` / CubeMX database)
 - Register / peripheral awareness (chip register maps, `.ioc`, device trees)
 ### 🚀 Quick Start
 
@@ -108,6 +108,8 @@ model = "deepseek-v4-flash"   # or deepseek-v4-pro
 [tools]
 # verify_command = "cargo check"   # run this before declaring completion (e.g. cmake --build build)
 # symbols_backend = "auto"         # auto / ctags / regex (symbol index backend)
+# build_command = "cmake --build build"   # build tool (Keil: uv4 -j0 -b project.uvprojx)
+# default_chip = "stm32f407vetx"          # default probe-rs chip for `firm flash`
 ```
 
 Add more providers and switch with `--provider <name>` or `/provider <name>` in the TUI; `/models` and `Ctrl+P` fetch and pick models without editing files.
@@ -129,6 +131,8 @@ Add more providers and switch with `--provider <name>` or `/provider <name>` in 
 | `firm --thinking xhigh -p "task"` | Set thinking level |
 | `firm --list` / `firm --doctor` | List sessions / check config + install |
 | `firm install` / `firm update [<exe>]` | Global install / self-update |
+| `firm build` | Run the configured build command (`[tools] build_command`, e.g. CMake/Make/Keil/IAR CLI) |
+| `firm flash [--chip <chip>] <elf>` | Flash a firmware ELF via probe-rs (ST-Link / J-Link / CMSIS-DAP / DFU) |
 | `firm --set-key default=sk-xxx` | Store an API key |
 
 ### 🎮 TUI

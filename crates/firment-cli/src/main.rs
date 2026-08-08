@@ -99,15 +99,50 @@ enum Command {
         #[arg(long)]
         to: Option<PathBuf>,
     },
+    /// Run the configured build command (config [tools] build_command).
+    Build,
+    /// Flash a firmware ELF via probe-rs.
+    Flash {
+        /// Path to the firmware ELF.
+        file: PathBuf,
+        /// Target chip (defaults to config [tools] default_chip).
+        #[arg(long)]
+        chip: Option<String>,
+        /// Probe serial/id to use.
+        #[arg(long)]
+        probe: Option<String>,
+    },
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    if let Some(command) = cli.command {
+    if let Some(command) = &cli.command {
         match command {
-            Command::Install { to, files_only } => install::install(to, files_only)?,
-            Command::Update { source, to } => install::update(source, to)?,
+            Command::Install { to, files_only } => install::install(to.clone(), *files_only)?,
+            Command::Update { source, to } => install::update(source.clone(), to.clone())?,
+            Command::Build => {
+                let config = load_config(&cli)?;
+                run_direct_tool(&config, cli.cwd.clone(), "build", serde_json::json!({})).await?;
+            }
+            Command::Flash { file, chip, probe } => {
+                let config = load_config(&cli)?;
+                let mut args = serde_json::Map::new();
+                args.insert("file".to_string(), serde_json::json!(file));
+                if let Some(chip) = chip {
+                    args.insert("chip".to_string(), serde_json::json!(chip));
+                }
+                if let Some(probe) = probe {
+                    args.insert("probe".to_string(), serde_json::json!(probe));
+                }
+                run_direct_tool(
+                    &config,
+                    cli.cwd.clone(),
+                    "flash",
+                    serde_json::Value::Object(args),
+                )
+                .await?;
+            }
         }
         return Ok(());
     }
@@ -216,6 +251,9 @@ async fn run_once(
     let mut auto_approve = config.auto_approve.clone();
     if !auto_approve.iter().any(|t| t == "verify") {
         auto_approve.push("verify".to_string());
+    }
+    if !auto_approve.iter().any(|t| t == "build") {
+        auto_approve.push("build".to_string());
     }
     let base_permission = Arc::new(CliPermission::new(yes, auto_approve));
     let permission: Arc<dyn PermissionChecker> = if session.mode == SessionMode::Plan {
@@ -445,6 +483,43 @@ fn doctor_install() {
             "not created yet"
         }
     );
+}
+
+fn load_config(cli: &Cli) -> anyhow::Result<Config> {
+    let config_path = cli.config.clone().unwrap_or_else(config_path);
+    Ok(Config::load_or_create(&config_path)?)
+}
+
+/// Run a tool directly with the user's explicit invocation (firm build/flash):
+/// permission is granted, dangerous guard still applies inside the tools.
+async fn run_direct_tool(
+    config: &Config,
+    cwd: Option<PathBuf>,
+    tool: &str,
+    args: serde_json::Value,
+) -> anyhow::Result<()> {
+    let cwd = cwd.unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let ctx = firment_core::ToolContext {
+        cwd: cwd.clone(),
+        permission: Arc::new(firment_core::AutoApprove::everything()),
+        allow_dangerous: true,
+        journal: Arc::new(Mutex::new(firment_core::EditJournal::new(
+            env::temp_dir().join("firm-cli-journal"),
+        ))),
+        verify_command: config.tools.verify_command.clone(),
+        symbols_backend: config.tools.symbols_backend.clone(),
+        build_command: config.tools.build_command.clone(),
+        default_chip: config.tools.default_chip.clone(),
+        allowed_roots: Vec::new(),
+    };
+    let registry = firment_tools::default_registry();
+    match registry.run(tool, args, &ctx).await {
+        Ok(output) => {
+            println!("{}", output.text);
+            Ok(())
+        }
+        Err(e) => Err(anyhow::anyhow!("{}", e.message)),
+    }
 }
 
 fn parse_thinking(s: &str) -> Result<ThinkingLevel, std::io::Error> {

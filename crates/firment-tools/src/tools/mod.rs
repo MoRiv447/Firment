@@ -1,4 +1,6 @@
+mod build;
 mod edit_file;
+mod flash;
 mod glob;
 mod grep;
 mod list_dir;
@@ -14,8 +16,10 @@ use std::sync::Arc;
 
 pub fn all() -> Vec<Arc<dyn Tool>> {
     vec![
+        Arc::new(build::Build),
         Arc::new(read_file::ReadFile),
         Arc::new(write_file::WriteFile),
+        Arc::new(flash::Flash),
         Arc::new(edit_file::EditFile),
         Arc::new(list_dir::ListDir),
         Arc::new(glob::Glob),

@@ -38,6 +38,12 @@ pub struct ToolsConfig {
     /// Symbol index backend: `auto` (ctags if available, else regex) / `ctags` / `regex`.
     #[serde(default)]
     pub symbols_backend: Option<String>,
+    /// Command run by the `build` tool (platform shell), e.g. `cmake --build build`.
+    #[serde(default)]
+    pub build_command: Option<String>,
+    /// Default target chip for the `flash` tool (e.g. `stm32f407vetx`).
+    #[serde(default)]
+    pub default_chip: Option<String>,
 }
 
 /// Auto-compaction strategy: `summarize` (default) summarizes all old rounds;
@@ -365,6 +371,8 @@ model = "deepseek-v4-flash"
 # 嵌入式示例：
 # verify_command = "cmake --build build"
 # symbols_backend = "auto"   # auto / ctags / regex（符号索引后端，auto=有 ctags 用 ctags）
+# build_command = "cmake --build build"   # build 工具执行的命令（Keil: uv4 -j0 -b project.uvprojx）
+# default_chip = "stm32f407vetx"          # flash 工具的默认芯片（probe-rs 芯片名）
 "#
 }
 

@@ -397,6 +397,8 @@ mod tests {
             journal: Arc::new(Mutex::new(EditJournal::new(dir.join("undo")))),
             verify_command: None,
             symbols_backend: None,
+            build_command: None,
+            default_chip: None,
             allowed_roots: Vec::new(),
         }
     }

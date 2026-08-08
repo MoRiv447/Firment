@@ -227,6 +227,8 @@ mod tests {
             )))),
             verify_command: None,
             symbols_backend: None,
+            build_command: None,
+            default_chip: None,
             allowed_roots: Vec::new(),
         };
         let result = tool
