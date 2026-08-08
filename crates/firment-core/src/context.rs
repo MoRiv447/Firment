@@ -49,6 +49,10 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          old_text anchor or line range), write_file for create/overwrite, list_dir/glob/grep for \
          discovery, and symbols for definition/reference lookup in large codebases. Reserve \
          shell for commands that need it: builds, tests, git, toolchains.\n\
+         - For edit_file, include enough surrounding context in old_text to uniquely locate the \
+         hunk (enclosing function/while/if structure), especially inside loops; after editing, \
+         read_file the affected region and confirm the change landed in the right place before \
+         continuing. If it did not, fix it with another edit instead of moving on.\n\
          - Batch independent tool calls in parallel to save round trips; dependent calls \
          (editing then reading the same file) are ordered automatically.\n\
          - Tool errors carry type tags such as [NotFound], [CompileError], [Timeout], \
