@@ -31,6 +31,7 @@ pub async fn run(
     config_path: std::path::PathBuf,
     session: Session,
 ) -> anyhow::Result<()> {
+    let config = config.merged_for(&session.cwd);
     // The TUI must start even without an API key, so the user can configure
     // it from inside with /apikey or /provider.
     let (provider, startup_hint) =

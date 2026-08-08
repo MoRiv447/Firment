@@ -45,6 +45,33 @@ default_chip = "stm32f407vetx"
 }
 
 #[test]
+fn project_config_merges_tools_over_global() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(".firment.toml"),
+        "[tools]\nbuild_command = \"make\"\ndefault_chip = \"stm32f103c8\"\n",
+    )
+    .unwrap();
+    let global: firment_core::Config =
+        toml::from_str("[providers.default]\ntype=\"openai\"\nmodel=\"x\"\n").unwrap();
+    let merged = global.merged_for(dir.path());
+    assert_eq!(merged.tools.build_command.as_deref(), Some("make"));
+    assert_eq!(merged.tools.default_chip.as_deref(), Some("stm32f103c8"));
+    assert!(merged.tools.monitor_port.is_none());
+
+    let nested = dir.path().join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    let merged2 = global.merged_for(&nested);
+    assert_eq!(merged2.tools.build_command.as_deref(), Some("make"));
+}
+
+#[test]
+fn default_config_auto_approves_build() {
+    let config = firment_core::Config::default_config();
+    assert!(config.auto_approve.iter().any(|t| t == "build"));
+}
+
+#[test]
 fn config_save_load_roundtrip() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("config.toml");

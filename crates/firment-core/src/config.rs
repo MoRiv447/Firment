@@ -109,7 +109,7 @@ impl Config {
         Self {
             providers,
             default_provider: name.to_string(),
-            auto_approve: Vec::new(),
+            auto_approve: vec!["build".to_string()],
             max_iterations: 30,
             thinking: ThinkingLevel::Off,
             tools: ToolsConfig::default(),
@@ -137,6 +137,38 @@ impl Config {
         let text = fs::read_to_string(path)?;
         let config: Config = toml::from_str(&text)?;
         Ok(config)
+    }
+
+    /// Return a copy with project-local `.firment.toml` / `firment.toml`
+    /// values merged over this config (project wins). Searches cwd and
+    /// ancestors, like AGENTS.md.
+    pub fn merged_for(&self, cwd: &Path) -> Config {
+        let mut config = self.clone();
+        let Some(project) = load_project_config(cwd) else {
+            return config;
+        };
+        if let Some(value) = project.tools.verify_command {
+            config.tools.verify_command = Some(value);
+        }
+        if let Some(value) = project.tools.symbols_backend {
+            config.tools.symbols_backend = Some(value);
+        }
+        if let Some(value) = project.tools.build_command {
+            config.tools.build_command = Some(value);
+        }
+        if let Some(value) = project.tools.default_chip {
+            config.tools.default_chip = Some(value);
+        }
+        if let Some(value) = project.tools.monitor_port {
+            config.tools.monitor_port = Some(value);
+        }
+        if project.tools.monitor_baud != default_monitor_baud() {
+            config.tools.monitor_baud = project.tools.monitor_baud;
+        }
+        if project.compaction_strategy != CompactionStrategy::default() {
+            config.compaction_strategy = project.compaction_strategy;
+        }
+        config
     }
 
     pub fn save(&self, path: &Path) -> Result<(), ConfigError> {
@@ -363,7 +395,8 @@ model = "deepseek-v4-flash"
 # model = "claude-sonnet-4-5"
 
 # Tools that skip confirmation prompts (write_file, edit_file, shell).
-# auto_approve = []
+# 默认 build 免确认（构建是用户配置的命令）；flash 始终需确认。
+# auto_approve = ["build"]
 
 # Max tool-calling rounds per turn.
 # max_iterations = 30
@@ -382,6 +415,21 @@ model = "deepseek-v4-flash"
 # monitor_port = "COM3"                   # firm monitor 默认串口
 # monitor_baud = 115200                   # firm monitor 默认波特率
 "#
+}
+
+fn load_project_config(cwd: &Path) -> Option<Config> {
+    for dir in cwd.ancestors() {
+        for name in [".firment.toml", "firment.toml"] {
+            let path = dir.join(name);
+            if path.is_file()
+                && let Ok(text) = fs::read_to_string(&path)
+                && let Ok(config) = toml::from_str::<Config>(&text)
+            {
+                return Some(config);
+            }
+        }
+    }
+    None
 }
 
 fn default_provider_name() -> String {

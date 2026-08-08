@@ -151,11 +151,19 @@ async fn main() -> anyhow::Result<()> {
             Command::Install { to, files_only } => install::install(to.clone(), *files_only)?,
             Command::Update { source, to } => install::update(source.clone(), to.clone())?,
             Command::Build => {
-                let config = load_config(&cli)?;
+                let cwd = cli
+                    .cwd
+                    .clone()
+                    .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let config = load_config(&cli)?.merged_for(&cwd);
                 run_direct_tool(&config, cli.cwd.clone(), "build", serde_json::json!({})).await?;
             }
             Command::Flash { file, chip, probe } => {
-                let config = load_config(&cli)?;
+                let cwd = cli
+                    .cwd
+                    .clone()
+                    .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let config = load_config(&cli)?.merged_for(&cwd);
                 let mut args = serde_json::Map::new();
                 args.insert("file".to_string(), serde_json::json!(file));
                 if let Some(chip) = chip {
@@ -178,7 +186,11 @@ async fn main() -> anyhow::Result<()> {
                 probe,
                 timeout,
             } => {
-                let config = load_config(&cli)?;
+                let cwd = cli
+                    .cwd
+                    .clone()
+                    .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let config = load_config(&cli)?.merged_for(&cwd);
                 let mut args = serde_json::Map::new();
                 args.insert("file".to_string(), serde_json::json!(file));
                 if let Some(chip) = chip {
@@ -205,7 +217,11 @@ async fn main() -> anyhow::Result<()> {
                 elf,
                 timeout,
             } => {
-                let config = load_config(&cli)?;
+                let cwd = cli
+                    .cwd
+                    .clone()
+                    .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let config = load_config(&cli)?.merged_for(&cwd);
                 let port = port
                     .clone()
                     .or(config.tools.monitor_port.clone())
@@ -316,6 +332,7 @@ async fn run_once(
     yes: bool,
     allow_dangerous: bool,
 ) -> anyhow::Result<()> {
+    let config = config.merged_for(&session.cwd);
     let provider = config.build_provider(Some(&session.provider), Some(&session.model))?;
     let registry = if session.mode == SessionMode::Plan {
         firment_tools::plan_registry()

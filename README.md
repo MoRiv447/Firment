@@ -120,6 +120,19 @@ Add more providers and switch with `--provider <name>` or `/provider <name>` in 
 
 在固件项目里放 `docs/vendor-index.toml`（+ `docs/cheatsheets/` 原创速查表），Firment 会自动发现并在提示词中要求 agent 优先查询。涉及芯片/外设/寄存器/HAL 的问题，agent 会先查知识库再作答。模板见 [docs/vendor-index.toml](docs/vendor-index.toml)，说明见 [docs/vendor-index.md](docs/vendor-index.md)。
 
+### 📁 项目级配置（让 AI 自己干活）
+
+在项目根目录放 `.firment.toml`，把构建/烧录/串口配置写进 `[tools]`（可提交进版本库）：
+
+```toml
+[tools]
+build_command = "cmake --build build"   # 或 uv4 -j0 -b project.uvprojx
+default_chip = "stm32f407vetx"
+monitor_port = "COM3"
+```
+
+项目配置会覆盖全局 `config.toml` 的对应项。进 TUI 后直接说“构建并烧录”，agent 会自己读取/修改这份文件并调用 `build` / `flash` / `run`；`build` 默认免确认，`flash` 始终弹确认。
+
 ### 🖥️ CLI
 
 | Command | Description |

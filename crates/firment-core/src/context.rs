@@ -90,6 +90,12 @@ pub fn default_system_prompt(cwd: &Path) -> String {
         prompt.push_str("\n# Project instructions (AGENTS.md)\n");
         prompt.push_str(&instructions);
     }
+    prompt.push_str(
+        "\n         - 构建/烧录/串口配置可写在项目根目录 `.firment.toml`（或 firment.toml）的 [tools]：\
+         build_command / default_chip / verify_command / monitor_port / monitor_baud。\
+         需要构建烧录时，先 read_file 该项目配置，缺什么就询问用户或用 write_file 补齐，再调用 build / flash / run。\
+         全局配置可用 /config 查看。\n",
+    );
     let seed = crate::kb::seed_index_text();
     let seed: String = seed.chars().take(12000).collect();
     prompt.push_str(&format!(
