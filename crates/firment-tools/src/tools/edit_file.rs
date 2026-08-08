@@ -26,12 +26,15 @@ impl Tool for EditFile {
                 "expected_sha256": {"type": "string", "description": "Optional SHA-256 of the file content as read (from read_file footer); mismatches abort with [ConcurrentChange]"},
                 "start_line": {"type": "integer", "minimum": 1},
                 "end_line": {"type": "integer", "minimum": 1},
-                "new_text": {"type": "string", "description": "Replacement text"}
+                "new_text": {"type": "string", "description": "Replacement text"},
+                "hashline": {"type": "string", "description": "8-hex content hash anchor of the first line to replace (from read_file hashlines=true); the file must still contain exactly one line with this hash"},
+                "end_hashline": {"type": "string", "description": "8-hex content hash of the last line of the range (optional, same mode as hashline)"}
             },
             "required": ["path", "new_text"],
             "oneOf": [
                 {"required": ["old_text"]},
-                {"required": ["start_line"]}
+                {"required": ["start_line"]},
+                {"required": ["hashline"]}
             ]
         })
     }
@@ -75,6 +78,11 @@ impl Tool for EditFile {
             }
         }
         let new_content = compute_edit(&resolved, &original, &args)?;
+        if new_content == original {
+            return Err(ToolError::new(
+                "[InvalidInput] 编辑未产生任何变化（目标内容与替换内容一致）。问题可能在别处：请先 read_file 核对，不要扩大锚点或重复提交同一编辑。",
+            ));
+        }
 
         ctx.journal
             .lock()
@@ -113,6 +121,12 @@ fn compute_edit(resolved: &Path, original: &str, args: &Value) -> Result<String,
     let old_text = args.get("old_text").and_then(|o| o.as_str());
     let start_line = args.get("start_line").and_then(|s| s.as_u64());
     let end_line = args.get("end_line").and_then(|e| e.as_u64());
+    let hashline = args.get("hashline").and_then(|h| h.as_str());
+    let end_hashline = args.get("end_hashline").and_then(|h| h.as_str());
+
+    if let Some(hashline) = hashline {
+        return edit_by_hashline(original, hashline, end_hashline, new_text);
+    }
 
     if let Some(old) = old_text {
         let occurrences = original.match_indices(old).count();
@@ -153,6 +167,62 @@ fn compute_edit(resolved: &Path, original: &str, args: &Value) -> Result<String,
         Ok(joined)
     }
 }
+
+/// omp-style hashline edit: locate lines by 8-hex content-hash anchors.
+fn edit_by_hashline(
+    original: &str,
+    hashline: &str,
+    end_hashline: Option<&str>,
+    new_text: &str,
+) -> Result<String, ToolError> {
+    let mut lines: Vec<&str> = original.split('\n').collect();
+    let trailing_newline = original.ends_with('\n');
+    if trailing_newline {
+        lines.pop();
+    }
+    let full_hash = |line: &str| firment_core::hash::sha256_hex(line.as_bytes());
+    let find = |anchor: &str| -> Result<usize, ToolError> {
+        let anchor = anchor.to_lowercase();
+        let matches: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| full_hash(line).starts_with(&anchor))
+            .map(|(i, _)| i)
+            .collect();
+        match matches.len() {
+            1 => Ok(matches[0]),
+            0 => Err(ToolError::new(format!(
+                "[ConcurrentChange] 锚点哈希 {anchor} 在文件中不存在：文件可能已变化，请重新 read_file 后重试"
+            ))),
+            _ => Err(ToolError::new(format!(
+                "[InvalidInput] 锚点哈希 {anchor} 对应 {} 行，不唯一：请 read_file hashlines=true 刷新后使用更长的哈希",
+                matches.len()
+            ))),
+        }
+    };
+    let start = find(hashline)?;
+    let end = match end_hashline {
+        Some(end) => {
+            let end = find(end)?;
+            if end < start {
+                return Err(ToolError::new(
+                    "[InvalidInput] end_hashline 位于 hashline 之前，区间无效",
+                ));
+            }
+            end
+        }
+        None => start,
+    };
+    let mut out: Vec<&str> = Vec::new();
+    out.extend_from_slice(&lines[..start]);
+    out.extend(new_text.split('\n'));
+    out.extend_from_slice(&lines[end + 1..]);
+    let mut joined = out.join("\n");
+    if trailing_newline {
+        joined.push('\n');
+    }
+    Ok(joined)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,6 +258,96 @@ mod tests {
             .unwrap();
         assert!(preview.contains("-hello"), "got: {preview}");
         assert!(preview.contains("+hi"), "got: {preview}");
+    }
+
+    #[tokio::test]
+    async fn hashline_edits_by_content_hash() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "aaa\nbbb\nccc\n").unwrap();
+        let anchor = crate::tools::util::line_hash_prefix("bbb");
+        let ok = EditFile
+            .run(
+                json!({"path": "a.txt", "hashline": anchor, "new_text": "XXX"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(ok.text.contains("Edited"));
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "aaa\nXXX\nccc\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn hashline_range_edits_multiple_lines() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "aaa\nbbb\nccc\nddd\n").unwrap();
+        let start = crate::tools::util::line_hash_prefix("bbb");
+        let end = crate::tools::util::line_hash_prefix("ccc");
+        let ok = EditFile
+            .run(
+                json!({"path": "a.txt", "hashline": start, "end_hashline": end, "new_text": "X"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(ok.text.contains("Edited"));
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "aaa\nX\nddd\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn hashline_missing_anchor_reports_concurrent_change() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "aaa\n").unwrap();
+        let err = EditFile
+            .run(
+                json!({"path": "a.txt", "hashline": "00000000", "new_text": "X"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.message.contains("[ConcurrentChange]"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    #[tokio::test]
+    async fn hashline_ambiguous_anchor_is_rejected() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "bbb\nbbb\n").unwrap();
+        let anchor = crate::tools::util::line_hash_prefix("bbb");
+        let err = EditFile
+            .run(
+                json!({"path": "a.txt", "hashline": anchor, "new_text": "X"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap_err();
+        assert!(err.message.contains("不唯一"), "got: {}", err.message);
+    }
+
+    #[tokio::test]
+    async fn no_change_edit_is_a_hard_error() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "bbb\n").unwrap();
+        let err = EditFile
+            .run(
+                json!({"path": "a.txt", "old_text": "bbb", "new_text": "bbb"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.message.contains("未产生任何变化"),
+            "got: {}",
+            err.message
+        );
     }
 
     #[tokio::test]

@@ -74,6 +74,15 @@ pub(crate) fn rel_str(root: &Path, path: &Path) -> String {
         .replace('\\', "/")
 }
 
+/// 8-hex prefix of the SHA-256 of a normalized line (no trailing CR/LF).
+/// `edit_file` 的 hashline 锚点与此一致（starts_with 匹配）。
+pub(crate) fn line_hash_prefix(line: &str) -> String {
+    firment_core::hash::sha256_hex(line.as_bytes())
+        .chars()
+        .take(8)
+        .collect()
+}
+
 pub(crate) fn truncate(text: &str, max_chars: usize) -> String {
     let mut chars: Vec<char> = text.chars().collect();
     if chars.len() > max_chars {

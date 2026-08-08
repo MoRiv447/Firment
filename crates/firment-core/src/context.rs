@@ -56,6 +56,9 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          - read_file 会在输出末尾附 `[file-sha256: ...]`（整文件哈希）。担心文件被并发改动时，\
          把该值传给 edit_file / write_file 的 expected_sha256 做前置校验；不匹配会返回 \
          [ConcurrentChange] 和当前哈希，重新 read_file 再改即可。\n\
+         - 大文件或高风险改动优先用 hashline：read_file 加 hashlines=true 拿到每行的 \
+         [8位内容哈希]，edit_file 用 hashline / end_hashline 精确定位；哈希不存在说明文件已 \
+         变化（[ConcurrentChange]），先重读再改，不要盲试。\n\
          - Batch independent tool calls in parallel to save round trips; dependent calls \
          (editing then reading the same file) are ordered automatically.\n\
          - Tool errors carry type tags such as [NotFound], [CompileError], [Timeout], \

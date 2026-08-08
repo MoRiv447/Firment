@@ -22,7 +22,8 @@ impl Tool for ReadFile {
             "properties": {
                 "path": {"type": "string", "description": "File path, absolute or relative to the workspace; output appends [file-sha256: ...] as metadata"},
                 "offset": {"type": "integer", "minimum": 0, "description": "0-based line offset to start reading from"},
-                "limit": {"type": "integer", "minimum": 1, "description": "Maximum number of lines to read"}
+                "limit": {"type": "integer", "minimum": 1, "description": "Maximum number of lines to read"},
+                "hashlines": {"type": "boolean", "default": false, "description": "prefix every line with its [8-hex content hash] anchor for hashline edits"}
             },
             "required": ["path"]
         })
@@ -35,6 +36,10 @@ impl Tool for ReadFile {
             .ok_or_else(|| ToolError::new("missing 'path'"))?;
         let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+        let hashlines = args
+            .get("hashlines")
+            .and_then(|h| h.as_bool())
+            .unwrap_or(false);
         let resolved =
             resolve_within(&ctx.cwd, path, &ctx.allowed_roots).map_err(ToolError::new)?;
         let content = read_text(&resolved).map_err(|e| {
@@ -66,6 +71,14 @@ impl Tool for ReadFile {
         let digest = firment_core::hash::sha256_hex(
             &fs::read(&resolved).map_err(|e| ToolError::new(format!("[Io] {e}")))?,
         );
+        let text = if hashlines {
+            text.lines()
+                .map(|line| format!("[{}] {}", crate::tools::util::line_hash_prefix(line), line))
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            text
+        };
         Ok(ToolOutput {
             text: format!("{text}\n[file-sha256: {digest}]"),
         })
@@ -94,6 +107,29 @@ mod tests {
             default_chip: None,
             allowed_roots: Vec::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn hashlines_prefixes_every_line() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), "hello\nworld\n").unwrap();
+        let out = ReadFile
+            .run(
+                json!({"path": "a.txt", "hashlines": true}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        let hello_hash = crate::tools::util::line_hash_prefix("hello");
+        assert!(
+            out.text.contains(&format!("[{hello_hash}] hello")),
+            "got: {}",
+            out.text
+        );
+        assert!(
+            !out.text.contains("[file-sha256: ["),
+            "hashlines must not tag the footer"
+        );
     }
 
     #[tokio::test]
