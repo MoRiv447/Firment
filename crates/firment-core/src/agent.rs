@@ -162,7 +162,8 @@ impl Agent {
         self.symbols_backend = backend;
     }
 
-    /// Pin a file so compaction always re-injects its full content.
+    /// Pin a file so compaction always re-injects its full content. Warns when
+    /// the file is large relative to the context budget.
     pub fn pin_path(&self, path: PathBuf) -> Result<String, String> {
         let id = self.session.id.clone();
         let mut pins = self.store.load_pins(&id);
@@ -172,7 +173,17 @@ impl Agent {
                 .save_pins(&id, &pins)
                 .map_err(|e| e.to_string())?;
         }
-        Ok(format!("已固定 {}（压缩时保留全文）", path.display()))
+        let mut message = format!("已固定 {}（压缩时保留全文）", path.display());
+        if let Ok(meta) = fs::metadata(&path) {
+            let budget = self.context_budget_chars.max(1);
+            if meta.len() as usize >= budget * 30 / 100 {
+                message.push_str(&format!(
+                    "\n⚠ 文件约 {} KB，已达上下文预算的 30% 以上；固定后可能挤占摘要空间，建议只固定关键源码文件",
+                    meta.len() / 1024
+                ));
+            }
+        }
+        Ok(message)
     }
 
     /// Remove a pinned file.

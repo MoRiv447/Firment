@@ -357,7 +357,7 @@ model = "deepseek-v4-flash"
 # max_iterations = 30
 # thinking = "medium"   # off / low / medium / high / xhigh / max（思考深度）
 # context_budget_chars = 60000   # 会话上下文字符预算，超出后自动压缩早期对话
-# compaction_strategy = "summarize"   # summarize（默认）/ drop（更早轮次直接丢弃）/ off（禁用自动压缩）
+# compaction_strategy = "summarize"   # 默认 summarize；可选 drop（超预算直接丢弃旧轮）/ off（不自动压缩）
 
 [tools]
 # 代码改动后，agent 需先跑通 verify 再宣布完成；留空则 verify 工具不可用

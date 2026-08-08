@@ -1,7 +1,7 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.3.0--beta.5-orange)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.3.0--beta.6-orange)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![Benchmark](https://img.shields.io/badge/benchmark-4.95-%231-green)]()
@@ -11,7 +11,7 @@
 > ⚠️ **Status: half-finished beta, actively developed.**
 > Firment is still a work in progress. The first layer (general coding agent) runs and is tested, but the TUI, configuration format, and tool APIs keep evolving and may change without notice. It is not yet recommended for production or mission-critical work. Try it, break it, and tell us what happened.
 
-**Firmware + Agent = Firment** — a general-purpose coding agent for firmware and embedded development, named after *firmament*, the sky above every embedded engineer. The first layer (general coding agent) is usable today; later layers (build, flash, debug, UART, ...) plug into the same kernel through the unified `Tool` trait.
+**Firmware + Agent = Firment** — a general-purpose coding agent for firmware and embedded development, named after *firmament* (the sky above every embedded engineer), with the second **a** dropped to fuse firmware + agent. The first layer (general coding agent) is usable today; later layers (build, flash, debug, UART, ...) plug into the same kernel through the unified `Tool` trait.
 
 **Layer positioning.** Layer 1 (current release) is a general-purpose coding agent — the same category as other terminal coding agents, built with firmware/embedded workflows in mind. Embedded-specific capabilities (build, flash, debug, UART) land in **Layer 2**, currently in development; see the Roadmap.
 ### ✨ Features**Layer 1 — General**
@@ -103,7 +103,7 @@ model = "deepseek-v4-flash"   # or deepseek-v4-pro
 
 # thinking = "medium"      # off / low / medium / high / xhigh / max
 # context_budget_chars = 60000       # session context budget; older messages are compacted when exceeded
-# compaction_strategy = "summarize"  # summarize / drop / off
+# compaction_strategy = "summarize"  # default summarize; drop = discard oldest rounds, off = disable auto-compaction
 
 [tools]
 # verify_command = "cargo check"   # run this before declaring completion (e.g. cmake --build build)

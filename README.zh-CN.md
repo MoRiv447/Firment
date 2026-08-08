@@ -1,7 +1,7 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.3.0--beta.5-orange)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.3.0--beta.6-orange)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![Benchmark](https://img.shields.io/badge/benchmark-4.95-%231-green)]()
@@ -11,7 +11,7 @@
 > ⚠️ **状态：半成品，活跃开发中。**
 > Firment 目前还只是半成品。第一层（通用编码 Agent）已经能跑、也做了测试，但 TUI、配置格式和工具接口都还在快速演进，随时可能调整，暂时不建议用于生产或关键任务。欢迎拿来试用，遇到问题请告诉我们。
 
-**Firmware + Agent = Firment**——一个面向固件与嵌入式开发的通用编码 Agent。第一层（通用编码 Agent 层）当前可用，但整体仍是半成品；后续构建、烧录、调试、UART 等层通过统一的 `Tool` trait 接入同一内核。
+**Firmware + Agent = Firment**——一个面向固件与嵌入式开发的通用编码 Agent。名字取自 *firmament*（苍穹），故意少一个 a，把 firmware + agent 融成一个词。第一层（通用编码 Agent 层）当前可用，但整体仍是半成品；后续构建、烧录、调试、UART 等层通过统一的 `Tool` trait 接入同一内核。
 
 ---
 
@@ -105,7 +105,7 @@ model = "deepseek-v4-flash"   # 或 deepseek-v4-pro
 
 # thinking = "medium"      # off / low / medium / high / xhigh / max
 # context_budget_chars = 60000       # 会话上下文字符预算，超出自动压缩早期对话
-# compaction_strategy = "summarize"  # summarize / drop / off
+# compaction_strategy = "summarize"  # 默认 summarize；可选 drop（超预算直接丢弃旧轮）/ off（不自动压缩）
 
 [tools]
 # verify_command = "cargo check"   # 改动后先跑通再宣布完成（如 cmake --build build）
