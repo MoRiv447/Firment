@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use crossterm::event::{
-    DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
-    MouseButton, MouseEventKind, read,
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind, read,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -472,7 +472,12 @@ const MAX_INPUT_HEIGHT: usize = 7;
 fn init_terminal() -> anyhow::Result<Tui> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableBracketedPaste
+    )?;
     let backend = CrosstermBackend::new(stdout);
     Ok(Terminal::new(backend)?)
 }
@@ -481,7 +486,8 @@ fn restore_terminal(terminal: &mut Tui) -> anyhow::Result<()> {
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
-        DisableMouseCapture
+        DisableMouseCapture,
+        DisableBracketedPaste
     )?;
     disable_raw_mode()?;
     Ok(())
@@ -580,6 +586,10 @@ struct App {
     items: Vec<Item>,
     input: Vec<char>,
     cursor: usize,
+    /// 输入框内选区 (anchor 字符下标, 当前字符下标)
+    input_sel: Option<(usize, usize)>,
+    /// 粘贴的大段文本折叠块：占位符文本 + 原始文本
+    paste_blocks: Vec<PasteBlock>,
     history: Vec<String>,
     history_pos: Option<usize>,
     busy: bool,
@@ -598,13 +608,20 @@ struct App {
     model_picker: Option<ModelPicker>,
     session_picker: Option<SessionPicker>,
     transcript_rect: Rect,
+    input_rect: Rect,
     content_width: usize,
+    input_width: usize,
     selection: Option<Selection>,
     cwd: PathBuf,
     config_path: PathBuf,
     cmd_tx: mpsc::Sender<AgentCmd>,
     always: Arc<Mutex<HashSet<String>>>,
     frame: u64,
+}
+
+struct PasteBlock {
+    placeholder: String,
+    text: String,
 }
 
 struct ModelPicker {
@@ -744,6 +761,8 @@ impl App {
             items: Vec::new(),
             input: Vec::new(),
             cursor: 0,
+            input_sel: None,
+            paste_blocks: Vec::new(),
             history: Vec::new(),
             history_pos: None,
             busy: false,
@@ -762,7 +781,9 @@ impl App {
             model_picker: None,
             session_picker: None,
             transcript_rect: Rect::default(),
+            input_rect: Rect::default(),
             content_width: 0,
+            input_width: 80,
             selection: None,
             cwd,
             config_path,
@@ -904,6 +925,8 @@ impl App {
                 self.scroll = 0;
                 self.max_offset = 0;
                 self.input_scroll = 0;
+                self.input_sel = None;
+                self.paste_blocks.clear();
                 self.interrupting = false;
                 self.push_messages(&session.messages);
             }
@@ -930,6 +953,10 @@ impl App {
     fn on_ui(&mut self, event: Event) -> bool {
         match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => self.on_key(key),
+            Event::Paste(text) => {
+                self.insert_text_at_cursor(&text, true);
+                false
+            }
             Event::Mouse(mouse) => match mouse.kind {
                 MouseEventKind::ScrollUp => {
                     self.scroll_up(3);
@@ -940,18 +967,30 @@ impl App {
                     false
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
-                    self.selection =
-                        self.cell_to_content(mouse.column, mouse.row)
-                            .map(|(row, col)| Selection {
-                                anchor_row: row,
-                                anchor_col: col,
-                                row,
-                                col,
-                            });
+                    if let Some(idx) = self.cell_to_input(mouse.column, mouse.row) {
+                        self.cursor = idx;
+                        self.input_sel = Some((idx, idx));
+                        self.selection = None;
+                    } else {
+                        self.input_sel = None;
+                        self.selection =
+                            self.cell_to_content(mouse.column, mouse.row)
+                                .map(|(row, col)| Selection {
+                                    anchor_row: row,
+                                    anchor_col: col,
+                                    row,
+                                    col,
+                                });
+                    }
                     false
                 }
                 MouseEventKind::Drag(MouseButton::Left) => {
-                    if let Some((row, col)) = self.cell_to_content(mouse.column, mouse.row)
+                    if let Some((anchor, _)) = self.input_sel {
+                        if let Some(idx) = self.cell_to_input(mouse.column, mouse.row) {
+                            self.input_sel = Some((anchor, idx));
+                            self.cursor = idx;
+                        }
+                    } else if let Some((row, col)) = self.cell_to_content(mouse.column, mouse.row)
                         && let Some(selection) = &mut self.selection
                     {
                         selection.row = row;
@@ -961,7 +1000,9 @@ impl App {
                 }
                 MouseEventKind::Up(MouseButton::Left) => false,
                 MouseEventKind::Down(MouseButton::Right) => {
-                    if self.selection.is_some() {
+                    if self.input_sel.is_some() && self.input_selection_text().is_some() {
+                        self.copy_input_selection();
+                    } else if self.selection.is_some() {
                         self.copy_selection();
                     } else {
                         self.paste_clipboard();
@@ -993,6 +1034,14 @@ impl App {
                 false
             }
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.copy_primary_selection();
+                false
+            }
+            KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.paste_clipboard();
+                false
+            }
+            KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.quit = true;
                 true
             }
@@ -1002,10 +1051,12 @@ impl App {
             }
             KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.cursor = 0;
+                self.input_sel = None;
                 false
             }
             KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.cursor = self.input.len();
+                self.input_sel = None;
                 false
             }
             KeyCode::Char(ch) => {
@@ -1021,25 +1072,29 @@ impl App {
                 false
             }
             KeyCode::Left => {
-                self.cursor = self.cursor.saturating_sub(1);
+                self.move_cursor_left();
                 false
             }
             KeyCode::Right => {
-                self.cursor = (self.cursor + 1).min(self.input.len());
+                self.move_cursor_right();
                 false
             }
             KeyCode::Home => {
                 self.cursor = 0;
+                self.input_sel = None;
                 false
             }
             KeyCode::End => {
                 self.cursor = self.input.len();
+                self.input_sel = None;
                 false
             }
             KeyCode::Up => {
                 if self.history_pos.is_some() || (self.input.is_empty() && !self.history.is_empty())
                 {
                     self.history_up();
+                } else if !self.input.is_empty() && self.input_line_count() > 1 {
+                    self.move_input_cursor(-1);
                 } else {
                     self.scroll_up(1);
                 }
@@ -1048,6 +1103,8 @@ impl App {
             KeyCode::Down => {
                 if self.history_pos.is_some() {
                     self.history_down();
+                } else if !self.input.is_empty() && self.input_line_count() > 1 {
+                    self.move_input_cursor(1);
                 } else {
                     self.scroll_down(1);
                 }
@@ -1071,6 +1128,8 @@ impl App {
                 } else {
                     self.input.clear();
                     self.cursor = 0;
+                    self.input_sel = None;
+                    self.paste_blocks.clear();
                 }
                 false
             }
@@ -1088,9 +1147,9 @@ impl App {
             .push(Item::System("⏹ 已发送中断请求…".to_string()));
     }
 
-    /// 把输入按显示宽度软换行，返回 (每行文本, 光标所在行, 光标所在列)。
+    /// 把输入按显示宽度软换行，返回 (每行文本, 每行起始字符下标, 光标所在行, 光标所在列)。
     /// 光标位置按字符索引换算，兼容 CJK 宽字符。
-    fn input_layout(&self, width: usize) -> (Vec<String>, usize, usize) {
+    fn input_layout(&self, width: usize) -> (Vec<String>, Vec<usize>, usize, usize) {
         let chars = &self.input;
         let mut lines: Vec<String> = Vec::new();
         let mut line_starts: Vec<usize> = Vec::new();
@@ -1128,7 +1187,7 @@ impl App {
             .iter()
             .map(|c| c.width().unwrap_or(0))
             .sum();
-        (lines, cursor_line, cursor_col)
+        (lines, line_starts, cursor_line, cursor_col)
     }
 
     fn on_permission_key(&mut self, key: KeyEvent) -> bool {
@@ -1169,16 +1228,26 @@ impl App {
 
     fn insert_char(&mut self, ch: char) {
         self.history_pos = None;
-        if self.cursor >= self.input.len() {
+        self.input_sel = None;
+        let cursor = self.snap_cursor(self.cursor);
+        self.cursor = cursor;
+        if cursor >= self.input.len() {
             self.input.push(ch);
         } else {
-            self.input.insert(self.cursor, ch);
+            self.input.insert(cursor, ch);
         }
         self.cursor += 1;
     }
 
     fn backspace(&mut self) {
+        self.input_sel = None;
         if self.cursor == 0 {
+            return;
+        }
+        if let Some((start, end, idx)) = self.placeholder_range_with_end(self.cursor) {
+            self.input.drain(start..end);
+            self.paste_blocks.remove(idx);
+            self.cursor = start;
             return;
         }
         self.history_pos = None;
@@ -1187,9 +1256,234 @@ impl App {
     }
 
     fn delete_char(&mut self) {
+        self.input_sel = None;
+        if let Some((start, end, idx)) = self.placeholder_range_with_start(self.cursor) {
+            self.input.drain(start..end);
+            self.paste_blocks.remove(idx);
+            return;
+        }
         if self.cursor < self.input.len() {
             self.history_pos = None;
             self.input.remove(self.cursor);
+        }
+    }
+
+    /// 光标左移；折叠占位符视为一个整体，从尾部一次跳到头部。
+    fn move_cursor_left(&mut self) {
+        self.input_sel = None;
+        if let Some((start, _end, _)) = self.placeholder_range_with_end(self.cursor) {
+            self.cursor = start;
+            return;
+        }
+        self.cursor = self.cursor.saturating_sub(1);
+        self.cursor = self.snap_cursor(self.cursor);
+    }
+
+    /// 光标右移；折叠占位符视为一个整体，从头部一次跳到尾部。
+    fn move_cursor_right(&mut self) {
+        self.input_sel = None;
+        if let Some((_start, end, _)) = self.placeholder_range_with_start(self.cursor) {
+            self.cursor = end;
+            return;
+        }
+        self.cursor = (self.cursor + 1).min(self.input.len());
+        self.cursor = self.snap_cursor(self.cursor);
+    }
+
+    /// 输入框内上下移动光标（按显示行），保持列位置。
+    fn move_input_cursor(&mut self, delta: isize) {
+        if self.input.is_empty() {
+            return;
+        }
+        let (lines, line_starts, cursor_line, cursor_col) =
+            self.input_layout(self.input_width.max(1));
+        let target_line = if delta < 0 {
+            cursor_line.saturating_sub(1)
+        } else {
+            (cursor_line + 1).min(lines.len().saturating_sub(1))
+        };
+        if target_line == cursor_line {
+            return;
+        }
+        let line_text = &lines[target_line];
+        let col = cursor_col.min(cell_width(line_text));
+        let char_in_line = char_index_at_cell(line_text, col);
+        let target = line_starts[target_line] + char_in_line;
+        self.cursor = self.snap_cursor(target);
+        self.history_pos = None;
+        self.input_sel = None;
+    }
+
+    fn input_line_count(&self) -> usize {
+        if self.input.is_empty() {
+            return 0;
+        }
+        self.input_layout(self.input_width.max(1)).0.len()
+    }
+
+    /// 当前输入中所有折叠占位符的位置（按输入顺序）。
+    fn placeholder_ranges(&self) -> Vec<(usize, usize, usize)> {
+        let mut ranges = Vec::new();
+        let mut search_from = 0usize;
+        for (idx, block) in self.paste_blocks.iter().enumerate() {
+            let needle: Vec<char> = block.placeholder.chars().collect();
+            if let Some(pos) = find_subslice(&self.input, &needle, search_from) {
+                ranges.push((pos, pos + needle.len(), idx));
+                search_from = pos + needle.len();
+            }
+        }
+        ranges
+    }
+
+    fn placeholder_range_with_end(&self, cursor: usize) -> Option<(usize, usize, usize)> {
+        self.placeholder_ranges()
+            .into_iter()
+            .find(|(_, end, _)| *end == cursor)
+    }
+
+    fn placeholder_range_with_start(&self, cursor: usize) -> Option<(usize, usize, usize)> {
+        self.placeholder_ranges()
+            .into_iter()
+            .find(|(start, _, _)| *start == cursor)
+    }
+
+    /// 光标如果落在折叠占位符内部，跳到占位符末尾。
+    fn snap_cursor(&self, cursor: usize) -> usize {
+        for (start, end, _) in self.placeholder_ranges() {
+            if start < cursor && cursor < end {
+                return end;
+            }
+        }
+        cursor
+    }
+
+    /// 把输入展开成完整文本：折叠占位符替换回原始粘贴内容。
+    fn expand_input(&self) -> String {
+        let chars = &self.input;
+        let mut out = String::new();
+        let mut last = 0usize;
+        for (start, end, idx) in self.placeholder_ranges() {
+            out.extend(chars[last..start].iter());
+            out.push_str(&self.paste_blocks[idx].text);
+            last = end;
+        }
+        out.extend(chars[last..].iter());
+        out
+    }
+
+    /// 输入框选区的完整文本（折叠块展开）。
+    fn input_selection_text(&self) -> Option<String> {
+        let (a, b) = self.input_sel?;
+        let (s0, s1) = if a <= b { (a, b) } else { (b, a) };
+        if s0 == s1 {
+            return None;
+        }
+        let chars = &self.input;
+        let mut out = String::new();
+        let mut last = s0;
+        for (start, end, idx) in self.placeholder_ranges() {
+            if start >= s1 {
+                break;
+            }
+            if end <= s0 {
+                continue;
+            }
+            let seg_start = start.max(s0);
+            let seg_end = end.min(s1);
+            if last < seg_start {
+                out.extend(chars[last..seg_start].iter());
+            }
+            out.push_str(&self.paste_blocks[idx].text);
+            last = seg_end;
+        }
+        if last < s1 {
+            out.extend(chars[last..s1].iter());
+        }
+        if out.is_empty() { None } else { Some(out) }
+    }
+
+    /// 在光标处插入文本；`collapse` 为 true 时大段文本折叠成占位符。
+    fn insert_text_at_cursor(&mut self, text: &str, collapse: bool) {
+        let text: String = text.chars().filter(|c| *c != '\r').collect();
+        if text.is_empty() {
+            return;
+        }
+        self.history_pos = None;
+        self.input_sel = None;
+        let start = self.snap_cursor(self.cursor);
+        self.cursor = start;
+        let insert: Vec<char> = if collapse && Self::needs_collapse(&text) {
+            let placeholder = Self::collapse_label(&text, &self.paste_blocks);
+            self.paste_blocks.push(PasteBlock {
+                placeholder: placeholder.clone(),
+                text: text.clone(),
+            });
+            placeholder.chars().collect()
+        } else {
+            text.chars().collect()
+        };
+        if start >= self.input.len() {
+            self.input.extend(insert.iter().copied());
+        } else {
+            self.input.splice(start..start, insert.iter().copied());
+        }
+        self.cursor = start + insert.len();
+    }
+
+    fn needs_collapse(text: &str) -> bool {
+        text.lines().count() > 2 || text.chars().count() > 150
+    }
+
+    fn collapse_label(text: &str, existing: &[PasteBlock]) -> String {
+        let line_count = text.lines().count().max(1);
+        let mut label = if line_count > 1 {
+            format!("【line 1-{line_count}】")
+        } else {
+            format!("【已折叠 {} 字符】", text.chars().count())
+        };
+        let mut id = 1usize;
+        while existing.iter().any(|b| b.placeholder == label) {
+            id += 1;
+            label = if line_count > 1 {
+                format!("【line 1-{line_count}#{id}】")
+            } else {
+                format!("【已折叠 {} 字符#{id}】", text.chars().count())
+            };
+        }
+        label
+    }
+
+    fn copy_input_selection(&mut self) {
+        let Some(text) = self.input_selection_text() else {
+            return;
+        };
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        match copy_to_clipboard(text) {
+            Ok(()) => self.items.push(Item::System(format!(
+                "已复制输入框选中内容（{} 字符）",
+                text.chars().count()
+            ))),
+            Err(e) => self.items.push(Item::System(format!("复制失败: {e}"))),
+        }
+    }
+
+    /// Ctrl+C 优先级：输入框选区 > 对话选区 > 最后一条回复。
+    fn copy_primary_selection(&mut self) {
+        if self.input_sel.is_some() && self.input_selection_text().is_some() {
+            self.copy_input_selection();
+        } else if self.selection.is_some() {
+            self.copy_selection();
+        } else if let Some(text) = self.last_output_text() {
+            match copy_to_clipboard(&text) {
+                Ok(()) => self.items.push(Item::System(format!(
+                    "已复制最后一条回复（{} 字符）",
+                    text.chars().count()
+                ))),
+                Err(e) => self.items.push(Item::System(format!("复制失败: {e}"))),
+            }
         }
     }
 
@@ -1204,6 +1498,8 @@ impl App {
         self.history_pos = Some(next);
         self.input = self.history[next].chars().collect();
         self.cursor = self.input.len();
+        self.paste_blocks.clear();
+        self.input_sel = None;
     }
 
     fn history_down(&mut self) {
@@ -1215,10 +1511,14 @@ impl App {
             self.history_pos = Some(next);
             self.input = self.history[next].chars().collect();
             self.cursor = self.input.len();
+            self.paste_blocks.clear();
+            self.input_sel = None;
         } else {
             self.history_pos = None;
             self.input.clear();
             self.cursor = 0;
+            self.paste_blocks.clear();
+            self.input_sel = None;
         }
     }
 
@@ -1349,6 +1649,30 @@ impl App {
         Some((content_row, (column - area.x - 1) as usize))
     }
 
+    /// 终端单元格 → 输入框字符下标（点击/拖动选择输入框文字用）。
+    fn cell_to_input(&self, column: u16, row: u16) -> Option<usize> {
+        let area = self.input_rect;
+        if area.width == 0 || area.height == 0 {
+            return None;
+        }
+        if row <= area.y || row >= area.y + area.height - 1 {
+            return None;
+        }
+        if column <= area.x || column >= area.x + area.width - 1 {
+            return None;
+        }
+        if self.input.is_empty() {
+            return Some(0);
+        }
+        let (lines, line_starts, _, _) = self.input_layout(self.input_width.max(1));
+        let line = (row - area.y - 1) as usize + self.input_scroll;
+        let line_text = lines.get(line)?;
+        let col = (column - area.x - 1) as usize;
+        let char_in_line = char_index_at_cell(line_text, col.min(cell_width(line_text)));
+        let idx = line_starts[line] + char_in_line;
+        Some(self.snap_cursor(idx))
+    }
+
     fn offset(&self) -> usize {
         if self.follow {
             self.max_offset
@@ -1413,13 +1737,7 @@ impl App {
         let Ok(text) = arboard::Clipboard::new().and_then(|mut c| c.get_text()) else {
             return;
         };
-        let text: String = text.chars().filter(|c| *c != '\r').collect();
-        if text.is_empty() {
-            return;
-        }
-        for ch in text.chars() {
-            self.insert_char(ch);
-        }
+        self.insert_text_at_cursor(&text, true);
     }
 
     fn last_output_text(&self) -> Option<String> {
@@ -1518,7 +1836,7 @@ impl App {
     }
 
     fn submit(&mut self) {
-        let text: String = self.input.iter().collect();
+        let text = self.expand_input();
         let text = text.trim().to_string();
         if text.is_empty() {
             return;
@@ -1532,6 +1850,8 @@ impl App {
         self.history_pos = None;
         self.input.clear();
         self.cursor = 0;
+        self.input_sel = None;
+        self.paste_blocks.clear();
         if let Some(command) = text.strip_prefix('/') {
             self.run_command(command);
             return;
@@ -1557,7 +1877,7 @@ impl App {
             .unwrap_or((command, ""));
         match name {
             "help" => self.items.push(Item::System(
-                "命令: /plan [on|off]  /agent  /models  /model <id>  /sessions(上下键选择)  /session <id>  /undo  /ledger  /pin <路径>  /unpin <路径>  /copy  /provider <名字>  /add-provider <名字> <openai|anthropic> <base_url> <模型>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /config  /clear  /help  /quit\n键位: ↑/↓ 空输入时浏览历史，非空时滚动对话 · PgUp/PgDn/滚轮始终滚动 · Ctrl+P 模型选择器 · 左键拖动选择 · 右键复制选中（无选区时粘贴） · Ctrl+Shift+C 复制最后回复 · ←/→ 移动输入光标 · y/n/a 权限确认 · Esc 中断 AI 输出（空闲时清空输入） · Ctrl-C 退出\n输入框: 自动换行自适应高度，最长显示 5 行"
+                "命令: /plan [on|off]  /agent  /models  /model <id>  /sessions(上下键选择)  /session <id>  /undo  /ledger  /pin <路径>  /unpin <路径>  /copy  /provider <名字>  /add-provider <名字> <openai|anthropic> <base_url> <模型>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /config  /clear  /help  /quit\n键位: ↑/↓ 空输入时浏览历史，多行输入时移动输入光标，单行时滚动对话 · PgUp/PgDn/滚轮始终滚动 · Ctrl+P 模型选择器 · 左键拖动选择 · 右键复制选中（无选区时粘贴） · Ctrl+C 复制选区（无选区时复制最后回复） · Ctrl+V 粘贴 · Ctrl+Shift+C 复制最后回复 · ←/→ 移动输入光标 · y/n/a 权限确认 · Esc 中断 AI 输出（空闲时清空输入） · Ctrl+Q 退出\n输入框: 自动换行自适应高度，最长显示 5 行；粘贴大段文本自动折叠为【line x-y】"
                     .to_string(),
             )),
             "plan" => {
@@ -1835,8 +2155,8 @@ impl App {
     fn render(&mut self, frame: &mut Frame) {
         self.frame = self.frame.wrapping_add(1);
         let frame_width = frame.area().width.saturating_sub(2) as usize;
-        let (input_lines, cursor_line, cursor_col) = if self.input.is_empty() {
-            (Vec::<String>::new(), 0, 0)
+        let (input_lines, line_starts, cursor_line, cursor_col) = if self.input.is_empty() {
+            (Vec::<String>::new(), Vec::new(), 0, 0)
         } else {
             self.input_layout(frame_width.max(1))
         };
@@ -1847,6 +2167,8 @@ impl App {
             Constraint::Length(input_height),
         ])
         .areas(frame.area());
+        self.input_width = frame_width;
+        self.input_rect = input_area;
 
         let content_width = transcript_area.width.saturating_sub(2) as usize;
         self.transcript_rect = transcript_area;
@@ -1933,7 +2255,7 @@ impl App {
         let content = if self.input.is_empty() {
             self.input_scroll = 0;
             Paragraph::new(Line::from(Span::styled(
-                "输入任务，Enter 发送 · Esc 中断/清空 · /help · ↑/↓ 空输入时浏览历史 · Ctrl+P 模型 · 左键选择右键复制 · Ctrl-C 退出",
+                "输入任务，Enter 发送 · Esc 中断/清空 · Ctrl+C 复制 · Ctrl+V 粘贴 · Ctrl+P 模型 · Ctrl+Q 退出 · /help",
                 Style::default().fg(Color::DarkGray),
             )))
             .block(block)
@@ -1951,11 +2273,41 @@ impl App {
                 .iter()
                 .skip(self.input_scroll)
                 .take(visible_text_height.max(1))
-                .map(|line| {
-                    Line::from(Span::styled(
-                        line.clone(),
-                        Style::default().fg(Color::White),
-                    ))
+                .enumerate()
+                .map(|(shown_idx, line)| {
+                    let abs_line = self.input_scroll + shown_idx;
+                    let line_start = line_starts.get(abs_line).copied().unwrap_or(0);
+                    let line_len = line.chars().count();
+                    let (sel_min, sel_max) = self
+                        .input_sel
+                        .map(|(a, b)| if a <= b { (a, b) } else { (b, a) })
+                        .unwrap_or((0, 0));
+                    let seg_start = sel_min.saturating_sub(line_start);
+                    let seg_end = sel_max.saturating_sub(line_start).min(line_len);
+                    if seg_start < seg_end {
+                        let before: String = line.chars().take(seg_start).collect();
+                        let selected: String = line
+                            .chars()
+                            .skip(seg_start)
+                            .take(seg_end - seg_start)
+                            .collect();
+                        let after: String = line.chars().skip(seg_end).collect();
+                        Line::from(vec![
+                            Span::styled(before, Style::default().fg(Color::White)),
+                            Span::styled(
+                                selected,
+                                Style::default()
+                                    .fg(Color::White)
+                                    .add_modifier(Modifier::REVERSED),
+                            ),
+                            Span::styled(after, Style::default().fg(Color::White)),
+                        ])
+                    } else {
+                        Line::from(Span::styled(
+                            line.clone(),
+                            Style::default().fg(Color::White),
+                        ))
+                    }
                 })
                 .collect::<Vec<_>>();
             Paragraph::new(shown).block(block)
@@ -2200,6 +2552,16 @@ fn char_index_at_cell(text: &str, cell: usize) -> usize {
     text.chars().count()
 }
 
+/// 在字符切片中查找子串（从 `from` 开始），返回起始下标。
+fn find_subslice(haystack: &[char], needle: &[char], from: usize) -> Option<usize> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return None;
+    }
+    let from = from.min(haystack.len());
+    (from..=haystack.len().saturating_sub(needle.len()))
+        .find(|&i| haystack[i..i + needle.len()] == *needle)
+}
+
 async fn run_loop(
     terminal: &mut Tui,
     app: &mut App,
@@ -2399,17 +2761,74 @@ mod tests {
         // 12 个 ASCII + 2 个 CJK：宽度 = 12 + 4 = 16，4 列宽换行时每行 4 字符
         app.input = "abcdefghijkl你好".chars().collect();
         app.cursor = app.input.len();
-        let (lines, cursor_line, cursor_col) = app.input_layout(4);
+        let (lines, line_starts, cursor_line, cursor_col) = app.input_layout(4);
         assert_eq!(lines, vec!["abcd", "efgh", "ijkl", "你好"]);
+        assert_eq!(line_starts, vec![0, 4, 8, 12]);
         assert_eq!(cursor_line, 3);
         assert_eq!(cursor_col, 4);
 
         // 光标停在中间字符时，列按单元格宽度计算
         app.input = "你abc".chars().collect();
         app.cursor = 3; // 你(2) + a(1) + b(1) → 列 4
-        let (_, cursor_line, cursor_col) = app.input_layout(10);
+        let (_, _, cursor_line, cursor_col) = app.input_layout(10);
         assert_eq!(cursor_line, 0);
         assert_eq!(cursor_col, 4);
+    }
+
+    #[test]
+    fn move_input_cursor_moves_between_wrapped_lines() {
+        let mut app = test_app();
+        app.input_width = 4;
+        app.input = "abcdefghijkl".chars().collect();
+        app.cursor = app.input.len(); // 行: abcd / efgh / ijkl，光标在第 2 行末尾
+
+        app.move_input_cursor(-1);
+        assert_eq!(app.cursor, 8); // 上一行 efgh 末尾
+        app.move_input_cursor(-1);
+        assert_eq!(app.cursor, 4); // 再上一行 abcd 末尾
+        app.move_input_cursor(1);
+        assert_eq!(app.cursor, 8); // 回到 efgh 末尾
+    }
+
+    #[test]
+    fn paste_collapses_long_text_into_placeholder() {
+        let mut app = test_app();
+        let text = "a\nb\nc\nd";
+        app.insert_text_at_cursor(text, true);
+        assert_eq!(app.input.iter().collect::<String>(), "【line 1-4】");
+        assert_eq!(app.expand_input(), text);
+        assert_eq!(app.cursor, "【line 1-4】".chars().count());
+
+        // 光标从占位符尾部左移会跳过整个占位符，右移同理
+        app.move_cursor_left();
+        assert_eq!(app.cursor, 0);
+        app.move_cursor_right();
+        assert_eq!(app.cursor, "【line 1-4】".chars().count());
+
+        // Backspace 在占位符末尾会整体删除
+        app.backspace();
+        assert!(app.input.is_empty());
+        assert!(app.paste_blocks.is_empty());
+    }
+
+    #[test]
+    fn paste_small_text_stays_inline() {
+        let mut app = test_app();
+        app.insert_text_at_cursor("hello", true);
+        assert_eq!(app.input.iter().collect::<String>(), "hello");
+        assert!(app.paste_blocks.is_empty());
+    }
+
+    #[test]
+    fn input_selection_expands_collapsed_blocks() {
+        let mut app = test_app();
+        app.input = "A【line 1-2】B".chars().collect();
+        app.paste_blocks.push(PasteBlock {
+            placeholder: "【line 1-2】".to_string(),
+            text: "x\ny".to_string(),
+        });
+        app.input_sel = Some((0, app.input.len()));
+        assert_eq!(app.input_selection_text().unwrap(), "Ax\nyB");
     }
 
     #[test]
