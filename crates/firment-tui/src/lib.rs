@@ -85,6 +85,8 @@ pub async fn run(
     // dangerous shell commands are allowed to reach it (and are labeled ⚠).
     agent.set_allow_dangerous(true);
     agent.set_context_budget_chars(config.context_budget_chars);
+    agent.set_compaction_strategy(config.compaction_strategy);
+    agent.set_symbols_backend(config.tools.symbols_backend.clone());
     let initial_messages = agent.session().messages.clone();
     let model = agent.session().model.clone();
     let cwd = agent.session().cwd.clone();
@@ -272,6 +274,28 @@ pub async fn run(
                         agent
                             .emit(AgentEvent::Info(format!("最近改动台账:\n{summary}")))
                             .await;
+                    }
+                }
+                AgentCmd::Pin { path } => match agent.pin_path(std::path::PathBuf::from(&path)) {
+                    Ok(message) => {
+                        agent.emit(AgentEvent::Info(message)).await;
+                    }
+                    Err(e) => {
+                        agent
+                            .emit(AgentEvent::Error(format!("固定失败: {e}")))
+                            .await;
+                    }
+                },
+                AgentCmd::Unpin { path } => {
+                    match agent.unpin_path(std::path::PathBuf::from(&path)) {
+                        Ok(message) => {
+                            agent.emit(AgentEvent::Info(message)).await;
+                        }
+                        Err(e) => {
+                            agent
+                                .emit(AgentEvent::Error(format!("取消固定失败: {e}")))
+                                .await;
+                        }
                     }
                 }
                 AgentCmd::SetProvider(name) => {
@@ -463,6 +487,12 @@ enum AgentCmd {
     LoadSession(String),
     Undo,
     Ledger,
+    Pin {
+        path: String,
+    },
+    Unpin {
+        path: String,
+    },
     SetProvider(String),
     SetApiKey {
         provider: Option<String>,
@@ -1425,7 +1455,7 @@ impl App {
             .unwrap_or((command, ""));
         match name {
             "help" => self.items.push(Item::System(
-                "命令: /plan [on|off]  /agent  /models  /model <id>  /sessions(上下键选择)  /session <id>  /undo  /ledger  /copy  /provider <名字>  /add-provider <名字> <openai|anthropic> <base_url> <模型>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /config  /clear  /help  /quit\n键位: ↑/↓ 空输入时浏览历史，非空时滚动对话 · PgUp/PgDn/滚轮始终滚动 · Ctrl+P 模型选择器 · 左键拖动选择 · 右键复制选中（无选区时粘贴） · Ctrl+Shift+C 复制最后回复 · ←/→ 移动输入光标 · y/n/a 权限确认 · Ctrl-C 退出"
+                "命令: /plan [on|off]  /agent  /models  /model <id>  /sessions(上下键选择)  /session <id>  /undo  /ledger  /pin <路径>  /unpin <路径>  /copy  /provider <名字>  /add-provider <名字> <openai|anthropic> <base_url> <模型>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /config  /clear  /help  /quit\n键位: ↑/↓ 空输入时浏览历史，非空时滚动对话 · PgUp/PgDn/滚轮始终滚动 · Ctrl+P 模型选择器 · 左键拖动选择 · 右键复制选中（无选区时粘贴） · Ctrl+Shift+C 复制最后回复 · ←/→ 移动输入光标 · y/n/a 权限确认 · Ctrl-C 退出"
                     .to_string(),
             )),
             "plan" => {
@@ -1515,6 +1545,28 @@ impl App {
             "ledger" => {
                 let _ = self.cmd_tx.try_send(AgentCmd::Ledger);
                 self.items.push(Item::System("正在读取改动台账…".to_string()));
+            }
+            "pin" if !arg.is_empty() => {
+                let _ = self
+                    .cmd_tx
+                    .try_send(AgentCmd::Pin { path: arg.to_string() });
+                self.items
+                    .push(Item::System(format!("固定 {arg}…")));
+            }
+            "pin" => {
+                self.items.push(Item::System(
+                    "用法: /pin <路径>（压缩时保留该文件全文）".to_string(),
+                ));
+            }
+            "unpin" if !arg.is_empty() => {
+                let _ = self
+                    .cmd_tx
+                    .try_send(AgentCmd::Unpin { path: arg.to_string() });
+                self.items
+                    .push(Item::System(format!("取消固定 {arg}…")));
+            }
+            "unpin" => {
+                self.items.push(Item::System("用法: /unpin <路径>".to_string()));
             }
             "copy" => self.copy_last_output(),
             "apikey" | "key" if !arg.is_empty() => {

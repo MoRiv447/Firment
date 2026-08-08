@@ -1,7 +1,7 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.3.0--beta.4-orange)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.3.0--beta.5-orange)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![Benchmark](https://img.shields.io/badge/benchmark-4.95-%231-green)]()
@@ -32,9 +32,10 @@
 - **Context compaction**: long sessions auto-compact older messages into a digest (`context_budget_chars`)
 - **Cache-stable prefix**: the system prompt stays byte-identical for provider prefix caching; dynamic state (change ledger) is merged into user messages as deltas
 - **Unchanged-read dedup**: re-reading an unchanged file returns a stub instead of repeating content; recently read files are re-injected after compaction
+- **Pin files**: `/pin <path>` keeps a file's full content through compaction (re-injected verbatim); `/unpin <path>` removes it
 - **Tool output spill**: outputs over a size threshold are saved to the session's spill directory, keeping only a short excerpt + `read_file` pointer in the conversation
 - **Change ledger**: every committed turn appends path/line/hunk entries to a per-session ledger, injected into context on resume; `/ledger` shows it
-- **Symbols index**: lightweight regex-based definition/reference lookup (heuristic, not a full ctags parser) for C/C++, Rust, Python, JS/TS, Go, Java (also available in plan mode)
+- **Symbols index**: definition/reference lookup that auto-uses universal-ctags (JSON output) when available, falling back to the built-in regex scanner; `[tools] symbols_backend = auto | ctags | regex` (also available in plan mode)
 
 **Safety & reliability**
 
@@ -100,11 +101,13 @@ base_url = "https://api.deepseek.com/v1"
 api_key_env = "DEEPSEEK_API_KEY"
 model = "deepseek-v4-flash"   # or deepseek-v4-pro
 
-# thinking = "medium"   # off / low / medium / high / xhigh / max
+# thinking = "medium"      # off / low / medium / high / xhigh / max
+# context_budget_chars = 60000       # session context budget; older messages are compacted when exceeded
+# compaction_strategy = "summarize"  # summarize / drop / off
 
 [tools]
 # verify_command = "cargo check"   # run this before declaring completion (e.g. cmake --build build)
-# context_budget_chars = 60000     # session context budget; older messages are compacted when exceeded
+# symbols_backend = "auto"         # auto / ctags / regex (symbol index backend)
 ```
 
 Add more providers and switch with `--provider <name>` or `/provider <name>` in the TUI; `/models` and `Ctrl+P` fetch and pick models without editing files.
@@ -126,7 +129,7 @@ Add more providers and switch with `--provider <name>` or `/provider <name>` in 
 
 ### 🎮 TUI
 
-Slash commands: `/plan [on|off]`, `/agent`, `/models`, `/model <id>`, `/sessions` (↑/↓ to pick), `/session <id>`, `/undo`, `/ledger`, `/provider <name>`, `/add-provider`, `/apikey`, `/thinking`, `/copy`, `/config`, `/clear`, `/help`, `/quit`.
+Slash commands: `/plan [on|off]`, `/agent`, `/models`, `/model <id>`, `/sessions` (↑/↓ to pick), `/session <id>`, `/undo`, `/ledger`, `/pin <path>`, `/unpin <path>`, `/provider <name>`, `/add-provider`, `/apikey`, `/thinking`, `/copy`, `/config`, `/clear`, `/help`, `/quit`.
 
 Keys: `↑/↓` browse history when the input is empty, otherwise scroll; `PgUp/PgDn` and the mouse wheel always scroll; `Ctrl+P` opens the model picker; left-drag to select and right-click to copy (paste when nothing is selected); `Ctrl+Shift+C` copies the last reply; `←/→`, `Home/End`, `Ctrl+A/E` move the cursor; permission popups accept `y`/`n`/`a`.
 

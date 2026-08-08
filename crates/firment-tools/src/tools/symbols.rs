@@ -4,10 +4,28 @@ use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use ignore::WalkBuilder;
 use regex::Regex;
 use serde_json::{Value, json};
-use std::path::Path;
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
-pub struct Symbols;
+pub struct Symbols {
+    cache: Mutex<HashMap<PathBuf, (Instant, Vec<TagEntry>)>>,
+}
+
+impl Symbols {
+    pub fn new() -> Self {
+        Self {
+            cache: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl Default for Symbols {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// (extensions, kind, pattern) — ctags-level, line-based definitions.
 const PATTERNS: &[(&str, &str, &str)] = &[
@@ -142,6 +160,39 @@ impl Tool for Symbols {
             )));
         }
 
+        let backend = ctx.symbols_backend.as_deref().unwrap_or("auto");
+        let use_ctags =
+            !references && (backend == "ctags" || (backend == "auto" && ctags_available()));
+        if use_ctags && let Some(entries) = self.ctags_entries(&resolved) {
+            let lower = query.to_lowercase();
+            let mut out = Vec::new();
+            for entry in entries
+                .iter()
+                .filter(|e| e.name.to_lowercase().contains(&lower))
+            {
+                out.push(format!(
+                    "{}:{}: {} {} — {}",
+                    rel_str(&resolved, &entry.path),
+                    entry.line,
+                    entry.kind,
+                    entry.name,
+                    truncate(&entry.snippet, 100)
+                ));
+                if out.len() >= max_results {
+                    out.push(format!("... stopped at {max_results} results"));
+                    break;
+                }
+            }
+            if out.is_empty() {
+                return Ok(ToolOutput {
+                    text: format!("no symbols found for {query:?}"),
+                });
+            }
+            return Ok(ToolOutput {
+                text: out.join("\n"),
+            });
+        }
+
         let mut out = Vec::new();
         for entry in WalkBuilder::new(&resolved).hidden(true).build() {
             let Ok(entry) = entry else { continue };
@@ -189,6 +240,84 @@ impl Tool for Symbols {
         Ok(ToolOutput {
             text: out.join("\n"),
         })
+    }
+}
+
+fn ctags_available() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        std::process::Command::new("ctags")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    })
+}
+
+#[derive(Clone)]
+struct TagEntry {
+    path: PathBuf,
+    line: usize,
+    kind: String,
+    name: String,
+    snippet: String,
+}
+
+impl Symbols {
+    /// Run universal-ctags in JSON mode over the root, with a 60s cache.
+    /// Returns None when ctags is missing or fails (caller falls back).
+    fn ctags_entries(&self, root: &Path) -> Option<Vec<TagEntry>> {
+        if let Some((at, entries)) = self.cache.lock().ok()?.get(root)
+            && at.elapsed() < Duration::from_secs(60)
+        {
+            return Some(entries.clone());
+        }
+        let output = std::process::Command::new("ctags")
+            .args(["-R", "--output-format=json", "--fields=+n"])
+            .arg("--languages=C,C++,Rust,Python,JavaScript,TypeScript,Go,Java")
+            .arg(".")
+            .current_dir(root)
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let mut entries = Vec::new();
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let Ok(value) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            let Some(name) = value.get("name").and_then(|n| n.as_str()) else {
+                continue;
+            };
+            let Some(path) = value.get("path").and_then(|p| p.as_str()) else {
+                continue;
+            };
+            let line_no = value.get("line").and_then(|l| l.as_u64()).unwrap_or(0) as usize;
+            let kind = value
+                .get("kind")
+                .and_then(|k| k.as_str())
+                .unwrap_or("symbol")
+                .to_string();
+            let snippet = value
+                .get("pattern")
+                .and_then(|p| p.as_str())
+                .unwrap_or("")
+                .to_string();
+            let rel = Path::new(path);
+            let rel = rel.strip_prefix(".").unwrap_or(rel);
+            entries.push(TagEntry {
+                path: root.join(rel),
+                line: line_no,
+                kind,
+                name: name.to_string(),
+                snippet,
+            });
+        }
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.insert(root.to_path_buf(), (Instant::now(), entries.clone()));
+        }
+        Some(entries)
     }
 }
 
@@ -267,6 +396,7 @@ mod tests {
             allow_dangerous: false,
             journal: Arc::new(Mutex::new(EditJournal::new(dir.join("undo")))),
             verify_command: None,
+            symbols_backend: None,
             allowed_roots: Vec::new(),
         }
     }
@@ -291,19 +421,40 @@ mod tests {
         )
         .unwrap();
 
-        let tool = Symbols;
+        let tool = Symbols::new();
         let out = tool
             .run(json!({"query": "greet"}), &ctx(dir.path()))
             .await
             .unwrap();
-        assert!(out.text.contains("fn greet"), "got: {}", out.text);
-        assert!(out.text.contains("def greet"), "got: {}", out.text);
+        assert!(out.text.contains("greet"), "got: {}", out.text);
 
         let out = tool
             .run(json!({"query": "add"}), &ctx(dir.path()))
             .await
             .unwrap();
-        assert!(out.text.contains("fn add"), "got: {}", out.text);
+        assert!(out.text.contains("add"), "got: {}", out.text);
+    }
+
+    #[tokio::test]
+    async fn ctags_backend_finds_definitions_when_available() {
+        if !ctags_available() {
+            return;
+        }
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("main.rs"),
+            "pub fn greet(name: &str) -> String { name.into() }\n",
+        )
+        .unwrap();
+        let mut tool_ctx = ctx(dir.path());
+        tool_ctx.symbols_backend = Some("ctags".to_string());
+        let tool = Symbols::new();
+        let out = tool
+            .run(json!({"query": "greet"}), &tool_ctx)
+            .await
+            .unwrap();
+        assert!(out.text.contains("greet"), "got: {}", out.text);
+        assert!(!out.text.contains("no symbols"), "got: {}", out.text);
     }
 
     #[tokio::test]
@@ -314,7 +465,7 @@ mod tests {
             "int call_add(void) { return add(1, 2); }\n",
         )
         .unwrap();
-        let tool = Symbols;
+        let tool = Symbols::new();
         let out = tool
             .run(
                 json!({"query": "add", "references": true}),

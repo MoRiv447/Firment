@@ -1,7 +1,7 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.3.0--beta.4-orange)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.3.0--beta.5-orange)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![Benchmark](https://img.shields.io/badge/benchmark-4.95-%231-green)]()
@@ -34,9 +34,10 @@
 - **上下文压缩**：长会话自动把早期消息压缩成摘要（`context_budget_chars`）
 - **缓存稳定前缀**：系统提示词保持字节不变以命中 Provider 前缀缓存；动态状态（改动台账）以增量合并进用户消息
 - **重复读取去重**：未变化的文件重复读取时返回桩引用而非重复内容；压缩后自动回填最近读取的文件
+- **Pin 固定**：`/pin <路径>` 标记文件在压缩时保留全文（逐字回填）；`/unpin <路径>` 取消
 - **工具输出外溢**：超长工具输出自动落盘到会话外溢目录，对话里只留短摘录 + `read_file` 路径指针
 - **改动台账**：每回合已提交的改动（路径/行数/hunk）写入会话台账，恢复时注入上下文；`/ledger` 查看
-- **符号索引**：轻量正则定义/引用查找（启发式，非完整 ctags 解析），支持 C/C++、Rust、Python、JS/TS、Go、Java（Plan 模式也可用）
+- **符号索引**：定义/引用查找自动优先 universal-ctags（JSON 输出），未安装时回退内置正则扫描；`[tools] symbols_backend = auto | ctags | regex`（Plan 模式也可用）
 
 **安全与可靠性**
 
@@ -102,11 +103,13 @@ base_url = "https://api.deepseek.com/v1"
 api_key_env = "DEEPSEEK_API_KEY"
 model = "deepseek-v4-flash"   # 或 deepseek-v4-pro
 
-# thinking = "medium"   # off / low / medium / high / xhigh / max
+# thinking = "medium"      # off / low / medium / high / xhigh / max
+# context_budget_chars = 60000       # 会话上下文字符预算，超出自动压缩早期对话
+# compaction_strategy = "summarize"  # summarize / drop / off
 
 [tools]
 # verify_command = "cargo check"   # 改动后先跑通再宣布完成（如 cmake --build build）
-# context_budget_chars = 60000     # 会话上下文字符预算，超出自动压缩早期对话
+# symbols_backend = "auto"         # auto / ctags / regex（符号索引后端）
 ```
 
 多 Provider 追加配置后用 `--provider <名字>` 或 TUI 内 `/provider <名字>` 切换；`/models`、`Ctrl+P` 可直接拉取并选择模型，不用手改文件。
@@ -128,7 +131,7 @@ model = "deepseek-v4-flash"   # 或 deepseek-v4-pro
 
 ### 🎮 TUI 交互
 
-斜杠命令：`/plan [on|off]`、`/agent`、`/models`、`/model <id>`、`/sessions`（↑/↓ 选择）、`/session <id>`、`/undo`、`/ledger`、`/provider <名字>`、`/add-provider`、`/apikey`、`/thinking`、`/copy`、`/config`、`/clear`、`/help`、`/quit`。
+斜杠命令：`/plan [on|off]`、`/agent`、`/models`、`/model <id>`、`/sessions`（↑/↓ 选择）、`/session <id>`、`/undo`、`/ledger`、`/pin <路径>`、`/unpin <路径>`、`/provider <名字>`、`/add-provider`、`/apikey`、`/thinking`、`/copy`、`/config`、`/clear`、`/help`、`/quit`。
 
 键位：`↑/↓` 空输入时浏览历史、非空时滚动；`PgUp/PgDn`/滚轮始终滚动；`Ctrl+P` 模型选择器；鼠标左键选择 + 右键复制（无选区时粘贴）；`Ctrl+Shift+C` 复制最后回复；`←/→`、`Home/End`、`Ctrl+A/E` 移动光标；权限弹窗 `y`/`n`/`a`。
 

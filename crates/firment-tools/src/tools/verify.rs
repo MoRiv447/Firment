@@ -78,6 +78,7 @@ mod tests {
             allow_dangerous: false,
             journal: Arc::new(Mutex::new(EditJournal::new(dir.path().join("undo")))),
             verify_command: command.map(|s| s.to_string()),
+            symbols_backend: None,
             allowed_roots: Vec::new(),
         };
         (ctx, dir)

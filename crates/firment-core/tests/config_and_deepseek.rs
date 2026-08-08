@@ -10,6 +10,34 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 #[test]
+fn compaction_strategy_and_symbols_backend_roundtrip() {
+    let text = r#"
+compaction_strategy = "drop"
+
+[providers.default]
+type = "openai"
+model = "x"
+
+[tools]
+symbols_backend = "ctags"
+"#;
+    let config: firment_core::Config = toml::from_str(text).unwrap();
+    assert_eq!(
+        config.compaction_strategy,
+        firment_core::CompactionStrategy::Drop
+    );
+    assert_eq!(config.tools.symbols_backend.as_deref(), Some("ctags"));
+
+    let empty: firment_core::Config =
+        toml::from_str("[providers.default]\ntype=\"openai\"\nmodel=\"x\"\n").unwrap();
+    assert_eq!(
+        empty.compaction_strategy,
+        firment_core::CompactionStrategy::Summarize
+    );
+    assert!(empty.tools.symbols_backend.is_none());
+}
+
+#[test]
 fn config_save_load_roundtrip() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("config.toml");

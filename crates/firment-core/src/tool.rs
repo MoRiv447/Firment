@@ -22,6 +22,8 @@ pub struct ToolContext {
     /// Extra roots (besides cwd) that file tools may access, e.g. the
     /// session's spill directory. Paths outside cwd + these roots are rejected.
     pub allowed_roots: Vec<PathBuf>,
+    /// Symbol index backend override: `auto` / `ctags` / `regex`.
+    pub symbols_backend: Option<String>,
 }
 
 #[derive(Debug, Clone)]

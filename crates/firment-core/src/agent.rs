@@ -1,3 +1,4 @@
+use crate::config::CompactionStrategy;
 use crate::journal::{EditJournal, Ledger};
 use crate::provider::{Provider, ProviderError, ProviderEvent};
 use crate::session::{SessionStore, SessionSummary};
@@ -78,6 +79,8 @@ pub struct Agent {
     context_budget_chars: usize,
     /// Highest ledger sequence already merged into the conversation.
     ledger_seq_appended: u64,
+    compaction_strategy: CompactionStrategy,
+    symbols_backend: Option<String>,
     /// Hash of the last read result per path, for unchanged-read dedup.
     read_hashes: HashMap<PathBuf, String>,
     /// Recently read paths (most recent last), for post-compact re-injection.
@@ -107,6 +110,8 @@ impl Agent {
             verify_command: None,
             context_budget_chars: 60_000,
             ledger_seq_appended: 0,
+            compaction_strategy: CompactionStrategy::default(),
+            symbols_backend: None,
             read_hashes: HashMap::new(),
             recent_read_paths: VecDeque::new(),
         }
@@ -145,6 +150,45 @@ impl Agent {
     /// messages are compacted into a digest when the budget is exceeded.
     pub fn set_context_budget_chars(&mut self, budget: usize) {
         self.context_budget_chars = budget;
+    }
+
+    /// Set the auto-compaction strategy (summarize / drop / off).
+    pub fn set_compaction_strategy(&mut self, strategy: CompactionStrategy) {
+        self.compaction_strategy = strategy;
+    }
+
+    /// Set the symbol index backend override (auto / ctags / regex).
+    pub fn set_symbols_backend(&mut self, backend: Option<String>) {
+        self.symbols_backend = backend;
+    }
+
+    /// Pin a file so compaction always re-injects its full content.
+    pub fn pin_path(&self, path: PathBuf) -> Result<String, String> {
+        let id = self.session.id.clone();
+        let mut pins = self.store.load_pins(&id);
+        if !pins.contains(&path) {
+            pins.push(path.clone());
+            self.store
+                .save_pins(&id, &pins)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(format!("已固定 {}（压缩时保留全文）", path.display()))
+    }
+
+    /// Remove a pinned file.
+    pub fn unpin_path(&self, path: PathBuf) -> Result<String, String> {
+        let id = self.session.id.clone();
+        let mut pins = self.store.load_pins(&id);
+        let before = pins.len();
+        pins.retain(|p| p != &path);
+        self.store
+            .save_pins(&id, &pins)
+            .map_err(|e| e.to_string())?;
+        if pins.len() == before {
+            Ok(format!("{} 不在固定列表", path.display()))
+        } else {
+            Ok(format!("已取消固定 {}", path.display()))
+        }
     }
 
     /// Tool outputs above the threshold are spilled to the session's spill
@@ -282,6 +326,7 @@ impl Agent {
                 journal: journal.clone(),
                 verify_command: self.verify_command.clone(),
                 allowed_roots: vec![self.store.spill_dir(&self.session.id)],
+                symbols_backend: self.symbols_backend.clone(),
             };
 
             if tool_calls.is_empty() {
@@ -388,7 +433,12 @@ impl Agent {
     /// Approximate character budget for session context; older messages are
     /// compacted into a digest when exceeded.
     async fn compact_if_needed(&mut self) {
+        if self.compaction_strategy == CompactionStrategy::Off {
+            return;
+        }
         const DIGEST_CHARS: usize = 6000;
+        const ROUNDS_KEPT: usize = 3;
+        const DROP_EXTRA_ROUNDS: usize = 5;
         let total: usize = self
             .session
             .messages
@@ -398,21 +448,63 @@ impl Agent {
         if total <= self.context_budget_chars {
             return;
         }
-        let Some(cut) = round_cut_index(&self.session.messages) else {
+        let Some((cut, round_count)) = round_cut_index(&self.session.messages) else {
             return;
         };
-        let old = self.session.messages.drain(..cut).collect::<Vec<_>>();
+        let mut drop_until = 0usize;
+        if self.compaction_strategy == CompactionStrategy::Drop
+            && round_count > ROUNDS_KEPT + DROP_EXTRA_ROUNDS
+        {
+            drop_until = round_starts_at(
+                &self.session.messages,
+                round_count - ROUNDS_KEPT - DROP_EXTRA_ROUNDS,
+            );
+        }
+        let _dropped = self.session.messages.drain(..drop_until).count();
+        let old = self
+            .session
+            .messages
+            .drain(..(cut.saturating_sub(drop_until)))
+            .collect::<Vec<_>>();
         let summary = match self.summarize_messages(&old).await {
             Some(summary) => summary,
             None => compact_summary(&old, DIGEST_CHARS),
         };
         let mut content = format!("[对话已压缩] 摘要：\n{summary}");
+        if drop_until > 0 {
+            content.push_str("\n\n（更早的对话已按 drop 策略直接丢弃，不再保留摘要）");
+        }
         if let Some(files) = self.recent_read_files_text() {
             content.push_str(&format!("\n\n{files}"));
+        }
+        if let Some(pins) = self.pinned_files_text() {
+            content.push_str(&format!("\n\n{pins}"));
         }
         let mut messages = vec![ChatMessage::User { content }];
         messages.extend(self.session.messages.iter().cloned());
         self.session.messages = messages;
+    }
+
+    /// Pinned files re-injected with full content after compaction.
+    fn pinned_files_text(&self) -> Option<String> {
+        const MAX_FILES: usize = 5;
+        const MAX_CHARS: usize = 8000;
+        let pins = self.store.load_pins(&self.session.id);
+        if pins.is_empty() {
+            return None;
+        }
+        let mut out = String::new();
+        for path in pins.iter().take(MAX_FILES) {
+            if let Ok(text) = fs::read_to_string(path) {
+                let text: String = text.chars().take(MAX_CHARS).collect();
+                out.push_str(&format!("### {}\n{text}\n\n", path.display()));
+            }
+        }
+        if out.is_empty() {
+            None
+        } else {
+            Some(format!("[已固定文件（压缩时保留全文）]\n{out}"))
+        }
     }
 
     /// Ask the main provider to summarize the given messages (CC-style).
@@ -659,8 +751,8 @@ fn lock_journal(journal: &Arc<Mutex<EditJournal>>) -> std::sync::MutexGuard<'_, 
 
 /// Find the earliest message index to keep such that eviction never splits an
 /// API round: cuts only at User-message round boundaries, keeping the last
-/// `ROUNDS_TO_KEEP` rounds verbatim.
-fn round_cut_index(messages: &[ChatMessage]) -> Option<usize> {
+/// `ROUNDS_TO_KEEP` rounds verbatim. Returns (cut_index, total_rounds).
+fn round_cut_index(messages: &[ChatMessage]) -> Option<(usize, usize)> {
     const ROUNDS_TO_KEEP: usize = 3;
     let round_starts: Vec<usize> = messages
         .iter()
@@ -675,8 +767,19 @@ fn round_cut_index(messages: &[ChatMessage]) -> Option<usize> {
     if keep_from == 0 {
         None
     } else {
-        Some(keep_from)
+        Some((keep_from, round_starts.len()))
     }
+}
+
+/// Index of the `n`-th round start (0-based) among User messages.
+fn round_starts_at(messages: &[ChatMessage], n: usize) -> usize {
+    messages
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| matches!(m, ChatMessage::User { .. }))
+        .map(|(i, _)| i)
+        .nth(n)
+        .unwrap_or(0)
 }
 
 fn resolved_tool_path(ctx: &ToolContext, call: &ToolCall) -> Option<PathBuf> {

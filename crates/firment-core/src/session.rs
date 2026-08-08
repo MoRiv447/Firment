@@ -133,6 +133,24 @@ impl SessionStore {
         self.dir.join(format!("{id}.ledger.jsonl"))
     }
 
+    /// Path of the session's pinned-file list (JSON array of paths).
+    pub fn pins_path(&self, id: &str) -> PathBuf {
+        self.dir.join(format!("{id}.pins.json"))
+    }
+
+    pub fn load_pins(&self, id: &str) -> Vec<PathBuf> {
+        let Ok(text) = fs::read_to_string(self.pins_path(id)) else {
+            return Vec::new();
+        };
+        serde_json::from_str(&text).unwrap_or_default()
+    }
+
+    pub fn save_pins(&self, id: &str, pins: &[PathBuf]) -> Result<(), SessionError> {
+        fs::create_dir_all(&self.dir)?;
+        fs::write(self.pins_path(id), serde_json::to_string_pretty(pins)?)?;
+        Ok(())
+    }
+
     pub fn save(&self, session: &Session) -> Result<(), SessionError> {
         fs::create_dir_all(&self.dir)?;
         let content = serialize_session(session)?;

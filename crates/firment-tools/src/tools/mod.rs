@@ -21,7 +21,7 @@ pub fn all() -> Vec<Arc<dyn Tool>> {
         Arc::new(glob::Glob),
         Arc::new(grep::Grep),
         Arc::new(shell::Shell),
-        Arc::new(symbols::Symbols),
+        Arc::new(symbols::Symbols::new()),
         Arc::new(verify::Verify),
     ]
 }

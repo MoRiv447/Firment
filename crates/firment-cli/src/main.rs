@@ -235,6 +235,8 @@ async fn run_once(
     agent.set_allow_dangerous(allow_dangerous);
     agent.set_verify_command(config.tools.verify_command.clone());
     agent.set_context_budget_chars(config.context_budget_chars);
+    agent.set_compaction_strategy(config.compaction_strategy);
+    agent.set_symbols_backend(config.tools.symbols_backend.clone());
     let text = agent.run_turn(prompt).await?;
     println!("{text}");
     Ok(())

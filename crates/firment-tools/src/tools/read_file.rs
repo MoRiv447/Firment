@@ -82,6 +82,7 @@ mod tests {
             allow_dangerous: false,
             journal: Arc::new(Mutex::new(EditJournal::new(dir.join("undo")))),
             verify_command: None,
+            symbols_backend: None,
             allowed_roots: Vec::new(),
         }
     }

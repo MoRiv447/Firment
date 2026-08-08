@@ -949,6 +949,123 @@ async fn duplicate_read_results_are_stubbed() {
 }
 
 #[tokio::test]
+async fn pinned_files_survive_compaction() {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let provider = RecordingProvider {
+        requests: requests.clone(),
+    };
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().join("sessions"));
+    let mut session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    for i in 0..14 {
+        session.push(ChatMessage::User {
+            content: format!("message {i} {}", "x".repeat(200)),
+        });
+    }
+    let pinned = dir.path().join("pin.txt");
+    std::fs::write(&pinned, "critical register map").unwrap();
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(Vec::new()),
+        session,
+        store,
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(Arc::new(Mutex::new(Vec::new())))),
+        10,
+    );
+    agent.set_context_budget_chars(1000);
+    agent.pin_path(pinned.clone()).unwrap();
+
+    let _ = agent.run_turn("hi").await.unwrap();
+    let messages = &agent.session().messages;
+    assert!(
+        messages
+            .iter()
+            .any(|m| matches!(m, ChatMessage::User { content } if content.contains("[已固定文件") && content.contains("critical register map"))),
+        "pinned file must be re-injected, got first: {:?}",
+        messages.first()
+    );
+
+    let summary = agent.unpin_path(pinned.clone()).unwrap();
+    assert!(summary.contains("已取消固定"), "got: {summary}");
+}
+
+#[tokio::test]
+async fn compaction_strategy_off_disables_auto_compaction() {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let provider = RecordingProvider {
+        requests: requests.clone(),
+    };
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().join("sessions"));
+    let mut session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    for i in 0..14 {
+        session.push(ChatMessage::User {
+            content: format!("message {i} {}", "x".repeat(200)),
+        });
+    }
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(Vec::new()),
+        session,
+        store,
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(Arc::new(Mutex::new(Vec::new())))),
+        10,
+    );
+    agent.set_context_budget_chars(1000);
+    agent.set_compaction_strategy(firment_core::CompactionStrategy::Off);
+
+    let _ = agent.run_turn("hi").await.unwrap();
+    let messages = &agent.session().messages;
+    assert_eq!(messages.len(), 16);
+    assert!(
+        !messages.iter().any(
+            |m| matches!(m, ChatMessage::User { content } if content.contains("[对话已压缩]"))
+        ),
+        "compaction must be disabled"
+    );
+}
+
+#[tokio::test]
+async fn compaction_strategy_drop_discards_oldest_rounds() {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let provider = RecordingProvider {
+        requests: requests.clone(),
+    };
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().join("sessions"));
+    let mut session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    for i in 0..15 {
+        session.push(ChatMessage::User {
+            content: format!("message {i} {}", "x".repeat(200)),
+        });
+    }
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(Vec::new()),
+        session,
+        store,
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(Arc::new(Mutex::new(Vec::new())))),
+        10,
+    );
+    agent.set_context_budget_chars(1000);
+    agent.set_compaction_strategy(firment_core::CompactionStrategy::Drop);
+
+    let _ = agent.run_turn("hi").await.unwrap();
+    let messages = &agent.session().messages;
+    assert!(
+        messages
+            .iter()
+            .any(|m| matches!(m, ChatMessage::User { content } if content.contains("drop 策略"))),
+        "drop marker missing"
+    );
+    // summary message + last 3 rounds verbatim
+    assert_eq!(messages.len(), 5, "got {} messages", messages.len());
+}
+
+#[tokio::test]
 async fn verify_hard_gate_runs_after_mutations_and_allows_completion() {
     let verify_calls = Arc::new(AtomicUsize::new(0));
     let provider = FakeProvider {
@@ -1067,6 +1184,7 @@ async fn invalid_arguments_are_rejected_before_tool_runs() {
             dir.path().join("undo"),
         ))),
         verify_command: None,
+        symbols_backend: None,
         allowed_roots: Vec::new(),
     };
     let err = registry.run("flag", json!({}), &ctx).await.unwrap_err();

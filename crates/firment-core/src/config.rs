@@ -25,6 +25,9 @@ pub struct Config {
     /// compacted into a digest when exceeded.
     #[serde(default = "default_context_budget")]
     pub context_budget_chars: usize,
+    /// Auto-compaction strategy (see `CompactionStrategy`).
+    #[serde(default)]
+    pub compaction_strategy: CompactionStrategy,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -32,6 +35,20 @@ pub struct ToolsConfig {
     /// Command run by the `verify` tool (platform shell), e.g. `cargo check`.
     #[serde(default)]
     pub verify_command: Option<String>,
+    /// Symbol index backend: `auto` (ctags if available, else regex) / `ctags` / `regex`.
+    #[serde(default)]
+    pub symbols_backend: Option<String>,
+}
+
+/// Auto-compaction strategy: `summarize` (default) summarizes all old rounds;
+/// `drop` also discards the oldest rounds entirely; `off` disables auto-compaction.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CompactionStrategy {
+    #[default]
+    Summarize,
+    Drop,
+    Off,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +102,7 @@ impl Config {
             thinking: ThinkingLevel::Off,
             tools: ToolsConfig::default(),
             context_budget_chars: default_context_budget(),
+            compaction_strategy: CompactionStrategy::default(),
         }
     }
 
@@ -339,12 +357,14 @@ model = "deepseek-v4-flash"
 # max_iterations = 30
 # thinking = "medium"   # off / low / medium / high / xhigh / max（思考深度）
 # context_budget_chars = 60000   # 会话上下文字符预算，超出后自动压缩早期对话
+# compaction_strategy = "summarize"   # summarize（默认）/ drop（更早轮次直接丢弃）/ off（禁用自动压缩）
 
 [tools]
 # 代码改动后，agent 需先跑通 verify 再宣布完成；留空则 verify 工具不可用
 # verify_command = "cargo check"
 # 嵌入式示例：
 # verify_command = "cmake --build build"
+# symbols_backend = "auto"   # auto / ctags / regex（符号索引后端，auto=有 ctags 用 ctags）
 "#
 }
 
