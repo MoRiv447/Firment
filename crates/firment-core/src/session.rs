@@ -123,6 +123,16 @@ impl SessionStore {
         self.dir.join(format!("{id}.undo"))
     }
 
+    /// Directory holding spilled (out-of-band) tool outputs for a session.
+    pub fn spill_dir(&self, id: &str) -> PathBuf {
+        self.dir.join(format!("{id}.spill"))
+    }
+
+    /// Path of the session's change ledger (JSONL, one committed turn per line).
+    pub fn ledger_path(&self, id: &str) -> PathBuf {
+        self.dir.join(format!("{id}.ledger.jsonl"))
+    }
+
     pub fn save(&self, session: &Session) -> Result<(), SessionError> {
         fs::create_dir_all(&self.dir)?;
         let content = serialize_session(session)?;

@@ -6,6 +6,7 @@ use firment_core::{
 };
 use serde_json::{Value, json};
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 
@@ -171,6 +172,59 @@ impl Tool for FailingEditTool {
 
     async fn run(&self, _args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         Err(ToolError::new("anchor mismatch (fake failure)"))
+    }
+}
+
+struct LongOutputTool;
+
+#[async_trait]
+impl Tool for LongOutputTool {
+    fn name(&self) -> &'static str {
+        "long"
+    }
+
+    fn description(&self) -> &'static str {
+        "returns very long output"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+
+    async fn run(&self, _args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+        Ok(ToolOutput {
+            text: "x".repeat(10_000),
+        })
+    }
+}
+
+struct FlagTool {
+    ran: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl Tool for FlagTool {
+    fn name(&self) -> &'static str {
+        "flag"
+    }
+
+    fn description(&self) -> &'static str {
+        "sets a flag when actually run"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {"need": {"type": "string"}},
+            "required": ["need"]
+        })
+    }
+
+    async fn run(&self, _args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+        self.ran.store(true, Ordering::SeqCst);
+        Ok(ToolOutput {
+            text: "ran".to_string(),
+        })
     }
 }
 
@@ -616,6 +670,133 @@ async fn agent_without_provider_reports_clear_error() {
 
     let err = agent.run_turn("hi").await.unwrap_err();
     assert!(matches!(err, AgentError::NoProvider));
+}
+
+#[tokio::test]
+async fn long_tool_output_is_spilled_to_disk() {
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_long".to_string(),
+                    name: "long".to_string(),
+                    arguments: json!({}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            vec![
+                ProviderEvent::Text("done".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+        ]))),
+        model: "fake".to_string(),
+    };
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().join("sessions"));
+    let session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(vec![Arc::new(LongOutputTool)]),
+        session,
+        store.clone(),
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(Arc::new(Mutex::new(Vec::new())))),
+        10,
+    );
+
+    let _ = agent.run_turn("long").await.unwrap();
+    let tool_message = agent
+        .session()
+        .messages
+        .iter()
+        .find_map(|m| match m {
+            ChatMessage::Tool { content, .. } => Some(content.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(tool_message.contains("已外溢到"), "got: {tool_message}");
+    let spill_dir = store.spill_dir(&agent.session().id);
+    let spilled = std::fs::read_dir(&spill_dir).unwrap().count();
+    assert_eq!(spilled, 1);
+    let file = std::fs::read_dir(&spill_dir)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap();
+    assert_eq!(std::fs::read(file.path()).unwrap().len(), 10_000);
+}
+
+#[tokio::test]
+async fn ledger_records_changes_and_is_injected_into_prompt() {
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_write".to_string(),
+                    name: "write_file".to_string(),
+                    arguments: json!({"path": "c.txt", "content": "v1"}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            vec![
+                ProviderEvent::Text("done".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+        ]))),
+        model: "fake".to_string(),
+    };
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().join("sessions"));
+    let session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(vec![Arc::new(JournalingWriteTool)]),
+        session,
+        store.clone(),
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(Arc::new(Mutex::new(Vec::new())))),
+        10,
+    );
+
+    let _ = agent.run_turn("write c").await.unwrap();
+    let ledger_text = std::fs::read_to_string(store.ledger_path(&agent.session().id)).unwrap();
+    assert!(ledger_text.contains("c.txt"), "got: {ledger_text}");
+
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    agent.set_provider(Box::new(RecordingProvider {
+        requests: requests.clone(),
+    }));
+    let _ = agent.run_turn("second").await.unwrap();
+    let requests = requests.lock().unwrap();
+    match &requests[0].messages[0] {
+        ChatMessage::System { content } => {
+            assert!(content.contains("改动台账"), "got: {content}");
+            assert!(content.contains("c.txt"), "got: {content}");
+        }
+        _ => panic!("expected a system message"),
+    }
+}
+
+#[tokio::test]
+async fn invalid_arguments_are_rejected_before_tool_runs() {
+    let ran = Arc::new(AtomicBool::new(false));
+    let registry = registry_with(vec![Arc::new(FlagTool { ran: ran.clone() })]);
+    let dir = tempdir().unwrap();
+    let ctx = ToolContext {
+        cwd: dir.path().to_path_buf(),
+        permission: Arc::new(AutoApprove::everything()),
+        allow_dangerous: false,
+        journal: Arc::new(Mutex::new(firment_core::EditJournal::new(
+            dir.path().join("undo"),
+        ))),
+        verify_command: None,
+    };
+    let err = registry.run("flag", json!({}), &ctx).await.unwrap_err();
+    assert!(err.message.contains("参数校验失败"), "got: {}", err.message);
+    assert!(
+        !ran.load(Ordering::SeqCst),
+        "tool must not run on invalid args"
+    );
 }
 
 #[tokio::test]

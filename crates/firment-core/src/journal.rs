@@ -26,6 +26,93 @@ pub struct UndoSummary {
     pub restored: Vec<String>,
 }
 
+/// One file's change within a committed turn (change ledger).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LedgerChange {
+    pub path: PathBuf,
+    pub old_lines: usize,
+    pub new_lines: usize,
+    /// Compact `-`/`+` hunk lines, capped in size.
+    pub hunks: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LedgerLine {
+    seq: u64,
+    created_at: u64,
+    changes: Vec<LedgerChange>,
+}
+
+/// Session-scoped change ledger: one JSONL line per committed turn.
+#[derive(Debug, Clone)]
+pub struct Ledger {
+    path: PathBuf,
+}
+
+impl Ledger {
+    pub fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    pub fn append(&self, changes: &[LedgerChange]) -> Result<(), String> {
+        if changes.is_empty() {
+            return Ok(());
+        }
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let seq = if self.path.exists() {
+            fs::read_to_string(&self.path)
+                .map(|t| t.lines().count() as u64 + 1)
+                .unwrap_or(1)
+        } else {
+            1
+        };
+        let line = LedgerLine {
+            seq,
+            created_at: now_secs(),
+            changes: changes.to_vec(),
+        };
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+            .map_err(|e| e.to_string())?;
+        use std::io::Write;
+        writeln!(
+            file,
+            "{}",
+            serde_json::to_string(&line).map_err(|e| e.to_string())?
+        )
+        .map_err(|e| e.to_string())
+    }
+
+    /// Most recent entries, formatted for injection into the system prompt.
+    pub fn summary(&self, max_entries: usize, max_chars: usize) -> String {
+        let Ok(text) = fs::read_to_string(&self.path) else {
+            return String::new();
+        };
+        let entries: Vec<LedgerLine> = text
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        let start = entries.len().saturating_sub(max_entries);
+        let mut out = String::new();
+        for entry in &entries[start..] {
+            for change in &entry.changes {
+                out.push_str(&format!(
+                    "- {}（{} 行 -> {} 行）\n{}",
+                    change.path.display(),
+                    change.old_lines,
+                    change.new_lines,
+                    change.hunks
+                ));
+            }
+        }
+        truncate_chars(&out, max_chars)
+    }
+}
+
 /// Per-turn edit journal: backs up every file before the first mutation and
 /// can roll the whole batch back. On a successful turn it commits the entry
 /// so `/undo` can restore it later.
@@ -97,10 +184,11 @@ impl EditJournal {
         }
     }
 
-    /// Seal the turn's mutations as an undo entry. Empty batches are skipped.
-    pub fn commit(&mut self) -> Result<(), String> {
+    /// Seal the turn's mutations as an undo entry and return the change
+    /// ledger entries. Empty batches are skipped.
+    pub fn commit(&mut self) -> Result<Vec<LedgerChange>, String> {
         if self.entries.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
         fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
         let created = now_secs();
@@ -111,8 +199,13 @@ impl EditJournal {
         let name = format!("undo-{created}-{}.json", self.next_seq);
         let text = serde_json::to_string_pretty(&record).map_err(|e| e.to_string())?;
         fs::write(self.dir.join(name), text).map_err(|e| e.to_string())?;
+
+        let mut changes = Vec::new();
+        for entry in &self.entries {
+            changes.push(ledger_change_for(&self.dir, entry)?);
+        }
         self.entries.clear();
-        Ok(())
+        Ok(changes)
     }
 
     /// Restore the most recently committed undo entry for a session.
@@ -155,6 +248,60 @@ impl EditJournal {
             restored,
         })
     }
+}
+
+fn ledger_change_for(dir: &Path, entry: &EntryRecord) -> Result<LedgerChange, String> {
+    let old_bytes = if entry.existed {
+        fs::read(dir.join(&entry.backup)).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let new_bytes = fs::read(&entry.path).unwrap_or_default();
+    let old = String::from_utf8_lossy(&old_bytes).into_owned();
+    let new = String::from_utf8_lossy(&new_bytes).into_owned();
+    Ok(LedgerChange {
+        path: entry.path.clone(),
+        old_lines: old.lines().count(),
+        new_lines: new.lines().count(),
+        hunks: diff_capped(&old, &new, 1600),
+    })
+}
+
+/// Compact `-`/`+` line diff (common prefix/suffix trimmed), capped in size.
+fn diff_capped(old: &str, new: &str, max_chars: usize) -> String {
+    let old_lines: Vec<&str> = old.split('\n').collect();
+    let new_lines: Vec<&str> = new.split('\n').collect();
+    let mut prefix = 0;
+    while prefix < old_lines.len()
+        && prefix < new_lines.len()
+        && old_lines[prefix] == new_lines[prefix]
+    {
+        prefix += 1;
+    }
+    let mut suffix = 0;
+    while suffix < old_lines.len().saturating_sub(prefix)
+        && suffix < new_lines.len().saturating_sub(prefix)
+        && old_lines[old_lines.len() - 1 - suffix] == new_lines[new_lines.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+    let mut out = String::new();
+    for line in &old_lines[prefix..old_lines.len() - suffix] {
+        out.push_str(&format!("-{line}\n"));
+    }
+    for line in &new_lines[prefix..new_lines.len() - suffix] {
+        out.push_str(&format!("+{line}\n"));
+    }
+    truncate_chars(&out, max_chars)
+}
+
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    let mut chars: Vec<char> = text.chars().collect();
+    if chars.len() > max_chars {
+        chars.truncate(max_chars);
+        chars.push('…');
+    }
+    chars.into_iter().collect()
 }
 
 fn restore_entry(dir: &Path, entry: &EntryRecord) -> Result<(), String> {
@@ -228,7 +375,20 @@ mod tests {
         let mut journal = EditJournal::new(undo_dir.clone());
         journal.begin(&file).unwrap();
         fs::write(&file, "changed").unwrap();
-        journal.commit().unwrap();
+        let changes = journal.commit().unwrap();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].old_lines, 1);
+        assert_eq!(changes[0].new_lines, 1);
+        assert!(
+            changes[0].hunks.contains("-original"),
+            "got: {}",
+            changes[0].hunks
+        );
+        assert!(
+            changes[0].hunks.contains("+changed"),
+            "got: {}",
+            changes[0].hunks
+        );
         fs::write(&file, "changed-again").unwrap();
         let summary = EditJournal::undo_latest(&undo_dir).unwrap();
         assert_eq!(summary.files, 1);
@@ -243,5 +403,32 @@ mod tests {
         let mut journal = EditJournal::new(undo_dir.clone());
         journal.commit().unwrap();
         assert!(EditJournal::undo_latest(&undo_dir).is_err());
+    }
+
+    #[test]
+    fn ledger_appends_and_summarizes() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::new(dir.path().join("ledger.jsonl"));
+        ledger
+            .append(&[LedgerChange {
+                path: PathBuf::from("a.txt"),
+                old_lines: 1,
+                new_lines: 2,
+                hunks: "-old\n+new\n".to_string(),
+            }])
+            .unwrap();
+        ledger
+            .append(&[LedgerChange {
+                path: PathBuf::from("b.txt"),
+                old_lines: 0,
+                new_lines: 1,
+                hunks: "+hello\n".to_string(),
+            }])
+            .unwrap();
+        let summary = ledger.summary(10, 1000);
+        assert!(summary.contains("a.txt"), "got: {summary}");
+        assert!(summary.contains("b.txt"), "got: {summary}");
+        assert!(summary.contains("+hello"), "got: {summary}");
+        assert!(summary.contains("1 行 -> 2 行"), "got: {summary}");
     }
 }

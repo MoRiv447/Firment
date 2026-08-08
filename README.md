@@ -1,7 +1,7 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.3.0--beta.1-orange)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.3.0--beta.2-orange)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![Benchmark](https://img.shields.io/badge/benchmark-4.95-%231-green)]()
@@ -32,6 +32,9 @@
 - **Context compaction**: long sessions auto-compact older messages into a digest (`context_budget_chars`)
 - **Symbols index**: ctags-level definition/reference lookup for C/C++, Rust, Python, JS/TS, Go, Java (also available in plan mode)
 - **Failure taxonomy**: tool errors carry tags such as `[NotFound]`, `[CompileError]`, `[Timeout]`, `[Permission]`, `[ConcurrentChange]`
+- **Tool output spill**: outputs over a size threshold are saved to the session's spill directory, keeping only a short excerpt + `read_file` pointer in the conversation
+- **Argument schema validation**: tool arguments are validated against their JSON Schema before execution; malformed calls are rejected with a `[InvalidInput]` tag
+- **Change ledger**: every committed turn appends path/line/hunk entries to a per-session ledger, injected into context on resume; `/ledger` shows it
 
 ### 🚀 Quick Start
 
@@ -105,7 +108,7 @@ Add more providers and switch with `--provider <name>` or `/provider <name>` in 
 
 ### 🎮 TUI
 
-Slash commands: `/plan [on|off]`, `/agent`, `/models`, `/model <id>`, `/sessions` (↑/↓ to pick), `/session <id>`, `/undo`, `/provider <name>`, `/add-provider`, `/apikey`, `/thinking`, `/copy`, `/config`, `/clear`, `/help`, `/quit`.
+Slash commands: `/plan [on|off]`, `/agent`, `/models`, `/model <id>`, `/sessions` (↑/↓ to pick), `/session <id>`, `/undo`, `/ledger`, `/provider <name>`, `/add-provider`, `/apikey`, `/thinking`, `/copy`, `/config`, `/clear`, `/help`, `/quit`.
 
 Keys: `↑/↓` browse history when the input is empty, otherwise scroll; `PgUp/PgDn` and the mouse wheel always scroll; `Ctrl+P` opens the model picker; left-drag to select and right-click to copy (paste when nothing is selected); `Ctrl+Shift+C` copies the last reply; `←/→`, `Home/End`, `Ctrl+A/E` move the cursor; permission popups accept `y`/`n`/`a`.
 

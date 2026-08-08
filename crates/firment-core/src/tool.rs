@@ -105,6 +105,8 @@ impl ToolRegistry {
         let tool = self
             .get(name)
             .ok_or_else(|| ToolError::new(format!("unknown tool: {name}")))?;
+        crate::schema::validate_args(tool.name(), &tool.input_schema(), &args)
+            .map_err(ToolError::new)?;
         let mut reason = tool.approval(&args);
         if let Some(preview) = tool.preview(&args, ctx)
             && let Some(reason) = reason.as_mut()

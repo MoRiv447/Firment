@@ -262,6 +262,18 @@ pub async fn run(
                             .await;
                     }
                 },
+                AgentCmd::Ledger => {
+                    let summary = agent.ledger_summary();
+                    if summary.is_empty() {
+                        agent
+                            .emit(AgentEvent::Info("本会话还没有已提交的编辑".to_string()))
+                            .await;
+                    } else {
+                        agent
+                            .emit(AgentEvent::Info(format!("最近改动台账:\n{summary}")))
+                            .await;
+                    }
+                }
                 AgentCmd::SetProvider(name) => {
                     match task_config.build_provider(Some(&name), None) {
                         Ok(new_provider) => {
@@ -450,6 +462,7 @@ enum AgentCmd {
     OpenSessionPicker,
     LoadSession(String),
     Undo,
+    Ledger,
     SetProvider(String),
     SetApiKey {
         provider: Option<String>,
@@ -1412,7 +1425,7 @@ impl App {
             .unwrap_or((command, ""));
         match name {
             "help" => self.items.push(Item::System(
-                "命令: /plan [on|off]  /agent  /models  /model <id>  /sessions(上下键选择)  /session <id>  /undo  /copy  /provider <名字>  /add-provider <名字> <openai|anthropic> <base_url> <模型>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /config  /clear  /help  /quit\n键位: ↑/↓ 空输入时浏览历史，非空时滚动对话 · PgUp/PgDn/滚轮始终滚动 · Ctrl+P 模型选择器 · 左键拖动选择 · 右键复制选中（无选区时粘贴） · Ctrl+Shift+C 复制最后回复 · ←/→ 移动输入光标 · y/n/a 权限确认 · Ctrl-C 退出"
+                "命令: /plan [on|off]  /agent  /models  /model <id>  /sessions(上下键选择)  /session <id>  /undo  /ledger  /copy  /provider <名字>  /add-provider <名字> <openai|anthropic> <base_url> <模型>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /config  /clear  /help  /quit\n键位: ↑/↓ 空输入时浏览历史，非空时滚动对话 · PgUp/PgDn/滚轮始终滚动 · Ctrl+P 模型选择器 · 左键拖动选择 · 右键复制选中（无选区时粘贴） · Ctrl+Shift+C 复制最后回复 · ←/→ 移动输入光标 · y/n/a 权限确认 · Ctrl-C 退出"
                     .to_string(),
             )),
             "plan" => {
@@ -1498,6 +1511,10 @@ impl App {
                 self.items.push(Item::System(
                     "正在撤销上一次已提交的编辑…".to_string(),
                 ));
+            }
+            "ledger" => {
+                let _ = self.cmd_tx.try_send(AgentCmd::Ledger);
+                self.items.push(Item::System("正在读取改动台账…".to_string()));
             }
             "copy" => self.copy_last_output(),
             "apikey" | "key" if !arg.is_empty() => {

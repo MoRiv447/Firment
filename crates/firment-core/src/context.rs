@@ -67,6 +67,8 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          and re-verify.\n\
          - Never claim a build, test, or check passed unless you actually ran it and saw exit \
          code 0.\n\
+         - A change ledger may be attached to this session; use it as ground truth when \
+         describing what changed.\n\
          \n\
          # Safety\n\
          - Freely take local, reversible actions. Confirm before destructive or hard-to-reverse \

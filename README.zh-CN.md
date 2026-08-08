@@ -1,7 +1,7 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.3.0--beta.1-orange)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.3.0--beta.2-orange)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![Benchmark](https://img.shields.io/badge/benchmark-4.95-%231-green)]()
@@ -34,6 +34,9 @@
 - **上下文压缩**：长会话自动把早期消息压缩成摘要（`context_budget_chars`）
 - **符号索引**：ctags 级定义/引用查找，支持 C/C++、Rust、Python、JS/TS、Go、Java（Plan 模式也可用）
 - **失败分类**：工具错误带 `[NotFound]`、`[CompileError]`、`[Timeout]`、`[Permission]`、`[ConcurrentChange]` 等标签
+- **工具输出外溢**：超长工具输出自动落盘到会话外溢目录，对话里只留短摘录 + `read_file` 路径指针
+- **参数 schema 校验**：工具参数在执行前按 JSON Schema 校验，非法参数以 `[InvalidInput]` 拒绝
+- **改动台账**：每回合已提交的改动（路径/行数/hunk）写入会话台账，恢复时注入上下文；`/ledger` 查看
 
 ### 🚀 快速开始
 
@@ -107,7 +110,7 @@ model = "deepseek-v4-flash"   # 或 deepseek-v4-pro
 
 ### 🎮 TUI 交互
 
-斜杠命令：`/plan [on|off]`、`/agent`、`/models`、`/model <id>`、`/sessions`（↑/↓ 选择）、`/session <id>`、`/undo`、`/provider <名字>`、`/add-provider`、`/apikey`、`/thinking`、`/copy`、`/config`、`/clear`、`/help`、`/quit`。
+斜杠命令：`/plan [on|off]`、`/agent`、`/models`、`/model <id>`、`/sessions`（↑/↓ 选择）、`/session <id>`、`/undo`、`/ledger`、`/provider <名字>`、`/add-provider`、`/apikey`、`/thinking`、`/copy`、`/config`、`/clear`、`/help`、`/quit`。
 
 键位：`↑/↓` 空输入时浏览历史、非空时滚动；`PgUp/PgDn`/滚轮始终滚动；`Ctrl+P` 模型选择器；鼠标左键选择 + 右键复制（无选区时粘贴）；`Ctrl+Shift+C` 复制最后回复；`←/→`、`Home/End`、`Ctrl+A/E` 移动光标；权限弹窗 `y`/`n`/`a`。
 

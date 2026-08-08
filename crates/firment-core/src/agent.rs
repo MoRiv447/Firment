@@ -1,4 +1,4 @@
-use crate::journal::EditJournal;
+use crate::journal::{EditJournal, Ledger};
 use crate::provider::{Provider, ProviderError, ProviderEvent};
 use crate::session::{SessionStore, SessionSummary};
 use crate::tool::{ToolContext, ToolRegistry};
@@ -7,6 +7,7 @@ use crate::{PermissionChecker, Session, system_prompt_for};
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::Value;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -136,6 +137,36 @@ impl Agent {
         self.context_budget_chars = budget;
     }
 
+    /// Tool outputs above the threshold are spilled to the session's spill
+    /// directory; the message keeps a short excerpt plus a `read_file` pointer.
+    fn spill_text(&self, text: &str) -> String {
+        const THRESHOLD: usize = 8000;
+        const EXCERPT: usize = 2000;
+        if text.chars().count() <= THRESHOLD {
+            return text.to_string();
+        }
+        let dir = self.store.spill_dir(&self.session.id);
+        if fs::create_dir_all(&dir).is_ok() {
+            let name = format!("{}.txt", uuid::Uuid::new_v4());
+            let path = dir.join(&name);
+            if fs::write(&path, text).is_ok() {
+                let excerpt: String = text.chars().take(EXCERPT).collect();
+                return format!(
+                    "[输出过长（{} 字符），完整内容已外溢到 {}；需要时用 read_file 查看]\n{}",
+                    text.chars().count(),
+                    path.display(),
+                    excerpt
+                );
+            }
+        }
+        text.to_string()
+    }
+
+    /// Formatted change-ledger summary for display (e.g. `/ledger`).
+    pub fn ledger_summary(&self) -> String {
+        Ledger::new(self.store.ledger_path(&self.session.id)).summary(30, 6000)
+    }
+
     /// Switch between agent and read-only plan mode. The caller supplies the
     /// matching tool registry and permission checker for the new mode.
     pub fn set_mode(
@@ -164,8 +195,16 @@ impl Agent {
     }
 
     fn build_request(&self) -> ChatRequest {
+        let mut system_content = system_prompt_for(&self.session.cwd, self.session.mode);
+        let ledger_summary =
+            Ledger::new(self.store.ledger_path(&self.session.id)).summary(20, 4000);
+        if !ledger_summary.is_empty() {
+            system_content.push_str(&format!(
+                "\n\n# 本会话改动台账（最近已提交编辑）\n{ledger_summary}"
+            ));
+        }
         let mut messages = vec![ChatMessage::System {
-            content: system_prompt_for(&self.session.cwd, self.session.mode),
+            content: system_content,
         }];
         messages.extend(self.session.messages.clone());
         ChatRequest {
@@ -187,6 +226,7 @@ impl Agent {
         let journal = Arc::new(Mutex::new(EditJournal::new(
             self.store.undo_dir(&self.session.id),
         )));
+        let ledger = Ledger::new(self.store.ledger_path(&self.session.id));
 
         for _ in 0..self.max_iterations {
             self.compact_if_needed();
@@ -226,10 +266,20 @@ impl Agent {
 
             if tool_calls.is_empty() {
                 let commit_result = lock_journal(&journal).commit();
-                if let Err(e) = commit_result {
-                    self.sink
-                        .event(AgentEvent::Info(format!("编辑日志写入失败: {e}")))
-                        .await;
+                match commit_result {
+                    Ok(changes) if !changes.is_empty() => {
+                        if let Err(e) = ledger.append(&changes) {
+                            self.sink
+                                .event(AgentEvent::Info(format!("改动台账写入失败: {e}")))
+                                .await;
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        self.sink
+                            .event(AgentEvent::Info(format!("编辑日志写入失败: {e}")))
+                            .await;
+                    }
                 }
                 self.sink
                     .event(AgentEvent::TurnEnd {
@@ -404,7 +454,7 @@ async fn execute_tool_calls(
             agent.session.push(ChatMessage::Tool {
                 tool_call_id: call.id.clone(),
                 name: call.name.clone(),
-                content: text,
+                content: agent.spill_text(&text),
             });
             done[i] = true;
             remaining -= 1;
