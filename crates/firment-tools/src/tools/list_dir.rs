@@ -1,4 +1,4 @@
-use super::util::resolve;
+use super::util::resolve_within;
 use async_trait::async_trait;
 use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
@@ -35,7 +35,8 @@ impl Tool for ListDir {
             .and_then(|r| r.as_bool())
             .unwrap_or(false);
         let limit = args.get("limit").and_then(|l| l.as_u64()).unwrap_or(200) as usize;
-        let resolved = resolve(&ctx.cwd, path);
+        let resolved =
+            resolve_within(&ctx.cwd, path, &ctx.allowed_roots).map_err(ToolError::new)?;
         if !resolved.is_dir() {
             return Err(ToolError::new(format!(
                 "{} is not a directory",

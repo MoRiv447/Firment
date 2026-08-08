@@ -64,7 +64,8 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          # Verification\n\
          - If the verify tool is available, run it after code changes and before declaring the \
          task complete. A failed or non-zero exit means the task is NOT complete: fix the errors \
-         and re-verify.\n\
+         and re-verify. When verify is configured, the harness enforces this gate: completion is \
+         not accepted until verify passes.\n\
          - Never claim a build, test, or check passed unless you actually ran it and saw exit \
          code 0.\n\
          - A change ledger may be attached to this session; use it as ground truth when \

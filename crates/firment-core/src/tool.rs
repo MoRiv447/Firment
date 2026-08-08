@@ -19,6 +19,9 @@ pub struct ToolContext {
     pub journal: Arc<Mutex<EditJournal>>,
     /// Configured verification command from `[tools] verify_command`.
     pub verify_command: Option<String>,
+    /// Extra roots (besides cwd) that file tools may access, e.g. the
+    /// session's spill directory. Paths outside cwd + these roots are rejected.
+    pub allowed_roots: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone)]

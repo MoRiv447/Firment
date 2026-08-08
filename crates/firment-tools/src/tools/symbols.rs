@@ -1,4 +1,4 @@
-use super::util::{read_text, rel_str, resolve, truncate};
+use super::util::{read_text, rel_str, resolve_within, truncate};
 use async_trait::async_trait;
 use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use ignore::WalkBuilder;
@@ -133,7 +133,8 @@ impl Tool for Symbols {
             .get("max_results")
             .and_then(|m| m.as_u64())
             .unwrap_or(200) as usize;
-        let resolved = resolve(&ctx.cwd, path);
+        let resolved =
+            resolve_within(&ctx.cwd, path, &ctx.allowed_roots).map_err(ToolError::new)?;
         if !resolved.is_dir() {
             return Err(ToolError::new(format!(
                 "[NotFound] {} is not a directory",
@@ -266,6 +267,7 @@ mod tests {
             allow_dangerous: false,
             journal: Arc::new(Mutex::new(EditJournal::new(dir.join("undo")))),
             verify_command: None,
+            allowed_roots: Vec::new(),
         }
     }
 

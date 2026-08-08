@@ -1,4 +1,4 @@
-use super::util::resolve;
+use super::util::resolve_within;
 use async_trait::async_trait;
 use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use globset::Glob as GlobPattern;
@@ -44,7 +44,8 @@ impl Tool for Glob {
         let glob = GlobPattern::new(pattern)
             .map_err(|e| ToolError::new(format!("bad glob pattern: {e}")))?
             .compile_matcher();
-        let resolved = resolve(&ctx.cwd, root);
+        let resolved =
+            resolve_within(&ctx.cwd, root, &ctx.allowed_roots).map_err(ToolError::new)?;
         if !resolved.is_dir() {
             return Err(ToolError::new(format!(
                 "{} is not a directory",

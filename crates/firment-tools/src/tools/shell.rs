@@ -226,6 +226,7 @@ mod tests {
                 ".",
             )))),
             verify_command: None,
+            allowed_roots: Vec::new(),
         };
         let result = tool
             .run(json!({"command": "del todo.py test_todo.py"}), &ctx)

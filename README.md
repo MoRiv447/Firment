@@ -25,12 +25,12 @@
 - **Copy support**: select with the left mouse button, copy with the right button (paste when nothing is selected); `Ctrl+Shift+C` / `/copy` copies the last reply
 - **Global install**: `firm install` adds itself to PATH with PowerShell completions; `firm update` self-updates
 - **Transactional edits + undo**: every write/edit in a turn is backed up and rolled back as a batch if any mutation fails; `/undo` restores the last committed batch (persisted per session)
-- **CAS protection**: write/edit re-checks the file before applying and aborts with a `[ConcurrentChange]` tag if it changed meanwhile
+- **CAS protection**: write/edit re-checks the file byte-for-byte before applying and aborts with a `[ConcurrentChange]` tag if it changed meanwhile
 - **Diff-first approval**: write/edit permission prompts show the exact unified diff before you approve
 - **Parallel tool calls**: independent calls run concurrently; same-file reads/writes and broad tools (shell/verify/grep) are ordered automatically
-- **Verify gate**: an optional `verify` tool runs your configured build/check command; the agent must pass it before declaring completion
+- **Verify gate (enforced)**: an optional `verify` tool runs your configured build/check command; after any file changes the harness itself runs verify and refuses to accept completion until it passes
 - **Context compaction**: long sessions auto-compact older messages into a digest (`context_budget_chars`)
-- **Symbols index**: ctags-level definition/reference lookup for C/C++, Rust, Python, JS/TS, Go, Java (also available in plan mode)
+- **Symbols index**: lightweight regex-based definition/reference lookup (heuristic, not a full ctags parser) for C/C++, Rust, Python, JS/TS, Go, Java (also available in plan mode)
 - **Failure taxonomy**: tool errors carry tags such as `[NotFound]`, `[CompileError]`, `[Timeout]`, `[Permission]`, `[ConcurrentChange]`
 - **Tool output spill**: outputs over a size threshold are saved to the session's spill directory, keeping only a short excerpt + `read_file` pointer in the conversation
 - **Argument schema validation**: tool arguments are validated against their JSON Schema before execution; malformed calls are rejected with a `[InvalidInput]` tag
@@ -38,6 +38,7 @@
 - **Model-summarized compaction**: when the context budget is exceeded, older rounds are summarized by the main model (with a local fallback), the last 3 rounds stay verbatim, and tool-call pairs are never split
 - **Cache-stable prefix**: the system prompt stays byte-identical for provider prefix caching; dynamic state (change ledger) is merged into user messages as deltas
 - **Unchanged-read dedup**: re-reading an unchanged file returns a stub instead of repeating content; recently read files are re-injected after compaction
+- **Path sandbox**: file tools are confined to the workspace (canonicalized; extra roots such as the spill directory are explicitly allowed); paths outside are rejected with `[Permission]`
 
 ### 🚀 Quick Start
 

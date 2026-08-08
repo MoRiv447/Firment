@@ -291,12 +291,13 @@ fn ledger_change_for(dir: &Path, entry: &EntryRecord) -> Result<LedgerChange, St
         path: entry.path.clone(),
         old_lines: old.lines().count(),
         new_lines: new.lines().count(),
-        hunks: diff_capped(&old, &new, 1600),
+        hunks: line_diff(&old, &new, 1600),
     })
 }
 
 /// Compact `-`/`+` line diff (common prefix/suffix trimmed), capped in size.
-fn diff_capped(old: &str, new: &str, max_chars: usize) -> String {
+/// Shared with the tool-layer permission previews.
+pub fn line_diff(old: &str, new: &str, max_chars: usize) -> String {
     let old_lines: Vec<&str> = old.split('\n').collect();
     let new_lines: Vec<&str> = new.split('\n').collect();
     let mut prefix = 0;

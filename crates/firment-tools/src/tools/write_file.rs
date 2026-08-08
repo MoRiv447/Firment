@@ -1,4 +1,4 @@
-use super::util::{read_text, resolve, simple_diff};
+use super::util::{read_text, resolve_within, simple_diff};
 use async_trait::async_trait;
 use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
@@ -36,7 +36,7 @@ impl Tool for WriteFile {
     fn preview(&self, args: &Value, ctx: &ToolContext) -> Option<String> {
         let path = args.get("path")?.as_str()?;
         let content = args.get("content")?.as_str()?;
-        let resolved = resolve(&ctx.cwd, path);
+        let resolved = resolve_within(&ctx.cwd, path, &ctx.allowed_roots).ok()?;
         let old = read_text(&resolved).unwrap_or_default();
         Some(simple_diff(&resolved, &old, content, 4000))
     }
@@ -50,7 +50,8 @@ impl Tool for WriteFile {
             .get("content")
             .and_then(|c| c.as_str())
             .ok_or_else(|| ToolError::new("missing 'content'"))?;
-        let resolved = resolve(&ctx.cwd, path);
+        let resolved =
+            resolve_within(&ctx.cwd, path, &ctx.allowed_roots).map_err(ToolError::new)?;
         let existed = resolved.exists();
         let original_bytes = if existed {
             Some(fs::read(&resolved).map_err(|e| {
@@ -107,6 +108,7 @@ mod tests {
             allow_dangerous: false,
             journal: Arc::new(Mutex::new(EditJournal::new(dir.join("undo")))),
             verify_command: None,
+            allowed_roots: Vec::new(),
         }
     }
 

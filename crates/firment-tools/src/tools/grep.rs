@@ -1,4 +1,4 @@
-use super::util::{read_text, rel_str, resolve};
+use super::util::{read_text, rel_str, resolve_within};
 use async_trait::async_trait;
 use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use globset::Glob;
@@ -62,7 +62,8 @@ impl Tool for Grep {
             .case_insensitive(!case_sensitive)
             .build()
             .map_err(|e| ToolError::new(format!("[InvalidInput] bad regex: {e}")))?;
-        let resolved = resolve(&ctx.cwd, path);
+        let resolved =
+            resolve_within(&ctx.cwd, path, &ctx.allowed_roots).map_err(ToolError::new)?;
         if !resolved.is_dir() {
             return Err(ToolError::new(format!(
                 "[NotFound] {} is not a directory",

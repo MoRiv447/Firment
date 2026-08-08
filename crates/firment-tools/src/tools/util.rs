@@ -11,6 +11,50 @@ pub(crate) fn resolve(cwd: &Path, path: &str) -> PathBuf {
     if p.is_absolute() { p } else { cwd.join(p) }
 }
 
+/// Resolve `path` and enforce the workspace boundary: the canonical target
+/// must live under `cwd` or one of `extra_roots` (e.g. the session spill dir).
+/// Returns the un-canonicalized resolved path on success (for display/use).
+pub(crate) fn resolve_within(
+    cwd: &Path,
+    path: &str,
+    extra_roots: &[PathBuf],
+) -> Result<PathBuf, String> {
+    let target = resolve(cwd, path);
+    let cwd_canon = fs::canonicalize(cwd)
+        .map_err(|e| format!("cannot canonicalize cwd {}: {e}", cwd.display()))?;
+    let target_canon = canonicalize_for_check(&target)
+        .map_err(|e| format!("cannot resolve {}: {e}", target.display()))?;
+    let inside = target_canon.starts_with(&cwd_canon)
+        || extra_roots.iter().any(|root| {
+            fs::canonicalize(root)
+                .map(|root_canon| target_canon.starts_with(&root_canon))
+                .unwrap_or(false)
+        });
+    if !inside {
+        return Err(format!(
+            "[Permission] 路径超出工作区边界: {}（工作区: {}）",
+            target.display(),
+            cwd_canon.display()
+        ));
+    }
+    Ok(target)
+}
+
+/// Canonicalize an existing path; for a not-yet-existing path (e.g. a file to
+/// be created), canonicalize its parent and re-attach the file name.
+fn canonicalize_for_check(path: &Path) -> std::io::Result<PathBuf> {
+    if path.exists() {
+        return fs::canonicalize(path);
+    }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        let parent = fs::canonicalize(parent)?;
+        return Ok(parent.join(path.file_name().unwrap_or_default()));
+    }
+    fs::canonicalize(path)
+}
+
 pub(crate) fn read_text(path: &Path) -> Result<String, String> {
     let bytes = fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     if bytes.contains(&0) {
@@ -42,40 +86,9 @@ pub(crate) fn truncate(text: &str, max_chars: usize) -> String {
 /// Minimal unified diff for permission previews: trims common prefix/suffix
 /// lines into a single hunk, capped at `max_chars`.
 pub(crate) fn simple_diff(path: &Path, old: &str, new: &str, max_chars: usize) -> String {
-    let old_lines: Vec<&str> = old.split('\n').collect();
-    let new_lines: Vec<&str> = new.split('\n').collect();
-    let mut prefix = 0;
-    while prefix < old_lines.len()
-        && prefix < new_lines.len()
-        && old_lines[prefix] == new_lines[prefix]
-    {
-        prefix += 1;
-    }
-    let mut suffix = 0;
-    while suffix < old_lines.len().saturating_sub(prefix)
-        && suffix < new_lines.len().saturating_sub(prefix)
-        && old_lines[old_lines.len() - 1 - suffix] == new_lines[new_lines.len() - 1 - suffix]
-    {
-        suffix += 1;
-    }
-    let old_mid = &old_lines[prefix..old_lines.len() - suffix];
-    let new_mid = &new_lines[prefix..new_lines.len() - suffix];
-    let mut out = String::new();
-    out.push_str(&format!("--- {}\n+++ {}\n", path.display(), path.display()));
-    out.push_str(&format!(
-        "@@ -{},{} +{},{} @@\n",
-        prefix + 1,
-        old_mid.len(),
-        prefix + 1,
-        new_mid.len()
-    ));
-    for line in old_mid {
-        out.push_str(&format!("-{line}\n"));
-    }
-    for line in new_mid {
-        out.push_str(&format!("+{line}\n"));
-    }
-    truncate(&out, max_chars)
+    let mut out = format!("--- {}\n+++ {}\n", path.display(), path.display());
+    out.push_str(&firment_core::journal::line_diff(old, new, max_chars));
+    out
 }
 
 /// Run a command through the platform shell, capture output, enforce a
@@ -157,4 +170,30 @@ pub(crate) async fn run_command(
         ),
         code,
     ))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn resolve_within_enforces_workspace_boundary() {
+        let dir = tempdir().unwrap();
+        let inside = resolve_within(dir.path(), "a.txt", &[]).unwrap();
+        assert_eq!(inside, dir.path().join("a.txt"));
+
+        let err = resolve_within(dir.path(), "../outside.txt", &[]).unwrap_err();
+        assert!(err.contains("超出工作区边界"), "got: {err}");
+
+        let extra = tempdir().unwrap();
+        let target = extra.path().join("x.txt");
+        assert!(resolve_within(dir.path(), &target.to_string_lossy(), &[]).is_err());
+        let ok = resolve_within(
+            dir.path(),
+            &target.to_string_lossy(),
+            &[extra.path().to_path_buf()],
+        )
+        .unwrap();
+        assert!(ok.starts_with(extra.path()));
+    }
 }

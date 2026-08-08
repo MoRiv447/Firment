@@ -6,7 +6,7 @@ use crate::types::{ChatMessage, ChatRequest, SessionMode, ThinkingLevel, ToolCal
 use crate::{PermissionChecker, Session, system_prompt_for};
 use async_trait::async_trait;
 use futures::StreamExt;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
@@ -237,6 +237,7 @@ impl Agent {
             self.store.undo_dir(&self.session.id),
         )));
         let ledger = Ledger::new(self.store.ledger_path(&self.session.id));
+        let mut mutations_since_verify = 0usize;
 
         for _ in 0..self.max_iterations {
             self.compact_if_needed().await;
@@ -274,7 +275,75 @@ impl Agent {
                 tool_calls: tool_calls.clone(),
             });
 
+            let ctx = ToolContext {
+                cwd: self.session.cwd.clone(),
+                permission: self.permission.clone(),
+                allow_dangerous: self.allow_dangerous,
+                journal: journal.clone(),
+                verify_command: self.verify_command.clone(),
+                allowed_roots: vec![self.store.spill_dir(&self.session.id)],
+            };
+
             if tool_calls.is_empty() {
+                let plain_assistant = self.session.messages.pop().expect("assistant message");
+                if mutations_since_verify > 0
+                    && self.verify_command.is_some()
+                    && self.registry.get("verify").is_some()
+                {
+                    let gate_call = ToolCall {
+                        id: "verify_gate".to_string(),
+                        name: "verify".to_string(),
+                        arguments: json!({}),
+                    };
+                    self.session.push(ChatMessage::Assistant {
+                        content: content.clone(),
+                        tool_calls: vec![gate_call.clone()],
+                    });
+                    self.sink
+                        .event(AgentEvent::ToolStart {
+                            name: "verify".to_string(),
+                            args: json!({}),
+                        })
+                        .await;
+                    let result = self
+                        .registry
+                        .get("verify")
+                        .expect("checked above")
+                        .run(json!({}), &ctx)
+                        .await;
+                    let (ok, text) = match &result {
+                        Ok(output) => (true, output.text.clone()),
+                        Err(e) => (false, e.message.clone()),
+                    };
+                    self.sink
+                        .event(AgentEvent::ToolEnd {
+                            name: "verify".to_string(),
+                            ok,
+                            summary: summarize(&text),
+                        })
+                        .await;
+                    self.session.push(ChatMessage::Tool {
+                        tool_call_id: gate_call.id,
+                        name: "verify".to_string(),
+                        content: text,
+                    });
+                    if ok {
+                        // Restore the clean transcript and finish normally.
+                        self.session.messages.pop();
+                        self.session.messages.pop();
+                        self.session.push(plain_assistant);
+                    } else {
+                        self.sink
+                            .event(AgentEvent::Info(
+                                "verify 硬门未通过：修复后重试，跑通前不会标记完成".to_string(),
+                            ))
+                            .await;
+                        continue;
+                    }
+                } else {
+                    self.session.push(plain_assistant);
+                }
+
                 let commit_result = lock_journal(&journal).commit();
                 match commit_result {
                     Ok(changes) if !changes.is_empty() => {
@@ -300,14 +369,11 @@ impl Agent {
                 return Ok(content);
             }
 
-            let ctx = ToolContext {
-                cwd: self.session.cwd.clone(),
-                permission: self.permission.clone(),
-                allow_dangerous: self.allow_dangerous,
-                journal: journal.clone(),
-                verify_command: self.verify_command.clone(),
-            };
-            execute_tool_calls(self, &tool_calls, &ctx, &journal).await;
+            let stats = execute_tool_calls(self, &tool_calls, &ctx, &journal).await;
+            mutations_since_verify += stats.mutations;
+            if stats.verify_passed {
+                mutations_since_verify = 0;
+            }
         }
 
         let summary = rollback_journal(&journal);
@@ -472,6 +538,11 @@ fn tool_call_dependencies(tool_calls: &[ToolCall]) -> Vec<Vec<usize>> {
     deps
 }
 
+struct ToolRunStats {
+    mutations: usize,
+    verify_passed: bool,
+}
+
 /// Execute the turn's tool calls in dependency waves: independent calls run
 /// concurrently; a failed mutation rolls the whole turn's edit batch back.
 async fn execute_tool_calls(
@@ -479,11 +550,13 @@ async fn execute_tool_calls(
     tool_calls: &[ToolCall],
     ctx: &ToolContext,
     journal: &Arc<Mutex<EditJournal>>,
-) {
+) -> ToolRunStats {
     let n = tool_calls.len();
     let deps = tool_call_dependencies(tool_calls);
     let mut done = vec![false; n];
     let mut remaining = n;
+    let mut mutations = 0usize;
+    let mut verify_passed = false;
     while remaining > 0 {
         let ready: Vec<usize> = (0..n)
             .filter(|&i| !done[i] && deps[i].iter().all(|&j| done[j]))
@@ -525,6 +598,14 @@ async fn execute_tool_calls(
                 Ok(output) => (true, output.text.clone()),
                 Err(e) => (false, e.message.clone()),
             };
+            if ok {
+                if is_mutation_tool(&call.name) {
+                    mutations += 1;
+                }
+                if call.name == "verify" {
+                    verify_passed = true;
+                }
+            }
             let mut content = text.clone();
             let read_path = if ok && call.name == "read_file" && !content.is_empty() {
                 resolved_tool_path(ctx, call)
@@ -563,6 +644,10 @@ async fn execute_tool_calls(
             done[i] = true;
             remaining -= 1;
         }
+    }
+    ToolRunStats {
+        mutations,
+        verify_passed,
     }
 }
 

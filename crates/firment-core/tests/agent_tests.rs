@@ -6,7 +6,7 @@ use firment_core::{
 };
 use serde_json::{Value, json};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 
@@ -225,6 +225,53 @@ impl Tool for FlagTool {
         Ok(ToolOutput {
             text: "ran".to_string(),
         })
+    }
+}
+
+struct FakeVerifyTool {
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl Tool for FakeVerifyTool {
+    fn name(&self) -> &'static str {
+        "verify"
+    }
+
+    fn description(&self) -> &'static str {
+        "fake verify tool"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+
+    async fn run(&self, _args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(ToolOutput {
+            text: "verify passed (exit 0)".to_string(),
+        })
+    }
+}
+
+struct FailingVerifyTool;
+
+#[async_trait]
+impl Tool for FailingVerifyTool {
+    fn name(&self) -> &'static str {
+        "verify"
+    }
+
+    fn description(&self) -> &'static str {
+        "fake verify tool that always fails"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+
+    async fn run(&self, _args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+        Err(ToolError::new("[CompileError] verify failed (exit 3)"))
     }
 }
 
@@ -902,6 +949,112 @@ async fn duplicate_read_results_are_stubbed() {
 }
 
 #[tokio::test]
+async fn verify_hard_gate_runs_after_mutations_and_allows_completion() {
+    let verify_calls = Arc::new(AtomicUsize::new(0));
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_write".to_string(),
+                    name: "write_file".to_string(),
+                    arguments: json!({"path": "a.txt", "content": "x"}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            vec![
+                ProviderEvent::Text("done".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+        ]))),
+        model: "fake".to_string(),
+    };
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().join("sessions"));
+    let session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(vec![
+            Arc::new(JournalingWriteTool),
+            Arc::new(FakeVerifyTool {
+                calls: verify_calls.clone(),
+            }),
+        ]),
+        session,
+        store,
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(Arc::new(Mutex::new(Vec::new())))),
+        10,
+    );
+    agent.set_verify_command(Some("fake-verify".to_string()));
+
+    let text = agent.run_turn("write then finish").await.unwrap();
+    assert_eq!(text, "done");
+    assert_eq!(
+        verify_calls.load(Ordering::SeqCst),
+        1,
+        "hard gate must run verify once"
+    );
+    assert!(
+        dir.path().join("a.txt").exists(),
+        "mutation must be committed"
+    );
+    assert!(
+        matches!(agent.session().messages.last(), Some(ChatMessage::Assistant { content, .. }) if content == "done")
+    );
+}
+
+#[tokio::test]
+async fn verify_hard_gate_blocks_completion_on_failure() {
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_write".to_string(),
+                    name: "write_file".to_string(),
+                    arguments: json!({"path": "b.txt", "content": "x"}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            vec![
+                ProviderEvent::Text("done".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+        ]))),
+        model: "fake".to_string(),
+    };
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().join("sessions"));
+    let session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(vec![
+            Arc::new(JournalingWriteTool),
+            Arc::new(FailingVerifyTool),
+        ]),
+        session,
+        store,
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(Arc::new(Mutex::new(Vec::new())))),
+        3,
+    );
+    agent.set_verify_command(Some("fake-verify".to_string()));
+
+    let err = agent.run_turn("write then finish").await.unwrap_err();
+    assert!(matches!(err, AgentError::MaxIterations(3)));
+    assert!(
+        agent.session().messages.iter().any(|m| matches!(
+            m,
+            ChatMessage::Tool { content, .. } if content.contains("[CompileError]")
+        )),
+        "verify failure must be visible to the model"
+    );
+    assert!(
+        !dir.path().join("b.txt").exists(),
+        "unverified mutation must be rolled back"
+    );
+}
+
+#[tokio::test]
 async fn invalid_arguments_are_rejected_before_tool_runs() {
     let ran = Arc::new(AtomicBool::new(false));
     let registry = registry_with(vec![Arc::new(FlagTool { ran: ran.clone() })]);
@@ -914,6 +1067,7 @@ async fn invalid_arguments_are_rejected_before_tool_runs() {
             dir.path().join("undo"),
         ))),
         verify_command: None,
+        allowed_roots: Vec::new(),
     };
     let err = registry.run("flag", json!({}), &ctx).await.unwrap_err();
     assert!(err.message.contains("参数校验失败"), "got: {}", err.message);
