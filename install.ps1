@@ -5,6 +5,7 @@
 #   FIRMENT_VERSION   指定版本 tag（默认 latest）
 #   FIRMENT_MIRROR    国内镜像根地址，目录结构: {mirror}/{tag}/{asset}
 #   FIRMENT_REPO      仓库（默认 MoRiv447/Firment）
+#   FIRMENT_DRY_RUN   设为 1 时只打印安装计划，不下载、不执行
 
 $ErrorActionPreference = 'Stop'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
@@ -42,6 +43,19 @@ if ($Mirror) {
     }
     $DownloadUrl = "$ReleaseBase/$AssetName"
     $SumsUrl = "$ReleaseBase/SHA256SUMS"
+}
+
+if ($env:FIRMENT_DRY_RUN -eq '1') {
+    $installDir = if ($env:FIRMENT_BIN_DIR) { $env:FIRMENT_BIN_DIR } else { Join-Path $env:USERPROFILE '.firment\bin' }
+    Write-Host '[dry-run] 以下操作不会真正执行：'
+    Write-Host "  仓库      : $Repo"
+    Write-Host "  版本      : $Tag"
+    Write-Host "  安装包    : $DownloadUrl"
+    Write-Host "  校验和    : $SumsUrl"
+    Write-Host "  安装目录  : $installDir"
+    Write-Host '  步骤      : 下载 -> SHA256 校验 -> 解压 -> firm install（写用户 PATH + PowerShell 补全）'
+    Write-Host '[dry-run] 结束。去掉 FIRMENT_DRY_RUN=1 后重新执行即可真正安装。'
+    exit 0
 }
 
 $tmp = Join-Path $env:TEMP "firment-install-$([guid]::NewGuid().ToString('N'))"

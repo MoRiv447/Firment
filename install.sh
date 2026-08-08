@@ -7,6 +7,7 @@
 #   FIRMENT_MIRROR    国内镜像根地址，目录结构: {mirror}/{tag}/{asset}
 #   FIRMENT_REPO      仓库（默认 MoRiv447/Firment）
 #   FIRMENT_INSTALL_DIR  安装目录（默认 ~/.firment/bin）
+#   FIRMENT_DRY_RUN   设为 1 时只打印安装计划，不下载、不执行
 set -eu
 
 REPO="${FIRMENT_REPO:-MoRiv447/Firment}"
@@ -44,6 +45,18 @@ else
         ASSET_URL="https://github.com/$REPO/releases/download/$VERSION/$ASSET"
         SUM_URL="https://github.com/$REPO/releases/download/$VERSION/SHA256SUMS"
     fi
+fi
+
+if [ "${FIRMENT_DRY_RUN:-}" = "1" ]; then
+    echo "[dry-run] 以下操作不会真正执行："
+    echo "  仓库      : $REPO"
+    echo "  版本      : $TAG"
+    echo "  安装包    : $ASSET_URL"
+    echo "  校验和    : $SUM_URL"
+    echo "  安装目录  : $INSTALL_DIR"
+    echo "  步骤      : 下载 -> SHA256 校验 -> 解压 -> 安装到 \$INSTALL_DIR/firm 并写入 PATH"
+    echo "[dry-run] 结束。去掉 FIRMENT_DRY_RUN=1 后重新执行即可真正安装。"
+    exit 0
 fi
 
 TMP="$(mktemp -d)"

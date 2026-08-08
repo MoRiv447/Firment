@@ -13,33 +13,46 @@
 
 **Firmware + Agent = Firment** — a general-purpose coding agent for firmware and embedded development, named after *firmament*, the sky above every embedded engineer. The first layer (general coding agent) is usable today; later layers (build, flash, debug, UART, ...) plug into the same kernel through the unified `Tool` trait.
 
-### ✨ Features
+**Layer positioning.** Layer 1 (current release) is a general-purpose coding agent — the same category as other terminal coding agents, built with firmware/embedded workflows in mind. Embedded-specific capabilities (build, flash, debug, UART) land in **Layer 2**, currently in development; see the Roadmap.
+### ✨ Features**Layer 1 — General**
 
 - **Multi-provider**: Anthropic-compatible (`/v1/messages`) and OpenAI-compatible (`/chat/completions`, covering DeepSeek / GLM / Qwen / Ollama) streaming tool calls; DeepSeek V4 automatically uses official `thinking` + `reasoning_effort`
 - **Thinking levels**: `off / low / medium / high / xhigh / max`
 - **Built-in tools**: `read_file`, `write_file`, `edit_file` (anchor / line-range edits), `list_dir`, `glob`, `grep`, `shell`
-- **Dangerous command guard**: in one-shot `-y` mode, `del/rm/Remove-Item/mv/move/git clean/git reset --hard`, force push, and scripting deletion APIs are blocked by default (including wrapper bypasses); the TUI labels them ⚠ and asks for confirmation
 - **Read-only plan mode**: `--plan` / `/plan` exposes only read tools and requires a decision-complete plan
+- **Parallel tool calls**: independent calls run concurrently; same-file reads/writes and broad tools (shell/verify/grep) are ordered automatically
 - **Engineering-grade system prompt**: sections for communication, engineering principles, tool policy, verification, and safety, plus `AGENTS.md` / `FIRMENT.md` project instructions
 - **Session management**: JSONL persistence, `--continue`, `--list`, and an interactive `/sessions` picker
 - **Copy support**: select with the left mouse button, copy with the right button (paste when nothing is selected); `Ctrl+Shift+C` / `/copy` copies the last reply
 - **Global install**: `firm install` adds itself to PATH with PowerShell completions; `firm update` self-updates
+
+**Context**
+
+- **Model-summarized compaction**: when the context budget is exceeded, older rounds are summarized by the main model (with a local fallback), the last 3 rounds stay verbatim, and tool-call pairs are never split
+- **Context compaction**: long sessions auto-compact older messages into a digest (`context_budget_chars`)
+- **Cache-stable prefix**: the system prompt stays byte-identical for provider prefix caching; dynamic state (change ledger) is merged into user messages as deltas
+- **Unchanged-read dedup**: re-reading an unchanged file returns a stub instead of repeating content; recently read files are re-injected after compaction
+- **Tool output spill**: outputs over a size threshold are saved to the session's spill directory, keeping only a short excerpt + `read_file` pointer in the conversation
+- **Change ledger**: every committed turn appends path/line/hunk entries to a per-session ledger, injected into context on resume; `/ledger` shows it
+- **Symbols index**: lightweight regex-based definition/reference lookup (heuristic, not a full ctags parser) for C/C++, Rust, Python, JS/TS, Go, Java (also available in plan mode)
+
+**Safety & reliability**
+
 - **Transactional edits + undo**: every write/edit in a turn is backed up and rolled back as a batch if any mutation fails; `/undo` restores the last committed batch (persisted per session)
 - **CAS protection**: write/edit re-checks the file byte-for-byte before applying and aborts with a `[ConcurrentChange]` tag if it changed meanwhile
 - **Diff-first approval**: write/edit permission prompts show the exact unified diff before you approve
-- **Parallel tool calls**: independent calls run concurrently; same-file reads/writes and broad tools (shell/verify/grep) are ordered automatically
 - **Verify gate (enforced)**: an optional `verify` tool runs your configured build/check command; after any file changes the harness itself runs verify and refuses to accept completion until it passes
-- **Context compaction**: long sessions auto-compact older messages into a digest (`context_budget_chars`)
-- **Symbols index**: lightweight regex-based definition/reference lookup (heuristic, not a full ctags parser) for C/C++, Rust, Python, JS/TS, Go, Java (also available in plan mode)
-- **Failure taxonomy**: tool errors carry tags such as `[NotFound]`, `[CompileError]`, `[Timeout]`, `[Permission]`, `[ConcurrentChange]`
-- **Tool output spill**: outputs over a size threshold are saved to the session's spill directory, keeping only a short excerpt + `read_file` pointer in the conversation
-- **Argument schema validation**: tool arguments are validated against their JSON Schema before execution; malformed calls are rejected with a `[InvalidInput]` tag
-- **Change ledger**: every committed turn appends path/line/hunk entries to a per-session ledger, injected into context on resume; `/ledger` shows it
-- **Model-summarized compaction**: when the context budget is exceeded, older rounds are summarized by the main model (with a local fallback), the last 3 rounds stay verbatim, and tool-call pairs are never split
-- **Cache-stable prefix**: the system prompt stays byte-identical for provider prefix caching; dynamic state (change ledger) is merged into user messages as deltas
-- **Unchanged-read dedup**: re-reading an unchanged file returns a stub instead of repeating content; recently read files are re-injected after compaction
 - **Path sandbox**: file tools are confined to the workspace (canonicalized; extra roots such as the spill directory are explicitly allowed); paths outside are rejected with `[Permission]`
+- **Dangerous command guard**: in one-shot `-y` mode, `del/rm/Remove-Item/mv/move/git clean/git reset --hard`, force push, and scripting deletion APIs are blocked by default (including wrapper bypasses); the TUI labels them ⚠ and asks for confirmation
+- **Argument schema validation**: tool arguments are validated against their JSON Schema before execution; malformed calls are rejected with a `[InvalidInput]` tag
+- **Failure taxonomy**: tool errors carry tags such as `[NotFound]`, `[CompileError]`, `[Timeout]`, `[Permission]`, `[ConcurrentChange]`
 
+**Layer 2 — Embedded-specific (coming, in development)**
+
+- Build system integration (CMake / Make / Keil / IAR)
+- Flashing & debugging (OpenOCD / ST-Link)
+- UART / serial log analysis
+- Register / peripheral awareness (chip register maps, `.ioc`, device trees)
 ### 🚀 Quick Start
 
 Requirements: Rust 1.85+; Windows Terminal or any modern terminal is recommended.
@@ -58,6 +71,7 @@ curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | 
 
 For faster downloads in mainland China, set `FIRMENT_MIRROR` to a mirror base URL before running the installer (`{mirror}/{tag}/{asset}` layout, e.g. Alibaba Cloud OSS).
 
+> **Security note:** the installer downloads the binary from GitHub Releases and verifies its SHA-256 against the release's `SHA256SUMS` before running it; the install scripts are small, HTTPS-served, and reviewable in this repository. To preview without executing anything, set `FIRMENT_DRY_RUN=1` before the one-liner; pin a specific version with `FIRMENT_VERSION`.
 Build from source:
 
 ```powershell
@@ -118,6 +132,7 @@ Keys: `↑/↓` browse history when the input is empty, otherwise scroll; `PgUp/
 
 ### 🔒 Security Model
 
+- **Disclaimer**: the dangerous command guard is a best-effort heuristic (command-name scanning), not an OS sandbox. File tools are confined by the path sandbox; `shell` remains permission-gated only. For strong isolation, run Firment inside a container/VM.
 - Write/edit/shell require permission confirmation by default (TUI popup, `y`/`n`/`a`)
 - `-y` still respects the **dangerous command guard**: `del/erase/rm/rmdir/rd/Remove-Item/mv/move/ren/git clean/git reset --hard`, force push, `format`, `taskkill`, and scripting deletion APIs are blocked unless `--allow-dangerous` is passed
 - Plan mode exposes only read-only tools; the permission layer hard-rejects write/edit/shell
