@@ -21,7 +21,8 @@ impl Tool for WriteFile {
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
-                "content": {"type": "string"}
+                "content": {"type": "string"},
+                "expected_sha256": {"type": "string", "description": "Optional SHA-256 of the existing file (from read_file footer); mismatches abort with [ConcurrentChange]"}
             },
             "required": ["path", "content"]
         })
@@ -65,6 +66,16 @@ impl Tool for WriteFile {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .begin(&resolved)
             .map_err(ToolError::new)?;
+        if let Some(expected) = args.get("expected_sha256").and_then(|e| e.as_str())
+            && let Some(original) = &original_bytes
+        {
+            let current = firment_core::hash::sha256_hex(original);
+            if current != expected {
+                return Err(ToolError::new(format!(
+                    "[ConcurrentChange] 文件哈希不匹配（期望 {expected}，当前 {current}）：请重新 read_file 后重试"
+                )));
+            }
+        }
         // CAS: refuse to overwrite a file that changed since we read it.
         if let Some(original) = &original_bytes {
             let current = fs::read(&resolved)

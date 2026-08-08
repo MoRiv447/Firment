@@ -42,7 +42,7 @@
 **安全与可靠性**
 
 - **事务编辑 + 撤销**：一个回合内的所有写/编辑统一备份，任一修改失败整批回滚；`/undo` 恢复上一次已提交的改动（按会话持久化）
-- **CAS 防并发覆盖**：写/编辑前逐字节重新校验文件，被并发改动时拒绝并返回 `[ConcurrentChange]`
+- **CAS + SHA-256 哈希锚定**：写/编辑前逐字节重新校验；`read_file` 返回 `[file-sha256: ...]`，`edit_file` / `write_file` 支持 `expected_sha256` 前置校验，哈希不符以 `[ConcurrentChange]` 拒绝
 - **diff-first 批准**：写/编辑的权限弹窗直接展示 unified diff，批准前先看改动
 - **verify 硬门**：可选 `verify` 工具执行配置的构建/检查命令；发生文件改动后由程序强制运行 verify，未通过就不接受完成
 - **路径沙箱**：文件工具被限制在工作区内（canonicalize 校验，外溢目录等额外根目录显式放行），越界路径以 `[Permission]` 拒绝

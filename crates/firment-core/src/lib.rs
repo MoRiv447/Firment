@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod config;
 pub mod context;
+pub mod hash;
 pub mod journal;
 pub mod kb;
 pub mod permission;

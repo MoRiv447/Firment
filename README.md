@@ -40,7 +40,7 @@
 **Safety & reliability**
 
 - **Transactional edits + undo**: every write/edit in a turn is backed up and rolled back as a batch if any mutation fails; `/undo` restores the last committed batch (persisted per session)
-- **CAS protection**: write/edit re-checks the file byte-for-byte before applying and aborts with a `[ConcurrentChange]` tag if it changed meanwhile
+- **CAS + SHA-256 anchoring**: write/edit re-checks the file byte-for-byte before applying; `read_file` returns a `[file-sha256: ...]` hash and `edit_file` / `write_file` accept `expected_sha256` as a stale-read guard (`[ConcurrentChange]` on mismatch)
 - **Diff-first approval**: write/edit permission prompts show the exact unified diff before you approve
 - **Verify gate (enforced)**: an optional `verify` tool runs your configured build/check command; after any file changes the harness itself runs verify and refuses to accept completion until it passes
 - **Path sandbox**: file tools are confined to the workspace (canonicalized; extra roots such as the spill directory are explicitly allowed); paths outside are rejected with `[Permission]`

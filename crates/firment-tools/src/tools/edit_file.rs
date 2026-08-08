@@ -23,6 +23,7 @@ impl Tool for EditFile {
             "properties": {
                 "path": {"type": "string"},
                 "old_text": {"type": "string", "description": "Exact text to replace; must occur exactly once"},
+                "expected_sha256": {"type": "string", "description": "Optional SHA-256 of the file content as read (from read_file footer); mismatches abort with [ConcurrentChange]"},
                 "start_line": {"type": "integer", "minimum": 1},
                 "end_line": {"type": "integer", "minimum": 1},
                 "new_text": {"type": "string", "description": "Replacement text"}
@@ -65,6 +66,14 @@ impl Tool for EditFile {
         })?;
         let original_bytes = fs::read(&resolved)
             .map_err(|e| ToolError::new(format!("[Io] cannot read {}: {e}", resolved.display())))?;
+        if let Some(expected) = args.get("expected_sha256").and_then(|e| e.as_str()) {
+            let current = firment_core::hash::sha256_hex(&original_bytes);
+            if current != expected {
+                return Err(ToolError::new(format!(
+                    "[ConcurrentChange] 文件哈希不匹配（期望 {expected}，当前 {current}）：请重新 read_file 后重试"
+                )));
+            }
+        }
         let new_content = compute_edit(&resolved, &original, &args)?;
 
         ctx.journal
@@ -179,6 +188,35 @@ mod tests {
             .unwrap();
         assert!(preview.contains("-hello"), "got: {preview}");
         assert!(preview.contains("+hi"), "got: {preview}");
+    }
+
+    #[tokio::test]
+    async fn expected_sha256_guards_against_stale_reads() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "hello\n").unwrap();
+        let digest = firment_core::hash::sha256_hex(b"hello\n");
+        let err = EditFile
+            .run(
+                json!({"path": "a.txt", "old_text": "hello", "new_text": "hi", "expected_sha256": "0".repeat(64)}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.message.contains("[ConcurrentChange]"),
+            "got: {}",
+            err.message
+        );
+        assert!(err.message.contains("当前"), "got: {}", err.message);
+
+        let ok = EditFile
+            .run(
+                json!({"path": "a.txt", "old_text": "hello", "new_text": "hi", "expected_sha256": digest}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(ok.text.contains("Edited"));
     }
 
     #[tokio::test]

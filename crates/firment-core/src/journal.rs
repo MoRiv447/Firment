@@ -34,6 +34,10 @@ pub struct LedgerChange {
     pub new_lines: usize,
     /// Compact `-`/`+` hunk lines, capped in size.
     pub hunks: String,
+    /// SHA-256 of the file before the change (content anchoring).
+    pub old_sha256: String,
+    /// SHA-256 of the file after the change (content anchoring).
+    pub new_sha256: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -292,6 +296,8 @@ fn ledger_change_for(dir: &Path, entry: &EntryRecord) -> Result<LedgerChange, St
         old_lines: old.lines().count(),
         new_lines: new.lines().count(),
         hunks: line_diff(&old, &new, 1600),
+        old_sha256: crate::hash::sha256_hex(&old_bytes),
+        new_sha256: crate::hash::sha256_hex(&new_bytes),
     })
 }
 
@@ -444,6 +450,8 @@ mod tests {
                 old_lines: 0,
                 new_lines: 1,
                 hunks: "+a\n".to_string(),
+                old_sha256: "old-a".to_string(),
+                new_sha256: "new-a".to_string(),
             }])
             .unwrap();
         ledger
@@ -452,6 +460,8 @@ mod tests {
                 old_lines: 0,
                 new_lines: 1,
                 hunks: "+b\n".to_string(),
+                old_sha256: "old-b".to_string(),
+                new_sha256: "new-b".to_string(),
             }])
             .unwrap();
         let (delta, last) = ledger.delta_text(1, 5);
@@ -472,6 +482,8 @@ mod tests {
                 old_lines: 1,
                 new_lines: 2,
                 hunks: "-old\n+new\n".to_string(),
+                old_sha256: "old-a".to_string(),
+                new_sha256: "new-a".to_string(),
             }])
             .unwrap();
         ledger
@@ -480,6 +492,8 @@ mod tests {
                 old_lines: 0,
                 new_lines: 1,
                 hunks: "+hello\n".to_string(),
+                old_sha256: "old-b".to_string(),
+                new_sha256: "new-b".to_string(),
             }])
             .unwrap();
         let summary = ledger.summary(10, 1000);

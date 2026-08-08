@@ -822,10 +822,7 @@ fn resolved_tool_path(ctx: &ToolContext, call: &ToolCall) -> Option<PathBuf> {
 }
 
 fn simple_hash(text: &str) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    text.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+    crate::hash::sha256_hex(text.as_bytes())
 }
 
 fn message_text(message: &ChatMessage) -> &str {

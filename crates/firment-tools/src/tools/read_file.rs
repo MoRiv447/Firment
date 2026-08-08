@@ -2,6 +2,7 @@ use super::util::{read_text, resolve_within};
 use async_trait::async_trait;
 use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
+use std::fs;
 
 pub struct ReadFile;
 
@@ -19,7 +20,7 @@ impl Tool for ReadFile {
         json!({
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "File path, absolute or relative to the workspace"},
+                "path": {"type": "string", "description": "File path, absolute or relative to the workspace; output appends [file-sha256: ...] as metadata"},
                 "offset": {"type": "integer", "minimum": 0, "description": "0-based line offset to start reading from"},
                 "limit": {"type": "integer", "minimum": 1, "description": "Maximum number of lines to read"}
             },
@@ -62,7 +63,12 @@ impl Tool for ReadFile {
         } else {
             content
         };
-        Ok(ToolOutput { text })
+        let digest = firment_core::hash::sha256_hex(
+            &fs::read(&resolved).map_err(|e| ToolError::new(format!("[Io] {e}")))?,
+        );
+        Ok(ToolOutput {
+            text: format!("{text}\n[file-sha256: {digest}]"),
+        })
     }
 }
 #[cfg(test)]
@@ -71,6 +77,7 @@ mod tests {
     use crate::tools::write_file::WriteFile;
     use firment_core::{AutoApprove, EditJournal};
     use serde_json::json;
+    use std::fs;
     use std::path::Path;
     use std::sync::{Arc, Mutex};
     use tempfile::tempdir;
@@ -87,6 +94,22 @@ mod tests {
             default_chip: None,
             allowed_roots: Vec::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn output_includes_file_sha256() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), "hello world").unwrap();
+        let out = ReadFile
+            .run(json!({"path": "a.txt"}), &ctx(dir.path()))
+            .await
+            .unwrap();
+        let expected = firment_core::hash::sha256_hex(b"hello world");
+        assert!(
+            out.text.contains(&format!("[file-sha256: {expected}]")),
+            "got: {}",
+            out.text
+        );
     }
 
     #[tokio::test]
