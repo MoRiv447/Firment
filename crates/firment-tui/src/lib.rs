@@ -8,8 +8,9 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use firment_core::{
-    Agent, AgentEvent, ChatMessage, Config, EventSink, PermissionChecker, PermissionError,
-    PlanModePermission, ProviderConfig, Session, SessionMode, SessionStore, ThinkingLevel,
+    Agent, AgentEvent, Asker, ChatMessage, Config, EventSink, PermissionChecker, PermissionError,
+    PlanModePermission, ProviderConfig, QuestionRequest, Session, SessionMode, SessionStore,
+    SubagentRunner, ThinkingLevel,
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
@@ -50,6 +51,7 @@ pub async fn run(
 
     let (event_tx, event_rx) = mpsc::channel(256);
     let (perm_tx, perm_rx) = mpsc::channel(16);
+    let (ask_tx, ask_rx) = mpsc::channel(16);
     let (cmd_tx, mut cmd_rx) = mpsc::channel(32);
     let always: Arc<Mutex<HashSet<String>>> =
         Arc::new(Mutex::new(config.auto_approve.iter().cloned().collect()));
@@ -92,6 +94,21 @@ pub async fn run(
     agent.set_default_chip(config.tools.default_chip.clone());
     agent.set_monitor_port(config.tools.monitor_port.clone());
     agent.set_monitor_baud(config.tools.monitor_baud);
+    let asker: Arc<dyn Asker> = Arc::new(TuiAsker { req_tx: ask_tx });
+    agent.set_asker(Some(asker.clone()));
+    agent.set_web_search(
+        config.tools.web_search.clone(),
+        config.tools.resolved_web_search_api_key(),
+    );
+    agent.set_session_dir(Some(store.dir.join("work")));
+    let subagent_factory: Arc<SubagentRunner> = Arc::new(SubagentRunner::new(
+        Arc::new(config.clone()),
+        plan_registry.clone(),
+        agent.session().provider.clone(),
+        agent.session().model.clone(),
+        Some(asker.clone()),
+    ));
+    agent.set_subagent_factory(Some(subagent_factory));
     let initial_messages = agent.session().messages.clone();
     let model = agent.session().model.clone();
     let cwd = agent.session().cwd.clone();
@@ -496,7 +513,7 @@ pub async fn run(
         startup_hint,
         initial_messages,
     );
-    let result = run_loop(&mut terminal, &mut app, event_rx, perm_rx, ui_rx).await;
+    let result = run_loop(&mut terminal, &mut app, event_rx, perm_rx, ask_rx, ui_rx).await;
     restore_terminal(&mut terminal)?;
     agent_task.abort();
     result
@@ -621,6 +638,30 @@ impl TuiPermission {
     }
 }
 
+/// Forwards `ask_user` questions to the UI thread, which shows a modal; the
+/// agent blocks until the user answers or dismisses it.
+struct TuiAsker {
+    req_tx: mpsc::Sender<QuestionRequest>,
+}
+
+#[async_trait]
+impl Asker for TuiAsker {
+    async fn ask(&self, question: &str, options: &[String]) -> Result<String, String> {
+        let (reply, rx) = oneshot::channel();
+        self.req_tx
+            .send(QuestionRequest {
+                question: question.to_string(),
+                options: options.to_vec(),
+                reply,
+            })
+            .await
+            .map_err(|_| "TUI closed while asking a question".to_string())?;
+        rx.await
+            .map_err(|_| "TUI closed while waiting for an answer".to_string())?
+            .ok_or_else(|| "user declined the question".to_string())
+    }
+}
+
 struct App {
     items: Vec<Item>,
     input: Vec<char>,
@@ -637,6 +678,11 @@ struct App {
     /// Tools currently running (raw name, activity label) for status hints.
     active_tools: Vec<(String, String)>,
     permission: Option<PermissionRequest>,
+    /// Pending `ask_user` question shown as a modal; the agent is blocked until
+    /// the user answers or dismisses it.
+    question: Option<QuestionRequest>,
+    /// Free-form answer being typed into the question modal.
+    question_input: Vec<char>,
     interrupting: bool,
     scroll: usize,
     max_offset: usize,
@@ -1000,6 +1046,8 @@ impl App {
             ai_thinking: false,
             active_tools: Vec::new(),
             permission: None,
+            question: None,
+            question_input: Vec::new(),
             interrupting: false,
             scroll: 0,
             max_offset: 0,
@@ -1209,6 +1257,54 @@ impl App {
         self.permission = Some(request);
     }
 
+    fn on_question(&mut self, request: QuestionRequest) {
+        self.question_input.clear();
+        self.items
+            .push(Item::System(format!("❓ {}", request.question)));
+        // The question modal must be visible; force the view back to the bottom.
+        self.follow = true;
+        self.scroll = 0;
+        self.question = Some(request);
+    }
+
+    fn on_question_key(&mut self, key: KeyEvent) -> bool {
+        let Some(question) = self.question.take() else {
+            return false;
+        };
+        let answer = match key.code {
+            KeyCode::Char(d) if d.is_ascii_digit() && d != '0' => {
+                let idx = (d as usize) - ('1' as usize);
+                question.options.get(idx).cloned()
+            }
+            KeyCode::Enter => {
+                let typed: String = self.question_input.iter().collect();
+                let typed = typed.trim().to_string();
+                if typed.is_empty() { None } else { Some(typed) }
+            }
+            KeyCode::Backspace => {
+                self.question_input.pop();
+                self.question = Some(question);
+                return false;
+            }
+            KeyCode::Esc => None,
+            KeyCode::Char(ch)
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                self.question_input.push(ch);
+                self.question = Some(question);
+                return false;
+            }
+            _ => {
+                self.question = Some(question);
+                return false;
+            }
+        };
+        self.question_input.clear();
+        let _ = question.reply.send(answer);
+        false
+    }
+
     fn on_ui(&mut self, event: Event) -> bool {
         match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => self.on_key_with_burst(key),
@@ -1279,7 +1375,10 @@ impl App {
     /// Key entry point: runs paste-burst detection first, then falls back to
     /// the original key handling.
     fn on_key_with_burst(&mut self, key: KeyEvent) -> bool {
-        if self.permission.is_some() || self.model_picker.is_some() || self.session_picker.is_some()
+        if self.permission.is_some()
+            || self.question.is_some()
+            || self.model_picker.is_some()
+            || self.session_picker.is_some()
         {
             return self.on_key(key);
         }
@@ -1360,6 +1459,9 @@ impl App {
     fn on_key(&mut self, key: KeyEvent) -> bool {
         if self.permission.is_some() {
             return self.on_permission_key(key);
+        }
+        if self.question.is_some() {
+            return self.on_question_key(key);
         }
         if self.model_picker.is_some() {
             return self.on_picker_key(key);
@@ -2705,7 +2807,8 @@ impl App {
         // Permission cards are inline now, so the input always keeps the
         // cursor; even with empty input, pin it to the input start so IME/first
         // chars are not drawn outside the box.
-        let modal_open = self.model_picker.is_some() || self.session_picker.is_some();
+        let modal_open =
+            self.model_picker.is_some() || self.session_picker.is_some() || self.question.is_some();
         if !modal_open {
             let cursor_x = input_area.x + 1 + cursor_col as u16;
             let cursor_y = input_area.y + 1 + cursor_line.saturating_sub(self.input_scroll) as u16;
@@ -2827,6 +2930,51 @@ impl App {
                 }
                 frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
             }
+
+            if let Some(question) = &self.question {
+                let area = centered_rect(68, 42, frame.area());
+                frame.render_widget(Clear, area);
+                let block = Block::bordered()
+                    .title(Span::styled(
+                        " Question ",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ))
+                    .border_style(Style::default().fg(Color::Yellow));
+                frame.render_widget(block, area);
+                let inner = area.inner(Margin {
+                    horizontal: 2,
+                    vertical: 1,
+                });
+                let mut lines = Vec::new();
+                for line in wrap_text(&question.question, inner.width as usize) {
+                    lines.push(Line::from(Span::styled(
+                        line,
+                        Style::default().fg(Color::White),
+                    )));
+                }
+                if !question.options.is_empty() {
+                    lines.push(Line::default());
+                    for (idx, option) in question.options.iter().enumerate() {
+                        lines.push(Line::from(Span::styled(
+                            format!("  {}  {option}", idx + 1),
+                            Style::default().fg(Color::Cyan),
+                        )));
+                    }
+                }
+                lines.push(Line::default());
+                let typed: String = self.question_input.iter().collect();
+                lines.push(Line::from(vec![
+                    Span::styled("Answer: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(typed, Style::default().fg(Color::White)),
+                ]));
+                lines.push(Line::from(Span::styled(
+                    "1-9 pick an option · type + Enter free answer · Esc dismiss",
+                    Style::default().fg(Color::DarkGray),
+                )));
+                frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+            }
         }
     }
 
@@ -2834,6 +2982,8 @@ impl App {
     fn status_text(&self) -> String {
         if self.permission.is_some() {
             "waiting for approval".to_string()
+        } else if self.question.is_some() {
+            "question".to_string()
         } else if self.interrupting {
             "interrupting…".to_string()
         } else if self.ai_thinking {
@@ -3014,6 +3164,7 @@ async fn run_loop(
     app: &mut App,
     mut event_rx: mpsc::Receiver<AgentEvent>,
     mut perm_rx: mpsc::Receiver<PermissionRequest>,
+    mut ask_rx: mpsc::Receiver<QuestionRequest>,
     mut ui_rx: mpsc::Receiver<Event>,
 ) -> anyhow::Result<()> {
     // A 25ms tick lands paste-burst buffers on time without slowing animations.
@@ -3031,6 +3182,12 @@ async fn run_loop(
             request = perm_rx.recv() => {
                 if let Some(request) = request {
                     app.on_permission(request);
+                    dirty = true;
+                }
+            }
+            question = ask_rx.recv() => {
+                if let Some(question) = question {
+                    app.on_question(question);
                     dirty = true;
                 }
             }
@@ -3054,7 +3211,8 @@ async fn run_loop(
         }
         // No animation plays while waiting for approval; stop the 25ms
         // redraws to avoid flicker.
-        let animate = (app.busy || app.ai_thinking) && app.permission.is_none();
+        let animate =
+            (app.busy || app.ai_thinking) && app.permission.is_none() && app.question.is_none();
         if dirty || (animate && spinner_tick) {
             terminal.draw(|frame| app.render(frame))?;
             dirty = false;
@@ -3210,6 +3368,54 @@ mod tests {
                 .iter()
                 .any(|item| matches!(item, Item::Permission { .. }))
         );
+    }
+
+    #[test]
+    fn question_modal_answers_by_option_key() {
+        let mut app = test_app();
+        let (tx, mut rx) = oneshot::channel();
+        app.on_question(QuestionRequest {
+            question: "which chip?".to_string(),
+            options: vec!["stm32f407".to_string(), "stm32g0".to_string()],
+            reply: tx,
+        });
+        assert!(matches!(
+            app.items.last(),
+            Some(Item::System(text)) if text.contains("which chip?")
+        ));
+        assert!(app.question.is_some());
+
+        app.on_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
+        assert_eq!(rx.try_recv(), Ok(Some("stm32g0".to_string())));
+        assert!(app.question.is_none());
+    }
+
+    #[test]
+    fn question_modal_accepts_free_form_answer_and_esc_dismisses() {
+        let mut app = test_app();
+        let (tx, mut rx) = oneshot::channel();
+        app.on_question(QuestionRequest {
+            question: "which toolchain?".to_string(),
+            options: Vec::new(),
+            reply: tx,
+        });
+        for ch in ['g', 'n', 'u', '-', 'r', 'm'] {
+            app.on_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        assert_eq!(app.question_input.iter().collect::<String>(), "gnu-rm");
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(rx.try_recv(), Ok(Some("gnu-rm".to_string())));
+        assert!(app.question.is_none());
+
+        let (tx, mut rx) = oneshot::channel();
+        app.on_question(QuestionRequest {
+            question: "still there?".to_string(),
+            options: Vec::new(),
+            reply: tx,
+        });
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(rx.try_recv(), Ok(None));
+        assert!(app.question.is_none());
     }
 
     #[test]

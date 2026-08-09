@@ -1,8 +1,39 @@
 # Changelog
 
-## v0.4.0-beta.1 Monitor tool + activity indicators (2026-08-09)
+## v0.4.0-beta.2 (2026-08-09) — Web research tools + subagents + question modal
 
-- **firm monitor as an agent tool**: serial monitoring is now callable by the agent
+### New agent tools
+
+- **`web_search`**: search the web without an API key via DuckDuckGo, or via Tavily /
+  Brave with a key (`[tools] web_search`, `web_search_api_key`, `web_search_api_key_env`).
+  Rate-limit handling for the free endpoint: one shared browser-like client with a cookie
+  jar, a 3s process-wide pacing between requests, one retried request with backoff, and a
+  Lite-endpoint fallback when the HTML endpoint is challenged; challenge/anomaly pages are
+  detected and reported as `[Blocked]` errors instead of fake empty results
+- **`web_fetch`**: fetch an http/https URL and return its readable text (HTML stripped);
+  capped at 200 KB body / 60K chars, so datasheets and vendor pages are usable
+- **`task`**: spawn a read-only research subagent (same session provider/model, optional
+  `model`/`cwd` override) that returns a report — can read files, search/fetch the web,
+  keep todos and ask the user, but cannot modify the workspace; recursion bounded by
+  `[tools] max_subagent_depth` (default 2), subagent sessions kept in a temp dir
+- **`ask_user`**: interactive question modal in the TUI — press 1-9 to pick an option,
+  type a free-form answer, Esc to dismiss; only intended for decisions/information that
+  only the user has
+- **`todo`**: session-scoped todo list (`todos.json` in the session work dir) with
+  `list` / `add` / `done` / `rm` / `clear`; survives context compaction
+
+### Plan mode & prompt
+
+- **Plan mode extended**: the read-only registry now also exposes `web_search`,
+  `web_fetch`, `task`, `todo`, `ask_user` (10 read-only tools total); PLAN mode and
+  research subagents share the same registry, so investigation can go online
+- System prompt gained a **Research** section (search first, fetch known URLs, ask the
+  user only what only they know, todo for multi-step work); PLAN-mode instructions
+  updated to match
+
+### Serial monitor + activity indicators + KB dedup
+
+- **`firm monitor` as an agent tool**: serial monitoring is callable by the agent
   (`[tools] monitor_port` / `monitor_baud` fallback); bounded capture with a default 10s
   timeout, `--elf` symbol decoding on log lines, workspace sandbox on the firmware path,
   and an approval step before opening the port (errors tagged `[InvalidInput]`/`[Io]`)
@@ -13,6 +44,15 @@
 - **KB dedup**: when a project carries its own `docs/vendor-index.toml` identical to the
   seed, the hint is no longer injected twice (content-identical check), with two
   regression tests
+
+### Config & plumbing
+
+- New `[tools]` options: `web_search`, `web_search_api_key`, `web_search_api_key_env`,
+  `max_subagent_depth` (project `.firment.toml` overrides merged as before)
+- `ToolContext` gained a `with_cwd` constructor and a `Default` impl (safe defaults,
+  permission = auto-approve); `ToolError` now implements `Display`/`Error`
+- One-shot CLI mode now wires the same subagent runner, web search, session work dir,
+  build/chip/monitor settings into the agent
 
 ## v0.4.0-beta.1 (2026-08-08) — English UI + `/new`
 

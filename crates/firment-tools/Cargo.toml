@@ -6,13 +6,16 @@ edition.workspace = true
 [dependencies]
 firment-core = { path = "../firment-core" }
 async-trait.workspace = true
+futures.workspace = true
 globset.workspace = true
 ignore.workspace = true
 object.workspace = true
-sha2.workspace = true
+reqwest = { workspace = true, features = ["cookies"] }
 regex.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 serialport.workspace = true
+sha2.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]

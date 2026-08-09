@@ -250,6 +250,7 @@ mod tests {
             monitor_port: None,
             monitor_baud: 115_200,
             allowed_roots: Vec::new(),
+            ..ToolContext::default()
         }
     }
 

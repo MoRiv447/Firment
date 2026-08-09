@@ -235,6 +235,7 @@ mod tests {
             monitor_port: None,
             monitor_baud: 115_200,
             allowed_roots: Vec::new(),
+            ..ToolContext::default()
         };
         let result = tool
             .run(json!({"command": "del todo.py test_todo.py"}), &ctx)

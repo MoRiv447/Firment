@@ -4,7 +4,7 @@ use crate::provider::{Provider, ProviderError, ProviderEvent};
 use crate::session::{SessionStore, SessionSummary};
 use crate::tool::{ToolContext, ToolRegistry};
 use crate::types::{ChatMessage, ChatRequest, SessionMode, ThinkingLevel, ToolCall};
-use crate::{PermissionChecker, Session, system_prompt_for};
+use crate::{Asker, PermissionChecker, Session, SubagentFactory, system_prompt_for};
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::{Value, json};
@@ -87,6 +87,19 @@ pub struct Agent {
     default_chip: Option<String>,
     monitor_port: Option<String>,
     monitor_baud: u32,
+    /// Nested-agent runner exposed to the `task` tool.
+    subagent: Option<Arc<dyn SubagentFactory>>,
+    /// Current subagent nesting depth (0 = main agent).
+    subagent_depth: usize,
+    /// Recursion limit for the `task` tool.
+    max_subagent_depth: usize,
+    /// Interactive user front-end exposed to the `ask_user` tool.
+    asker: Option<Arc<dyn Asker>>,
+    /// Web search provider + resolved API key exposed to the web_search tool.
+    web_search_provider: Option<String>,
+    web_search_api_key: Option<String>,
+    /// Per-session bookkeeping directory (todo list etc.).
+    session_dir: Option<PathBuf>,
     /// Hash of the last read result per path, for unchanged-read dedup.
     read_hashes: HashMap<PathBuf, String>,
     /// Recently read paths (most recent last), for post-compact re-injection.
@@ -123,6 +136,13 @@ impl Agent {
             default_chip: None,
             monitor_port: None,
             monitor_baud: 115_200,
+            subagent: None,
+            subagent_depth: 0,
+            max_subagent_depth: 2,
+            asker: None,
+            web_search_provider: None,
+            web_search_api_key: None,
+            session_dir: None,
             read_hashes: HashMap::new(),
             recent_read_paths: VecDeque::new(),
         }
@@ -202,6 +222,37 @@ impl Agent {
     /// Set the baud rate for the monitor tool.
     pub fn set_monitor_baud(&mut self, baud: u32) {
         self.monitor_baud = baud;
+    }
+
+    /// Set the nested-agent runner exposed to the `task` tool.
+    pub fn set_subagent_factory(&mut self, factory: Option<Arc<dyn SubagentFactory>>) {
+        self.subagent = factory;
+    }
+
+    /// Set the current subagent nesting depth (used by nested agents).
+    pub fn set_subagent_depth(&mut self, depth: usize) {
+        self.subagent_depth = depth;
+    }
+
+    /// Set the `[tools] max_subagent_depth` recursion limit for the task tool.
+    pub fn set_max_subagent_depth(&mut self, depth: usize) {
+        self.max_subagent_depth = depth.max(1);
+    }
+
+    /// Set the interactive user front-end exposed to the `ask_user` tool.
+    pub fn set_asker(&mut self, asker: Option<Arc<dyn Asker>>) {
+        self.asker = asker;
+    }
+
+    /// Set the web search provider and resolved API key for the web_search tool.
+    pub fn set_web_search(&mut self, provider: Option<String>, api_key: Option<String>) {
+        self.web_search_provider = provider;
+        self.web_search_api_key = api_key;
+    }
+
+    /// Set the per-session bookkeeping directory (todo list etc.).
+    pub fn set_session_dir(&mut self, dir: Option<PathBuf>) {
+        self.session_dir = dir;
     }
 
     /// Pin a file so compaction always re-injects its full content. Warns when
@@ -461,6 +512,13 @@ impl Agent {
                 default_chip: self.default_chip.clone(),
                 monitor_port: self.monitor_port.clone(),
                 monitor_baud: self.monitor_baud,
+                subagent: self.subagent.clone(),
+                subagent_depth: self.subagent_depth,
+                max_subagent_depth: self.max_subagent_depth,
+                asker: self.asker.clone(),
+                web_search_provider: self.web_search_provider.clone(),
+                web_search_api_key: self.web_search_api_key.clone(),
+                session_dir: self.session_dir.clone(),
             };
 
             if tool_calls.is_empty() {

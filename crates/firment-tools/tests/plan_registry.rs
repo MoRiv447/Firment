@@ -9,8 +9,13 @@ fn plan_registry_exposes_only_read_only_tools() {
     assert!(names.contains(&"glob"));
     assert!(names.contains(&"grep"));
     assert!(names.contains(&"symbols"));
+    assert!(names.contains(&"web_search"));
+    assert!(names.contains(&"web_fetch"));
+    assert!(names.contains(&"task"));
+    assert!(names.contains(&"todo"));
+    assert!(names.contains(&"ask_user"));
     assert!(!names.contains(&"write_file"));
     assert!(!names.contains(&"edit_file"));
     assert!(!names.contains(&"shell"));
-    assert_eq!(names.len(), 5);
+    assert_eq!(names.len(), 10);
 }

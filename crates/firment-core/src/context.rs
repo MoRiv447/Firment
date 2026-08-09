@@ -62,6 +62,10 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          hashlines=true to get an [8-hex content hash] per line, then target edit_file with \
          hashline / end_hashline. If the hash is missing the file changed \
          ([ConcurrentChange]); re-read first, never guess.\n\
+         - Research: web_search finds sources (datasheets, errata, vendor docs) and web_fetch \
+         reads them; task runs a read-only research subagent that returns a report; ask_user \
+         asks the user only for decisions or information that only they have; todo keeps a \
+         session-scoped task list for multi-step work.\n\
          - Batch independent tool calls in parallel to save round trips; dependent calls \
          (editing then reading the same file) are ordered automatically.\n\
          - Tool errors carry type tags such as [NotFound], [CompileError], [Timeout], \
@@ -138,7 +142,8 @@ pub fn system_prompt_for(cwd: &Path, mode: SessionMode) -> String {
              instructions:\n\
              - You MUST NOT write, edit, delete, or rename files, and you MUST NOT run shell \
              commands or any state-changing tool.\n\
-             - Available tools are limited to: read_file, list_dir, glob, grep, symbols.\n\
+             - Available tools are limited to: read_file, list_dir, glob, grep, symbols, \
+             web_search, web_fetch, task, todo, ask_user.\n\
              - Ground every claim in what you actually read: inspect files before stating facts, \
              and mark anything you could not verify as \"unverified\".\n\
              - Ask the user only about preferences and tradeoffs that exploration cannot answer; \

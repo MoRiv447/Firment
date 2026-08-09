@@ -50,6 +50,33 @@ pub struct ToolsConfig {
     /// Default baud rate for `firm monitor`.
     #[serde(default = "default_monitor_baud")]
     pub monitor_baud: u32,
+    /// Web search provider: `duckduckgo` (no key, default) / `tavily` /
+    /// `brave`.
+    #[serde(default)]
+    pub web_search: Option<String>,
+    /// Web search API key (tavily / brave).
+    #[serde(default)]
+    pub web_search_api_key: Option<String>,
+    /// Environment variable holding the web search API key.
+    #[serde(default)]
+    pub web_search_api_key_env: Option<String>,
+    /// Recursion limit for the `task` subagent tool.
+    #[serde(default = "default_max_subagent_depth")]
+    pub max_subagent_depth: usize,
+}
+
+impl ToolsConfig {
+    /// Resolved web search API key: the inline `web_search_api_key` wins,
+    /// otherwise the variable named by `web_search_api_key_env` is read.
+    pub fn resolved_web_search_api_key(&self) -> Option<String> {
+        if let Some(key) = self.web_search_api_key.as_deref().filter(|k| !k.is_empty()) {
+            return Some(key.to_string());
+        }
+        self.web_search_api_key_env
+            .as_deref()
+            .filter(|name| !name.is_empty())
+            .and_then(|name| std::env::var(name).ok().filter(|k| !k.is_empty()))
+    }
 }
 
 /// Auto-compaction strategy: `summarize` (default) summarizes all old rounds;
@@ -164,6 +191,18 @@ impl Config {
         }
         if project.tools.monitor_baud != default_monitor_baud() {
             config.tools.monitor_baud = project.tools.monitor_baud;
+        }
+        if let Some(value) = project.tools.web_search {
+            config.tools.web_search = Some(value);
+        }
+        if let Some(value) = project.tools.web_search_api_key {
+            config.tools.web_search_api_key = Some(value);
+        }
+        if let Some(value) = project.tools.web_search_api_key_env {
+            config.tools.web_search_api_key_env = Some(value);
+        }
+        if project.tools.max_subagent_depth != default_max_subagent_depth() {
+            config.tools.max_subagent_depth = project.tools.max_subagent_depth;
         }
         if project.compaction_strategy != CompactionStrategy::default() {
             config.compaction_strategy = project.compaction_strategy;
@@ -414,6 +453,9 @@ model = "deepseek-v4-flash"
 # default_chip = "stm32f407vetx"          # default chip for the flash tool (probe-rs chip name)
 # monitor_port = "COM3"                   # default serial port for firm monitor
 # monitor_baud = 115200                   # default baud rate for firm monitor
+# web_search = "duckduckgo"               # web_search provider: duckduckgo (no key) / tavily / brave
+# web_search_api_key_env = "TAVILY_API_KEY"  # API key env for tavily / brave (or set web_search_api_key inline)
+# max_subagent_depth = 2                  # recursion limit for the task subagent tool
 "#
 }
 
@@ -442,6 +484,10 @@ fn default_max_iterations() -> usize {
 
 fn default_monitor_baud() -> u32 {
     115_200
+}
+
+fn default_max_subagent_depth() -> usize {
+    2
 }
 
 fn default_context_budget() -> usize {

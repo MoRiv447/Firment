@@ -1,7 +1,7 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.4.0--beta.1-orange)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.4.0--beta.2-orange)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![Benchmark](https://img.shields.io/badge/benchmark-4.95-%231-green)]()
@@ -20,8 +20,8 @@
 
 - **多模型接入**：Anthropic 兼容（`/v1/messages`）与 OpenAI 兼容（`/chat/completions`，覆盖 DeepSeek / GLM / Qwen / Ollama）流式工具调用；DeepSeek V4 自动走官方 `thinking` + `reasoning_effort`
 - **思考深度分级**：`off / low / medium / high / xhigh / max`
-- **内置工具**：`read_file`、`write_file`、`edit_file`（锚点/行范围编辑）、`list_dir`、`glob`、`grep`、`shell`
-- **只读 Plan 模式**：`--plan` / `/plan` 只暴露读工具，plan 提示词要求“决策完整、执行者零决策”
+- **内置工具**：`read_file`、`write_file`、`edit_file`（锚点/行范围编辑）、`list_dir`、`glob`、`grep`、`shell`、`web_search`（DuckDuckGo 免 key / Tavily / Brave）、`web_fetch`、`task`（只读研究子代理）、`todo`、`ask_user`
+- **只读 Plan 模式**：`--plan` / `/plan` 只暴露读工具（外加联网研究、todo、ask_user），plan 提示词要求“决策完整、执行者零决策”
 - **并行工具调用**：独立工具并发执行；同文件读写与 shell/verify/grep 等宽泛工具自动排序
 - **工程化系统提示词**：分节内建（沟通 / 工程原则 / 工具策略 / 验证 / 安全）+ `AGENTS.md` / `FIRMENT.md` 项目指令注入
 - **会话管理**：JSONL 持久化、`--continue`、`--list`、TUI `/sessions` 上下键选择器
@@ -114,6 +114,9 @@ model = "deepseek-v4-flash"   # 或 deepseek-v4-pro
 # default_chip = "stm32f407vetx"          # firm flash 默认芯片（probe-rs 芯片名）
 # monitor_port = "COM3"                   # firm monitor 默认串口
 # monitor_baud = 115200                   # firm monitor 默认波特率
+# web_search = "duckduckgo"               # web_search 提供商：duckduckgo（免 key）/ tavily / brave
+# web_search_api_key_env = "TAVILY_API_KEY"  # 搜索 API key 所在环境变量（或直接 web_search_api_key 内联）
+# max_subagent_depth = 2                  # task 子代理工具的递归深度上限
 ```
 
 多 Provider 追加配置后用 `--provider <名字>` 或 TUI 内 `/provider <名字>` 切换；`/models`、`Ctrl+P` 可直接拉取并选择模型，不用手改文件。

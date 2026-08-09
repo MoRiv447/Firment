@@ -1,4 +1,6 @@
+use crate::ask::Asker;
 use crate::journal::EditJournal;
+use crate::subagent::SubagentFactory;
 use crate::{PermissionChecker, PermissionError, ToolSpec};
 use async_trait::async_trait;
 use serde_json::Value;
@@ -32,6 +34,56 @@ pub struct ToolContext {
     pub monitor_port: Option<String>,
     /// Baud rate for the monitor tool from `[tools] monitor_baud`.
     pub monitor_baud: u32,
+    /// Nested-agent runner for the `task` tool; `None` in direct tool runs.
+    pub subagent: Option<Arc<dyn SubagentFactory>>,
+    /// Current subagent nesting depth (0 = main agent).
+    pub subagent_depth: usize,
+    /// Recursion limit for nested agents from `[tools] max_subagent_depth`.
+    pub max_subagent_depth: usize,
+    /// Interactive user front-end for the `ask_user` tool.
+    pub asker: Option<Arc<dyn Asker>>,
+    /// Web search provider name from `[tools] web_search`.
+    pub web_search_provider: Option<String>,
+    /// Resolved web search API key (inline config or env var).
+    pub web_search_api_key: Option<String>,
+    /// Per-session directory for tool bookkeeping (e.g. the todo list).
+    pub session_dir: Option<PathBuf>,
+}
+
+impl ToolContext {
+    /// Convenience constructor with safe defaults; tests and direct tool runs
+    /// override fields afterwards. Permission defaults to auto-approve so the
+    /// caller decides what to expose.
+    pub fn with_cwd(cwd: PathBuf) -> Self {
+        Self {
+            cwd,
+            permission: Arc::new(crate::AutoApprove::everything()),
+            allow_dangerous: false,
+            journal: Arc::new(Mutex::new(EditJournal::new(
+                std::env::temp_dir().join("firment-journal"),
+            ))),
+            verify_command: None,
+            allowed_roots: Vec::new(),
+            symbols_backend: None,
+            build_command: None,
+            default_chip: None,
+            monitor_port: None,
+            monitor_baud: 115_200,
+            subagent: None,
+            subagent_depth: 0,
+            max_subagent_depth: 2,
+            asker: None,
+            web_search_provider: None,
+            web_search_api_key: None,
+            session_dir: None,
+        }
+    }
+}
+
+impl Default for ToolContext {
+    fn default() -> Self {
+        Self::with_cwd(PathBuf::from("."))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -43,6 +95,14 @@ pub struct ToolOutput {
 pub struct ToolError {
     pub message: String,
 }
+
+impl std::fmt::Display for ToolError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for ToolError {}
 
 impl ToolError {
     pub fn new(message: impl Into<String>) -> Self {

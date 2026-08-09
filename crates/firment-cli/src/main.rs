@@ -340,6 +340,7 @@ async fn run_once(
         firment_tools::default_registry()
     };
     let store = SessionStore::default();
+    let work_dir = store.dir.join("work");
     // The verify tool runs the user-configured command from config.toml; in
     // one-shot mode it is part of the completion gate, so it is always
     // auto-approved (the dangerous-command guard still applies).
@@ -371,6 +372,25 @@ async fn run_once(
     agent.set_context_budget_chars(config.context_budget_chars);
     agent.set_compaction_strategy(config.compaction_strategy);
     agent.set_symbols_backend(config.tools.symbols_backend.clone());
+    agent.set_build_command(config.tools.build_command.clone());
+    agent.set_default_chip(config.tools.default_chip.clone());
+    agent.set_monitor_port(config.tools.monitor_port.clone());
+    agent.set_monitor_baud(config.tools.monitor_baud);
+    agent.set_max_subagent_depth(config.tools.max_subagent_depth);
+    agent.set_web_search(
+        config.tools.web_search.clone(),
+        config.tools.resolved_web_search_api_key(),
+    );
+    agent.set_session_dir(Some(work_dir));
+    let subagent_factory: Arc<firment_core::SubagentRunner> =
+        Arc::new(firment_core::SubagentRunner::new(
+            Arc::new(config.clone()),
+            firment_tools::plan_registry(),
+            agent.session().provider.clone(),
+            agent.session().model.clone(),
+            None,
+        ));
+    agent.set_subagent_factory(Some(subagent_factory));
     let text = agent.run_turn(prompt).await?;
     println!("{text}");
     Ok(())
@@ -607,6 +627,13 @@ async fn run_direct_tool(
         default_chip: config.tools.default_chip.clone(),
         monitor_port: config.tools.monitor_port.clone(),
         monitor_baud: config.tools.monitor_baud,
+        subagent: None,
+        subagent_depth: 0,
+        max_subagent_depth: 2,
+        asker: None,
+        web_search_provider: config.tools.web_search.clone(),
+        web_search_api_key: config.tools.resolved_web_search_api_key(),
+        session_dir: None,
         allowed_roots: Vec::new(),
     };
     let registry = firment_tools::default_registry();

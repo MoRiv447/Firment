@@ -1,7 +1,7 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.4.0--beta.1-orange)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.4.0--beta.2-orange)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![Benchmark](https://img.shields.io/badge/benchmark-4.95-%231-green)]()
@@ -18,8 +18,8 @@
 
 - **Multi-provider**: Anthropic-compatible (`/v1/messages`) and OpenAI-compatible (`/chat/completions`, covering DeepSeek / GLM / Qwen / Ollama) streaming tool calls; DeepSeek V4 automatically uses official `thinking` + `reasoning_effort`
 - **Thinking levels**: `off / low / medium / high / xhigh / max`
-- **Built-in tools**: `read_file`, `write_file`, `edit_file` (anchor / line-range edits), `list_dir`, `glob`, `grep`, `shell`
-- **Read-only plan mode**: `--plan` / `/plan` exposes only read tools and requires a decision-complete plan
+- **Built-in tools**: `read_file`, `write_file`, `edit_file` (anchor / line-range edits), `list_dir`, `glob`, `grep`, `shell`, `web_search` (DuckDuckGo no-key / Tavily / Brave), `web_fetch`, `task` (read-only research subagent), `todo`, `ask_user`
+- **Read-only plan mode**: `--plan` / `/plan` exposes only read tools (plus web research, todo, ask_user) and requires a decision-complete plan
 - **Parallel tool calls**: independent calls run concurrently; same-file reads/writes and broad tools (shell/verify/grep) are ordered automatically
 - **Engineering-grade system prompt**: sections for communication, engineering principles, tool policy, verification, and safety, plus `AGENTS.md` / `FIRMENT.md` project instructions
 - **Session management**: JSONL persistence, `--continue`, `--list`, and an interactive `/sessions` picker
@@ -112,6 +112,9 @@ model = "deepseek-v4-flash"   # or deepseek-v4-pro
 # default_chip = "stm32f407vetx"          # default probe-rs chip for `firm flash`
 # monitor_port = "COM3"                   # default serial port for `firm monitor`
 # monitor_baud = 115200                   # default baud rate for `firm monitor`
+# web_search = "duckduckgo"               # web_search provider: duckduckgo (no key) / tavily / brave
+# web_search_api_key_env = "TAVILY_API_KEY"  # env var holding the search API key (or web_search_api_key inline)
+# max_subagent_depth = 2                  # recursion limit for the `task` subagent tool
 ```
 
 Add more providers and switch with `--provider <name>` or `/provider <name>` in the TUI; `/models` and `Ctrl+P` fetch and pick models without editing files.

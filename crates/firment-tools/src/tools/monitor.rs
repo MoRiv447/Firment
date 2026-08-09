@@ -9,7 +9,12 @@ pub struct Monitor;
 
 /// Blocking serial read loop: collect lines until the deadline, decoding hex
 /// code addresses against an ELF when provided.
-fn read_serial(port: &str, baud: u32, timeout_ms: u64, elf: Option<&Path>) -> Result<String, String> {
+fn read_serial(
+    port: &str,
+    baud: u32,
+    timeout_ms: u64,
+    elf: Option<&Path>,
+) -> Result<String, String> {
     use std::io::Read;
     let mut reader = serialport::new(port, baud)
         .timeout(Duration::from_millis(500))
@@ -39,7 +44,7 @@ fn read_serial(port: &str, baud: u32, timeout_ms: u64, elf: Option<&Path>) -> Re
                 if e.kind() == std::io::ErrorKind::TimedOut
                     || e.kind() == std::io::ErrorKind::WouldBlock =>
             {
-                continue
+                continue;
             }
             Err(e) => return Err(format!("serial read failed: {e}")),
         }
@@ -149,6 +154,7 @@ mod tests {
             monitor_port: monitor_port.map(|s| s.to_string()),
             monitor_baud: 115_200,
             allowed_roots: Vec::new(),
+            ..ToolContext::default()
         }
     }
 
@@ -185,7 +191,10 @@ mod tests {
     async fn unopenable_port_returns_error() {
         let dir = tempdir().unwrap();
         let err = Monitor
-            .run(json!({"port": "COM_DOES_NOT_EXIST_12345"}), &ctx(dir.path(), None))
+            .run(
+                json!({"port": "COM_DOES_NOT_EXIST_12345"}),
+                &ctx(dir.path(), None),
+            )
             .await
             .unwrap_err();
         assert!(
