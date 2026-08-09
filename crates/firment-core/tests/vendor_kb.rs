@@ -16,6 +16,39 @@ fn collect_cheatsheets(value: &Value, out: &mut Vec<String>) {
 }
 
 #[test]
+fn seed_index_is_not_injected_twice_when_project_index_is_identical() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("vendor-index.toml"),
+        firment_core::kb::seed_index_text(),
+    )
+    .unwrap();
+    let prompt = firment_core::context::default_system_prompt(dir.path());
+    assert_eq!(
+        prompt.matches("Hardware knowledge base").count(),
+        1,
+        "seed + identical project index must not both be injected"
+    );
+}
+
+#[test]
+fn distinct_project_index_is_injected_alongside_seed() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("vendor-index.toml"),
+        "meta = { schema_version = \"1\" }\n[my-board]\n",
+    )
+    .unwrap();
+    let prompt = firment_core::context::default_system_prompt(dir.path());
+    assert_eq!(
+        prompt.matches("Hardware knowledge base").count(),
+        2,
+        "seed and a distinct project index should both be injected"
+    );
+    assert!(prompt.contains("my-board"), "project index content missing");
+}
+
+#[test]
 fn vendor_knowledge_base_files_parse_and_link() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let index_path = root.join("docs").join("vendor-index.toml");

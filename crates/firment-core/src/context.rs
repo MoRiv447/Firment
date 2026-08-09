@@ -176,6 +176,9 @@ fn load_vendor_index_hint(cwd: &Path) -> Option<String> {
             continue;
         };
         let index_text = std::fs::read_to_string(&index).unwrap_or_default();
+        if index_text.trim() == crate::kb::seed_index_text().trim() {
+            continue;
+        }
         let index_text: String = index_text.chars().take(6000).collect();
         let hint = format!(
             "\n\n# Hardware knowledge base\n\
