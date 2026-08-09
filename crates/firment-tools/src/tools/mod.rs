@@ -4,6 +4,7 @@ mod flash;
 mod glob;
 mod grep;
 mod list_dir;
+mod monitor;
 mod read_file;
 mod run;
 mod shell;
@@ -20,6 +21,7 @@ pub fn all() -> Vec<Arc<dyn Tool>> {
         Arc::new(build::Build),
         Arc::new(read_file::ReadFile),
         Arc::new(run::Run),
+        Arc::new(monitor::Monitor),
         Arc::new(write_file::WriteFile),
         Arc::new(flash::Flash),
         Arc::new(edit_file::EditFile),

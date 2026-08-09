@@ -605,6 +605,8 @@ async fn run_direct_tool(
         symbols_backend: config.tools.symbols_backend.clone(),
         build_command: config.tools.build_command.clone(),
         default_chip: config.tools.default_chip.clone(),
+        monitor_port: config.tools.monitor_port.clone(),
+        monitor_baud: config.tools.monitor_baud,
         allowed_roots: Vec::new(),
     };
     let registry = firment_tools::default_registry();

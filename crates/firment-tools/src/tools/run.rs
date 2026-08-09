@@ -114,6 +114,8 @@ mod tests {
             symbols_backend: None,
             build_command: None,
             default_chip: Some("stm32f407vetx".to_string()),
+            monitor_port: None,
+            monitor_baud: 115_200,
             allowed_roots: Vec::new(),
         }
     }

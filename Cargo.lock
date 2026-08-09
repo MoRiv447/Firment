@@ -685,6 +685,7 @@ dependencies = [
  "object",
  "regex",
  "serde_json",
+ "serialport",
  "sha2",
  "tempfile",
  "tokio",

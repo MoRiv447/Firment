@@ -131,7 +131,7 @@ default_chip = "stm32f407vetx"
 monitor_port = "COM3"
 ```
 
-项目配置会覆盖全局 `config.toml` 的对应项。进 TUI 后直接说“构建并烧录”，agent 会自己读取/修改这份文件并调用 `build` / `flash` / `run`；`build` 默认免确认，`flash` 始终弹确认。
+项目配置会覆盖全局 `config.toml` 的对应项。进 TUI 后直接说“构建并烧录”，agent 会自己读取/修改这份文件并调用 `build` / `flash` / `run`；`build` 默认免确认，`flash` 始终弹确认。`monitor` 也是 agent 工具——target 通过物理 UART 输出日志时，agent 可打开串口监听一段时间（可配 `--elf` 解码地址），把日志拉回对话。
 
 ### 🖥️ CLI
 

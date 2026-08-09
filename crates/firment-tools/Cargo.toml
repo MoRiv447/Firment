@@ -12,6 +12,7 @@ object.workspace = true
 sha2.workspace = true
 regex.workspace = true
 serde_json.workspace = true
+serialport.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]

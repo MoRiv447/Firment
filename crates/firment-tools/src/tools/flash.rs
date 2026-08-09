@@ -116,6 +116,8 @@ mod tests {
             symbols_backend: None,
             build_command: None,
             default_chip: default_chip.map(|s| s.to_string()),
+            monitor_port: None,
+            monitor_baud: 115_200,
             allowed_roots: Vec::new(),
         }
     }

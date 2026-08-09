@@ -1215,6 +1215,8 @@ async fn invalid_arguments_are_rejected_before_tool_runs() {
         symbols_backend: None,
         build_command: None,
         default_chip: None,
+        monitor_port: None,
+        monitor_baud: 115_200,
         allowed_roots: Vec::new(),
     };
     let err = registry.run("flag", json!({}), &ctx).await.unwrap_err();

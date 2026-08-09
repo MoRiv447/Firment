@@ -28,6 +28,10 @@ pub struct ToolContext {
     pub build_command: Option<String>,
     /// Default target chip for the flash tool from `[tools] default_chip`.
     pub default_chip: Option<String>,
+    /// Serial port for the monitor tool from `[tools] monitor_port`.
+    pub monitor_port: Option<String>,
+    /// Baud rate for the monitor tool from `[tools] monitor_baud`.
+    pub monitor_baud: u32,
 }
 
 #[derive(Debug, Clone)]

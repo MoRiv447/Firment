@@ -85,6 +85,8 @@ pub struct Agent {
     symbols_backend: Option<String>,
     build_command: Option<String>,
     default_chip: Option<String>,
+    monitor_port: Option<String>,
+    monitor_baud: u32,
     /// Hash of the last read result per path, for unchanged-read dedup.
     read_hashes: HashMap<PathBuf, String>,
     /// Recently read paths (most recent last), for post-compact re-injection.
@@ -119,6 +121,8 @@ impl Agent {
             symbols_backend: None,
             build_command: None,
             default_chip: None,
+            monitor_port: None,
+            monitor_baud: 115_200,
             read_hashes: HashMap::new(),
             recent_read_paths: VecDeque::new(),
         }
@@ -188,6 +192,16 @@ impl Agent {
     /// Set the default target chip for the flash tool.
     pub fn set_default_chip(&mut self, chip: Option<String>) {
         self.default_chip = chip;
+    }
+
+    /// Set the serial port for the monitor tool.
+    pub fn set_monitor_port(&mut self, port: Option<String>) {
+        self.monitor_port = port;
+    }
+
+    /// Set the baud rate for the monitor tool.
+    pub fn set_monitor_baud(&mut self, baud: u32) {
+        self.monitor_baud = baud;
     }
 
     /// Pin a file so compaction always re-injects its full content. Warns when
@@ -445,6 +459,8 @@ impl Agent {
                 symbols_backend: self.symbols_backend.clone(),
                 build_command: self.build_command.clone(),
                 default_chip: self.default_chip.clone(),
+                monitor_port: self.monitor_port.clone(),
+                monitor_baud: self.monitor_baud,
             };
 
             if tool_calls.is_empty() {
