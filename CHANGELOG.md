@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.4.0-beta.1 Monitor tool + activity indicators (2026-08-09)
+
+- **firm monitor as an agent tool**: serial monitoring is now callable by the agent
+  (`[tools] monitor_port` / `monitor_baud` fallback); bounded capture with a default 10s
+  timeout, `--elf` symbol decoding on log lines, workspace sandbox on the firmware path,
+  and an approval step before opening the port (errors tagged `[InvalidInput]`/`[Io]`)
+- **TUI activity indicators**: the status bar shows what the agent is working on
+  ("working · searching main.rs…", with a count like "2× flashing…" when tools run in
+  parallel); running tool cards spin (`◐◓◑◒`); the hint derives from the tool name and
+  its file/path/pattern argument
+- **KB dedup**: when a project carries its own `docs/vendor-index.toml` identical to the
+  seed, the hint is no longer injected twice (content-identical check), with two
+  regression tests
+
 ## v0.4.0-beta.1 (2026-08-08) — English UI + `/new`
 
 - **Full English pass**: all TUI/CLI output, permission cards, status bar, help text,

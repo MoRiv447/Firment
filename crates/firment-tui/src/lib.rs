@@ -90,6 +90,8 @@ pub async fn run(
     agent.set_symbols_backend(config.tools.symbols_backend.clone());
     agent.set_build_command(config.tools.build_command.clone());
     agent.set_default_chip(config.tools.default_chip.clone());
+    agent.set_monitor_port(config.tools.monitor_port.clone());
+    agent.set_monitor_baud(config.tools.monitor_baud);
     let initial_messages = agent.session().messages.clone();
     let model = agent.session().model.clone();
     let cwd = agent.session().cwd.clone();
@@ -632,6 +634,8 @@ struct App {
     history_pos: Option<usize>,
     busy: bool,
     ai_thinking: bool,
+    /// Tools currently running (raw name, activity label) for status hints.
+    active_tools: Vec<(String, String)>,
     permission: Option<PermissionRequest>,
     interrupting: bool,
     scroll: usize,
@@ -994,6 +998,7 @@ impl App {
             history_pos: None,
             busy: false,
             ai_thinking: false,
+            active_tools: Vec::new(),
             permission: None,
             interrupting: false,
             scroll: 0,
@@ -1078,6 +1083,8 @@ impl App {
             },
             AgentEvent::ToolStart { name, args } => {
                 self.ai_thinking = false;
+                self.active_tools
+                    .push((name.clone(), tool_activity(&name, &args)));
                 self.items.push(Item::Tool {
                     name,
                     running: true,
@@ -1086,6 +1093,9 @@ impl App {
                 });
             }
             AgentEvent::ToolEnd { name, ok, summary } => {
+                if let Some(pos) = self.active_tools.iter().rposition(|(n, _)| n == &name) {
+                    self.active_tools.remove(pos);
+                }
                 for item in self.items.iter_mut().rev() {
                     if let Item::Tool {
                         name: n,
@@ -2467,11 +2477,15 @@ impl App {
                     summary,
                 } => {
                     let (symbol, color) = if *running {
-                        ("◌", Color::Yellow)
+                        const SPINNER: [char; 4] = ['◐', '◓', '◑', '◒'];
+                        (
+                            SPINNER[(self.frame as usize) % SPINNER.len()],
+                            Color::Yellow,
+                        )
                     } else if *ok {
-                        ("✓", Color::Green)
+                        ('✓', Color::Green)
                     } else {
-                        ("✗", Color::Red)
+                        ('✗', Color::Red)
                     };
                     let line = format!("{symbol} {name}  {}", truncate_chars(summary, 140));
                     for seg in wrap_text(&line, width.saturating_sub(1)) {
@@ -2585,17 +2599,7 @@ impl App {
         } else {
             "•".to_string()
         };
-        let state = if self.permission.is_some() {
-            "waiting for approval"
-        } else if self.interrupting {
-            "interrupting…"
-        } else if self.ai_thinking {
-            "thinking"
-        } else if self.busy {
-            "working"
-        } else {
-            "ready"
-        };
+        let state = self.status_text();
         let mut cwd_str = self.cwd.display().to_string();
         if cwd_str.width() > 36 {
             cwd_str = format!("…{}", truncate_tail(&cwd_str, 35));
@@ -2825,6 +2829,30 @@ impl App {
             }
         }
     }
+
+    /// Short status text shown in the status bar while the agent is running.
+    fn status_text(&self) -> String {
+        if self.permission.is_some() {
+            "waiting for approval".to_string()
+        } else if self.interrupting {
+            "interrupting…".to_string()
+        } else if self.ai_thinking {
+            "thinking".to_string()
+        } else if self.busy {
+            if let Some((_, label)) = self.active_tools.last() {
+                let count = if self.active_tools.len() > 1 {
+                    format!("{}× ", self.active_tools.len())
+                } else {
+                    String::new()
+                };
+                format!("working · {count}{label}")
+            } else {
+                "working".to_string()
+            }
+        } else {
+            "ready".to_string()
+        }
+    }
 }
 
 fn wrap_text(text: &str, width: usize) -> Vec<String> {
@@ -2878,6 +2906,38 @@ fn truncate_tail(text: &str, max: usize) -> String {
         w += cw;
     }
     format!("…{out}")
+}
+
+/// Human-readable in-progress hint for a running tool, e.g. "searching" or
+/// "flashing target/out.elf…". Falls back to the raw tool name.
+fn tool_activity(name: &str, args: &serde_json::Value) -> String {
+    let label = match name {
+        "grep" | "glob" | "symbols" | "list_dir" => "searching",
+        "read_file" => "reading",
+        "edit_file" | "write_file" => "editing",
+        "build" => "building",
+        "flash" => "flashing",
+        "run" => "running target",
+        "monitor" => "monitoring serial",
+        "verify" => "verifying",
+        "shell" => "running shell command",
+        other => other,
+    };
+    let target = ["file", "path", "pattern"]
+        .iter()
+        .find_map(|key| args.get(*key).and_then(|v| v.as_str()))
+        .and_then(|s| {
+            let base = s.rsplit(['/', '\\']).next().unwrap_or(s);
+            if base.is_empty() {
+                None
+            } else {
+                Some(base.to_string())
+            }
+        });
+    match target {
+        Some(target) => format!("{label} {target}…"),
+        None => format!("{label}…"),
+    }
 }
 
 fn next_thinking(level: ThinkingLevel) -> ThinkingLevel {
@@ -3720,5 +3780,69 @@ mod tests {
         app.scroll_up(10);
         assert!(app.follow);
         assert_eq!(app.scroll, 0);
+    }
+
+    #[test]
+    fn tool_activity_names_common_tools_and_targets() {
+        assert_eq!(
+            tool_activity("grep", &serde_json::json!({ "pattern": "fn main" })),
+            "searching fn main…"
+        );
+        assert_eq!(
+            tool_activity("glob", &serde_json::json!({ "path": "src/main.rs" })),
+            "searching main.rs…"
+        );
+        assert_eq!(
+            tool_activity(
+                "flash",
+                &serde_json::json!({ "file": "target/thumbv7em/debug/app.elf" })
+            ),
+            "flashing app.elf…"
+        );
+        assert_eq!(
+            tool_activity("monitor", &serde_json::json!({ "port": "COM3" })),
+            "monitoring serial…"
+        );
+        assert_eq!(
+            tool_activity("read_file", &serde_json::json!({ "path": "" })),
+            "reading…"
+        );
+        // Unknown tools fall back to their raw name.
+        assert_eq!(tool_activity("deploy", &serde_json::json!({})), "deploy…");
+    }
+
+    #[test]
+    fn status_tracks_active_tools_with_count() {
+        let mut app = test_app();
+        assert_eq!(app.status_text(), "ready");
+
+        app.on_agent(AgentEvent::TurnStart);
+        assert_eq!(app.status_text(), "thinking");
+
+        app.on_agent(AgentEvent::ToolStart {
+            name: "grep".to_string(),
+            args: serde_json::json!({ "pattern": "fn main" }),
+        });
+        assert_eq!(app.status_text(), "working · searching fn main…");
+
+        app.on_agent(AgentEvent::ToolStart {
+            name: "flash".to_string(),
+            args: serde_json::json!({ "file": "app.elf" }),
+        });
+        assert_eq!(app.status_text(), "working · 2× flashing app.elf…");
+
+        app.on_agent(AgentEvent::ToolEnd {
+            name: "flash".to_string(),
+            ok: true,
+            summary: String::new(),
+        });
+        assert_eq!(app.status_text(), "working · searching fn main…");
+
+        app.on_agent(AgentEvent::ToolEnd {
+            name: "grep".to_string(),
+            ok: true,
+            summary: String::new(),
+        });
+        assert_eq!(app.status_text(), "working");
     }
 }
