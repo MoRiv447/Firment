@@ -66,6 +66,10 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          reads them; task runs a read-only research subagent that returns a report; ask_user \
          asks the user only for decisions or information that only they have; todo keeps a \
          session-scoped task list for multi-step work.\n\
+         - After building firmware, call elf_analyze on the ELF and compare with the previous \
+         build (baseline is cached automatically) to catch flash/RAM growth, function size \
+         changes, and stack depth increases that still compile fine. If it reports no stack \
+         data, mention that the build lacks -fstack-usage rather than guessing.\n\
          - Batch independent tool calls in parallel to save round trips; dependent calls \
          (editing then reading the same file) are ordered automatically.\n\
          - Tool errors carry type tags such as [NotFound], [CompileError], [Timeout], \

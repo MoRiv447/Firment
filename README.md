@@ -18,7 +18,7 @@
 
 - **Multi-provider**: Anthropic-compatible (`/v1/messages`) and OpenAI-compatible (`/chat/completions`, covering DeepSeek / GLM / Qwen / Ollama) streaming tool calls; DeepSeek V4 automatically uses official `thinking` + `reasoning_effort`
 - **Thinking levels**: `off / low / medium / high / xhigh / max`
-- **Built-in tools**: `read_file`, `write_file`, `edit_file` (anchor / line-range edits), `list_dir`, `glob`, `grep`, `shell`, `web_search` (DuckDuckGo no-key / Tavily / Brave), `web_fetch`, `task` (read-only research subagent), `todo`, `ask_user`
+- **Built-in tools**: `read_file`, `write_file`, `edit_file` (anchor / line-range edits), `list_dir`, `glob`, `grep`, `shell`, `web_search` (DuckDuckGo no-key / Tavily / Brave), `web_fetch`, `task` (read-only research subagent), `todo`, `ask_user`, `elf_analyze` (flash/RAM + stack-depth analysis of built binaries)
 - **Read-only plan mode**: `--plan` / `/plan` exposes only read tools (plus web research, todo, ask_user) and requires a decision-complete plan
 - **Parallel tool calls**: independent calls run concurrently; same-file reads/writes and broad tools (shell/verify/grep) are ordered automatically
 - **Engineering-grade system prompt**: sections for communication, engineering principles, tool policy, verification, and safety, plus `AGENTS.md` / `FIRMENT.md` project instructions
@@ -42,7 +42,7 @@
 - **Transactional edits + undo**: every write/edit in a turn is backed up and rolled back as a batch if any mutation fails; `/undo` restores the last committed batch (persisted per session)
 - **CAS + SHA-256 anchoring**: write/edit re-checks the file byte-for-byte before applying; `read_file` returns a `[file-sha256: ...]` hash and `edit_file` / `write_file` accept `expected_sha256` as a stale-read guard (`[ConcurrentChange]` on mismatch); `read_file hashlines=true` exposes per-line content-hash anchors and `edit_file` supports `hashline` / `end_hashline` for precise placement
 - **Diff-first approval**: write/edit permission prompts show the exact unified diff before you approve
-- **Verify gate (enforced)**: an optional `verify` tool runs your configured build/check command; after any file changes the harness itself runs verify and refuses to accept completion until it passes
+- **Verify gate (enforced)**: an optional `verify` tool runs your configured build/check command; after any file changes the harness itself runs verify and refuses to accept completion until it passes. **Binary analysis (soft gate)**: after a build, `elf_analyze` reports flash/RAM usage, largest functions and per-function stack depth (requires `-fstack-usage`), and auto-diffs against the previous build to surface stack-depth growth and size regressions that compile fine
 - **Path sandbox**: file tools are confined to the workspace (canonicalized; extra roots such as the spill directory are explicitly allowed); paths outside are rejected with `[Permission]`
 - **Dangerous command guard**: in one-shot `-y` mode, `del/rm/Remove-Item/mv/move/git clean/git reset --hard`, force push, and scripting deletion APIs are blocked by default (including wrapper bypasses); the TUI labels them ⚠ and asks for confirmation
 - **Argument schema validation**: tool arguments are validated against their JSON Schema before execution; malformed calls are rejected with a `[InvalidInput]` tag

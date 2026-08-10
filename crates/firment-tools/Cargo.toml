@@ -21,3 +21,4 @@ tokio.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 wiremock.workspace = true
+object = { workspace = true, features = ["write"] }

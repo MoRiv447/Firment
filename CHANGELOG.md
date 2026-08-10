@@ -21,6 +21,11 @@
   only the user has
 - **`todo`**: session-scoped todo list (`todos.json` in the session work dir) with
   `list` / `add` / `done` / `rm` / `clear`; survives context compaction
+- **`elf_analyze`**: read-only binary analysis of compiled firmware (ELF) — flash/RAM
+  usage per section, largest functions, and per-function stack depth when built with
+  `-fstack-usage` (GCC/Clang); the tool caches a baseline per ELF path and auto-diffs the
+  next build, surfacing stack-depth growth and flash/RAM regressions that still compile
+  cleanly. The system prompt guides the agent to run it after builds (soft gate)
 
 ### Plan mode & prompt
 

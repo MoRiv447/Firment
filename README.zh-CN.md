@@ -20,7 +20,7 @@
 
 - **多模型接入**：Anthropic 兼容（`/v1/messages`）与 OpenAI 兼容（`/chat/completions`，覆盖 DeepSeek / GLM / Qwen / Ollama）流式工具调用；DeepSeek V4 自动走官方 `thinking` + `reasoning_effort`
 - **思考深度分级**：`off / low / medium / high / xhigh / max`
-- **内置工具**：`read_file`、`write_file`、`edit_file`（锚点/行范围编辑）、`list_dir`、`glob`、`grep`、`shell`、`web_search`（DuckDuckGo 免 key / Tavily / Brave）、`web_fetch`、`task`（只读研究子代理）、`todo`、`ask_user`
+- **内置工具**：`read_file`、`write_file`、`edit_file`（锚点/行范围编辑）、`list_dir`、`glob`、`grep`、`shell`、`web_search`（DuckDuckGo 免 key / Tavily / Brave）、`web_fetch`、`task`（只读研究子代理）、`todo`、`ask_user`、`elf_analyze`（构建产物 flash/RAM 与栈深分析）
 - **只读 Plan 模式**：`--plan` / `/plan` 只暴露读工具（外加联网研究、todo、ask_user），plan 提示词要求“决策完整、执行者零决策”
 - **并行工具调用**：独立工具并发执行；同文件读写与 shell/verify/grep 等宽泛工具自动排序
 - **工程化系统提示词**：分节内建（沟通 / 工程原则 / 工具策略 / 验证 / 安全）+ `AGENTS.md` / `FIRMENT.md` 项目指令注入
@@ -44,7 +44,7 @@
 - **事务编辑 + 撤销**：一个回合内的所有写/编辑统一备份，任一修改失败整批回滚；`/undo` 恢复上一次已提交的改动（按会话持久化）
 - **CAS + SHA-256 哈希锚定**：写/编辑前逐字节重新校验；`read_file` 返回 `[file-sha256: ...]`，`edit_file` / `write_file` 支持 `expected_sha256` 前置校验，哈希不符以 `[ConcurrentChange]` 拒绝；`read_file hashlines=true` 输出逐行内容哈希，`edit_file` 支持 `hashline` / `end_hashline` 精确定位
 - **diff-first 批准**：写/编辑的权限弹窗直接展示 unified diff，批准前先看改动
-- **verify 硬门**：可选 `verify` 工具执行配置的构建/检查命令；发生文件改动后由程序强制运行 verify，未通过就不接受完成
+- **verify 硬门**：可选 `verify` 工具执行配置的构建/检查命令；发生文件改动后由程序强制运行 verify，未通过就不接受完成。**二进制分析（软门）**：构建后 `elf_analyze` 报告 flash/RAM 占用、最大函数与每函数栈深（需 `-fstack-usage`），并自动与上一次构建差分，暴露"能编译但有害"的栈深增长与体积回退
 - **路径沙箱**：文件工具被限制在工作区内（canonicalize 校验，外溢目录等额外根目录显式放行），越界路径以 `[Permission]` 拒绝
 - **危险命令安全闸**：`-y` 一次性模式下默认拦截 `del/rm/Remove-Item/mv/move/git clean/git reset --hard` 及脚本删除 API，防止包装绕过；TUI 中标注 ⚠ 并弹权限确认
 - **参数 schema 校验**：工具参数在执行前按 JSON Schema 校验，非法参数以 `[InvalidInput]` 拒绝

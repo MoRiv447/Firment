@@ -1,6 +1,7 @@
 mod ask_user;
 mod build;
 mod edit_file;
+mod elf_analyze;
 mod flash;
 mod glob;
 mod grep;
@@ -32,6 +33,7 @@ pub fn all() -> Vec<Arc<dyn Tool>> {
         Arc::new(write_file::WriteFile),
         Arc::new(flash::Flash),
         Arc::new(edit_file::EditFile),
+        Arc::new(elf_analyze::ElfAnalyze),
         Arc::new(list_dir::ListDir),
         Arc::new(glob::Glob),
         Arc::new(grep::Grep),

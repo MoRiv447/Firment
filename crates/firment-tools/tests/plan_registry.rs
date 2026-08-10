@@ -14,8 +14,9 @@ fn plan_registry_exposes_only_read_only_tools() {
     assert!(names.contains(&"task"));
     assert!(names.contains(&"todo"));
     assert!(names.contains(&"ask_user"));
+    assert!(names.contains(&"elf_analyze"));
     assert!(!names.contains(&"write_file"));
     assert!(!names.contains(&"edit_file"));
     assert!(!names.contains(&"shell"));
-    assert_eq!(names.len(), 10);
+    assert_eq!(names.len(), 11);
 }
