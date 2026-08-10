@@ -172,9 +172,10 @@ pub(crate) async fn run_command(
     }
     #[cfg(unix)]
     {
-        use std::os::unix::process::CommandExt;
         // Put the whole tree in its own process group so the timeout can
         // kill backgrounded grandchildren too, not just the shell.
+        // (tokio::process::Command provides process_group; the std import
+        // would be unused and fails `cargo clippy -D warnings` on Linux.)
         cmd.process_group(0);
     }
     cmd.current_dir(cwd)
