@@ -110,6 +110,7 @@ impl SubagentFactory for SubagentRunner {
             self.web_search_api_key.clone(),
         );
         nested.set_session_dir(Some(store.dir.join("work")));
+        nested.set_elf_glob(self.config.tools.elf.clone());
         nested.run_turn(prompt).await.map_err(|e| e.to_string())
     }
 }

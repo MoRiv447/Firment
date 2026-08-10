@@ -677,7 +677,7 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "firment-cli"
-version = "0.4.0-beta.2"
+version = "0.4.0-beta.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -698,7 +698,7 @@ dependencies = [
 
 [[package]]
 name = "firment-core"
-version = "0.4.0-beta.2"
+version = "0.4.0-beta.3"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -720,7 +720,7 @@ dependencies = [
 
 [[package]]
 name = "firment-tools"
-version = "0.4.0-beta.2"
+version = "0.4.0-beta.3"
 dependencies = [
  "async-trait",
  "firment-core",
@@ -741,7 +741,7 @@ dependencies = [
 
 [[package]]
 name = "firment-tui"
-version = "0.4.0-beta.2"
+version = "0.4.0-beta.3"
 dependencies = [
  "anyhow",
  "arboard",

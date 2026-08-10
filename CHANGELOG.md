@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.4.0-beta.3 (2026-08-10) — automatic binary-analysis gate
+
+- **`[tools] elf`**: configure a glob of the firmware ELF (e.g. `build/fw.elf`) and the
+  harness takes over the binary-analysis soft gate end to end. On every turn start it
+  re-seeds the per-session ELF baseline (so edits are always measured against where the
+  turn began); before accepting a finished turn that mutated files it auto-runs
+  `elf_analyze` on the newest matching ELF and hands the diff (flash/RAM deltas, function
+  size changes, stack-depth changes) back to the model as a tool message, asking it to
+  review and decide — completion is never blocked (kept soft), but regressions that
+  compile fine now surface automatically instead of by-agent-memory
+- `elf_analyze` tool itself unchanged (baseline caching, `-fstack-usage` support, explicit
+  `baseline` argument) — this release wires it into the agent loop (`Agent::set_elf_glob`,
+  TUI + one-shot CLI + research subagents), with integration tests covering the gate
+  injecting the diff and skipping when unconfigured
+- Support for single-segment `*` and cross-directory `**` globs when locating the ELF
+  (skips hidden dirs / `target/` / `node_modules`)
+
 ## v0.4.0-beta.2 (2026-08-09) — Web research tools + subagents + question modal
 
 ### New agent tools

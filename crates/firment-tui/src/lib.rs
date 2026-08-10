@@ -94,6 +94,7 @@ pub async fn run(
     agent.set_default_chip(config.tools.default_chip.clone());
     agent.set_monitor_port(config.tools.monitor_port.clone());
     agent.set_monitor_baud(config.tools.monitor_baud);
+    agent.set_elf_glob(config.tools.elf.clone());
     let asker: Arc<dyn Asker> = Arc::new(TuiAsker { req_tx: ask_tx });
     agent.set_asker(Some(asker.clone()));
     agent.set_web_search(

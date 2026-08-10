@@ -1,7 +1,7 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.4.0--beta.2-orange)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.4.0--beta.3-orange)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![Benchmark](https://img.shields.io/badge/benchmark-4.95-%231-green)]()
@@ -42,7 +42,7 @@
 - **Transactional edits + undo**: every write/edit in a turn is backed up and rolled back as a batch if any mutation fails; `/undo` restores the last committed batch (persisted per session)
 - **CAS + SHA-256 anchoring**: write/edit re-checks the file byte-for-byte before applying; `read_file` returns a `[file-sha256: ...]` hash and `edit_file` / `write_file` accept `expected_sha256` as a stale-read guard (`[ConcurrentChange]` on mismatch); `read_file hashlines=true` exposes per-line content-hash anchors and `edit_file` supports `hashline` / `end_hashline` for precise placement
 - **Diff-first approval**: write/edit permission prompts show the exact unified diff before you approve
-- **Verify gate (enforced)**: an optional `verify` tool runs your configured build/check command; after any file changes the harness itself runs verify and refuses to accept completion until it passes. **Binary analysis (soft gate)**: after a build, `elf_analyze` reports flash/RAM usage, largest functions and per-function stack depth (requires `-fstack-usage`), and auto-diffs against the previous build to surface stack-depth growth and size regressions that compile fine
+- **Verify gate (enforced)**: an optional `verify` tool runs your configured build/check command; after any file changes the harness itself runs verify and refuses to accept completion until it passes. **Binary analysis (soft gate, automatic)**: with `[tools] elf = "build/fw.elf"` the harness seeds a binary baseline each turn and, before accepting a finished turn, auto-runs `elf_analyze` on the newest matching firmware — flash/RAM usage, largest functions and per-function stack depth (requires `-fstack-usage`) — and hands the diff (function size / stack-growth regressions that compile fine) to the agent for review
 - **Path sandbox**: file tools are confined to the workspace (canonicalized; extra roots such as the spill directory are explicitly allowed); paths outside are rejected with `[Permission]`
 - **Dangerous command guard**: in one-shot `-y` mode, `del/rm/Remove-Item/mv/move/git clean/git reset --hard`, force push, and scripting deletion APIs are blocked by default (including wrapper bypasses); the TUI labels them ⚠ and asks for confirmation
 - **Argument schema validation**: tool arguments are validated against their JSON Schema before execution; malformed calls are rejected with a `[InvalidInput]` tag
@@ -114,6 +114,7 @@ model = "deepseek-v4-flash"   # or deepseek-v4-pro
 # monitor_baud = 115200                   # default baud rate for `firm monitor`
 # web_search = "duckduckgo"               # web_search provider: duckduckgo (no key) / tavily / brave
 # web_search_api_key_env = "TAVILY_API_KEY"  # env var holding the search API key (or web_search_api_key inline)
+# elf = "build/fw.elf"                       # glob of the firmware ELF: harness auto-seeds a binary baseline and runs elf_analyze (flash/RAM, function size, stack depth) after each edited turn (add -fstack-usage to your build flags for stack depth)
 # max_subagent_depth = 2                  # recursion limit for the `task` subagent tool
 ```
 

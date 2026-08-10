@@ -376,6 +376,7 @@ async fn run_once(
     agent.set_default_chip(config.tools.default_chip.clone());
     agent.set_monitor_port(config.tools.monitor_port.clone());
     agent.set_monitor_baud(config.tools.monitor_baud);
+    agent.set_elf_glob(config.tools.elf.clone());
     agent.set_max_subagent_depth(config.tools.max_subagent_depth);
     agent.set_web_search(
         config.tools.web_search.clone(),

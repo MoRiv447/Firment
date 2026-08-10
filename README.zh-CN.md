@@ -1,7 +1,7 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.4.0--beta.2-orange)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.4.0--beta.3-orange)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![Benchmark](https://img.shields.io/badge/benchmark-4.95-%231-green)]()
@@ -44,7 +44,7 @@
 - **事务编辑 + 撤销**：一个回合内的所有写/编辑统一备份，任一修改失败整批回滚；`/undo` 恢复上一次已提交的改动（按会话持久化）
 - **CAS + SHA-256 哈希锚定**：写/编辑前逐字节重新校验；`read_file` 返回 `[file-sha256: ...]`，`edit_file` / `write_file` 支持 `expected_sha256` 前置校验，哈希不符以 `[ConcurrentChange]` 拒绝；`read_file hashlines=true` 输出逐行内容哈希，`edit_file` 支持 `hashline` / `end_hashline` 精确定位
 - **diff-first 批准**：写/编辑的权限弹窗直接展示 unified diff，批准前先看改动
-- **verify 硬门**：可选 `verify` 工具执行配置的构建/检查命令；发生文件改动后由程序强制运行 verify，未通过就不接受完成。**二进制分析（软门）**：构建后 `elf_analyze` 报告 flash/RAM 占用、最大函数与每函数栈深（需 `-fstack-usage`），并自动与上一次构建差分，暴露"能编译但有害"的栈深增长与体积回退
+- **verify 硬门**：可选 `verify` 工具执行配置的构建/检查命令；发生文件改动后由程序强制运行 verify，未通过就不接受完成。**二进制分析（软门·自动）**：配置 `[tools] elf = "build/fw.elf"` 后，harness 每回合自动建立二进制基线，并在接受完成前自动运行 `elf_analyze` 分析最新的固件产物——flash/RAM 占用、最大函数与每函数栈深（需 `-fstack-usage`），把"能编译但有害"的栈深增长与体积回退的差分报告交给 agent 审阅
 - **路径沙箱**：文件工具被限制在工作区内（canonicalize 校验，外溢目录等额外根目录显式放行），越界路径以 `[Permission]` 拒绝
 - **危险命令安全闸**：`-y` 一次性模式下默认拦截 `del/rm/Remove-Item/mv/move/git clean/git reset --hard` 及脚本删除 API，防止包装绕过；TUI 中标注 ⚠ 并弹权限确认
 - **参数 schema 校验**：工具参数在执行前按 JSON Schema 校验，非法参数以 `[InvalidInput]` 拒绝
@@ -116,6 +116,7 @@ model = "deepseek-v4-flash"   # 或 deepseek-v4-pro
 # monitor_baud = 115200                   # firm monitor 默认波特率
 # web_search = "duckduckgo"               # web_search 提供商：duckduckgo（免 key）/ tavily / brave
 # web_search_api_key_env = "TAVILY_API_KEY"  # 搜索 API key 所在环境变量（或直接 web_search_api_key 内联）
+# elf = "build/fw.elf"                       # 固件 ELF 的 glob：harness 自动建立二进制基线，每次有改动的回合结束前自动跑 elf_analyze（flash/RAM、函数体积、栈深差分；栈深需构建加 -fstack-usage）
 # max_subagent_depth = 2                  # task 子代理工具的递归深度上限
 ```
 

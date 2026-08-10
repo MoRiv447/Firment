@@ -63,6 +63,11 @@ pub struct ToolsConfig {
     /// Recursion limit for the `task` subagent tool.
     #[serde(default = "default_max_subagent_depth")]
     pub max_subagent_depth: usize,
+    /// Glob pattern for the firmware ELF artifact (e.g. `build/fw.elf`).
+    /// When set, the harness captures an ELF baseline and automatically runs
+    /// `elf_analyze` against the newest match before each finished turn.
+    #[serde(default)]
+    pub elf: Option<String>,
 }
 
 impl ToolsConfig {
@@ -455,6 +460,7 @@ model = "deepseek-v4-flash"
 # monitor_baud = 115200                   # default baud rate for firm monitor
 # web_search = "duckduckgo"               # web_search provider: duckduckgo (no key) / tavily / brave
 # web_search_api_key_env = "TAVILY_API_KEY"  # API key env for tavily / brave (or set web_search_api_key inline)
+# elf = "build/fw.elf"                       # glob of the firmware ELF: harness seeds a binary baseline and auto-runs elf_analyze before finishing each edited turn (needs -fstack-usage for stack depth)
 # max_subagent_depth = 2                  # recursion limit for the task subagent tool
 "#
 }
@@ -492,4 +498,25 @@ fn default_max_subagent_depth() -> usize {
 
 fn default_context_budget() -> usize {
     60_000
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_tools_elf() {
+        let text = r#"
+            [tools]
+            elf = "build/*.elf"
+        "#;
+        let config: Config = toml::from_str(text).unwrap();
+        assert_eq!(config.tools.elf.as_deref(), Some("build/*.elf"));
+    }
+
+    #[test]
+    fn tools_elf_defaults_to_none() {
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(config.tools.elf, None);
+    }
 }

@@ -121,9 +121,7 @@ fn analyze(elf: &Path) -> Result<ElfReport, ToolError> {
             stack_dynamic: false,
         });
     }
-    report
-        .functions
-        .sort_by_key(|f| f.address);
+    report.functions.sort_by_key(|f| f.address);
 
     for section in file.sections() {
         let Ok(name) = section.name() else {
@@ -140,9 +138,7 @@ fn analyze(elf: &Path) -> Result<ElfReport, ToolError> {
         }
         match kind {
             SectionKind::Text => report.mem.text += size,
-            SectionKind::ReadOnlyData | SectionKind::ReadOnlyString => {
-                report.mem.rodata += size
-            }
+            SectionKind::ReadOnlyData | SectionKind::ReadOnlyString => report.mem.rodata += size,
             SectionKind::Data | SectionKind::ReadOnlyDataWithRel => report.mem.data += size,
             SectionKind::UninitializedData | SectionKind::UninitializedTls => {
                 report.mem.bss += size
@@ -204,17 +200,16 @@ fn read_le32(data: &[u8], at: usize) -> u32 {
 
 /// Human-readable analysis output.
 fn format_analyze(elf: &Path, report: &ElfReport) -> String {
-    let mut out = format!("ELF analysis: {}\n{}", elf.display(), report.maybe_gi_format());
+    let mut out = format!(
+        "ELF analysis: {}\n{}",
+        elf.display(),
+        report.maybe_gi_format()
+    );
     let largest = report.largest_functions(10);
     if !largest.is_empty() {
         out.push_str("\nLargest functions:");
         for (i, f) in largest.iter().enumerate() {
-            out.push_str(&format!(
-                "\n  {}. {} {}",
-                i + 1,
-                f.name,
-                kib(f.size)
-            ));
+            out.push_str(&format!("\n  {}. {} {}", i + 1, f.name, kib(f.size)));
         }
     }
     if report.stack_section_missing {
@@ -408,7 +403,9 @@ impl Tool for ElfAnalyze {
             }
         }
         baseline_text.push_str(&format_analyze(&elf, &current));
-        Ok(ToolOutput { text: baseline_text })
+        Ok(ToolOutput {
+            text: baseline_text,
+        })
     }
 }
 

@@ -83,10 +83,16 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          actual result. Make small, verifiable edits instead of one large rewrite.\n\
          \n\
          # Verification\n\
-         - If the verify tool is available, run it after code changes and before declaring the \
-         task complete. A failed or non-zero exit means the task is NOT complete: fix the errors \
-         and re-verify. When verify is configured, the harness enforces this gate: completion is \
-         not accepted until verify passes.\n\
+- If the verify tool is available, run it after code changes and before declaring the \
+          task complete. A failed or non-zero exit means the task is NOT complete: fix the errors \
+          and re-verify. When verify is configured, the harness enforces this gate: completion is \
+          not accepted until verify passes.\n\
+          - If `[tools] elf` is configured, the harness automatically seeds an ELF baseline and \
+          runs elf_analyze on the newest matching firmware before each turned-in completion; a \
+          binary diff (flash/RAM, function sizes, stack depth) is handed to you to review. If the \
+          diff shows regressions you introduced, fix them rather than accepting; you may treat \
+          benign growth as acceptable if you can explain it. The report is informational — \
+          completing is always allowed.\n\
          - Never claim a build, test, or check passed unless you actually ran it and saw exit \
          code 0.\n\
          - A change ledger may be attached to this session; use it as ground truth when \

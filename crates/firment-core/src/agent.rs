@@ -10,7 +10,7 @@ use futures::StreamExt;
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
 
@@ -100,6 +100,12 @@ pub struct Agent {
     web_search_api_key: Option<String>,
     /// Per-session bookkeeping directory (todo list etc.).
     session_dir: Option<PathBuf>,
+    /// Glob pattern for the firmware ELF artifact; enables the automatic
+    /// binary-analysis gate (`elf_analyze`) before a finished turn is accepted.
+    elf_glob: Option<String>,
+    /// True once the auto elf gate has run for the current edit batch; reset
+    /// whenever a new mutation lands.
+    elf_gate_done: bool,
     /// Hash of the last read result per path, for unchanged-read dedup.
     read_hashes: HashMap<PathBuf, String>,
     /// Recently read paths (most recent last), for post-compact re-injection.
@@ -143,6 +149,8 @@ impl Agent {
             web_search_provider: None,
             web_search_api_key: None,
             session_dir: None,
+            elf_glob: None,
+            elf_gate_done: false,
             read_hashes: HashMap::new(),
             recent_read_paths: VecDeque::new(),
         }
@@ -253,6 +261,56 @@ impl Agent {
     /// Set the per-session bookkeeping directory (todo list etc.).
     pub fn set_session_dir(&mut self, dir: Option<PathBuf>) {
         self.session_dir = dir;
+    }
+
+    /// Set the `[tools] elf` glob pattern; when set, the harness seeds an ELF
+    /// baseline and auto-runs `elf_analyze` before a finished turn is accepted.
+    pub fn set_elf_glob(&mut self, glob: Option<String>) {
+        self.elf_glob = glob;
+    }
+
+    /// At turn start, refresh the ELF baseline so edits are diffed against the
+    /// state the turn began with. Silent except on tool errors.
+    async fn seed_elf_baseline(&mut self, ctx: &ToolContext) {
+        let Some(glob) = self.elf_glob.clone() else {
+            return;
+        };
+        let Some(tool) = self.registry.get("elf_analyze") else {
+            return;
+        };
+        let Some(elf) = newest_elf_match(&self.session.cwd, &glob) else {
+            return;
+        };
+        if let Err(e) = tool
+            .run(json!({ "file": elf.to_string_lossy() }), ctx)
+            .await
+        {
+            self.sink
+                .event(AgentEvent::Info(format!(
+                    "elf baseline skipped: {}",
+                    e.message
+                )))
+                .await;
+        }
+    }
+
+    /// Binary-analysis gate: run `elf_analyze` once per edit batch against the
+    /// newest ELF matching `elf_glob`. Returns the report (with diff vs the
+    /// recorded baseline) when the model should be asked to review it, and
+    /// `None` when there is nothing new to surface. Never blocks completion.
+    async fn run_elf_gate(&mut self, ctx: &ToolContext) -> Option<String> {
+        let glob = self.elf_glob.clone()?;
+        let tool = self.registry.get("elf_analyze")?;
+        if self.elf_gate_done {
+            return None;
+        }
+        let elf = newest_elf_match(&self.session.cwd, &glob)?;
+        self.elf_gate_done = true;
+        let args = json!({ "file": elf.to_string_lossy() });
+        match tool.run(args, ctx).await {
+            Ok(out) => Some(out.text),
+            Err(e) => Some(e.message),
+        }
     }
 
     /// Pin a file so compaction always re-injects its full content. Warns when
@@ -405,6 +463,32 @@ impl Agent {
         )));
         let ledger = Ledger::new(self.store.ledger_path(&self.session.id));
         let mut mutations_since_verify = 0usize;
+
+        let ctx = ToolContext {
+            cwd: self.session.cwd.clone(),
+            permission: self.permission.clone(),
+            allow_dangerous: self.allow_dangerous,
+            journal: journal.clone(),
+            verify_command: self.verify_command.clone(),
+            allowed_roots: vec![
+                self.store.spill_dir(&self.session.id),
+                crate::kb::seed_kb_dir(),
+            ],
+            symbols_backend: self.symbols_backend.clone(),
+            build_command: self.build_command.clone(),
+            default_chip: self.default_chip.clone(),
+            monitor_port: self.monitor_port.clone(),
+            monitor_baud: self.monitor_baud,
+            subagent: self.subagent.clone(),
+            subagent_depth: self.subagent_depth,
+            max_subagent_depth: self.max_subagent_depth,
+            asker: self.asker.clone(),
+            web_search_provider: self.web_search_provider.clone(),
+            web_search_api_key: self.web_search_api_key.clone(),
+            session_dir: self.session_dir.clone(),
+        };
+
+        self.seed_elf_baseline(&ctx).await;
 
         for _ in 0..self.max_iterations {
             self.compact_if_needed().await;
@@ -583,6 +667,26 @@ impl Agent {
                     self.session.push(plain_assistant);
                 }
 
+                if mutations_since_verify > 0
+                    && let Some(text) = self.run_elf_gate(&ctx).await
+                {
+                    // Fresh binary diff: surface it to the model so it can
+                    // decide whether to accept the state or keep fixing.
+                    self.session.push(ChatMessage::Tool {
+                        tool_call_id: "elf_gate".to_string(),
+                        name: "elf_analyze".to_string(),
+                        content: text,
+                    });
+                    self.sink
+                        .event(AgentEvent::Info(
+                            "binary analysis: the firmware changed vs its baseline — review \
+                             the diff above and decide whether to accept or keep fixing"
+                                .to_string(),
+                        ))
+                        .await;
+                    continue;
+                }
+
                 let commit_result = lock_journal(&journal).commit();
                 match commit_result {
                     Ok(changes) if !changes.is_empty() => {
@@ -614,6 +718,9 @@ impl Agent {
 
             let stats = execute_tool_calls(self, &tool_calls, &ctx, &journal).await;
             mutations_since_verify += stats.mutations;
+            if stats.mutations > 0 {
+                self.elf_gate_done = false;
+            }
             if stats.verify_passed {
                 mutations_since_verify = 0;
             }
@@ -1058,10 +1165,149 @@ fn summarize(text: &str) -> String {
     chars.into_iter().collect()
 }
 
+/// Newest file under `cwd` matching `pattern` (glob; `**` crosses directories,
+/// `*`/`?` match within a segment, `\\` is normalized to `/`). Hidden dirs,
+/// `target/` and `node_modules/` are skipped.
+fn newest_elf_match(cwd: &Path, pattern: &str) -> Option<PathBuf> {
+    let pattern_norm = pattern.replace('\\', "/");
+    fn walk(
+        dir: &Path,
+        cwd: &Path,
+        pattern: &str,
+        best: &mut Option<(PathBuf, std::time::SystemTime)>,
+    ) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
+                if !name.starts_with('.') && !matches!(name, "target" | "node_modules") {
+                    walk(&path, cwd, pattern, best);
+                }
+            } else if file_type.is_file()
+                && let Ok(rel) = path.strip_prefix(cwd)
+            {
+                let rel_str = rel.to_string_lossy().replace('\\', "/");
+                if glob_match(pattern, &rel_str) {
+                    let mtime = std::fs::metadata(&path)
+                        .and_then(|m| m.modified())
+                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                    let newer = best.as_ref().is_none_or(|(_, t)| mtime > *t);
+                    if newer {
+                        *best = Some((path, mtime));
+                    }
+                }
+            }
+        }
+    }
+    let mut best = None;
+    walk(cwd, cwd, &pattern_norm, &mut best);
+    best.map(|(path, _)| path)
+}
+
+/// Glob match of a relative path against a pattern. Both use `/` separators.
+fn glob_match(pattern: &str, path: &str) -> bool {
+    let pattern_segments: Vec<&str> = pattern.split('/').collect();
+    let path_segments: Vec<&str> = path.split('/').collect();
+    glob_segments(&pattern_segments, &path_segments)
+}
+
+fn glob_segments(pattern: &[&str], path: &[&str]) -> bool {
+    match pattern.split_first() {
+        None => path.is_empty(),
+        Some((&"**", rest)) => {
+            glob_segments(rest, path) || (!path.is_empty() && glob_segments(pattern, &path[1..]))
+        }
+        Some((segment, rest)) => path.split_first().is_some_and(|(part, rest_path)| {
+            glob_segment(segment, part) && glob_segments(rest, rest_path)
+        }),
+    }
+}
+
+fn glob_segment(pattern: &str, text: &str) -> bool {
+    fn seg(pattern: &[char], text: &[char]) -> bool {
+        match pattern.split_first() {
+            None => text.is_empty(),
+            Some(('*', rest)) => seg(rest, text) || (!text.is_empty() && seg(pattern, &text[1..])),
+            Some(('?', rest)) => text
+                .split_first()
+                .is_some_and(|(_, rest_text)| seg(rest, rest_text)),
+            Some((c, rest)) => text
+                .split_first()
+                .is_some_and(|(tc, rest_text)| c == tc && seg(rest, rest_text)),
+        }
+    }
+    let pattern_chars: Vec<char> = pattern.chars().collect();
+    let text_chars: Vec<char> = text.chars().collect();
+    seg(&pattern_chars, &text_chars)
+}
+
 fn thinking_opt(level: ThinkingLevel) -> Option<ThinkingLevel> {
     if level == ThinkingLevel::Off {
         None
     } else {
         Some(level)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn glob_matches_simple_patterns() {
+        assert!(glob_match("build/fw.elf", "build/fw.elf"));
+        assert!(glob_match("build/*.elf", "build/fw.elf"));
+        assert!(!glob_match("build/*.elf", "build/out/fw.elf"));
+        assert!(!glob_match("build/*.elf", "src/fw.elf"));
+        assert!(glob_match("build/**/*.elf", "build/out/debug/fw.elf"));
+        assert!(glob_match("**/*.elf", "build/fw.elf"));
+        assert!(glob_match("build/**.elf", "build/fw.elf"));
+        assert!(glob_match("build/fw?.elf", "build/fw2.elf"));
+        assert!(!glob_match("build/fw?.elf", "build/fw.elf"));
+        assert!(!glob_match("build/fw.elf", "build/fw2.elf"));
+    }
+
+    #[test]
+    fn newest_match_picks_most_recent() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("build");
+        std::fs::create_dir_all(&sub).unwrap();
+        let old = sub.join("fw.elf");
+        let new = sub.join("fw2.elf");
+        std::fs::write(&old, b"old").unwrap();
+        std::fs::write(&new, b"new").unwrap();
+        let old_time = std::fs::metadata(&old).unwrap().modified().unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&new)
+            .unwrap()
+            .set_modified(old_time + Duration::from_secs(10))
+            .unwrap();
+        let found = newest_elf_match(dir.path(), "build/*.elf").unwrap();
+        assert_eq!(found, new);
+    }
+
+    #[test]
+    fn newest_match_skips_none_matching() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("build")).unwrap();
+        std::fs::write(dir.path().join("build").join("fw.bin"), b"x").unwrap();
+        assert_eq!(newest_elf_match(dir.path(), "build/*.elf"), None);
+    }
+
+    #[test]
+    fn glob_crosses_separator_with_double_star() {
+        assert!(glob_match("**", "anything/at/all.elf"));
+        assert!(glob_match("**", "single"));
+        assert!(!glob_match("**/*.elf", "fw.bin"));
     }
 }

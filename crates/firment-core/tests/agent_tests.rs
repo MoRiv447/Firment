@@ -1199,6 +1199,131 @@ async fn verify_hard_gate_blocks_completion_on_failure() {
     );
 }
 
+struct FakeElfTool;
+
+#[async_trait]
+impl Tool for FakeElfTool {
+    fn name(&self) -> &'static str {
+        "elf_analyze"
+    }
+
+    fn description(&self) -> &'static str {
+        "fake elf analyze"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({"type": "object", "properties": {"file": {"type": "string"}}, "required": ["file"]})
+    }
+
+    async fn run(&self, _args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+        Ok(ToolOutput {
+            text: "synthetic elf report".to_string(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn elf_gate_injects_diff_before_accepting_completion() {
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_write".to_string(),
+                    name: "write_file".to_string(),
+                    arguments: json!({"path": "a.txt", "content": "x"}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            // First finish: elf gate surfaces a diff and hands control back.
+            vec![
+                ProviderEvent::Text("done".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+            // Gate-continued round: provider keeps the original final text.
+            vec![
+                ProviderEvent::Text("done".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+        ]))),
+        model: "fake".to_string(),
+    };
+    let dir = tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("build")).unwrap();
+    std::fs::write(dir.path().join("build").join("fw.elf"), b"elf").unwrap();
+    let store = SessionStore::new(dir.path().join("sessions"));
+    let session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(vec![Arc::new(JournalingWriteTool), Arc::new(FakeElfTool)]),
+        session,
+        store,
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(Arc::new(Mutex::new(Vec::new())))),
+        10,
+    );
+    agent.set_elf_glob(Some("build/*.elf".to_string()));
+
+    let text = agent.run_turn("write then finish").await.unwrap();
+    assert_eq!(text, "done");
+    assert!(
+        dir.path().join("a.txt").exists(),
+        "mutation must be committed"
+    );
+    assert!(
+        agent
+            .session()
+            .messages
+            .iter()
+            .any(|m| matches!(m, ChatMessage::Tool { name, .. } if name == "elf_analyze")),
+        "elf diff must be surfaced to the model before completion"
+    );
+}
+
+#[tokio::test]
+async fn elf_gate_skips_when_not_configured() {
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_write".to_string(),
+                    name: "write_file".to_string(),
+                    arguments: json!({"path": "c.txt", "content": "x"}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            vec![
+                ProviderEvent::Text("done".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+        ]))),
+        model: "fake".to_string(),
+    };
+    let dir = tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("build")).unwrap();
+    std::fs::write(dir.path().join("build").join("fw.elf"), b"elf").unwrap();
+    let store = SessionStore::new(dir.path().join("sessions"));
+    let session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(vec![Arc::new(JournalingWriteTool), Arc::new(FakeElfTool)]),
+        session,
+        store,
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(Arc::new(Mutex::new(Vec::new())))),
+        10,
+    );
+
+    let text = agent.run_turn("write then finish").await.unwrap();
+    assert_eq!(text, "done");
+    assert!(
+        !agent.session().messages.iter().any(|m| matches!(
+            m,
+            ChatMessage::Tool { name, .. } if name == "elf_analyze"
+        )),
+        "elf gate must not run without [tools] elf"
+    );
+}
+
 #[tokio::test]
 async fn invalid_arguments_are_rejected_before_tool_runs() {
     let ran = Arc::new(AtomicBool::new(false));
