@@ -85,18 +85,20 @@ fn decode_entities(text: &str) -> String {
             "&hellip;" => "…".to_string(),
             "&mdash;" => "—".to_string(),
             "&ndash;" => "–".to_string(),
-            other if other.starts_with("&#") => {
-                let digits = &other[2..other.len() - 1];
-                let code = if digits.starts_with('x') || digits.starts_with('X') {
-                    u32::from_str_radix(&digits[1..], 16).ok()
+            other => {
+                if let Some(stripped) = other.strip_prefix("&#").and_then(|s| s.strip_suffix(';')) {
+                    let code = if stripped.starts_with('x') || stripped.starts_with('X') {
+                        u32::from_str_radix(&stripped[1..], 16).ok()
+                    } else {
+                        stripped.parse::<u32>().ok()
+                    };
+                    code.and_then(char::from_u32)
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| other.to_string())
                 } else {
-                    digits.parse::<u32>().ok()
-                };
-                code.and_then(char::from_u32)
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| other.to_string())
+                    other.to_string()
+                }
             }
-            other => other.to_string(),
         };
         out.push_str(&decoded);
         rest = &tail[end..];
@@ -126,5 +128,11 @@ mod tests {
             "a & b <c> \"q\""
         );
         assert_eq!(decode_entities("&#65;&#x42;"), "AB");
+    }
+
+    #[test]
+    fn bare_amp_hash_does_not_panic() {
+        assert_eq!(decode_entities("a &# b &#x c"), "a &# b &#x c");
+        assert_eq!(decode_entities("&#"), "&#");
     }
 }

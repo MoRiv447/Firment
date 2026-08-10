@@ -1,17 +1,21 @@
-use super::util::{resolve_within, run_command};
+use super::util::{resolve_within, run_command, shell_quote, token_arg};
 use async_trait::async_trait;
 use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
 
 pub struct Flash;
 
-/// Build the probe-rs command line for flashing (exposed for tests).
+/// Build the probe-rs command line for flashing (exposed for tests). Arguments
+/// are shell-quoted so hostile values cannot break out of the command line.
 pub fn flash_command(chip: &str, file: &str, probe: Option<&str>) -> String {
-    let mut cmd = format!("probe-rs download --chip {chip} --format elf");
+    let mut cmd = format!(
+        "probe-rs download --chip {} --format elf",
+        shell_quote(chip)
+    );
     if let Some(probe) = probe {
-        cmd.push_str(&format!(" --probe {probe}"));
+        cmd.push_str(&format!(" --probe {}", shell_quote(probe)));
     }
-    cmd.push_str(&format!(" \"{file}\""));
+    cmd.push_str(&format!(" {}", shell_quote(file)));
     cmd
 }
 
@@ -53,7 +57,9 @@ impl Tool for Flash {
         let chip = args
             .get("chip")
             .and_then(|c| c.as_str())
-            .map(|s| s.to_string())
+            .map(|s| token_arg(s, "chip"))
+            .transpose()
+            .map_err(ToolError::new)?
             .or_else(|| ctx.default_chip.clone())
             .ok_or_else(|| {
                 ToolError::new(
@@ -61,7 +67,12 @@ impl Tool for Flash {
                      [tools] of config.toml (e.g. stm32f407vetx)",
                 )
             })?;
-        let probe = args.get("probe").and_then(|p| p.as_str());
+        let probe = args
+            .get("probe")
+            .and_then(|p| p.as_str())
+            .map(|s| token_arg(s, "probe"))
+            .transpose()
+            .map_err(ToolError::new)?;
         let timeout_ms = args
             .get("timeout_ms")
             .and_then(|t| t.as_u64())
@@ -79,7 +90,7 @@ impl Tool for Flash {
             ));
         }
 
-        let command = flash_command(&chip, &resolved.to_string_lossy(), probe);
+        let command = flash_command(&chip, &resolved.to_string_lossy(), probe.as_deref());
         match run_command(&command, &ctx.cwd, timeout_ms, None).await {
             Ok((text, Some(0))) => Ok(ToolOutput {
                 text: format!("flash passed (exit 0)\n{text}"),
@@ -126,10 +137,29 @@ mod tests {
     #[test]
     fn flash_command_builds_probe_rs_line() {
         let cmd = flash_command("stm32f407vetx", "target/out.elf", Some("PROBE123"));
-        assert!(
-            cmd.contains("probe-rs download --chip stm32f407vetx --format elf --probe PROBE123")
-        );
+        assert!(cmd.contains("probe-rs download --chip"));
+        assert!(cmd.contains("stm32f407vetx"));
+        assert!(cmd.contains("PROBE123"));
         assert!(cmd.contains("target/out.elf"));
+        assert!(cmd.contains(&shell_quote("stm32f407vetx")));
+        assert!(cmd.contains(&shell_quote("PROBE123")));
+    }
+
+    #[test]
+    fn flash_command_quotes_hostile_values() {
+        let cmd = flash_command("x & whoami", "a'$(rm -rf /).elf", Some("p`p"));
+        assert!(
+            cmd.contains(&shell_quote("x & whoami")),
+            "chip must stay a single token: {cmd}"
+        );
+        assert!(
+            cmd.contains(&shell_quote("a'$(rm -rf /).elf")),
+            "file must be shell-safe: {cmd}"
+        );
+        assert!(
+            cmd.contains(&shell_quote("p`p")),
+            "probe must stay a single token: {cmd}"
+        );
     }
 
     #[tokio::test]

@@ -363,7 +363,7 @@ async fn run_once(
         registry,
         session,
         store,
-        permission,
+        permission.clone(),
         sink,
         config.max_iterations,
     );
@@ -390,6 +390,7 @@ async fn run_once(
             agent.session().provider.clone(),
             agent.session().model.clone(),
             None,
+            permission.clone(),
         ));
     agent.set_subagent_factory(Some(subagent_factory));
     let text = agent.run_turn(prompt).await?;

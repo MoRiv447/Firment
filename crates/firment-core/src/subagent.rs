@@ -1,7 +1,7 @@
 use crate::Asker;
 use crate::agent::{Agent, AgentEvent, EventSink};
 use crate::config::Config;
-use crate::permission::AutoApprove;
+use crate::permission::PermissionChecker;
 use crate::session::{Session, SessionStore};
 use crate::tool::ToolRegistry;
 use async_trait::async_trait;
@@ -36,16 +36,20 @@ pub struct SubagentRunner {
     pub asker: Option<Arc<dyn Asker>>,
     pub web_search_provider: Option<String>,
     pub web_search_api_key: Option<String>,
+    pub permission: Arc<dyn PermissionChecker>,
 }
 
 impl SubagentRunner {
-    /// Build the runner for the session's provider profile.
+    /// Build the runner for the session's provider profile. `permission` is
+    /// the same checker the parent agent uses, so nested agents inherit the
+    /// user's approval policy instead of bypassing it.
     pub fn new(
         config: Arc<Config>,
         registry: Arc<ToolRegistry>,
         provider_name: impl Into<String>,
         model: impl Into<String>,
         asker: Option<Arc<dyn Asker>>,
+        permission: Arc<dyn PermissionChecker>,
     ) -> Self {
         Self {
             max_iterations: 8,
@@ -56,6 +60,7 @@ impl SubagentRunner {
             provider_name: provider_name.into(),
             model: model.into(),
             asker,
+            permission,
         }
     }
 
@@ -69,6 +74,7 @@ impl SubagentRunner {
             asker: self.asker.clone(),
             web_search_provider: self.web_search_provider.clone(),
             web_search_api_key: self.web_search_api_key.clone(),
+            permission: self.permission.clone(),
         })
     }
 }
@@ -98,7 +104,7 @@ impl SubagentFactory for SubagentRunner {
             self.registry.clone(),
             session,
             store.clone(),
-            Arc::new(AutoApprove::everything()),
+            self.permission.clone(),
             Arc::new(NullSink),
             self.max_iterations,
         );

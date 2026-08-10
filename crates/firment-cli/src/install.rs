@@ -186,13 +186,18 @@ pub fn add_user_path(dir: &Path) -> Result<bool> {
 
 pub trait PathEnv {
     fn read_user_path(&self) -> Result<String>;
-    fn write_user_path(&self, value: &str) -> Result<()>;
+    /// Registry value type of the user PATH (Windows only): 1 = REG_SZ,
+    /// 2 = REG_EXPAND_SZ. `None` on non-Windows or when the value is absent.
+    fn read_user_path_kind(&self) -> Result<Option<u32>>;
+    fn write_user_path_with_kind(&self, value: &str, kind: Option<u32>) -> Result<()>;
 }
 
 /// Append `dir` to the user PATH once (case-insensitive, `;` separated).
-/// Returns true when the entry was added.
+/// Returns true when the entry was added. Aborts (leaving PATH untouched)
+/// when the current PATH cannot be read.
 pub fn add_user_path_impl(env: &dyn PathEnv, dir: &Path) -> Result<bool> {
-    let current = env.read_user_path().unwrap_or_default();
+    let current = env.read_user_path()?;
+    let kind = env.read_user_path_kind().unwrap_or(None);
     let needle = normalize_path(dir);
     let mut parts: Vec<String> = current
         .split(';')
@@ -207,7 +212,7 @@ pub fn add_user_path_impl(env: &dyn PathEnv, dir: &Path) -> Result<bool> {
         .trim_end_matches(['\\', '/'])
         .to_string();
     parts.push(dir_str);
-    env.write_user_path(&parts.join(";"))?;
+    env.write_user_path_with_kind(&parts.join(";"), kind)?;
     Ok(true)
 }
 
@@ -223,12 +228,35 @@ impl PathEnv for RegistryPathEnv {
         Ok(env.get_value("Path").unwrap_or_default())
     }
 
-    fn write_user_path(&self, value: &str) -> Result<()> {
+    fn read_user_path_kind(&self) -> Result<Option<u32>> {
+        use winreg::RegKey;
+        use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let env = hkcu.open_subkey_with_flags("Environment", KEY_READ)?;
+        let raw = env.get_raw_value("Path")?;
+        Ok(match raw.vtype {
+            winreg::enums::RegType::REG_SZ => Some(1),
+            winreg::enums::RegType::REG_EXPAND_SZ => Some(2),
+            _ => None,
+        })
+    }
+
+    fn write_user_path_with_kind(&self, value: &str, kind: Option<u32>) -> Result<()> {
         use winreg::RegKey;
         use winreg::enums::{HKEY_CURRENT_USER, KEY_WRITE};
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         let env = hkcu.open_subkey_with_flags("Environment", KEY_WRITE)?;
-        env.set_value("Path", &value)?;
+        match kind {
+            // Preserve REG_EXPAND_SZ so `%VAR%` entries keep expanding.
+            Some(2) => {
+                use winreg::enums::RegType;
+                use winreg::types::ToRegValue;
+                let mut reg_value = value.to_reg_value();
+                reg_value.vtype = RegType::REG_EXPAND_SZ;
+                env.set_raw_value("Path", &reg_value)?;
+            }
+            _ => env.set_value("Path", &value)?,
+        }
         broadcast_environment_change();
         Ok(())
     }
@@ -240,7 +268,11 @@ impl PathEnv for RegistryPathEnv {
         Ok(String::new())
     }
 
-    fn write_user_path(&self, _value: &str) -> Result<()> {
+    fn read_user_path_kind(&self) -> Result<Option<u32>> {
+        Ok(None)
+    }
+
+    fn write_user_path_with_kind(&self, _value: &str, _kind: Option<u32>) -> Result<()> {
         broadcast_environment_change();
         Ok(())
     }
@@ -351,7 +383,11 @@ mod tests {
             Ok(self.value.lock().unwrap().clone())
         }
 
-        fn write_user_path(&self, value: &str) -> Result<()> {
+        fn read_user_path_kind(&self) -> Result<Option<u32>> {
+            Ok(None)
+        }
+
+        fn write_user_path_with_kind(&self, value: &str, _kind: Option<u32>) -> Result<()> {
             *self.value.lock().unwrap() = value.to_string();
             Ok(())
         }

@@ -207,6 +207,10 @@ impl Provider for OpenAIProvider {
                         continue;
                     };
                     let data = data.trim();
+                    if data.is_empty() {
+                        // SSE heartbeat / keep-alive frame; legal, ignore it.
+                        continue;
+                    }
                     if data == "[DONE]" {
                         done = true;
                         break;

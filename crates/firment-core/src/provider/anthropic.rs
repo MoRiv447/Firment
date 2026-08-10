@@ -177,7 +177,12 @@ impl Provider for AnthropicProvider {
                     let Some(data) = line.strip_prefix("data:") else {
                         continue;
                     };
-                    let payload: Value = match serde_json::from_str(data.trim()) {
+                    let data = data.trim();
+                    if data.is_empty() {
+                        // SSE heartbeat / keep-alive frame; legal, ignore it.
+                        continue;
+                    }
+                    let payload: Value = match serde_json::from_str(data) {
                         Ok(v) => v,
                         Err(e) => {
                             yield Err(ProviderError::InvalidResponse(format!(

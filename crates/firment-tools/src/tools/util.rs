@@ -40,19 +40,33 @@ pub(crate) fn resolve_within(
     Ok(target)
 }
 
-/// Canonicalize an existing path; for a not-yet-existing path (e.g. a file to
-/// be created), canonicalize its parent and re-attach the file name.
+/// Canonicalize a path for boundary checking. An existing path is canonicalized
+/// directly; for a not-yet-existing path (e.g. a file to be created), the
+/// deepest existing ancestor is canonicalized and the missing suffix is
+/// re-attached, so files inside not-yet-created directories still resolve.
 fn canonicalize_for_check(path: &Path) -> std::io::Result<PathBuf> {
     if path.exists() {
         return fs::canonicalize(path);
     }
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        let parent = fs::canonicalize(parent)?;
-        return Ok(parent.join(path.file_name().unwrap_or_default()));
+    let mut missing: Vec<std::ffi::OsString> = Vec::new();
+    let mut probe = path;
+    loop {
+        if probe.exists() {
+            let canon = fs::canonicalize(probe)?;
+            return Ok(missing.iter().rev().fold(canon, |acc, seg| acc.join(seg)));
+        }
+        let Some(name) = probe.file_name() else {
+            return fs::canonicalize(path);
+        };
+        missing.push(name.to_os_string());
+        let Some(parent) = probe.parent() else {
+            return fs::canonicalize(path);
+        };
+        if parent.as_os_str().is_empty() {
+            return fs::canonicalize(path);
+        }
+        probe = parent;
     }
-    fs::canonicalize(path)
 }
 
 pub(crate) fn read_text(path: &Path) -> Result<String, String> {
@@ -90,6 +104,39 @@ pub(crate) fn truncate(text: &str, max_chars: usize) -> String {
         chars.push('…');
     }
     chars.into_iter().collect()
+}
+
+/// Validate a value that will be spliced unquoted into a shell command line
+/// (chip id, probe serial). Only plain token characters are allowed so the
+/// value can never break out of the shell or inject extra commands.
+pub(crate) fn token_arg(value: &str, what: &str) -> Result<String, String> {
+    if value.is_empty() {
+        return Err(format!("[InvalidInput] {what} must not be empty"));
+    }
+    if !value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':' | '/'))
+    {
+        return Err(format!(
+            "[InvalidInput] {what} contains characters that are not allowed in a command \
+             token; use only letters, digits, and `- _ . : /`"
+        ));
+    }
+    Ok(value.to_string())
+}
+
+/// Quote a value for safe interpolation into the platform shell used by
+/// `run_command` (cmd.exe on Windows, sh on Unix).
+pub(crate) fn shell_quote(arg: &str) -> String {
+    if cfg!(windows) {
+        // cmd.exe: double quotes are the quoting mechanism, but `%` expansion
+        // and `^` escaping still apply inside them, so neutralise both.
+        let escaped = arg.replace('%', "%%").replace('^', "^^");
+        format!("\"{escaped}\"")
+    } else {
+        // sh: single quotes; embedded single quotes are spliced out.
+        format!("'{}'", arg.replace('\'', "'\\''"))
+    }
 }
 
 /// Minimal unified diff for permission previews: trims common prefix/suffix

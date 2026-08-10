@@ -154,40 +154,38 @@ impl SessionStore {
     pub fn save(&self, session: &Session) -> Result<(), SessionError> {
         fs::create_dir_all(&self.dir)?;
         let content = serialize_session(session)?;
-        fs::write(self.path_for(&session.id), content)?;
+        atomic_write(&self.path_for(&session.id), &content)?;
         Ok(())
     }
 
+    /// Load a session. Corrupt lines are skipped so a single bad line (e.g.
+    /// from an interrupted write) does not discard the whole transcript.
     pub fn load(&self, id: &str) -> Result<Session, SessionError> {
         let path = self.path_for(id);
         let file = fs::File::open(&path).map_err(|_| SessionError::NotFound(id.to_string()))?;
         let mut meta: Option<MetaLine> = None;
         let mut messages = Vec::new();
-        for (idx, line) in std::io::BufReader::new(file).lines().enumerate() {
-            let line = line?;
+        for line in std::io::BufReader::new(file).lines() {
+            let Ok(line) = line else { continue };
             if line.trim().is_empty() {
                 continue;
             }
-            let value: serde_json::Value = serde_json::from_str(&line)
-                .map_err(|e| SessionError::Corrupt(path.clone(), e.to_string()))?;
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
             let kind = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
             match kind {
                 "meta" => {
-                    let m: MetaLine = serde_json::from_value(value)
-                        .map_err(|e| SessionError::Corrupt(path.clone(), e.to_string()))?;
-                    meta = Some(m);
+                    if let Ok(m) = serde_json::from_value::<MetaLine>(value) {
+                        meta = Some(m);
+                    }
                 }
                 "message" => {
-                    let m: MessageLine = serde_json::from_value(value)
-                        .map_err(|e| SessionError::Corrupt(path.clone(), e.to_string()))?;
-                    messages.push(m.message);
+                    if let Ok(m) = serde_json::from_value::<MessageLine>(value) {
+                        messages.push(m.message);
+                    }
                 }
-                _ => {
-                    return Err(SessionError::Corrupt(
-                        path.clone(),
-                        format!("unknown line kind at line {}", idx + 1),
-                    ));
-                }
+                _ => {}
             }
         }
         let meta =

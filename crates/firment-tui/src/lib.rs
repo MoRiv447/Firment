@@ -80,7 +80,7 @@ pub async fn run(
         initial_registry,
         session,
         store.clone(),
-        initial_permission,
+        initial_permission.clone(),
         sink.clone(),
         config.max_iterations,
     );
@@ -108,6 +108,7 @@ pub async fn run(
         agent.session().provider.clone(),
         agent.session().model.clone(),
         Some(asker.clone()),
+        initial_permission.clone(),
     ));
     agent.set_subagent_factory(Some(subagent_factory));
     let initial_messages = agent.session().messages.clone();

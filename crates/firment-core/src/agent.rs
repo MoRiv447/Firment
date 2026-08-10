@@ -104,8 +104,12 @@ pub struct Agent {
     /// binary-analysis gate (`elf_analyze`) before a finished turn is accepted.
     elf_glob: Option<String>,
     /// True once the auto elf gate has run for the current edit batch; reset
-    /// whenever a new mutation lands.
+    /// whenever a new mutation lands. Independent of `mutations_since_verify`
+    /// so the gate still runs after the model verifies via the verify tool.
     elf_gate_done: bool,
+    /// True when a mutation landed since the last elf analysis; gates the
+    /// binary-analysis diff without depending on verify-bookkeeping.
+    elf_gate_dirty: bool,
     /// Hash of the last read result per path, for unchanged-read dedup.
     read_hashes: HashMap<PathBuf, String>,
     /// Recently read paths (most recent last), for post-compact re-injection.
@@ -151,6 +155,7 @@ impl Agent {
             session_dir: None,
             elf_glob: None,
             elf_gate_done: false,
+            elf_gate_dirty: false,
             read_hashes: HashMap::new(),
             recent_read_paths: VecDeque::new(),
         }
@@ -560,9 +565,17 @@ impl Agent {
                 }
             }
 
+            // Never persist tool calls that were never executed: an assistant
+            // message with dangling tool_calls would make the next request an
+            // invalid provider sequence. On cancel, keep only the text.
+            let saved_calls = if cancelled {
+                Vec::new()
+            } else {
+                tool_calls.clone()
+            };
             self.session.push(ChatMessage::Assistant {
                 content: content.clone(),
-                tool_calls: tool_calls.clone(),
+                tool_calls: saved_calls,
             });
 
             if cancelled {
@@ -580,30 +593,6 @@ impl Agent {
                 let _ = self.store.save(&self.session);
                 return Ok(content);
             }
-
-            let ctx = ToolContext {
-                cwd: self.session.cwd.clone(),
-                permission: self.permission.clone(),
-                allow_dangerous: self.allow_dangerous,
-                journal: journal.clone(),
-                verify_command: self.verify_command.clone(),
-                allowed_roots: vec![
-                    self.store.spill_dir(&self.session.id),
-                    crate::kb::seed_kb_dir(),
-                ],
-                symbols_backend: self.symbols_backend.clone(),
-                build_command: self.build_command.clone(),
-                default_chip: self.default_chip.clone(),
-                monitor_port: self.monitor_port.clone(),
-                monitor_baud: self.monitor_baud,
-                subagent: self.subagent.clone(),
-                subagent_depth: self.subagent_depth,
-                max_subagent_depth: self.max_subagent_depth,
-                asker: self.asker.clone(),
-                web_search_provider: self.web_search_provider.clone(),
-                web_search_api_key: self.web_search_api_key.clone(),
-                session_dir: self.session_dir.clone(),
-            };
 
             if tool_calls.is_empty() {
                 let plain_assistant = self.session.messages.pop().expect("assistant message");
@@ -653,6 +642,7 @@ impl Agent {
                         self.session.messages.pop();
                         self.session.messages.pop();
                         self.session.push(plain_assistant);
+                        mutations_since_verify = 0;
                     } else {
                         self.sink
                             .event(AgentEvent::Info(
@@ -667,13 +657,27 @@ impl Agent {
                     self.session.push(plain_assistant);
                 }
 
-                if mutations_since_verify > 0
+                if self.elf_gate_dirty
                     && let Some(text) = self.run_elf_gate(&ctx).await
                 {
                     // Fresh binary diff: surface it to the model so it can
-                    // decide whether to accept the state or keep fixing.
+                    // decide whether to accept the state or keep fixing. The
+                    // report is injected as a real tool round (assistant
+                    // tool_use -> tool result) so the transcript stays a valid
+                    // provider message sequence.
+                    self.elf_gate_dirty = false;
+                    self.session.messages.pop();
+                    let gate_call = ToolCall {
+                        id: "elf_gate".to_string(),
+                        name: "elf_analyze".to_string(),
+                        arguments: json!({}),
+                    };
+                    self.session.push(ChatMessage::Assistant {
+                        content: content.clone(),
+                        tool_calls: vec![gate_call.clone()],
+                    });
                     self.session.push(ChatMessage::Tool {
-                        tool_call_id: "elf_gate".to_string(),
+                        tool_call_id: gate_call.id,
                         name: "elf_analyze".to_string(),
                         content: text,
                     });
@@ -720,6 +724,7 @@ impl Agent {
             mutations_since_verify += stats.mutations;
             if stats.mutations > 0 {
                 self.elf_gate_done = false;
+                self.elf_gate_dirty = true;
             }
             if stats.verify_passed {
                 mutations_since_verify = 0;
@@ -1188,7 +1193,10 @@ fn newest_elf_match(cwd: &Path, pattern: &str) -> Option<PathBuf> {
                 let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                     continue;
                 };
-                if !name.starts_with('.') && !matches!(name, "target" | "node_modules") {
+                let skip = name.starts_with('.')
+                    || ((name == "target" || name == "node_modules")
+                        && !allow_heavy_dir(pattern, name));
+                if !skip {
                     walk(&path, cwd, pattern, best);
                 }
             } else if file_type.is_file()
@@ -1210,6 +1218,13 @@ fn newest_elf_match(cwd: &Path, pattern: &str) -> Option<PathBuf> {
     let mut best = None;
     walk(cwd, cwd, &pattern_norm, &mut best);
     best.map(|(path, _)| path)
+}
+
+/// Whether a heavy artifact directory (e.g. `target`, `node_modules`) may be
+/// entered. It is only allowed when the pattern explicitly names that segment,
+/// e.g. `target/**/*.elf`; a broad `**/*.elf` still skips it for performance.
+fn allow_heavy_dir(pattern: &str, dir: &str) -> bool {
+    pattern.split('/').any(|seg| seg == dir)
 }
 
 /// Glob match of a relative path against a pattern. Both use `/` separators.
@@ -1302,6 +1317,36 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("build")).unwrap();
         std::fs::write(dir.path().join("build").join("fw.bin"), b"x").unwrap();
         assert_eq!(newest_elf_match(dir.path(), "build/*.elf"), None);
+    }
+
+    #[test]
+    fn newest_match_enters_target_only_when_pattern_names_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir
+            .path()
+            .join("target")
+            .join("thumbv7em-none-eabi")
+            .join("debug");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("fw.elf"), b"x").unwrap();
+
+        assert!(
+            allow_heavy_dir("target/**/*.elf", "target"),
+            "explicit target segment must be allowed"
+        );
+        assert!(
+            !allow_heavy_dir("**/*.elf", "target"),
+            "broad glob must keep skipping target for performance"
+        );
+        assert!(
+            newest_elf_match(dir.path(), "target/**/*.elf").is_some(),
+            "pattern naming target/ must find the artifact inside it"
+        );
+        assert_eq!(
+            newest_elf_match(dir.path(), "**/*.elf"),
+            None,
+            "broad glob must not descend into target/"
+        );
     }
 
     #[test]

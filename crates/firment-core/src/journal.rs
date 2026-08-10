@@ -153,6 +153,9 @@ pub struct EditJournal {
     dir: PathBuf,
     entries: Vec<EntryRecord>,
     next_seq: u64,
+    /// Nanoseconds since epoch at construction; fixed-width hex so backup and
+    /// undo file names are globally unique across turns and sort chronologically.
+    stamp: u128,
 }
 
 impl EditJournal {
@@ -161,7 +164,16 @@ impl EditJournal {
             dir,
             entries: Vec::new(),
             next_seq: 0,
+            stamp: now_nanos(),
         }
+    }
+
+    fn backup_name(&self, seq: u64) -> String {
+        format!("{:032x}-{:04x}.bak", self.stamp, seq)
+    }
+
+    fn index_name(&self, seq: u64) -> String {
+        format!("undo-{:032x}-{:04x}.json", self.stamp, seq)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -177,7 +189,7 @@ impl EditJournal {
         let existed = path.exists();
         let backup = if existed {
             fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
-            let name = format!("{}.bak", self.next_seq);
+            let name = self.backup_name(self.next_seq);
             fs::copy(path, self.dir.join(&name))
                 .map_err(|e| format!("backup {} failed: {e}", path.display()))?;
             self.next_seq += 1;
@@ -228,7 +240,7 @@ impl EditJournal {
             created_at: created,
             entries: self.entries.clone(),
         };
-        let name = format!("undo-{created}-{}.json", self.next_seq);
+        let name = self.index_name(self.next_seq);
         let text = serde_json::to_string_pretty(&record).map_err(|e| e.to_string())?;
         fs::write(self.dir.join(name), text).map_err(|e| e.to_string())?;
 
@@ -360,6 +372,13 @@ fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn now_nanos() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
         .unwrap_or(0)
 }
 

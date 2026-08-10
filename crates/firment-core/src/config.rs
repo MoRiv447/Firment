@@ -209,6 +209,9 @@ impl Config {
         if project.tools.max_subagent_depth != default_max_subagent_depth() {
             config.tools.max_subagent_depth = project.tools.max_subagent_depth;
         }
+        if let Some(value) = project.tools.elf {
+            config.tools.elf = Some(value);
+        }
         if project.compaction_strategy != CompactionStrategy::default() {
             config.compaction_strategy = project.compaction_strategy;
         }
