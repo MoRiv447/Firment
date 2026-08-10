@@ -170,6 +170,13 @@ pub(crate) async fn run_command(
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // Put the whole tree in its own process group so the timeout can
+        // kill backgrounded grandchildren too, not just the shell.
+        cmd.process_group(0);
+    }
     cmd.current_dir(cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -190,10 +197,14 @@ pub(crate) async fn run_command(
         .ok_or_else(|| "stderr handle unavailable".to_string())?;
     let mut out_buf: Vec<u8> = Vec::new();
     let mut err_buf: Vec<u8> = Vec::new();
-    let read_stdout = async { AsyncReadExt::read_to_end(&mut stdout, &mut out_buf).await };
-    let read_stderr = async { AsyncReadExt::read_to_end(&mut stderr, &mut err_buf).await };
-    let mut read_stdout = Box::pin(read_stdout);
-    let mut read_stderr = Box::pin(read_stderr);
+    let read_streams = async {
+        let _ = tokio::time::timeout(Duration::from_secs(5), async {
+            let _ = AsyncReadExt::read_to_end(&mut stdout, &mut out_buf).await;
+            let _ = AsyncReadExt::read_to_end(&mut stderr, &mut err_buf).await;
+        })
+        .await;
+    };
+    let mut read_streams = Box::pin(read_streams);
 
     let status = if timeout_ms == 0 {
         child.wait().await
@@ -201,21 +212,28 @@ pub(crate) async fn run_command(
         tokio::select! {
             status = child.wait() => status,
             _ = tokio::time::sleep(Duration::from_millis(timeout_ms)) => {
+                if let Some(pid) = child.id() {
+                    // Kill the process tree: the direct child may have spawned
+                    // background processes that inherit our pipe handles and
+                    // would otherwise keep the read futures open forever.
+                    kill_process_tree(pid);
+                }
                 let _ = child.kill().await;
                 let _ = child.wait().await;
-                let _ = (&mut read_stdout).await;
-                let _ = (&mut read_stderr).await;
                 return Ok((
                     format!(
-                        "command: {command}\ntimed out after {timeout_ms} ms and was killed (child processes may survive)"
+                        "command: {command}\ntimed out after {timeout_ms} ms and was killed \
+                         (process tree terminated)"
                     ),
                     None,
                 ));
             }
         }
     };
-    let _ = (&mut read_stdout).await;
-    let _ = (&mut read_stderr).await;
+    // Drain what the process left behind with a firm deadline: a background
+    // grandchild holding the pipe write-ends would otherwise block forever.
+    let _ = (&mut read_streams).await;
+    drop(read_streams);
 
     let stdout = truncate(&String::from_utf8_lossy(&out_buf), 32_000);
     let stderr = truncate(&String::from_utf8_lossy(&err_buf), 32_000);
@@ -230,6 +248,26 @@ pub(crate) async fn run_command(
         ),
         code,
     ))
+}
+
+/// Terminate a process and everything underneath it. Background jobs spawned by
+/// the command inherit our pipe handles; killing only the direct child would
+/// leave those handles open and the capture would never reach EOF.
+#[cfg(windows)]
+fn kill_process_tree(pid: u32) {
+    use std::os::windows::process::CommandExt;
+    let _ = std::process::Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .creation_flags(0x0800_0000)
+        .status();
+}
+
+#[cfg(not(windows))]
+fn kill_process_tree(pid: u32) {
+    // `-pid` targets the whole process group set up via process_group(0).
+    let _ = std::process::Command::new("kill")
+        .args(["-9", &format!("-{pid}")])
+        .status();
 }
 #[cfg(test)]
 mod tests {
@@ -255,5 +293,26 @@ mod tests {
         )
         .unwrap();
         assert!(ok.starts_with(extra.path()));
+    }
+
+    #[tokio::test]
+    async fn timeout_kills_long_running_command_promptly() {
+        let dir = tempdir().unwrap();
+        let slow = if cfg!(windows) {
+            "ping -n 30 127.0.0.1 >nul"
+        } else {
+            "sleep 30"
+        };
+        let started = std::time::Instant::now();
+        let (text, code) = run_command(slow, dir.path(), 400, None)
+            .await
+            .expect("run_command returns Ok");
+        assert!(code.is_none(), "timeout must report a killed process");
+        assert!(text.contains("timed out"), "got: {text}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "timeout returned too late: {:?}",
+            started.elapsed()
+        );
     }
 }

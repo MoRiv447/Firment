@@ -270,10 +270,12 @@ impl Config {
     }
 
     /// Resolve the API key for a provider: inline `api_key`, then `auth.json`,
-    /// then `api_key_env`.
+    /// then `api_key_env`. A blank inline value is treated as unset so it
+    /// falls through to auth.json / the environment instead of breaking every
+    /// request with an empty key.
     pub fn api_key_for(&self, provider: &ProviderConfig, name: &str) -> Option<String> {
-        if let Some(key) = &provider.api_key {
-            return Some(key.clone());
+        if let Some(key) = provider.api_key.as_deref().filter(|k| !k.is_empty()) {
+            return Some(key.to_string());
         }
         if let Some(key) = load_auth().get(name) {
             return Some(key.clone());
@@ -412,10 +414,17 @@ pub fn load_auth() -> AuthMap {
 }
 
 pub fn save_auth(auth: &AuthMap) -> Result<(), ConfigError> {
-    if let Some(parent) = auth_path().parent() {
+    let path = auth_path();
+    if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(auth_path(), serde_json::to_string_pretty(auth)?)?;
+    fs::write(&path, serde_json::to_string_pretty(auth)?)?;
+    // API keys are secrets: never world-readable (Unix).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+    }
     Ok(())
 }
 

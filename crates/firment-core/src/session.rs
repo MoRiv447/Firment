@@ -115,27 +115,27 @@ impl SessionStore {
     }
 
     pub fn path_for(&self, id: &str) -> PathBuf {
-        self.dir.join(format!("{id}.jsonl"))
+        self.dir.join(format!("{}.jsonl", sanitize_id(id)))
     }
 
     /// Directory holding undo backups for a session (next to its JSONL file).
     pub fn undo_dir(&self, id: &str) -> PathBuf {
-        self.dir.join(format!("{id}.undo"))
+        self.dir.join(format!("{}.undo", sanitize_id(id)))
     }
 
     /// Directory holding spilled (out-of-band) tool outputs for a session.
     pub fn spill_dir(&self, id: &str) -> PathBuf {
-        self.dir.join(format!("{id}.spill"))
+        self.dir.join(format!("{}.spill", sanitize_id(id)))
     }
 
     /// Path of the session's change ledger (JSONL, one committed turn per line).
     pub fn ledger_path(&self, id: &str) -> PathBuf {
-        self.dir.join(format!("{id}.ledger.jsonl"))
+        self.dir.join(format!("{}.ledger.jsonl", sanitize_id(id)))
     }
 
     /// Path of the session's pinned-file list (JSON array of paths).
     pub fn pins_path(&self, id: &str) -> PathBuf {
-        self.dir.join(format!("{id}.pins.json"))
+        self.dir.join(format!("{}.pins.json", sanitize_id(id)))
     }
 
     pub fn load_pins(&self, id: &str) -> Vec<PathBuf> {
@@ -291,6 +291,14 @@ fn read_meta_line(path: &Path) -> Result<MetaLine, SessionError> {
         path.to_path_buf(),
         "no meta line".into(),
     ))
+}
+
+/// Session ids are interpolated into file names; allow only safe characters so
+/// a crafted id (e.g. `../x`) cannot redirect sidecar files outside the store.
+fn sanitize_id(id: &str) -> String {
+    id.chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+        .collect::<String>()
 }
 
 fn migrate_legacy_model(model: &str) -> String {

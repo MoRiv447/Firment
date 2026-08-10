@@ -21,11 +21,15 @@ pub enum AgentEvent {
     ToolStart {
         name: String,
         args: Value,
+        /// Monotonic per-start id; ToolEnd carries the same id so concurrent
+        /// same-name tool calls resolve to their own cards.
+        seq: u64,
     },
     ToolEnd {
         name: String,
         ok: bool,
         summary: String,
+        seq: u64,
     },
     TurnEnd {
         text: String,
@@ -97,6 +101,8 @@ pub struct Agent {
     asker: Option<Arc<dyn Asker>>,
     /// Web search provider + resolved API key exposed to the web_search tool.
     web_search_provider: Option<String>,
+    /// Monotonic counter for tool-start/end event pairing.
+    tool_seq: u64,
     web_search_api_key: Option<String>,
     /// Per-session bookkeeping directory (todo list etc.).
     session_dir: Option<PathBuf>,
@@ -151,6 +157,7 @@ impl Agent {
             max_subagent_depth: 2,
             asker: None,
             web_search_provider: None,
+            tool_seq: 0,
             web_search_api_key: None,
             session_dir: None,
             elf_glob: None,
@@ -371,7 +378,22 @@ impl Agent {
             return text.to_string();
         }
         let dir = self.store.spill_dir(&self.session.id);
-        if fs::create_dir_all(&dir).is_ok() {
+        // Spill files live only as long as the messages referencing them; on
+        // each spill, drop files older than a day so long sessions do not
+        // accumulate unbounded disk usage.
+        let _ = fs::create_dir_all(&dir);
+        if let Ok(read) = fs::read_dir(&dir) {
+            let cutoff =
+                std::time::SystemTime::now().checked_sub(std::time::Duration::from_secs(24 * 3600));
+            for entry in read.flatten() {
+                let Ok(meta) = entry.metadata() else { continue };
+                let expired = cutoff.is_some_and(|c| meta.modified().ok().is_some_and(|t| t < c));
+                if expired {
+                    let _ = fs::remove_file(entry.path());
+                }
+            }
+        }
+        {
             let name = format!("{}.txt", uuid::Uuid::new_v4());
             let path = dir.join(&name);
             if fs::write(&path, text).is_ok() {
@@ -609,10 +631,13 @@ impl Agent {
                         content: content.clone(),
                         tool_calls: vec![gate_call.clone()],
                     });
+                    self.tool_seq += 1;
+                    let seq = self.tool_seq;
                     self.sink
                         .event(AgentEvent::ToolStart {
                             name: "verify".to_string(),
                             args: json!({}),
+                            seq,
                         })
                         .await;
                     let result = self
@@ -630,6 +655,7 @@ impl Agent {
                             name: "verify".to_string(),
                             ok,
                             summary: summarize(&text),
+                            seq,
                         })
                         .await;
                     self.session.push(ChatMessage::Tool {
@@ -970,13 +996,17 @@ async fn execute_tool_calls(
         let ready: Vec<usize> = (0..n)
             .filter(|&i| !done[i] && deps[i].iter().all(|&j| done[j]))
             .collect();
+        let mut call_seqs: Vec<u64> = Vec::with_capacity(ready.len());
         for &i in &ready {
             let call = &tool_calls[i];
+            agent.tool_seq += 1;
+            call_seqs.push(agent.tool_seq);
             agent
                 .sink
                 .event(AgentEvent::ToolStart {
                     name: call.name.clone(),
                     args: call.arguments.clone(),
+                    seq: agent.tool_seq,
                 })
                 .await;
         }
@@ -989,18 +1019,23 @@ async fn execute_tool_calls(
             .collect();
         let results = futures::future::join_all(futures).await;
 
-        let any_mutation_failed = ready
-            .iter()
-            .enumerate()
-            .any(|(k, &i)| is_mutation_tool(&tool_calls[i].name) && results[k].is_err());
+        // A denied mutation call (user said no) executes nothing and must not
+        // roll the batch back. Only real execution failures do.
+        let any_mutation_failed = ready.iter().enumerate().any(|(k, &i)| {
+            is_mutation_tool(&tool_calls[i].name) && matches!(&results[k], Err(e) if !e.denied)
+        });
         if any_mutation_failed {
             let summary = rollback_journal(journal);
-            agent
-                .sink
-                .event(AgentEvent::Info(format!(
-                    "edit batch failed; rolled back: {summary}"
-                )))
-                .await;
+            // Surface the rollback in the transcript: the failing wave was
+            // reverted wholesale (including earlier successful mutations in
+            // the same batch), so the model must not believe its edits are
+            // still in place when it plans the next wave.
+            let note = format!("edit batch failed; rolled back: {summary}");
+            agent.sink.event(AgentEvent::Info(note.clone())).await;
+            agent.session.push(ChatMessage::Assistant {
+                content: note,
+                tool_calls: Vec::new(),
+            });
         }
 
         for (k, &i) in ready.iter().enumerate() {
@@ -1046,6 +1081,7 @@ async fn execute_tool_calls(
                     name: call.name.clone(),
                     ok,
                     summary: summary.clone(),
+                    seq: call_seqs[k],
                 })
                 .await;
             agent.session.push(ChatMessage::Tool {

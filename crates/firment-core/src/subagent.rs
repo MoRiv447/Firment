@@ -117,7 +117,11 @@ impl SubagentFactory for SubagentRunner {
         );
         nested.set_session_dir(Some(store.dir.join("work")));
         nested.set_elf_glob(self.config.tools.elf.clone());
-        nested.run_turn(prompt).await.map_err(|e| e.to_string())
+        let result = nested.run_turn(prompt).await;
+        // The subagent session is transient bookkeeping: drop its whole
+        // directory when done so long sessions do not accumulate temp junk.
+        let _ = std::fs::remove_dir_all(&store.dir);
+        result.map_err(|e| e.to_string())
     }
 }
 

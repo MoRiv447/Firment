@@ -94,6 +94,10 @@ pub struct ToolOutput {
 #[derive(Debug, Clone)]
 pub struct ToolError {
     pub message: String,
+    /// Whether the call was rejected before execution (user denied approval
+    /// or the permission check failed). A denied call mutates nothing, so the
+    /// harness must not count it as a mutation or roll back on it.
+    pub denied: bool,
 }
 
 impl std::fmt::Display for ToolError {
@@ -108,6 +112,14 @@ impl ToolError {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            denied: false,
+        }
+    }
+
+    pub fn denied(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            denied: true,
         }
     }
 }
@@ -190,14 +202,10 @@ impl ToolRegistry {
             match ctx.permission.confirm(tool.name(), &args, &reason).await {
                 Ok(()) => {}
                 Err(PermissionError::Denied(message)) => {
-                    return Ok(ToolOutput {
-                        text: format!("Permission denied: {message}"),
-                    });
+                    return Err(ToolError::denied(format!("Permission denied: {message}")));
                 }
                 Err(PermissionError::Io(e)) => {
-                    return Ok(ToolOutput {
-                        text: format!("Permission check failed: {e}"),
-                    });
+                    return Err(ToolError::denied(format!("Permission check failed: {e}")));
                 }
             }
         }

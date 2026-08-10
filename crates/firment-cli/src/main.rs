@@ -405,7 +405,9 @@ impl EventSink for CliSink {
     async fn event(&self, event: AgentEvent) {
         match event {
             AgentEvent::ToolStart { name, .. } => eprintln!("▶ {name}"),
-            AgentEvent::ToolEnd { name, ok, summary } => {
+            AgentEvent::ToolEnd {
+                name, ok, summary, ..
+            } => {
                 let mark = if ok { "✓" } else { "✗" };
                 eprintln!("  {mark} {name}: {summary}");
             }

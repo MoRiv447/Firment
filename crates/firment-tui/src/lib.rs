@@ -32,7 +32,12 @@ pub async fn run(
     config_path: std::path::PathBuf,
     session: Session,
 ) -> anyhow::Result<()> {
-    let config = config.merged_for(&session.cwd);
+    // Keep the user-level config untouched so `/model` & co. only ever write
+    // the user's own settings to the global file — project `.firment.toml`
+    // overrides (build_command, default_chip, …) must not leak out of the
+    // project's scope.
+    let base_config = config;
+    let config = base_config.clone().merged_for(&session.cwd);
     // The TUI must start even without an API key, so the user can configure
     // it from inside with /apikey or /provider.
     let (provider, startup_hint) =
@@ -116,7 +121,7 @@ pub async fn run(
     let cwd = agent.session().cwd.clone();
     let provider_name = agent.session().provider.clone();
     let thinking = agent.session().thinking;
-    let mut task_config = config.clone();
+    let mut task_config = base_config;
     let task_config_path = config_path.clone();
     let agent_task = tokio::spawn(async move {
         while let Some(cmd) = cmd_rx.recv().await {
@@ -704,6 +709,10 @@ struct App {
     pending_new_baseline: usize,
     model_picker: Option<ModelPicker>,
     session_picker: Option<SessionPicker>,
+    /// The user closed the picker with Esc. A late data event (the async
+    /// model/session list arriving after dismissal) must not re-open it.
+    model_picker_dismissed: bool,
+    session_picker_dismissed: bool,
     transcript_rect: Rect,
     input_rect: Rect,
     content_width: usize,
@@ -1007,6 +1016,9 @@ enum Item {
     Assistant(String),
     Tool {
         name: String,
+        /// Event-pairing id from AgentEvent::ToolStart/ToolEnd; parallel
+        /// same-name tool calls each get their own card.
+        seq: u64,
         running: bool,
         ok: bool,
         summary: String,
@@ -1064,6 +1076,8 @@ impl App {
             pending_new_baseline: 0,
             model_picker: None,
             session_picker: None,
+            model_picker_dismissed: false,
+            session_picker_dismissed: false,
             transcript_rect: Rect::default(),
             input_rect: Rect::default(),
             content_width: 0,
@@ -1097,6 +1111,7 @@ impl App {
                         && !content.starts_with("[Permission] Dangerous command");
                     self.items.push(Item::Tool {
                         name: name.clone(),
+                        seq: u64::MAX,
                         running: false,
                         ok,
                         summary: content.clone(),
@@ -1131,30 +1146,37 @@ impl App {
                     self.items.push(Item::Assistant(text));
                 }
             },
-            AgentEvent::ToolStart { name, args } => {
+            AgentEvent::ToolStart { name, args, seq } => {
                 self.ai_thinking = false;
                 self.active_tools
                     .push((name.clone(), tool_activity(&name, &args)));
                 self.items.push(Item::Tool {
                     name,
+                    seq,
                     running: true,
                     ok: false,
                     summary: args.to_string(),
                 });
             }
-            AgentEvent::ToolEnd { name, ok, summary } => {
-                if let Some(pos) = self.active_tools.iter().rposition(|(n, _)| n == &name) {
+            AgentEvent::ToolEnd {
+                name,
+                ok,
+                summary,
+                seq,
+            } => {
+                if let Some(pos) = self.active_tools.iter().position(|(n, _)| n == &name) {
                     self.active_tools.remove(pos);
                 }
                 for item in self.items.iter_mut().rev() {
                     if let Item::Tool {
                         name: n,
+                        seq: item_seq,
                         running,
                         ok: current_ok,
                         summary: current_summary,
                     } = item
                         && n == &name
-                        && *running
+                        && *item_seq == seq
                     {
                         *running = false;
                         *current_ok = ok;
@@ -1188,24 +1210,22 @@ impl App {
                     self.mode = mode;
                 }
             }
-            AgentEvent::Models(models) => match &mut self.model_picker {
-                Some(picker) => {
+            AgentEvent::Models(models) => {
+                if let Some(picker) = &mut self.model_picker {
                     picker.models = models;
                     picker.clamp();
-                }
-                None => {
+                } else if !self.model_picker_dismissed {
                     self.model_picker = Some(ModelPicker::new(models));
                 }
-            },
-            AgentEvent::Sessions(sessions) => match &mut self.session_picker {
-                Some(picker) => {
+            }
+            AgentEvent::Sessions(sessions) => {
+                if let Some(picker) = &mut self.session_picker {
                     picker.sessions = sessions;
                     picker.clamp();
-                }
-                None => {
+                } else if !self.session_picker_dismissed {
                     self.session_picker = Some(SessionPicker::new(sessions));
                 }
-            },
+            }
             AgentEvent::SessionLoaded(session) => {
                 let was_new = self.pending_new_session;
                 self.pending_new_session = false;
@@ -1224,7 +1244,17 @@ impl App {
                 self.cwd = session.cwd.clone();
                 self.busy = false;
                 self.ai_thinking = false;
-                self.permission = None;
+                // A session swap invalidates any pending prompts/pickers.
+                if let Some(previous) = self.permission.take() {
+                    let _ = previous.reply.send(false);
+                }
+                if let Some(previous) = self.question.take() {
+                    let _ = previous.reply.send(None);
+                }
+                self.model_picker = None;
+                self.session_picker = None;
+                self.model_picker_dismissed = true;
+                self.session_picker_dismissed = true;
                 self.follow = true;
                 self.scroll = 0;
                 self.max_offset = 0;
@@ -1249,6 +1279,13 @@ impl App {
     }
 
     fn on_permission(&mut self, request: PermissionRequest) {
+        // A second request may arrive while one is still pending (concurrent
+        // tools/subagents). The older call can no longer be answered, so deny
+        // it explicitly instead of dropping the oneshot and leaving the
+        // awaiting tool hanging.
+        if let Some(previous) = self.permission.take() {
+            let _ = previous.reply.send(false);
+        }
         self.items.push(Item::Permission {
             tool: request.tool.clone(),
             reason: request.reason.clone(),
@@ -1260,6 +1297,11 @@ impl App {
     }
 
     fn on_question(&mut self, request: QuestionRequest) {
+        // Same story as permissions: dismiss any pending question so its
+        // caller does not hang waiting for an answer that can never come.
+        if let Some(previous) = self.question.take() {
+            let _ = previous.reply.send(None);
+        }
         self.question_input.clear();
         self.items
             .push(Item::System(format!("❓ {}", request.question)));
@@ -1587,12 +1629,22 @@ impl App {
         }
     }
 
+    /// Queue a command for the agent task. If the channel is full, surface
+    /// the loss instead of silently dropping the user's action.
+    fn send_cmd(&mut self, cmd: AgentCmd) {
+        if self.cmd_tx.try_send(cmd).is_err() {
+            self.items.push(Item::Error(
+                "command channel is full; please retry".to_string(),
+            ));
+        }
+    }
+
     fn request_interrupt(&mut self) {
         if self.interrupting {
             return;
         }
         self.interrupting = true;
-        let _ = self.cmd_tx.try_send(AgentCmd::Cancel);
+        self.send_cmd(AgentCmd::Cancel);
         self.items
             .push(Item::System("⏹ Interrupt request sent…".to_string()));
     }
@@ -1979,8 +2031,9 @@ impl App {
         if self.model_picker.is_some() {
             return;
         }
+        self.model_picker_dismissed = false;
         self.model_picker = Some(ModelPicker::new(Vec::new()));
-        let _ = self.cmd_tx.try_send(AgentCmd::OpenModelPicker);
+        self.send_cmd(AgentCmd::OpenModelPicker);
     }
 
     fn on_picker_key(&mut self, key: KeyEvent) -> bool {
@@ -1990,6 +2043,7 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.model_picker = None;
+                self.model_picker_dismissed = true;
             }
             KeyCode::Up => {
                 if picker.selected > 0 {
@@ -2014,7 +2068,7 @@ impl App {
                     self.model = model.clone();
                     self.items
                         .push(Item::System(format!("model -> {model} (switching…)")));
-                    let _ = self.cmd_tx.try_send(AgentCmd::SetModel(model));
+                    self.send_cmd(AgentCmd::SetModel(model));
                 }
                 self.model_picker = None;
             }
@@ -2035,8 +2089,9 @@ impl App {
         if self.session_picker.is_some() {
             return;
         }
+        self.session_picker_dismissed = false;
         self.session_picker = Some(SessionPicker::new(Vec::new()));
-        let _ = self.cmd_tx.try_send(AgentCmd::OpenSessionPicker);
+        self.send_cmd(AgentCmd::OpenSessionPicker);
     }
 
     fn on_session_picker_key(&mut self, key: KeyEvent) -> bool {
@@ -2046,6 +2101,7 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.session_picker = None;
+                self.session_picker_dismissed = true;
             }
             KeyCode::Up => {
                 if picker.selected > 0 {
@@ -2070,7 +2126,7 @@ impl App {
                     let id = session.id.clone();
                     self.items
                         .push(Item::System(format!("Loading session {id}…")));
-                    let _ = self.cmd_tx.try_send(AgentCmd::LoadSession(id));
+                    self.send_cmd(AgentCmd::LoadSession(id));
                 }
                 self.session_picker = None;
             }
@@ -2322,7 +2378,7 @@ impl App {
         self.ai_thinking = true;
         self.follow = true;
         self.scroll = 0;
-        let _ = self.cmd_tx.try_send(AgentCmd::User(text));
+        self.send_cmd(AgentCmd::User(text));
     }
 
     fn run_command(&mut self, command: &str) {
@@ -2355,9 +2411,9 @@ impl App {
                 self.scroll = 0;
                 self.pending_new_session = true;
                 if was_busy {
-                    let _ = self.cmd_tx.try_send(AgentCmd::Cancel);
+                    self.send_cmd(AgentCmd::Cancel);
                 }
-                let _ = self.cmd_tx.try_send(AgentCmd::NewSession);
+                self.send_cmd(AgentCmd::NewSession);
                 self.items
                     .push(Item::System("Starting a new conversation…".to_string()));
                 self.pending_new_baseline = self.items.len();
@@ -2370,7 +2426,7 @@ impl App {
                     _ => SessionMode::Plan,
                 };
                 self.mode = mode;
-                let _ = self.cmd_tx.try_send(AgentCmd::SetMode(mode));
+                self.send_cmd(AgentCmd::SetMode(mode));
                 let queued = if self.busy { " (takes effect after the current turn)" } else { "" };
                 self.items.push(Item::System(format!(
                     "mode -> {}{queued}",
@@ -2379,7 +2435,7 @@ impl App {
             }
             "agent" => {
                 self.mode = SessionMode::Agent;
-                let _ = self.cmd_tx.try_send(AgentCmd::SetMode(SessionMode::Agent));
+                self.send_cmd(AgentCmd::SetMode(SessionMode::Agent));
                 let queued = if self.busy { " (takes effect after the current turn)" } else { "" };
                 self.items
                     .push(Item::System(format!("mode -> agent{queued}")));
@@ -2400,7 +2456,7 @@ impl App {
                     }
                 };
                 self.thinking = level;
-                let _ = self.cmd_tx.try_send(AgentCmd::SetThinking(level));
+                self.send_cmd(AgentCmd::SetThinking(level));
                 self.items
                     .push(Item::System(format!("thinking -> {}", level.label())));
             }
@@ -2413,7 +2469,7 @@ impl App {
             }
             "model" if !arg.is_empty() => {
                 self.model = arg.to_string();
-                let _ = self.cmd_tx.try_send(AgentCmd::SetModel(arg.to_string()));
+                self.send_cmd(AgentCmd::SetModel(arg.to_string()));
                 self.items
                     .push(Item::System(format!("model -> {arg}")));
             }
@@ -2421,7 +2477,7 @@ impl App {
                 self.open_model_picker();
             }
             "models" => {
-                let _ = self.cmd_tx.try_send(AgentCmd::ListModels);
+                self.send_cmd(AgentCmd::ListModels);
                 self.items.push(Item::System(format!(
                     "Fetching model list for {}…",
                     self.provider
@@ -2441,13 +2497,13 @@ impl App {
                 self.open_session_picker();
             }
             "undo" => {
-                let _ = self.cmd_tx.try_send(AgentCmd::Undo);
+                self.send_cmd(AgentCmd::Undo);
                 self.items.push(Item::System(
                     "Undoing the last committed edit…".to_string(),
                 ));
             }
             "ledger" => {
-                let _ = self.cmd_tx.try_send(AgentCmd::Ledger);
+                self.send_cmd(AgentCmd::Ledger);
                 self.items.push(Item::System("Reading the change ledger…".to_string()));
             }
             "pin" if !arg.is_empty() => {
@@ -2479,7 +2535,7 @@ impl App {
                     Some((p, k)) => (Some(p.to_string()), k.to_string()),
                     None => (None, arg.to_string()),
                 };
-                let _ = self.cmd_tx.try_send(AgentCmd::SetApiKey { provider, key });
+                self.send_cmd(AgentCmd::SetApiKey { provider, key });
                 self.items
                     .push(Item::System("Saving API key…".to_string()));
             }
@@ -2502,7 +2558,7 @@ impl App {
                     return;
                 }
                 let (name, r#type, base_url, model) = (parts[0], parts[1], parts[2], parts[3]);
-                let _ = self.cmd_tx.try_send(AgentCmd::AddProvider {
+                self.send_cmd(AgentCmd::AddProvider {
                     name: name.to_string(),
                     r#type: r#type.to_string(),
                     base_url: base_url.to_string(),
@@ -2576,6 +2632,7 @@ impl App {
                 }
                 Item::Tool {
                     name,
+                    seq: _,
                     running,
                     ok,
                     summary,
@@ -2812,7 +2869,8 @@ impl App {
         let modal_open =
             self.model_picker.is_some() || self.session_picker.is_some() || self.question.is_some();
         if !modal_open {
-            let cursor_x = input_area.x + 1 + cursor_col as u16;
+            let cursor_x =
+                (input_area.x + 1 + cursor_col as u16).min(input_area.right().saturating_sub(1));
             let cursor_y = input_area.y + 1 + cursor_line.saturating_sub(self.input_scroll) as u16;
             frame.set_cursor_position((cursor_x, cursor_y));
         }
@@ -3231,7 +3289,10 @@ mod tests {
     use super::*;
 
     fn test_app() -> App {
-        let (cmd_tx, _cmd_rx) = mpsc::channel(8);
+        let (cmd_tx, mut cmd_rx) = mpsc::channel(8);
+        // Keep the receiver alive so queued commands with a full/dropped
+        // channel signal errors rather than silently failing.
+        std::thread::spawn(move || while cmd_rx.blocking_recv().is_some() {});
         App::new(
             cmd_tx,
             Arc::new(Mutex::new(HashSet::new())),
@@ -3692,6 +3753,7 @@ mod tests {
         app.on_agent(AgentEvent::ToolStart {
             name: "read_file".to_string(),
             args: serde_json::json!({}),
+            seq: 1,
         });
         assert_eq!(app.items.len(), 1); // only the "Starting…" hint
         assert!(matches!(
@@ -4030,12 +4092,14 @@ mod tests {
         app.on_agent(AgentEvent::ToolStart {
             name: "grep".to_string(),
             args: serde_json::json!({ "pattern": "fn main" }),
+            seq: 1,
         });
         assert_eq!(app.status_text(), "working · searching fn main…");
 
         app.on_agent(AgentEvent::ToolStart {
             name: "flash".to_string(),
             args: serde_json::json!({ "file": "app.elf" }),
+            seq: 2,
         });
         assert_eq!(app.status_text(), "working · 2× flashing app.elf…");
 
@@ -4043,6 +4107,7 @@ mod tests {
             name: "flash".to_string(),
             ok: true,
             summary: String::new(),
+            seq: 2,
         });
         assert_eq!(app.status_text(), "working · searching fn main…");
 
@@ -4050,6 +4115,7 @@ mod tests {
             name: "grep".to_string(),
             ok: true,
             summary: String::new(),
+            seq: 1,
         });
         assert_eq!(app.status_text(), "working");
     }
