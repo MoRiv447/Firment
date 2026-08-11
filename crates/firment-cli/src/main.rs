@@ -42,6 +42,16 @@ struct Cli {
     #[arg(long)]
     provider: Option<String>,
 
+    /// Session context budget in characters before auto-compaction kicks in
+    /// (default 256000; overrides config context_budget_chars).
+    #[arg(long = "context-length")]
+    context_length: Option<usize>,
+
+    /// Cap on output tokens per reply (default 32768; overrides config
+    /// max_output_tokens / provider max_tokens).
+    #[arg(long = "max-output-tokens")]
+    max_output_tokens: Option<u32>,
+
     /// Thinking effort: off/low/medium/high/xhigh/max (Anthropic extended thinking, OpenAI reasoning).
     #[arg(long, value_parser = parse_thinking)]
     thinking: Option<ThinkingLevel>,
@@ -242,7 +252,15 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let config_path = cli.config.clone().unwrap_or_else(config_path);
-    let config = Config::load_or_create(&config_path)?;
+    let mut config = Config::load_or_create(&config_path)?;
+    // CLI overrides win over config values (and apply to both TUI and
+    // one-shot paths, since both build from this config).
+    if let Some(length) = cli.context_length {
+        config.context_budget_chars = length;
+    }
+    if let Some(tokens) = cli.max_output_tokens {
+        config.max_output_tokens = Some(tokens);
+    }
     let _ = firment_core::kb::ensure_seed_kb();
 
     if let Some(kv) = &cli.set_key {

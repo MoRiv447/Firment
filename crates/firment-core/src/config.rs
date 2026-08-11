@@ -25,6 +25,11 @@ pub struct Config {
     /// compacted into a digest when exceeded.
     #[serde(default = "default_context_budget")]
     pub context_budget_chars: usize,
+    /// Cap on output tokens per assistant reply (sent as the API's
+    /// max_tokens). `None` falls back to the provider's own max_tokens, then
+    /// to the built-in default (32k).
+    #[serde(default)]
+    pub max_output_tokens: Option<u32>,
     /// Auto-compaction strategy (see `CompactionStrategy`).
     #[serde(default)]
     pub compaction_strategy: CompactionStrategy,
@@ -146,6 +151,7 @@ impl Config {
             thinking: ThinkingLevel::Off,
             tools: ToolsConfig::default(),
             context_budget_chars: default_context_budget(),
+            max_output_tokens: None,
             compaction_strategy: CompactionStrategy::default(),
         }
     }
@@ -219,6 +225,9 @@ impl Config {
         }
         if project.compaction_strategy != CompactionStrategy::default() {
             config.compaction_strategy = project.compaction_strategy;
+        }
+        if project.max_output_tokens.is_some() {
+            config.max_output_tokens = project.max_output_tokens;
         }
         config
     }
@@ -364,6 +373,12 @@ impl Config {
             ConfigError::MissingApiKey(name.clone(), env_name)
         })?;
         let model = model_override.unwrap_or(&provider.model).to_string();
+        // Output cap precedence: explicit config max_output_tokens >
+        // provider-level max_tokens > built-in 32k default.
+        let max_output_tokens = self
+            .max_output_tokens
+            .or(provider.max_tokens)
+            .unwrap_or_else(default_max_output_tokens);
         match provider.r#type.as_str() {
             "openai" => Ok(Box::new(OpenAIProvider::new(
                 provider
@@ -372,7 +387,7 @@ impl Config {
                     .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
                 api_key,
                 model,
-                provider.max_tokens,
+                Some(max_output_tokens),
                 provider.temperature,
             ))),
             "anthropic" => Ok(Box::new(AnthropicProvider::new(
@@ -382,7 +397,7 @@ impl Config {
                     .unwrap_or_else(|| "https://api.anthropic.com".to_string()),
                 api_key,
                 model,
-                provider.max_tokens,
+                Some(max_output_tokens),
                 provider.temperature,
             ))),
             other => Err(ConfigError::UnknownType(name, other.to_string())),
@@ -462,7 +477,8 @@ model = "deepseek-v4-flash"
 # Max tool-calling rounds per turn.
 # max_iterations = 30
 # thinking = "medium"   # off / low / medium / high / xhigh / max (reasoning depth)
-# context_budget_chars = 60000   # session context budget in chars; older messages are compacted past this
+# context_budget_chars = 256000   # session context budget in chars; older messages are compacted past this (256k default)
+# max_output_tokens = 32768       # cap on output tokens per reply (32k default; overrides provider max_tokens)
 # compaction_strategy = "summarize"   # default summarize; drop (discard old turns) / off (no auto-compaction)
 
 [tools]
@@ -514,7 +530,13 @@ fn default_max_subagent_depth() -> usize {
 }
 
 fn default_context_budget() -> usize {
-    60_000
+    256_000
+}
+
+/// Default cap on output tokens per reply when neither the config nor the
+/// provider specifies one (32k starts generous for long tool-calling turns).
+pub fn default_max_output_tokens() -> u32 {
+    32_768
 }
 
 #[cfg(test)]
