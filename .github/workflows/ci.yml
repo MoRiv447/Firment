@@ -24,37 +24,14 @@ jobs:
         run: cargo fmt --check
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: test (build only)
+      - name: test
         shell: bash
-        timeout-minutes: 12
+        timeout-minutes: 20
         run: |
-          free -m || true
-          nproc || true
-          echo "=== building (no-run) ==="
-          timeout 600 cargo test --workspace --no-run 2>&1 || { echo "=== BUILD STEP FAILED/HUNG (exit $?) ==="; exit 1; }
-          echo "=== build ok ==="
-      - name: test (run)
-        shell: bash
-        timeout-minutes: 12
-        run: |
-          echo "=== Z: bare sleep control (no rust involved) ==="
-          timeout 10 sleep 5 && echo "Z sleep ok" || { echo "=== Z FAILED (exit $?) ==="; exit 1; }
-          echo "=== mem probe ==="
-          cat /sys/fs/cgroup/memory.max 2>/dev/null || echo "no memory.max"
-          free -m | grep -E 'Mem|Swap' || true
-          timeout 60 python3 -c 'import time; a=bytearray(1024*1024*1024*6); time.sleep(10)' && echo "M6 ok" || echo "M6 fail rc=$?"
-          echo "=== C1: build tools tests (jobs 1, serial rustc) ==="
-          timeout 300 cargo test -p firment-tools --no-run --jobs 1 2>&1 | tail -3 || { echo "C1 FAILED"; exit 1; }
-          echo "C1 build ok"
-          echo "=== C2: run cancel test (cached build) ==="
-          timeout 60 cargo test -p firment-tools -- util::tests::cancel_stops -- --test-threads=1 2>&1 | tail -20 || true
-          echo "C2 pipeline rc=${PIPESTATUS[0]}"
-          echo "=== D: run timeout test (cached build) ==="
-          timeout 60 cargo test -p firment-tools -- util::tests::timeout_kills -- --test-threads=1 2>&1 | tail -20 || true
-          echo "D pipeline rc=${PIPESTATUS[0]}"
-          echo "=== E: util full (3 tests, cached build) ==="
-          timeout 60 cargo test -p firment-tools -- util:: -- --test-threads=1 2>&1 | tail -20 || true
-          echo "E pipeline rc=${PIPESTATUS[0]}"
-          echo "=== F: tools full suite (cached build) ==="
-          timeout 600 cargo test -p firment-tools -- --test-threads=1 2>&1 | tail -10 || true
-          echo "F pipeline rc=${PIPESTATUS[0]}"
+          set -e
+          # Run each crate's tests serially to bound peak memory on hosted
+          # runners (parallel test binaries previously OOM'd the job).
+          for pkg in firment-core firment-tools firment-tui firment-cli; do
+            echo "=== cargo test -p $pkg ==="
+            cargo test -p "$pkg" -- --test-threads=1
+          done
