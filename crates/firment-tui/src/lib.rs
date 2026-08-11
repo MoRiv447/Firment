@@ -306,6 +306,27 @@ fn spawn_agent_task(
                         }
                     }
                 }
+                AgentCmd::ShowContext => {
+                    let agent = agent.lock().await;
+                    agent.emit(AgentEvent::Info(agent.context_usage())).await;
+                }
+                AgentCmd::DeleteSession(id) => {
+                    let agent = agent.lock().await;
+                    match agent.session_store().delete(&id) {
+                        Ok(()) => {
+                            agent
+                                .emit(AgentEvent::Info(format!(
+                                    "deleted session {id} (transcript, undo, spill, ledger)"
+                                )))
+                                .await;
+                        }
+                        Err(e) => {
+                            agent
+                                .emit(AgentEvent::Error(format!("delete failed: {e}")))
+                                .await;
+                        }
+                    }
+                }
                 AgentCmd::SetMode(mode) => {
                     let mut agent = agent.lock().await;
                     let registry = if mode == SessionMode::Plan {
@@ -686,6 +707,8 @@ enum AgentCmd {
     SetThinking(ThinkingLevel),
     SetContextBudget(usize),
     SetMaxOutputTokens(u32),
+    ShowContext,
+    DeleteSession(String),
     SetMode(SessionMode),
     OpenModelPicker,
     OpenSessionPicker,
@@ -2537,7 +2560,7 @@ impl App {
             .unwrap_or((command, ""));
         match name {
             "help" => self.items.push(Item::System(
-                "Commands: /new  /plan [on|off]  /agent  /models  /model <id>  /sessions (use ↑/↓ to select)  /session <id>  /undo  /ledger  /pin <path>  /unpin <path>  /copy  /provider <name>  /add-provider <name> <openai|anthropic> <base_url> <model>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /budget <chars>  /output <tokens>  /config  /clear  /help  /quit\nKeys: ↑/↓ browse history when input is empty, move the input cursor on multi-line input, scroll the transcript on single-line input · Shift+Enter manual newline · PgUp/PgDn/wheel always scroll · Ctrl+P model picker · drag with left mouse to select · right-click copies the selection (pastes when there is no selection) · Ctrl+C copies the selection (copies the last reply when there is none) · Ctrl+V paste · Ctrl+Shift+C copy last reply · ←/→ move the input cursor · y/n/a permission answers · Esc interrupts AI output (Esc twice while working; clears input when idle) · Ctrl+Q quit\nInput box: auto-wraps and grows to up to 5 lines; taller content scrolls, large pastes collapse into 【line x-y】, and the title shows hidden/collapsed line counts before sending"
+                "Commands: /new  /plan [on|off]  /agent  /models  /model <id>  /sessions (use ↑/↓ to select)  /session <id>  /delete <id>  /undo  /ledger  /pin <path>  /unpin <path>  /copy  /provider <name>  /add-provider <name> <openai|anthropic> <base_url> <model>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /budget <chars>  /output <tokens>  /context  /config  /clear  /help  /quit\nKeys: ↑/↓ browse history when input is empty, move the input cursor on multi-line input, scroll the transcript on single-line input · Shift+Enter manual newline · PgUp/PgDn/wheel always scroll · Ctrl+P model picker · drag with left mouse to select · right-click copies the selection (pastes when there is no selection) · Ctrl+C copies the selection (copies the last reply when there is none) · Ctrl+V paste · Ctrl+Shift+C copy last reply · ←/→ move the input cursor · y/n/a permission answers · Esc interrupts AI output (Esc twice while working; clears input when idle) · Ctrl+Q quit\nInput box: auto-wraps and grows to up to 5 lines; taller content scrolls, large pastes collapse into 【line x-y】, and the title shows hidden/collapsed line counts before sending"
                     .to_string(),
             )),
             "new" => {
@@ -2646,6 +2669,21 @@ impl App {
                         self.items.push(Item::System(format!("invalid output cap: {e}")));
                     }
                 }
+            }
+            "context" => {
+                self.send_cmd(AgentCmd::ShowContext);
+                self.items.push(Item::System("context usage:".to_string()));
+            }
+            "delete" => {
+                if arg.is_empty() {
+                    self.items.push(Item::System(
+                        "usage: /delete <session-id>  (deletes the transcript and its undo/spill/ledger; /sessions lists ids)".to_string(),
+                    ));
+                    return;
+                }
+                self.send_cmd(AgentCmd::DeleteSession(arg.to_string()));
+                self.items
+                    .push(Item::System(format!("deleting session {arg}…")));
             }
             "provider" if !arg.is_empty() => {
                 let _ = self

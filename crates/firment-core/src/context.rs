@@ -114,7 +114,7 @@ pub fn default_system_prompt(cwd: &Path) -> String {
         Local::now().format("%Y-%m-%d"),
     );
     if let Some(instructions) = load_project_instructions(cwd) {
-        prompt.push_str("\n# Project instructions (AGENTS.md)\n");
+        prompt.push('\n');
         prompt.push_str(&instructions);
     }
     prompt.push_str(
@@ -210,15 +210,38 @@ fn load_vendor_index_hint(cwd: &Path) -> Option<String> {
 }
 
 pub fn load_project_instructions(cwd: &Path) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    // User-level memory (~/.config/firment/AGENTS.md) applies to every
+    // project, so it loads first; project instructions come after and win
+    // on conflicts (later text overrides earlier in the prompt).
+    let user_memory = crate::config::config_dir().join("AGENTS.md");
+    if user_memory.is_file()
+        && let Ok(text) = fs::read_to_string(&user_memory)
+    {
+        parts.push(format!(
+            "# User instructions ({})\n{}",
+            user_memory.display(),
+            text.trim()
+        ));
+    }
     for dir in cwd.ancestors() {
         for name in ["AGENTS.md", "FIRMENT.md"] {
             let candidate = dir.join(name);
             if candidate.is_file()
                 && let Ok(text) = fs::read_to_string(&candidate)
             {
-                return Some(text);
+                parts.push(format!(
+                    "# Project instructions ({})\n{}",
+                    candidate.display(),
+                    text.trim()
+                ));
+                break;
             }
         }
     }
-    None
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
+    }
 }

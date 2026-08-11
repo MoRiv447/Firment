@@ -185,6 +185,10 @@ impl Agent {
         &self.session
     }
 
+    pub fn session_store(&self) -> &SessionStore {
+        &self.store
+    }
+
     pub fn set_model(&mut self, model: impl Into<String>) {
         self.session.model = model.into();
     }
@@ -242,6 +246,30 @@ impl Agent {
     /// messages are compacted into a digest when the budget is exceeded.
     pub fn set_context_budget_chars(&mut self, budget: usize) {
         self.context_budget_chars = budget;
+    }
+
+    /// Rough per-part context usage (char counts) for the `/context`
+    /// command: system prompt, tool schemas, and message history, against
+    /// the current budget.
+    pub fn context_usage(&self) -> String {
+        let system_chars = crate::context::system_prompt_for(&self.session.cwd, self.session.mode)
+            .chars()
+            .count();
+        let tools_chars = serde_json::to_string(&self.registry.specs())
+            .map(|s| s.chars().count())
+            .unwrap_or(0);
+        let messages_chars: usize = self
+            .session
+            .messages
+            .iter()
+            .map(|m| message_text(m).chars().count())
+            .sum();
+        let total = system_chars + tools_chars + messages_chars;
+        let budget = self.context_budget_chars.max(1);
+        let pct = total as f64 * 100.0 / budget as f64;
+        format!(
+            "context usage ({total} chars, {pct:.0}% of budget {budget}):\n  system prompt: {system_chars}\n  tool schemas:  {tools_chars}\n  messages:      {messages_chars}"
+        )
     }
 
     /// Set the auto-compaction strategy (summarize / drop / off).

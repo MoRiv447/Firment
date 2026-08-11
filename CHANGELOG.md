@@ -1,5 +1,51 @@
 # Changelog
 
+## v0.4.0-beta.4 (2026-08-11) — security audit fixes + context/output tuning + TUI commands
+
+### Security fixes (audit findings P0-1/P0-2, P1-1/P1-2/P1-3)
+
+- **`shell` cwd boundary**: the `cwd` argument is now resolved through `resolve_within`,
+  enforcing the workspace boundary exactly like every other tool (previously any path —
+  including absolute paths outside the workspace — was accepted)
+- **Project-config trust**: when a project `.firment.toml` overrides `build_command` /
+  `verify_command`, `build`/`verify` are dropped from `auto_approve`, so a command from an
+  untrusted checkout can never run without an explicit human approval
+- **Shell metaprogramming guard**: `dangerous_reason` now flags `$()`-style command,
+  parameter and arithmetic substitution, process substitution (`<()` `>()` `=()`), IFS
+  injection, `/proc/self/`, `/etc/passwd`/`/etc/shadow`, and SSH credential access — closing
+  blacklist bypasses like `d$(echo el) f.txt` in one-shot mode
+- **`web_fetch` SSRF guard**: private (RFC1918), CGNAT, link-local/cloud-metadata
+  (`169.254/16`), `0.0.0.0/8` and IPv6 unique/link-local targets are refused, on both the
+  initial URL and every redirect; loopback stays allowed (local services, tests)
+- **`run_command` output drain**: deadline raised 5s → 15s and truncation is now marked
+  explicitly (`[output truncated: …]`) instead of silently dropping output
+
+### Context and output sizing
+
+- Session context budget default raised **60k → 256k chars** (`context_budget_chars`), and a
+  new `max_output_tokens` (default **32k**) caps per-reply output with precedence
+  config > provider > 32768; applies to one-shot, TUI and research subagents
+- New CLI flags `--context-length <chars>` and `--max-output-tokens <n>` accepting binary
+  `k`/`m` suffixes (`256k` = 262144); project config can override `max_output_tokens`
+
+### TUI commands
+
+- `/budget <chars>` — set and persist the session context budget (e.g. `/budget 256k`)
+- `/output <tokens>` — set and persist the output cap (e.g. `/output 32k`); rebuilds the
+  provider so it applies to the very next request
+- `/context` — show live per-part context usage (system prompt / tool schemas / messages)
+  as chars and percent of budget
+- `/delete <session-id>` — delete a session and all its sidecars (transcript, undo, spill,
+  ledger, pins)
+- User-level memory: `~/.config/firment/AGENTS.md` is loaded before project instructions
+  (applies to every project; project files still win on conflict)
+
+### Process-tree kill fix
+
+- Unix `kill_process_tree` no longer signals process groups (the pgid guard could race and
+  SIGKILL the runner's own job tree, the root cause of CI hangs); it now walks the process
+  table and kills each descendant pid directly
+
 ## v0.4.0-beta.3 (2026-08-10) — automatic binary-analysis gate
 
 - **`[tools] elf`**: configure a glob of the firmware ELF (e.g. `build/fw.elf`) and the

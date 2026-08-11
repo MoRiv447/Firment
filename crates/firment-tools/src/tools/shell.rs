@@ -6,6 +6,28 @@ use std::collections::HashMap;
 
 pub struct Shell;
 
+/// Statically detectable shell metaprogramming / sensitive-access patterns
+/// (expanded from Claude Code's bashSecurity command-substitution table).
+/// These cannot be verified by a token blacklist alone — e.g. `d$(echo el)`
+/// rebuilds `del` at expansion time — so any hit is flagged outright.
+const METAPROGRAMMING_PATTERNS: &[(&str, &str)] = &[
+    ("$(", "command substitution $()"),
+    ("${", "parameter substitution ${}"),
+    ("$[", "arithmetic expansion $[]"),
+    ("<(", "process substitution <()"),
+    (">(", "process substitution >()"),
+    ("=(", "zsh process substitution =()"),
+    ("IFS=", "IFS injection"),
+    ("/proc/self/", "sensitive /proc access"),
+    ("/etc/passwd", "sensitive file access"),
+    ("/etc/shadow", "sensitive file access"),
+    ("~/.ssh", "credential access"),
+    ("id_rsa", "credential access"),
+    ("id_ed25519", "credential access"),
+    ("id_dsa", "credential access"),
+    ("authorized_keys", "credential access"),
+];
+
 /// Returns a short reason when the shell command looks destructive. Used to
 /// warn in interactive approval popups and to hard-block in one-shot mode
 /// unless `--allow-dangerous` was passed.
@@ -15,8 +37,13 @@ pub fn dangerous_reason(command: &str) -> Option<&'static str> {
     // backticks run arbitrary commands at expansion time, and `eval` /
     // `source` re-interpret text as code. A blacklist can be bypassed by
     // e.g. `d$(echo el) f.txt`, so flag these patterns outright.
-    if lower.contains("$(") || lower.contains('`') {
-        return Some("shell metaprogramming ($(...) or backticks; cannot be verified statically)");
+    if lower.contains('`') {
+        return Some("shell metaprogramming (backticks; cannot be verified statically)");
+    }
+    for (pattern, why) in METAPROGRAMMING_PATTERNS {
+        if lower.contains(pattern) {
+            return Some(why);
+        }
     }
     let normalized = lower.replace('\\', "/").replace(['"', '\''], " ");
     let tokens: Vec<&str> = normalized
@@ -224,6 +251,11 @@ mod tests {
             "e$(echo val) ls",
             "`rm -rf src`",
             "echo x `cat /etc/passwd`",
+            "cat <(echo evil)",
+            "cat /etc/passwd",
+            "cat /etc/shadow",
+            "cat ~/.ssh/id_rsa",
+            "IFS=;rm -rf src",
         ] {
             assert!(
                 dangerous_reason(cmd).is_some(),

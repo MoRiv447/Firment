@@ -241,6 +241,32 @@ impl SessionStore {
     pub fn latest(&self) -> Result<Option<SessionSummary>, SessionError> {
         Ok(self.list()?.into_iter().next())
     }
+
+    /// Delete a session and all of its sidecar data (undo backups, spilled
+    /// tool outputs, change ledger, pinned-file list).
+    pub fn delete(&self, id: &str) -> Result<(), SessionError> {
+        let id = sanitize_id(id);
+        let mut removed = false;
+        for candidate in [
+            self.dir.join(format!("{id}.jsonl")),
+            self.dir.join(format!("{id}.undo")),
+            self.dir.join(format!("{id}.spill")),
+            self.dir.join(format!("{id}.ledger.jsonl")),
+            self.dir.join(format!("{id}.pins.json")),
+        ] {
+            if candidate.is_dir() {
+                fs::remove_dir_all(&candidate)?;
+                removed = true;
+            } else if candidate.is_file() {
+                fs::remove_file(&candidate)?;
+                removed = true;
+            }
+        }
+        if !removed {
+            return Err(SessionError::NotFound(id.to_string()));
+        }
+        Ok(())
+    }
 }
 
 fn serialize_session(session: &Session) -> Result<String, SessionError> {
