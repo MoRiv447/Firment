@@ -337,7 +337,12 @@ fn ps_pgid(pid: u32) -> u32 {
         .args(["-o", "pgid=", "-p", &pid.to_string()])
         .output()
         .ok()
-        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u32>().ok())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<u32>()
+                .ok()
+        })
         .unwrap_or(0)
 }
 #[cfg(test)]
