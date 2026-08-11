@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod ask;
+pub mod cancel;
 pub mod config;
 pub mod context;
 pub mod hash;
@@ -15,6 +16,7 @@ pub mod types;
 
 pub use agent::{Agent, AgentError, AgentEvent, EventSink};
 pub use ask::{Asker, QuestionRequest};
+pub use cancel::Cancellable;
 pub use config::{
     AuthMap, CompactionStrategy, Config, ConfigError, ProviderConfig, auth_path, config_dir,
     config_path, load_auth, save_auth,

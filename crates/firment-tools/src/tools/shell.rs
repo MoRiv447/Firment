@@ -145,9 +145,10 @@ impl Tool for Shell {
                 .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
                 .collect::<HashMap<String, String>>()
         });
-        let (text, _code) = super::util::run_command(command, &cwd, timeout_ms, env.as_ref())
-            .await
-            .map_err(ToolError::new)?;
+        let (text, _code) =
+            super::util::run_command(command, &cwd, timeout_ms, env.as_ref(), Some(&ctx.cancel))
+                .await
+                .map_err(ToolError::new)?;
         Ok(ToolOutput { text })
     }
 }

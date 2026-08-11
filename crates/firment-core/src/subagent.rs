@@ -1,5 +1,6 @@
 use crate::Asker;
 use crate::agent::{Agent, AgentEvent, EventSink};
+use crate::cancel::Cancellable;
 use crate::config::Config;
 use crate::permission::PermissionChecker;
 use crate::session::{Session, SessionStore};
@@ -14,12 +15,15 @@ use std::sync::Arc;
 pub trait SubagentFactory: Send + Sync {
     /// Run a nested read-only agent with the given prompt and return its final
     /// text. `depth` is the nesting level of the new agent (1 for the first).
+    /// `cancel` is the parent's turn-level cancellation signal; when it fires
+    /// the nested agent stops at its next checkpoint.
     async fn run_subagent(
         &self,
         prompt: &str,
         cwd: PathBuf,
         model: Option<&str>,
         depth: usize,
+        cancel: Cancellable,
     ) -> Result<String, String>;
 }
 
@@ -87,6 +91,7 @@ impl SubagentFactory for SubagentRunner {
         cwd: PathBuf,
         model: Option<&str>,
         depth: usize,
+        cancel: Cancellable,
     ) -> Result<String, String> {
         let model = model.unwrap_or(&self.model).to_string();
         let provider = self
@@ -110,13 +115,25 @@ impl SubagentFactory for SubagentRunner {
         );
         nested.set_subagent_factory(Some(self.child()));
         nested.set_subagent_depth(depth);
-        nested.set_asker(self.asker.clone());
+        // Subagents cannot ask the user: the ask_user tool is for questions
+        // only the human can answer, and a nested research agent must not
+        // pop a question modal on the parent's screen.
+        nested.set_asker(None);
         nested.set_web_search(
             self.web_search_provider.clone(),
             self.web_search_api_key.clone(),
         );
         nested.set_session_dir(Some(store.dir.join("work")));
         nested.set_elf_glob(self.config.tools.elf.clone());
+        // Propagate the parent turn's cancellation into the nested agent so
+        // interrupting the parent also stops the subagent (and the processes
+        // it spawned, via its own tool layer).
+        let propagate = cancel.clone();
+        let nested_cancel = nested.cancel_signal();
+        tokio::spawn(async move {
+            propagate.cancelled().await;
+            nested_cancel.cancel();
+        });
         let result = nested.run_turn(prompt).await;
         // The subagent session is transient bookkeeping: drop its whole
         // directory when done so long sessions do not accumulate temp junk.

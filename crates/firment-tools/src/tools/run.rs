@@ -88,7 +88,7 @@ impl Tool for Run {
         }
 
         let command = run_command_line(&chip, &resolved.to_string_lossy(), probe.as_deref());
-        match run_command(&command, &ctx.cwd, timeout_ms, None).await {
+        match run_command(&command, &ctx.cwd, timeout_ms, None, Some(&ctx.cancel)).await {
             Ok((text, Some(0))) => Ok(ToolOutput {
                 text: format!("run finished (exit 0)\n{text}"),
             }),

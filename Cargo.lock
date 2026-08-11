@@ -750,6 +750,7 @@ dependencies = [
  "crossterm",
  "firment-core",
  "firment-tools",
+ "futures",
  "ratatui",
  "serde_json",
  "tokio",

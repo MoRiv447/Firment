@@ -1,4 +1,5 @@
 use crate::ask::Asker;
+use crate::cancel::Cancellable;
 use crate::journal::EditJournal;
 use crate::subagent::SubagentFactory;
 use crate::{PermissionChecker, PermissionError, ToolSpec};
@@ -48,6 +49,9 @@ pub struct ToolContext {
     pub web_search_api_key: Option<String>,
     /// Per-session directory for tool bookkeeping (e.g. the todo list).
     pub session_dir: Option<PathBuf>,
+    /// Turn-level cooperative cancellation signal. Long-running tools poll
+    /// `cancelled()` and terminate child processes when it fires.
+    pub cancel: Cancellable,
 }
 
 impl ToolContext {
@@ -76,6 +80,7 @@ impl ToolContext {
             web_search_provider: None,
             web_search_api_key: None,
             session_dir: None,
+            cancel: Cancellable::new(),
         }
     }
 }

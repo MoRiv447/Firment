@@ -11,7 +11,7 @@ impl Tool for AskUser {
     }
 
     fn description(&self) -> &'static str {
-        "Ask the user a question and return their answer. Use only for decisions or information only the user has (which board/chip variant, hardware wiring, whether to install a toolchain, preference between approaches). Prefer 2-5 short options; the user can also type a free-form answer. Never ask something you can find out yourself with read_file / web_search / web_fetch."
+        "Ask the human user (the person running this session) a question and return their answer. Use only for decisions or information only the user has (which board/chip variant, hardware wiring, whether to install a toolchain, preference between approaches). Prefer 2-5 short options; the user can also type a free-form answer. Never ask something you can find out yourself with read_file / web_search / web_fetch, and never use this to ask another AI for information — spawn a `task` subagent for that."
     }
 
     fn input_schema(&self) -> Value {
@@ -87,6 +87,7 @@ mod tests {
             web_search_provider: None,
             web_search_api_key: None,
             session_dir: None,
+            cancel: firment_core::Cancellable::new(),
             allowed_roots: Vec::new(),
         }
     }

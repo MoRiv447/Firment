@@ -12,7 +12,7 @@ impl Tool for Task {
     }
 
     fn description(&self) -> &'static str {
-        "Run a read-only research subagent that investigates on its own and returns a report. Use for long, self-contained investigations (code archaeology, datasheet research, writing a design summary) so you can keep working. The subagent can read files, search the web, fetch pages, keep todos, and ask the user, but cannot modify the workspace. Its report is returned as text; recursion depth is bounded."
+        "Run a read-only research subagent that investigates on its own and returns a report. Use for long, self-contained investigations (code archaeology, datasheet research, writing a design summary) so you can keep working. The subagent can read files, search the web, fetch pages, and keep todos, but cannot modify the workspace or ask the user. Its report is returned as text; recursion depth is bounded."
     }
 
     fn input_schema(&self) -> Value {
@@ -55,7 +55,13 @@ impl Tool for Task {
         };
         let model = args.get("model").and_then(|m| m.as_str());
         let report = factory
-            .run_subagent(prompt, cwd, model, ctx.subagent_depth + 1)
+            .run_subagent(
+                prompt,
+                cwd,
+                model,
+                ctx.subagent_depth + 1,
+                ctx.cancel.clone(),
+            )
             .await
             .map_err(ToolError::new)?;
         Ok(ToolOutput {
@@ -89,6 +95,7 @@ mod tests {
             cwd: PathBuf,
             model: Option<&str>,
             depth: usize,
+            _cancel: firment_core::Cancellable,
         ) -> Result<String, String> {
             self.captures.lock().unwrap().push((
                 prompt.to_string(),
@@ -124,6 +131,7 @@ mod tests {
             web_search_provider: None,
             web_search_api_key: None,
             session_dir: None,
+            cancel: firment_core::Cancellable::new(),
             allowed_roots: Vec::new(),
         }
     }

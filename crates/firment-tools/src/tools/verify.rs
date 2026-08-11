@@ -47,9 +47,10 @@ impl Tool for Verify {
             .get("timeout_ms")
             .and_then(|t| t.as_u64())
             .unwrap_or(120_000);
-        let (text, code) = super::util::run_command(&command, &ctx.cwd, timeout_ms, None)
-            .await
-            .map_err(ToolError::new)?;
+        let (text, code) =
+            super::util::run_command(&command, &ctx.cwd, timeout_ms, None, Some(&ctx.cancel))
+                .await
+                .map_err(ToolError::new)?;
         match code {
             Some(0) => Ok(ToolOutput {
                 text: format!("verify passed (exit 0)\n{text}"),

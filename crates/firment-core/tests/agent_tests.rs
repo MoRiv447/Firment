@@ -1595,3 +1595,118 @@ async fn committed_turn_can_be_undone() {
     assert!(summary.contains("Restored 1 file(s)"));
     assert!(!file.exists());
 }
+
+/// A long-running tool that notices the turn-level cancellation signal. Its
+/// fallback timeout is far beyond the test horizon, so the test only passes
+/// when the cancel signal actually stops it promptly.
+struct SlowCancelTool {
+    started: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl Tool for SlowCancelTool {
+    fn name(&self) -> &'static str {
+        "slow"
+    }
+
+    fn description(&self) -> &'static str {
+        "slow tool"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+
+    async fn run(&self, _args: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+        self.started.notify_waiters();
+        tokio::select! {
+            _ = ctx.cancel.cancelled() => {
+                Err(ToolError::new("[Cancelled] interrupted while the tool was running"))
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
+                Err(ToolError::new("slow tool fallback timeout"))
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn cancel_during_tool_wave_stops_the_turn_promptly() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([vec![
+            ProviderEvent::ToolCall(firment_core::ToolCall {
+                id: "call_1".to_string(),
+                name: "slow".to_string(),
+                arguments: json!({}),
+            }),
+            ProviderEvent::Stop(StopReason::ToolUse),
+        ]]))),
+        model: "fake".to_string(),
+    };
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(vec![Arc::new(SlowCancelTool {
+            started: started.clone(),
+        })]),
+        session,
+        store.clone(),
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(events.clone())),
+        10,
+    );
+
+    let (cancel_tx, cancel_signal) = agent.cancel_handle();
+    let handle = tokio::spawn(async move {
+        let result = agent.run_turn("run slow").await;
+        (agent, result)
+    });
+    // Wait until the tool is actually executing, then interrupt.
+    started.notified().await;
+    let begin = std::time::Instant::now();
+    let _ = cancel_tx.send(true);
+    cancel_signal.cancel();
+    let (agent, result) = tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+        .await
+        .expect("turn must stop promptly after cancel")
+        .expect("task must not panic");
+
+    assert!(begin.elapsed() < std::time::Duration::from_secs(4));
+    let text = result.unwrap_or_default();
+    // Cancellation rolls the turn back: informational rollback note, no
+    // final text.
+    let collected = events.lock().unwrap();
+    assert!(
+        collected
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ToolEnd { ok: false, .. })),
+        "cancelled tools must close their cards: {collected:?}"
+    );
+    assert!(
+        collected
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Info(info) if info.contains("Interrupted"))),
+        "expected rollback info event: {collected:?}"
+    );
+    let roles: Vec<&str> = agent
+        .session()
+        .messages
+        .iter()
+        .map(|m| match m {
+            ChatMessage::User { .. } => "user",
+            ChatMessage::Assistant { .. } => "assistant",
+            ChatMessage::Tool { .. } => "tool",
+            ChatMessage::System { .. } => "system",
+        })
+        .collect();
+    assert_eq!(
+        roles,
+        vec!["user", "assistant", "tool"],
+        "the cancelled tool_call_id must still be answered: {}",
+        text
+    );
+}

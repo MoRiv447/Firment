@@ -639,6 +639,7 @@ async fn run_direct_tool(
         web_search_api_key: config.tools.resolved_web_search_api_key(),
         session_dir: None,
         allowed_roots: Vec::new(),
+        cancel: firment_core::Cancellable::new(),
     };
     let registry = firment_tools::default_registry();
     match registry.run(tool, args, &ctx).await {

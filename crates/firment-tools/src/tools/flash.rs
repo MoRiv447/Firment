@@ -91,7 +91,7 @@ impl Tool for Flash {
         }
 
         let command = flash_command(&chip, &resolved.to_string_lossy(), probe.as_deref());
-        match run_command(&command, &ctx.cwd, timeout_ms, None).await {
+        match run_command(&command, &ctx.cwd, timeout_ms, None, Some(&ctx.cancel)).await {
             Ok((text, Some(0))) => Ok(ToolOutput {
                 text: format!("flash passed (exit 0)\n{text}"),
             }),

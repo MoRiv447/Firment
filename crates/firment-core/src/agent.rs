@@ -1,3 +1,4 @@
+use crate::cancel::Cancellable;
 use crate::config::CompactionStrategy;
 use crate::journal::{EditJournal, Ledger};
 use crate::provider::{Provider, ProviderError, ProviderEvent};
@@ -79,6 +80,14 @@ pub struct Agent {
     permission: Arc<dyn PermissionChecker>,
     sink: Arc<dyn EventSink>,
     cancel_tx: watch::Sender<bool>,
+    /// Persistent receiver that keeps the cancel watch channel open even
+    /// between turns: `Sender::send` silently fails — leaving the stale value
+    /// in place — when every receiver has been dropped, which would leave the
+    /// next turn permanently marked cancelled.
+    cancel_rx: watch::Receiver<bool>,
+    /// Turn-level cancellation signal shared with tools (and child agents).
+    /// `Agent::cancel` sets both this and the watch channel.
+    cancel: Cancellable,
     max_iterations: usize,
     allow_dangerous: bool,
     verify_command: Option<String>,
@@ -133,6 +142,7 @@ impl Agent {
         sink: Arc<dyn EventSink>,
         max_iterations: usize,
     ) -> Self {
+        let (cancel_tx, cancel_rx) = watch::channel(false);
         Self {
             provider,
             registry,
@@ -140,7 +150,9 @@ impl Agent {
             store,
             permission,
             sink,
-            cancel_tx: watch::channel(false).0,
+            cancel_tx,
+            cancel_rx,
+            cancel: Cancellable::new(),
             max_iterations,
             allow_dangerous: false,
             verify_command: None,
@@ -189,14 +201,31 @@ impl Agent {
     }
 
     /// Request cancellation of the currently running turn. The agent stops at
-    /// the next safe checkpoint (provider stream boundary / iteration start).
+    /// the next safe checkpoint (provider stream boundary / iteration start /
+    /// tool-wave boundary) and long-running tools kill their child processes.
     pub fn cancel(&self) {
         let _ = self.cancel_tx.send(true);
+        self.cancel.cancel();
     }
 
     /// Clear a pending cancellation request before starting a new turn.
     pub fn reset_cancel(&self) {
         let _ = self.cancel_tx.send(false);
+        self.cancel.reset();
+    }
+
+    /// Clone of the turn-level cancellation signal, used to propagate a
+    /// parent agent's cancel into nested agents.
+    pub fn cancel_signal(&self) -> Cancellable {
+        self.cancel.clone()
+    }
+
+    /// Handles to cancel the currently running turn from outside (e.g. a test
+    /// that spawned the agent task): `send(true)` on the watch channel arms
+    /// the iteration/stream checkpoints and `cancel()` fires the tool-layer
+    /// signal. Prefer `Agent::cancel` when the agent is still reachable.
+    pub fn cancel_handle(&self) -> (watch::Sender<bool>, Cancellable) {
+        (self.cancel_tx.clone(), self.cancel.clone())
     }
 
     pub fn set_allow_dangerous(&mut self, allow: bool) {
@@ -459,7 +488,7 @@ impl Agent {
     }
 
     pub async fn run_turn(&mut self, input: &str) -> Result<String, AgentError> {
-        let mut cancel_rx = self.cancel_tx.subscribe();
+        let mut cancel_rx = self.cancel_rx.clone();
         if *cancel_rx.borrow() {
             self.sink
                 .event(AgentEvent::Info(
@@ -513,6 +542,7 @@ impl Agent {
             web_search_provider: self.web_search_provider.clone(),
             web_search_api_key: self.web_search_api_key.clone(),
             session_dir: self.session_dir.clone(),
+            cancel: self.cancel.clone(),
         };
 
         self.seed_elf_baseline(&ctx).await;
@@ -1017,7 +1047,56 @@ async fn execute_tool_calls(
                 agent.registry.run(&call.name, call.arguments.clone(), ctx)
             })
             .collect();
-        let results = futures::future::join_all(futures).await;
+        // Interruptible wave: on cancel, the running tool futures are dropped
+        // (tools themselves kill their child processes via the shared cancel
+        // signal), every pending tool_call_id gets a `[cancelled]` answer so
+        // the transcript stays a valid provider message sequence, and the
+        // iteration checkpoint in run_turn performs the rollback.
+        let mut wave_cancelled = false;
+        let results = tokio::select! {
+            results = futures::future::join_all(futures) => results,
+            _ = agent.cancel.cancelled() => {
+                wave_cancelled = true;
+                Vec::new()
+            }
+        };
+        if wave_cancelled {
+            for (k, &i) in ready.iter().enumerate() {
+                let call = &tool_calls[i];
+                agent
+                    .sink
+                    .event(AgentEvent::ToolEnd {
+                        name: call.name.clone(),
+                        ok: false,
+                        summary: "cancelled".to_string(),
+                        seq: call_seqs[k],
+                    })
+                    .await;
+                agent.session.push(ChatMessage::Tool {
+                    tool_call_id: call.id.clone(),
+                    name: call.name.clone(),
+                    content: "[cancelled: interrupted]".to_string(),
+                });
+                done[i] = true;
+            }
+            // Calls that never reached a wave still need their tool_call_id
+            // answered for the assistant message to remain a valid sequence.
+            let cancelled_text = "[cancelled: interrupted]".to_string();
+            for i in 0..n {
+                if !done[i] {
+                    agent.session.push(ChatMessage::Tool {
+                        tool_call_id: tool_calls[i].id.clone(),
+                        name: tool_calls[i].name.clone(),
+                        content: cancelled_text.clone(),
+                    });
+                    done[i] = true;
+                }
+            }
+            return ToolRunStats {
+                mutations,
+                verify_passed,
+            };
+        }
 
         // A denied mutation call (user said no) executes nothing and must not
         // roll the batch back. Only real execution failures do.

@@ -8,9 +8,9 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use firment_core::{
-    Agent, AgentEvent, Asker, ChatMessage, Config, EventSink, PermissionChecker, PermissionError,
-    PlanModePermission, ProviderConfig, QuestionRequest, Session, SessionMode, SessionStore,
-    SubagentRunner, ThinkingLevel,
+    Agent, AgentEvent, Asker, Cancellable, ChatMessage, Config, EventSink, PermissionChecker,
+    PermissionError, PlanModePermission, ProviderConfig, QuestionRequest, Session, SessionMode,
+    SessionStore, SubagentRunner, ThinkingLevel, ToolRegistry,
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub async fn run(
@@ -57,7 +57,7 @@ pub async fn run(
     let (event_tx, event_rx) = mpsc::channel(256);
     let (perm_tx, perm_rx) = mpsc::channel(16);
     let (ask_tx, ask_rx) = mpsc::channel(16);
-    let (cmd_tx, mut cmd_rx) = mpsc::channel(32);
+    let (cmd_tx, cmd_rx) = mpsc::channel(32);
     let always: Arc<Mutex<HashSet<String>>> =
         Arc::new(Mutex::new(config.auto_approve.iter().cloned().collect()));
 
@@ -121,21 +121,102 @@ pub async fn run(
     let cwd = agent.session().cwd.clone();
     let provider_name = agent.session().provider.clone();
     let thinking = agent.session().thinking;
-    let mut task_config = base_config;
+    let task_config = base_config;
     let task_config_path = config_path.clone();
-    let agent_task = tokio::spawn(async move {
+    // Cancel must be actionable WHILE a turn is running, so it cannot go
+    // through the agent lock: extract the turn's cancellation handles up
+    // front and fire them directly from the command loop.
+    let (cancel_tx, cancel_signal) = agent.cancel_handle();
+    let agent = Arc::new(tokio::sync::Mutex::new(agent));
+    // Serializes turns: a queued message waits for the running turn instead
+    // of running two agent loops against the same session.
+    let turn_lock = Arc::new(tokio::sync::Mutex::new(()));
+    // The command loop is extracted so tests can drive these exact semantics:
+    // turns run on their own task (so the loop stays responsive) and `Cancel`
+    // fires the pre-extracted handles directly instead of going through the
+    // agent lock — together that is what makes Esc interrupt a running turn.
+
+    let agent_task = spawn_agent_task(
+        cmd_rx,
+        agent,
+        cancel_tx,
+        cancel_signal,
+        turn_lock,
+        store.clone(),
+        task_config,
+        task_config_path,
+        plan_registry.clone(),
+        default_registry.clone(),
+        plan_permission.clone(),
+        tui_permission.clone(),
+    );
+
+    let (ui_tx, ui_rx) = mpsc::channel(128);
+    thread::spawn(move || {
+        while let Ok(event) = read() {
+            if ui_tx.blocking_send(event).is_err() {
+                break;
+            }
+        }
+    });
+
+    let mut terminal = init_terminal()?;
+    let mut app = App::new(
+        cmd_tx,
+        always,
+        model,
+        cwd,
+        provider_name,
+        thinking,
+        session_mode,
+        config_path,
+        startup_hint,
+        initial_messages,
+    );
+    let result = run_loop(&mut terminal, &mut app, event_rx, perm_rx, ask_rx, ui_rx).await;
+    restore_terminal(&mut terminal)?;
+    agent_task.abort();
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_agent_task(
+    mut cmd_rx: mpsc::Receiver<AgentCmd>,
+    agent: Arc<tokio::sync::Mutex<Agent>>,
+    cancel_tx: watch::Sender<bool>,
+    cancel_signal: Cancellable,
+    turn_lock: Arc<tokio::sync::Mutex<()>>,
+    store: SessionStore,
+    mut task_config: Config,
+    task_config_path: std::path::PathBuf,
+    plan_registry: Arc<ToolRegistry>,
+    default_registry: Arc<ToolRegistry>,
+    plan_permission: Arc<dyn PermissionChecker>,
+    tui_permission: Arc<dyn PermissionChecker>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
                 AgentCmd::User(text) => {
-                    agent.reset_cancel();
-                    if let Err(e) = agent.run_turn(&text).await {
-                        agent.emit(AgentEvent::Error(e.to_string())).await;
-                    }
+                    // Run the turn on its own task so the command loop stays
+                    // responsive and Cancel can interrupt mid-turn.
+                    let agent = agent.clone();
+                    let turn_lock = turn_lock.clone();
+                    tokio::spawn(async move {
+                        let _turn = turn_lock.lock().await;
+                        let mut agent = agent.lock().await;
+                        agent.reset_cancel();
+                        if let Err(e) = agent.run_turn(&text).await {
+                            agent.emit(AgentEvent::Error(e.to_string())).await;
+                        }
+                    });
                 }
                 AgentCmd::Cancel => {
-                    agent.cancel();
+                    let _ = cancel_tx.send(true);
+                    cancel_signal.cancel();
                 }
                 AgentCmd::SetModel(model) => {
+                    let mut agent = agent.lock().await;
                     agent.set_model(model.clone());
                     if let Some(provider) = task_config.providers.get_mut(&agent.session().provider)
                     {
@@ -156,6 +237,7 @@ pub async fn run(
                         .await;
                 }
                 AgentCmd::SetThinking(level) => {
+                    let mut agent = agent.lock().await;
                     agent.set_thinking(level);
                     task_config.thinking = level;
                     let _ = task_config.save(&task_config_path);
@@ -176,6 +258,7 @@ pub async fn run(
                         .await;
                 }
                 AgentCmd::SetMode(mode) => {
+                    let mut agent = agent.lock().await;
                     let registry = if mode == SessionMode::Plan {
                         plan_registry.clone()
                     } else {
@@ -204,6 +287,7 @@ pub async fn run(
                         .await;
                 }
                 AgentCmd::OpenModelPicker => {
+                    let agent = agent.lock().await;
                     let provider_name = agent.session().provider.clone();
                     match task_config.list_models(&provider_name).await {
                         Ok(models) => agent.emit(AgentEvent::Models(models)).await,
@@ -219,6 +303,7 @@ pub async fn run(
                 }
                 AgentCmd::OpenSessionPicker => match store.list() {
                     Ok(mut sessions) => {
+                        let agent = agent.lock().await;
                         for summary in &mut sessions {
                             if summary.preview.is_empty() {
                                 summary.preview = store
@@ -230,6 +315,7 @@ pub async fn run(
                         agent.emit(AgentEvent::Sessions(sessions)).await;
                     }
                     Err(e) => {
+                        let agent = agent.lock().await;
                         agent
                             .emit(AgentEvent::Error(format!("failed to list sessions: {e}")))
                             .await;
@@ -237,6 +323,7 @@ pub async fn run(
                     }
                 },
                 AgentCmd::NewSession => {
+                    let mut agent = agent.lock().await;
                     let fresh = Session::new(
                         agent.session().cwd.clone(),
                         agent.session().provider.clone(),
@@ -264,6 +351,7 @@ pub async fn run(
                 }
                 AgentCmd::LoadSession(id) => match store.load(&id) {
                     Ok(loaded) => {
+                        let mut agent = agent.lock().await;
                         let mode = loaded.mode;
                         agent.replace_session(loaded.clone());
                         match task_config
@@ -310,22 +398,27 @@ pub async fn run(
                             .await;
                     }
                     Err(e) => {
+                        let agent = agent.lock().await;
                         agent
                             .emit(AgentEvent::Error(format!("failed to load session: {e}")))
                             .await;
                     }
                 },
-                AgentCmd::Undo => match agent.undo_last().await {
-                    Ok(summary) => {
-                        agent.emit(AgentEvent::Info(summary)).await;
+                AgentCmd::Undo => {
+                    let mut agent = agent.lock().await;
+                    match agent.undo_last().await {
+                        Ok(summary) => {
+                            agent.emit(AgentEvent::Info(summary)).await;
+                        }
+                        Err(e) => {
+                            agent
+                                .emit(AgentEvent::Error(format!("undo failed: {e}")))
+                                .await;
+                        }
                     }
-                    Err(e) => {
-                        agent
-                            .emit(AgentEvent::Error(format!("undo failed: {e}")))
-                            .await;
-                    }
-                },
+                }
                 AgentCmd::Ledger => {
+                    let agent = agent.lock().await;
                     let summary = agent.ledger_summary();
                     if summary.is_empty() {
                         agent
@@ -341,17 +434,21 @@ pub async fn run(
                             .await;
                     }
                 }
-                AgentCmd::Pin { path } => match agent.pin_path(std::path::PathBuf::from(&path)) {
-                    Ok(message) => {
-                        agent.emit(AgentEvent::Info(message)).await;
+                AgentCmd::Pin { path } => {
+                    let agent = agent.lock().await;
+                    match agent.pin_path(std::path::PathBuf::from(&path)) {
+                        Ok(message) => {
+                            agent.emit(AgentEvent::Info(message)).await;
+                        }
+                        Err(e) => {
+                            agent
+                                .emit(AgentEvent::Error(format!("pin failed: {e}")))
+                                .await;
+                        }
                     }
-                    Err(e) => {
-                        agent
-                            .emit(AgentEvent::Error(format!("pin failed: {e}")))
-                            .await;
-                    }
-                },
+                }
                 AgentCmd::Unpin { path } => {
+                    let agent = agent.lock().await;
                     match agent.unpin_path(std::path::PathBuf::from(&path)) {
                         Ok(message) => {
                             agent.emit(AgentEvent::Info(message)).await;
@@ -364,6 +461,7 @@ pub async fn run(
                     }
                 }
                 AgentCmd::SetProvider(name) => {
+                    let mut agent = agent.lock().await;
                     match task_config.build_provider(Some(&name), None) {
                         Ok(new_provider) => {
                             let configured_model = new_provider.model().to_string();
@@ -395,6 +493,7 @@ pub async fn run(
                     }
                 }
                 AgentCmd::SetApiKey { provider, key } => {
+                    let mut agent = agent.lock().await;
                     let provider_name =
                         provider.unwrap_or_else(|| agent.session().provider.clone());
                     match task_config.set_api_key(&provider_name, &key) {
@@ -428,6 +527,7 @@ pub async fn run(
                     }
                 }
                 AgentCmd::ListModels => {
+                    let agent = agent.lock().await;
                     let provider_name = agent.session().provider.clone();
                     match task_config.list_models(&provider_name).await {
                         Ok(models) => {
@@ -463,6 +563,7 @@ pub async fn run(
                     base_url,
                     model,
                 } => {
+                    let agent = agent.lock().await;
                     let entry = task_config
                         .providers
                         .entry(name.clone())
@@ -496,34 +597,7 @@ pub async fn run(
                 }
             }
         }
-    });
-
-    let (ui_tx, ui_rx) = mpsc::channel(128);
-    thread::spawn(move || {
-        while let Ok(event) = read() {
-            if ui_tx.blocking_send(event).is_err() {
-                break;
-            }
-        }
-    });
-
-    let mut terminal = init_terminal()?;
-    let mut app = App::new(
-        cmd_tx,
-        always,
-        model,
-        cwd,
-        provider_name,
-        thinking,
-        session_mode,
-        config_path,
-        startup_hint,
-        initial_messages,
-    );
-    let result = run_loop(&mut terminal, &mut app, event_rx, perm_rx, ask_rx, ui_rx).await;
-    restore_terminal(&mut terminal)?;
-    agent_task.abort();
-    result
+    })
 }
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
@@ -555,6 +629,7 @@ fn restore_terminal(terminal: &mut Tui) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
 enum AgentCmd {
     User(String),
     Cancel,
@@ -684,6 +759,9 @@ struct App {
     ai_thinking: bool,
     /// Tools currently running (raw name, activity label) for status hints.
     active_tools: Vec<(String, String)>,
+    /// While busy, the first Esc arms an interrupt confirmation window (5s);
+    /// a second Esc inside it actually cancels the turn.
+    interrupt_armed_at: Option<Instant>,
     permission: Option<PermissionRequest>,
     /// Pending `ask_user` question shown as a modal; the agent is blocked until
     /// the user answers or dismisses it.
@@ -1063,6 +1141,7 @@ impl App {
             question: None,
             question_input: Vec::new(),
             interrupting: false,
+            interrupt_armed_at: None,
             scroll: 0,
             max_offset: 0,
             follow: true,
@@ -1189,6 +1268,7 @@ impl App {
                 self.busy = false;
                 self.ai_thinking = false;
                 self.interrupting = false;
+                self.interrupt_armed_at = None;
             }
             AgentEvent::Info(message) => self.items.push(Item::System(message)),
             AgentEvent::Settings {
@@ -1262,6 +1342,7 @@ impl App {
                 self.input_sel = None;
                 self.paste_blocks.clear();
                 self.interrupting = false;
+                self.interrupt_armed_at = None;
                 if was_new {
                     self.items
                         .push(Item::System("New conversation started".to_string()));
@@ -1274,6 +1355,7 @@ impl App {
                 self.busy = false;
                 self.ai_thinking = false;
                 self.interrupting = false;
+                self.interrupt_armed_at = None;
             }
         }
     }
@@ -1616,8 +1698,24 @@ impl App {
             }
             KeyCode::Esc => {
                 if self.busy {
-                    self.request_interrupt();
+                    // Double-Esc confirmation (aligned with opencode): the
+                    // first Esc arms a short window, the second Esc inside it
+                    // actually cancels the turn. A stale arm is just a hint.
+                    const ESC_CONFIRM_WINDOW: Duration = Duration::from_secs(5);
+                    let armed = self
+                        .interrupt_armed_at
+                        .is_some_and(|t| t.elapsed() < ESC_CONFIRM_WINDOW);
+                    if armed {
+                        self.interrupt_armed_at = None;
+                        self.request_interrupt();
+                    } else {
+                        self.interrupt_armed_at = Some(Instant::now());
+                        self.items.push(Item::System(
+                            "⏸ Press Esc again within 5s to interrupt…".to_string(),
+                        ));
+                    }
                 } else {
+                    self.interrupt_armed_at = None;
                     self.input.clear();
                     self.cursor = 0;
                     self.input_sel = None;
@@ -2388,7 +2486,7 @@ impl App {
             .unwrap_or((command, ""));
         match name {
             "help" => self.items.push(Item::System(
-                "Commands: /new  /plan [on|off]  /agent  /models  /model <id>  /sessions (use ↑/↓ to select)  /session <id>  /undo  /ledger  /pin <path>  /unpin <path>  /copy  /provider <name>  /add-provider <name> <openai|anthropic> <base_url> <model>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /config  /clear  /help  /quit\nKeys: ↑/↓ browse history when input is empty, move the input cursor on multi-line input, scroll the transcript on single-line input · Shift+Enter manual newline · PgUp/PgDn/wheel always scroll · Ctrl+P model picker · drag with left mouse to select · right-click copies the selection (pastes when there is no selection) · Ctrl+C copies the selection (copies the last reply when there is none) · Ctrl+V paste · Ctrl+Shift+C copy last reply · ←/→ move the input cursor · y/n/a permission answers · Esc interrupts AI output (clears input when idle) · Ctrl+Q quit\nInput box: auto-wraps and grows to up to 5 lines; taller content scrolls, large pastes collapse into 【line x-y】, and the title shows hidden/collapsed line counts before sending"
+                "Commands: /new  /plan [on|off]  /agent  /models  /model <id>  /sessions (use ↑/↓ to select)  /session <id>  /undo  /ledger  /pin <path>  /unpin <path>  /copy  /provider <name>  /add-provider <name> <openai|anthropic> <base_url> <model>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /config  /clear  /help  /quit\nKeys: ↑/↓ browse history when input is empty, move the input cursor on multi-line input, scroll the transcript on single-line input · Shift+Enter manual newline · PgUp/PgDn/wheel always scroll · Ctrl+P model picker · drag with left mouse to select · right-click copies the selection (pastes when there is no selection) · Ctrl+C copies the selection (copies the last reply when there is none) · Ctrl+V paste · Ctrl+Shift+C copy last reply · ←/→ move the input cursor · y/n/a permission answers · Esc interrupts AI output (Esc twice while working; clears input when idle) · Ctrl+Q quit\nInput box: auto-wraps and grows to up to 5 lines; taller content scrolls, large pastes collapse into 【line x-y】, and the title shows hidden/collapsed line counts before sending"
                     .to_string(),
             )),
             "new" => {
@@ -2406,6 +2504,7 @@ impl App {
                 self.busy = false;
                 self.ai_thinking = false;
                 self.interrupting = false;
+                self.interrupt_armed_at = None;
                 self.permission = None;
                 self.follow = true;
                 self.scroll = 0;
@@ -2773,8 +2872,10 @@ impl App {
             self.thinking.label(),
             cwd_str
         );
-        let right = if self.busy && !self.interrupting {
-            format!(" {} · {state} · Esc interrupt ", spinner)
+        let right = if self.interrupt_armed_at.is_some() {
+            format!(" {} · {state} · ⏸ Esc again to interrupt ", spinner)
+        } else if self.busy && !self.interrupting {
+            format!(" {} · {state} · Esc×2 interrupt ", spinner)
         } else {
             format!(" {} · {state} ", spinner)
         };
@@ -2806,7 +2907,7 @@ impl App {
         let content = if self.input.is_empty() {
             self.input_scroll = 0;
             Paragraph::new(Line::from(Span::styled(
-                "Type a task, Enter to send · Shift+Enter newline · Esc interrupt/clear · Ctrl+C copy · Ctrl+V paste · Ctrl+P model · Ctrl+Q quit · /help",
+                "Type a task, Enter to send · Shift+Enter newline · Esc×2 interrupt · Ctrl+C copy · Ctrl+V paste · Ctrl+P model · Ctrl+Q quit · /help",
                 Style::default().fg(Color::DarkGray),
             )))
             .block(block)
@@ -3044,6 +3145,8 @@ impl App {
             "waiting for approval".to_string()
         } else if self.question.is_some() {
             "question".to_string()
+        } else if self.interrupt_armed_at.is_some() {
+            "Esc again to interrupt".to_string()
         } else if self.interrupting {
             "interrupting…".to_string()
         } else if self.ai_thinking {
@@ -3267,6 +3370,14 @@ async fn run_loop(
                 if app.apply_burst_outputs() {
                     dirty = true;
                 }
+                // A stale Esc confirmation arm expires on its own.
+                if app
+                    .interrupt_armed_at
+                    .is_some_and(|t| t.elapsed() >= Duration::from_secs(5))
+                {
+                    app.interrupt_armed_at = None;
+                    dirty = true;
+                }
             }
         }
         // No animation plays while waiting for approval; stop the 25ms
@@ -3287,6 +3398,7 @@ async fn run_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn test_app() -> App {
         let (cmd_tx, mut cmd_rx) = mpsc::channel(8);
@@ -3340,7 +3452,7 @@ mod tests {
     }
 
     #[test]
-    fn esc_while_busy_requests_cancel_and_keeps_input() {
+    fn esc_while_busy_requires_double_press_and_keeps_input() {
         let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
         let mut app = App::new(
             cmd_tx,
@@ -3358,8 +3470,16 @@ mod tests {
         app.input = "draft".chars().collect();
         app.cursor = app.input.len();
 
+        // First Esc only arms the confirmation window: no Cancel is sent.
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.interrupting);
+        assert!(app.interrupt_armed_at.is_some());
+        assert!(cmd_rx.try_recv().is_err());
+
+        // Second Esc inside the window cancels for real.
         app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(app.interrupting);
+        assert!(app.interrupt_armed_at.is_none());
         assert_eq!(app.input.iter().collect::<String>(), "draft");
         match cmd_rx.try_recv().unwrap() {
             AgentCmd::Cancel => {}
@@ -3369,6 +3489,40 @@ mod tests {
         // The interrupt request can only be sent once.
         app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(cmd_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn esc_confirmation_window_expires_without_cancel() {
+        let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
+        let mut app = App::new(
+            cmd_tx,
+            Arc::new(Mutex::new(HashSet::new())),
+            "test-model".to_string(),
+            PathBuf::from("."),
+            "default".to_string(),
+            ThinkingLevel::Off,
+            SessionMode::Agent,
+            PathBuf::from("config.toml"),
+            None,
+            Vec::new(),
+        );
+        app.busy = true;
+
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.interrupt_armed_at.is_some());
+
+        // Simulate the 5s window lapsing; a second Esc re-arms instead of
+        // sending Cancel.
+        app.interrupt_armed_at = Some(Instant::now() - Duration::from_secs(6));
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.interrupting);
+        assert!(app.interrupt_armed_at.is_some());
+        assert!(cmd_rx.try_recv().is_err());
+
+        // And the ticker clears a stale arm.
+        app.interrupt_armed_at = Some(Instant::now() - Duration::from_secs(6));
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.interrupt_armed_at.is_some());
     }
 
     #[test]
@@ -4118,5 +4272,152 @@ mod tests {
             seq: 1,
         });
         assert_eq!(app.status_text(), "working");
+    }
+
+    /// Provider whose stream never ends on its own: run_turn blocks inside its
+    /// per-event select until the turn-level cancel/watch fires — exactly the
+    /// stale spot where Esc used to be swallowed by the serial command loop.
+    struct StallProvider {
+        calls: Arc<AtomicUsize>,
+        started: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait]
+    impl firment_core::Provider for StallProvider {
+        async fn stream(
+            &self,
+            _request: firment_core::ChatRequest,
+        ) -> Result<firment_core::ProviderStream, firment_core::ProviderError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.started.notify_one();
+            let stream = futures::stream::unfold((), |()| async move {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                Some((Err(firment_core::ProviderError::StreamEnded), ()))
+            });
+            Ok(Box::pin(stream))
+        }
+
+        fn model(&self) -> &str {
+            "stall"
+        }
+    }
+
+    /// Pauses until `provider.stream` has been entered `expected` times,
+    /// polling instead of racing a one-shot notification.
+    async fn wait_for_stream(calls: Arc<AtomicUsize>, expected: usize, what: &str) {
+        for _ in 0..500 {
+            if calls.load(Ordering::SeqCst) >= expected {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!(
+            "timed out waiting for {what}: provider.stream called {} of {expected} times",
+            calls.load(Ordering::SeqCst)
+        );
+    }
+
+    fn spawn_agent_task_harness(
+        calls: Arc<AtomicUsize>,
+        started: Arc<tokio::sync::Notify>,
+    ) -> (
+        mpsc::Sender<AgentCmd>,
+        mpsc::Receiver<AgentEvent>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let (event_tx, event_rx) = mpsc::channel(256);
+        let dir = std::env::temp_dir().join(format!("firment-tui-stall-{}", std::process::id()));
+        let store = SessionStore::new(dir.clone());
+        let session = Session::new(dir, "default", "stall");
+        let agent = Agent::new(
+            Some(Box::new(StallProvider {
+                calls: calls.clone(),
+                started: started.clone(),
+            })),
+            Arc::new(ToolRegistry::new()),
+            session,
+            store.clone(),
+            Arc::new(firment_core::AutoApprove::everything()),
+            Arc::new(ChannelSink { tx: event_tx }),
+            10,
+        );
+        let (cancel_tx, cancel_signal) = agent.cancel_handle();
+        let agent = Arc::new(tokio::sync::Mutex::new(agent));
+        let turn_lock = Arc::new(tokio::sync::Mutex::new(()));
+        let (cmd_tx, cmd_rx) = mpsc::channel(16);
+        let task = spawn_agent_task(
+            cmd_rx,
+            agent,
+            cancel_tx,
+            cancel_signal,
+            turn_lock,
+            store,
+            firment_core::Config::default_with_provider(
+                "default",
+                firment_core::ProviderConfig {
+                    r#type: "openai".to_string(),
+                    base_url: None,
+                    api_key_env: None,
+                    api_key: None,
+                    model: "stall".to_string(),
+                    max_tokens: None,
+                    temperature: None,
+                },
+            ),
+            std::env::temp_dir().join("firment-tui-stall.toml"),
+            firment_tools::plan_registry(),
+            firment_tools::default_registry(),
+            Arc::new(firment_core::AutoApprove::everything()),
+            Arc::new(firment_core::AutoApprove::everything()),
+        );
+        (cmd_tx, event_rx, task)
+    }
+
+    #[tokio::test]
+    async fn cancel_command_interrupts_a_running_turn() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let started = Arc::new(tokio::sync::Notify::new());
+        let (cmd_tx, mut event_rx, task) = spawn_agent_task_harness(calls.clone(), started.clone());
+
+        cmd_tx.send(AgentCmd::User("go".to_string())).await.unwrap();
+        // The turn is live inside provider.stream: its select is what a real
+        // (stalling) API call looks like from the agent's point of view.
+        wait_for_stream(calls.clone(), 1, "first turn").await;
+
+        let begin = std::time::Instant::now();
+        cmd_tx.send(AgentCmd::Cancel).await.unwrap();
+        // Until the regression fix, Cancel sat behind the running turn in the
+        // serial command loop and the stream's 30s sleep won the race.
+        tokio::time::timeout(Duration::from_secs(5), event_rx.recv())
+            .await
+            .expect("the command loop must act on Cancel while a turn runs")
+            .expect("event stream must stay open");
+        assert!(
+            begin.elapsed() < Duration::from_secs(4),
+            "turn must end within 4s of Cancel"
+        );
+
+        // The loop survives: a second turn starts (reset_cancel fired), and a
+        // second Cancel stops it too.
+        cmd_tx
+            .send(AgentCmd::User("again".to_string()))
+            .await
+            .unwrap();
+        wait_for_stream(calls.clone(), 2, "second turn").await;
+        cmd_tx.send(AgentCmd::Cancel).await.unwrap();
+        let mut ended = false;
+        for _ in 0..8 {
+            match tokio::time::timeout(Duration::from_secs(5), event_rx.recv()).await {
+                Ok(Some(AgentEvent::TurnEnd { .. })) => {
+                    ended = true;
+                    break;
+                }
+                Ok(Some(_)) => continue,
+                _ => break,
+            }
+        }
+        assert!(ended, "second turn must end after its Cancel");
+        drop(cmd_tx);
+        task.await.unwrap();
     }
 }

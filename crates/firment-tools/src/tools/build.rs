@@ -47,9 +47,10 @@ impl Tool for Build {
             .get("timeout_ms")
             .and_then(|t| t.as_u64())
             .unwrap_or(600_000);
-        let (text, code) = super::util::run_command(&command, &ctx.cwd, timeout_ms, None)
-            .await
-            .map_err(ToolError::new)?;
+        let (text, code) =
+            super::util::run_command(&command, &ctx.cwd, timeout_ms, None, Some(&ctx.cancel))
+                .await
+                .map_err(ToolError::new)?;
         match code {
             Some(0) => Ok(ToolOutput {
                 text: format!("build passed (exit 0)\n{text}"),

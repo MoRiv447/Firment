@@ -1,3 +1,4 @@
+use firment_core::Cancellable;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -148,13 +149,15 @@ pub(crate) fn simple_diff(path: &Path, old: &str, new: &str, max_chars: usize) -
 }
 
 /// Run a command through the platform shell, capture output, enforce a
-/// timeout. Returns (formatted text, exit code); exit code `None` means the
-/// process was killed by the timeout.
+/// timeout. `cancel` (the turn-level cancellation signal) stops the process
+/// tree promptly when the turn is interrupted. Returns (formatted text, exit
+/// code); exit code `None` means the process was killed (timeout or cancel).
 pub(crate) async fn run_command(
     command: &str,
     cwd: &Path,
     timeout_ms: u64,
     env: Option<&HashMap<String, String>>,
+    cancel: Option<&Cancellable>,
 ) -> Result<(String, Option<i32>), String> {
     let mut cmd = if cfg!(windows) {
         let mut c = Command::new("cmd");
@@ -206,28 +209,55 @@ pub(crate) async fn run_command(
         .await;
     };
     let mut read_streams = Box::pin(read_streams);
+    // Dropping a tokio Child future does NOT kill the child: only explicit
+    // termination (or an explicit cancel branch like this one) stops the
+    // process tree.
+    let cancel_fut = cancel.map(|c| Box::pin(c.cancelled()));
 
     let status = if timeout_ms == 0 {
-        child.wait().await
+        if let Some(cancel_fut) = cancel_fut {
+            tokio::select! {
+                status = child.wait() => status,
+                _ = cancel_fut => {
+                    return kill_tree_and_report(
+                        &mut child,
+                        command,
+                        "cancelled: interrupted before the command finished (process tree \
+                         terminated)".to_string(),
+                    )
+                    .await;
+                }
+            }
+        } else {
+            child.wait().await
+        }
     } else {
         tokio::select! {
             status = child.wait() => status,
             _ = tokio::time::sleep(Duration::from_millis(timeout_ms)) => {
-                if let Some(pid) = child.id() {
-                    // Kill the process tree: the direct child may have spawned
-                    // background processes that inherit our pipe handles and
-                    // would otherwise keep the read futures open forever.
-                    kill_process_tree(pid);
-                }
-                let _ = child.kill().await;
-                let _ = child.wait().await;
-                return Ok((
+                return kill_tree_and_report(
+                    &mut child,
+                    command,
                     format!(
-                        "command: {command}\ntimed out after {timeout_ms} ms and was killed \
-                         (process tree terminated)"
+                        "timed out after {timeout_ms} ms and was killed (process tree terminated)"
                     ),
-                    None,
-                ));
+                )
+                .await;
+            }
+            _ = async {
+                if let Some(c) = cancel.as_ref() {
+                    Box::pin(c.cancelled()).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {
+                return kill_tree_and_report(
+                    &mut child,
+                    command,
+                    "cancelled: interrupted before the command finished (process tree \
+                     terminated)".to_string(),
+                )
+                .await;
             }
         }
     };
@@ -249,6 +279,22 @@ pub(crate) async fn run_command(
         ),
         code,
     ))
+}
+
+/// Kill the direct child plus its whole tree (timeout or cancellation) and
+/// report the interruption. `exit code: None` tells the caller the process did
+/// not finish on its own.
+async fn kill_tree_and_report(
+    child: &mut tokio::process::Child,
+    command: &str,
+    reason: String,
+) -> Result<(String, Option<i32>), String> {
+    if let Some(pid) = child.id() {
+        kill_process_tree(pid);
+    }
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+    Ok((format!("command: {command}\n{reason}"), None))
 }
 
 /// Terminate a process and everything underneath it. Background jobs spawned by
@@ -305,7 +351,7 @@ mod tests {
             "sleep 30"
         };
         let started = std::time::Instant::now();
-        let (text, code) = run_command(slow, dir.path(), 400, None)
+        let (text, code) = run_command(slow, dir.path(), 400, None, None)
             .await
             .expect("run_command returns Ok");
         assert!(code.is_none(), "timeout must report a killed process");
@@ -313,6 +359,33 @@ mod tests {
         assert!(
             started.elapsed() < std::time::Duration::from_secs(5),
             "timeout returned too late: {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_stops_long_running_command_promptly() {
+        let dir = tempdir().unwrap();
+        let slow = if cfg!(windows) {
+            "ping -n 30 127.0.0.1 >nul"
+        } else {
+            "sleep 30"
+        };
+        let cancel = firment_core::Cancellable::new();
+        let c = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            c.cancel();
+        });
+        let started = std::time::Instant::now();
+        let (text, code) = run_command(slow, dir.path(), 0, None, Some(&cancel))
+            .await
+            .expect("run_command returns Ok");
+        assert!(code.is_none(), "cancel must report a killed process");
+        assert!(text.contains("cancelled"), "got: {text}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "cancel returned too late: {:?}",
             started.elapsed()
         );
     }
