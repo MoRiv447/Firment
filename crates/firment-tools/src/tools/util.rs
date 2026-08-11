@@ -347,10 +347,10 @@ fn ps_descendants(pid: u32) -> Vec<u32> {
     let mut table: Vec<(u32, u32)> = Vec::new();
     for line in String::from_utf8_lossy(&out.stdout).lines() {
         let mut it = line.split_whitespace();
-        if let (Some(pp), Some(p)) = (it.next(), it.next()) {
-            if let (Ok(pp), Ok(p)) = (pp.parse::<u32>(), p.parse::<u32>()) {
-                table.push((pp, p));
-            }
+        if let (Some(pp_str), Some(pid_str)) = (it.next(), it.next())
+            && let (Ok(pp), Ok(pid)) = (pp_str.parse::<u32>(), pid_str.parse::<u32>())
+        {
+            table.push((pp, pid));
         }
     }
     fn collect(table: &[(u32, u32)], parent: u32, result: &mut Vec<u32>) {
