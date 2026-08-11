@@ -38,7 +38,7 @@ jobs:
         timeout-minutes: 12
         run: |
           echo "=== Z: bare sleep control (no rust involved) ==="
-          timeout 10 sleep 30 && echo "Z sleep ok" || { echo "=== Z FAILED (exit $?) ==="; exit 1; }
+          timeout 10 sleep 5 && echo "Z sleep ok" || { echo "=== Z FAILED (exit $?) ==="; exit 1; }
           echo "=== C: cancel test alone (spawns sleep, kills tree) ==="
           timeout 120 cargo test -p firment-tools -- util::tests::cancel_stops -- --test-threads=1 2>&1 || { echo "=== C FAILED (exit $?) ==="; exit 1; }
           echo "=== D: timeout test alone (spawns sleep, kills tree) ==="
