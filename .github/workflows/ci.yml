@@ -37,5 +37,8 @@ jobs:
         shell: bash
         timeout-minutes: 12
         run: |
-          echo "=== running tests ==="
-          timeout 600 cargo test --workspace 2>&1 || { echo "=== TEST STEP FAILED/HUNG (exit $?) ==="; exit 1; }
+          echo "=== running tests (per-crate, serial to bound peak memory on 2-core runners) ==="
+          for crate in firment-core firment-tools firment-tui firment-cli; do
+            echo "--- $crate ---"
+            timeout 600 cargo test -p "$crate" 2>&1 || { echo "=== $crate FAILED/HUNG (exit $?) ==="; exit 1; }
+          done
