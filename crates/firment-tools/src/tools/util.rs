@@ -318,13 +318,17 @@ fn kill_process_tree(pid: u32) {
     // every process in that group - including the runner's job tree.
     let our_pgid = ps_pgid(std::process::id());
     let child_pgid = ps_pgid(pid);
+    eprintln!(
+        "[kill_process_tree] child={} our_pgid={} child_pgid={}",
+        pid, our_pgid, child_pgid
+    );
     if child_pgid > 1 && child_pgid != our_pgid {
+        eprintln!("[kill_process_tree] group-kill -{}", child_pgid);
         let _ = std::process::Command::new("kill")
             .args(["-9", &format!("-{child_pgid}")])
             .status();
     } else {
-        // No safe dedicated group: kill just the direct child. Its
-        // grandchildren get reparented and die with the job/container.
+        eprintln!("[kill_process_tree] direct kill {}", pid);
         let _ = std::process::Command::new("kill")
             .args(["-9", &pid.to_string()])
             .status();

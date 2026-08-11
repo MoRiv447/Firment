@@ -41,6 +41,25 @@ jobs:
           timeout 10 sleep 5 && echo "Z sleep ok" || { echo "=== Z FAILED (exit $?) ==="; exit 1; }
           echo "=== K: manual kill -9 -pgid inside plain bash (no rust) ==="
           sh -c 'sh -c "sleep 30" & CHILD=$!; sleep 1; kill -9 -$CHILD && echo "K group-kill ok"; wait; echo "K done"'
+          echo "=== L: bash replica of guarded kill_process_tree ==="
+          sh -c 'sleep 30' & CHILD=$!
+          sleep 1
+          OUR_PGID=$(ps -o pgid= -p $$ | tr -d ' ')
+          CHILD_PGID=$(ps -o pgid= -p $CHILD | tr -d ' ')
+          echo "L child=$CHILD our_pgid=$OUR_PGID child_pgid=$CHILD_PGID"
+          if [ "$CHILD_PGID" -gt 1 ] && [ "$CHILD_PGID" != "$OUR_PGID" ]; then
+            kill -9 -$CHILD_PGID && echo "L group-killed -$CHILD_PGID"
+          else
+            kill -9 $CHILD && echo "L killed direct $CHILD"
+          fi
+          wait 2>/dev/null; echo "L done"
+          echo "=== L2: setsid child (own group) then group-kill ==="
+          setsid sh -c 'sleep 30' & CHILD=$!
+          sleep 1
+          CHILD_PGID=$(ps -o pgid= -p $CHILD | tr -d ' ')
+          echo "L2 child=$CHILD child_pgid=$CHILD_PGID"
+          kill -9 -$CHILD_PGID; echo "L2 group-kill rc=$?"
+          wait 2>/dev/null; echo "L2 done"
           echo "=== C: cancel test alone (spawns sleep, kills tree) ==="
           timeout 120 cargo test -p firment-tools -- util::tests::cancel_stops -- --test-threads=1 2>&1 || { echo "=== C FAILED (exit $?) ==="; exit 1; }
           echo "=== D: timeout test alone (spawns sleep, kills tree) ==="
