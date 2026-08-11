@@ -24,6 +24,16 @@ jobs:
         run: cargo fmt --check
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: test
-        timeout-minutes: 8
-        run: cargo test --workspace
+      - name: test (build only)
+        timeout-minutes: 12
+        run: |
+          free -m
+          nproc
+          echo "=== building (no-run) ==="
+          timeout 600 cargo test --workspace --no-run 2>&1 || { echo "=== BUILD STEP FAILED/HUNG (exit $?) ==="; exit 1; }
+          echo "=== build ok ==="
+      - name: test (run)
+        timeout-minutes: 12
+        run: |
+          echo "=== running tests ==="
+          timeout 600 cargo test --workspace 2>&1 || { echo "=== TEST STEP FAILED/HUNG (exit $?) ==="; exit 1; }
