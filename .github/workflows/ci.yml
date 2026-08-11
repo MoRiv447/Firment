@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-22.04, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -25,14 +25,16 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: test (build only)
+        shell: bash
         timeout-minutes: 12
         run: |
-          free -m
-          nproc
+          free -m || true
+          nproc || true
           echo "=== building (no-run) ==="
           timeout 600 cargo test --workspace --no-run 2>&1 || { echo "=== BUILD STEP FAILED/HUNG (exit $?) ==="; exit 1; }
           echo "=== build ok ==="
       - name: test (run)
+        shell: bash
         timeout-minutes: 12
         run: |
           echo "=== running tests ==="
