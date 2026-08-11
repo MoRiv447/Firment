@@ -60,8 +60,20 @@ jobs:
           echo "L2 child=$CHILD child_pgid=$CHILD_PGID"
           kill -9 -$CHILD_PGID; echo "L2 group-kill rc=$?"
           wait 2>/dev/null; echo "L2 done"
-          echo "=== C: cancel test alone (spawns sleep, kills tree) ==="
-          timeout 120 cargo test -p firment-tools -- util::tests::cancel_stops -- --test-threads=1 2>&1 || { echo "=== C FAILED (exit $?) ==="; exit 1; }
+          echo "=== C: mem limits probe + 6GB alloc probe ==="
+          cat /sys/fs/cgroup/memory.max 2>/dev/null; cat /sys/fs/cgroup/memory.high 2>/dev/null; free -m | grep -E 'Mem|Swap'
+          timeout 60 python3 -c 'import time; a=bytearray(1024*1024*1024*6); time.sleep(10)' && echo "M 6GB ok" || echo "M 6GB failed rc=$?"
+          echo "=== C: cancel test with --jobs 1 + memory watch ==="
+          timeout 180 cargo test -p firment-tools --jobs 1 -- util::tests::cancel_stops -- --test-threads=1 2>&1 &
+          CPID=$!
+          while kill -0 $CPID 2>/dev/null; do
+            free -m | awk '/Mem/{print "mem_avail=" $7}' >> /tmp/memlog.txt
+            sleep 4
+          done
+          wait $CPID; RC=$?
+          echo "C exit $RC"
+          tail -5 /tmp/memlog.txt
+          [ $RC -ne 0 ] && exit 1
           echo "=== D: timeout test alone (spawns sleep, kills tree) ==="
           timeout 120 cargo test -p firment-tools -- util::tests::timeout_kills -- --test-threads=1 2>&1 || { echo "=== D FAILED (exit $?) ==="; exit 1; }
           echo "=== E: util full (3 tests together) ==="
