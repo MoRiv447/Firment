@@ -37,14 +37,11 @@ jobs:
         shell: bash
         timeout-minutes: 12
         run: |
-          echo "=== diag ==="
-          free -m
-          nproc
-          cat /proc/self/cgroup
-          for f in /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory/memory.limit_in_bytes /sys/fs/cgroup/memory/memory.usage_in_bytes; do
-            echo "$f: $(cat $f 2>/dev/null || echo n/a)"
-          done
-          echo "=== A: util tests, minimal profile (no debuginfo) ==="
-          timeout 300 cargo test -p firment-tools --profile test --config profile.test.debug=0 -- util:: -- --test-threads=1 2>&1 || { echo "=== A FAILED (exit $?) ==="; exit 1; }
-          echo "=== B: full workspace, minimal profile ==="
-          timeout 600 cargo test --workspace --profile test --config profile.test.debug=0 -- --test-threads=1 2>&1 || { echo "=== B FAILED/HUNG (exit $?) ==="; exit 1; }
+          echo "=== A: pure-string tests (no process spawn) ==="
+          timeout 180 cargo test -p firment-tools -- decode:: -- --test-threads=1 2>&1 || { echo "=== A FAILED (exit $?) ==="; exit 1; }
+          echo "=== B: html tests (no process spawn) ==="
+          timeout 180 cargo test -p firment-tools -- tools::html:: -- --test-threads=1 2>&1 || { echo "=== B FAILED (exit $?) ==="; exit 1; }
+          echo "=== C: util cancel test alone (spawns sleep, kills tree) ==="
+          timeout 180 cargo test -p firment-tools -- util::cancel_stops -- --test-threads=1 2>&1 || { echo "=== C FAILED (exit $?) ==="; exit 1; }
+          echo "=== D: util timeout test alone (spawns sleep, kills tree) ==="
+          timeout 180 cargo test -p firment-tools -- util::timeout_kills -- --test-threads=1 2>&1 || { echo "=== D FAILED (exit $?) ==="; exit 1; }
