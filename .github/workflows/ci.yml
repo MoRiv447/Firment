@@ -25,4 +25,5 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: test
+        timeout-minutes: 8
         run: cargo test --workspace
