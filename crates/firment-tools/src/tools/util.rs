@@ -311,10 +311,34 @@ fn kill_process_tree(pid: u32) {
 
 #[cfg(not(windows))]
 fn kill_process_tree(pid: u32) {
-    // `-pid` targets the whole process group set up via process_group(0).
-    let _ = std::process::Command::new("kill")
-        .args(["-9", &format!("-{pid}")])
-        .status();
+    // Query the child's real process-group id before signalling. Blindly
+    // running `kill -9 -{pid}` assumes the child leads a group of its own;
+    // on GitHub-hosted runners the child can land in a foreign process
+    // group (e.g. the job's own group), and `-{pid}` would then signal
+    // every process in that group - including the runner's job tree.
+    let our_pgid = ps_pgid(std::process::id());
+    let child_pgid = ps_pgid(pid);
+    if child_pgid > 1 && child_pgid != our_pgid {
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &format!("-{child_pgid}")])
+            .status();
+    } else {
+        // No safe dedicated group: kill just the direct child. Its
+        // grandchildren get reparented and die with the job/container.
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .status();
+    }
+}
+
+#[cfg(not(windows))]
+fn ps_pgid(pid: u32) -> u32 {
+    std::process::Command::new("ps")
+        .args(["-o", "pgid=", "-p", &pid.to_string()])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u32>().ok())
+        .unwrap_or(0)
 }
 #[cfg(test)]
 mod tests {

@@ -39,6 +39,8 @@ jobs:
         run: |
           echo "=== Z: bare sleep control (no rust involved) ==="
           timeout 10 sleep 5 && echo "Z sleep ok" || { echo "=== Z FAILED (exit $?) ==="; exit 1; }
+          echo "=== K: manual kill -9 -pgid inside plain bash (no rust) ==="
+          sh -c 'sh -c "sleep 30" & CHILD=$!; sleep 1; kill -9 -$CHILD && echo "K group-kill ok"; wait; echo "K done"'
           echo "=== C: cancel test alone (spawns sleep, kills tree) ==="
           timeout 120 cargo test -p firment-tools -- util::tests::cancel_stops -- --test-threads=1 2>&1 || { echo "=== C FAILED (exit $?) ==="; exit 1; }
           echo "=== D: timeout test alone (spawns sleep, kills tree) ==="
