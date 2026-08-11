@@ -4351,6 +4351,8 @@ mod tests {
         );
     }
 
+    static NEXT_HARNESS_DIR: AtomicUsize = AtomicUsize::new(0);
+
     fn spawn_agent_task_harness(
         provider: Box<dyn firment_core::Provider>,
     ) -> (
@@ -4359,7 +4361,13 @@ mod tests {
         tokio::task::JoinHandle<()>,
     ) {
         let (event_tx, event_rx) = mpsc::channel(256);
-        let dir = std::env::temp_dir().join(format!("firment-tui-stall-{}", std::process::id()));
+        // Unique per invocation: two harness tests run in parallel and must
+        // not race each other's session files.
+        let dir = std::env::temp_dir().join(format!(
+            "firment-tui-stall-{}-{}",
+            std::process::id(),
+            NEXT_HARNESS_DIR.fetch_add(1, Ordering::SeqCst)
+        ));
         let store = SessionStore::new(dir.clone());
         let session = Session::new(dir, "default", "stall");
         let agent = Agent::new(
