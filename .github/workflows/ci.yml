@@ -37,8 +37,16 @@ jobs:
         shell: bash
         timeout-minutes: 12
         run: |
-          echo "=== running tests (per-crate serial, single thread) ==="
-          for crate in firment-core firment-tools firment-tui firment-cli; do
+          echo "=== diag ==="
+          free -m
+          nproc
+          cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.current /sys/fs/cgroup/cpu.max /sys/fs/cgroup/pids.max 2>/dev/null || true
+          echo "=== A: firment-tools util tests alone ==="
+          timeout 120 cargo test -p firment-tools -- util:: -- --test-threads=1 2>&1 || { echo "=== A FAILED (exit $?) ==="; exit 1; }
+          echo "=== B: firment-tools full ==="
+          timeout 600 cargo test -p firment-tools -- --test-threads=1 2>&1 || { echo "=== B FAILED/HUNG (exit $?) ==="; exit 1; }
+          echo "=== C: remaining crates ==="
+          for crate in firment-core firment-tui firment-cli; do
             echo "--- $crate ---"
             timeout 600 cargo test -p "$crate" -- --test-threads=1 2>&1 || { echo "=== $crate FAILED/HUNG (exit $?) ==="; exit 1; }
           done
