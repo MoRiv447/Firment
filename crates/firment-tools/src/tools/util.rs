@@ -311,43 +311,59 @@ fn kill_process_tree(pid: u32) {
 
 #[cfg(not(windows))]
 fn kill_process_tree(pid: u32) {
-    // Query the child's real process-group id before signalling. Blindly
-    // running `kill -9 -{pid}` assumes the child leads a group of its own;
-    // on GitHub-hosted runners the child can land in a foreign process
-    // group (e.g. the job's own group), and `-{pid}` would then signal
-    // every process in that group - including the runner's job tree.
-    let our_pgid = ps_pgid(std::process::id());
-    let child_pgid = ps_pgid(pid);
-    eprintln!(
-        "[kill_process_tree] child={} our_pgid={} child_pgid={}",
-        pid, our_pgid, child_pgid
-    );
-    if child_pgid > 1 && child_pgid != our_pgid {
-        eprintln!("[kill_process_tree] group-kill -{}", child_pgid);
+    // Kill every descendant directly (discovered recursively via `ps`)
+    // instead of signalling a process group. Group kills are unsafe on
+    // hosted runners: when the child's pgid resolves to the job's own
+    // process group -- or when the `our_pgid` probe races/fails and
+    // returns 0, which defeats the `!= our_pgid` guard -- `kill -9
+    // -<pgid>` SIGKILLs the whole step, including this process itself
+    // (observed as `Killed` / exit 137 on ubuntu-22.04). Direct kills
+    // of individual pids can never hit a foreign group, so they are
+    // safe even under probe races.
+    for d in ps_descendants(pid).iter().rev() {
+        eprintln!("[kill_process_tree] killing descendant {d}");
         let _ = std::process::Command::new("kill")
-            .args(["-9", &format!("-{child_pgid}")])
-            .status();
-    } else {
-        eprintln!("[kill_process_tree] direct kill {}", pid);
-        let _ = std::process::Command::new("kill")
-            .args(["-9", &pid.to_string()])
+            .args(["-9", &d.to_string()])
             .status();
     }
+    eprintln!("[kill_process_tree] killing {pid}");
+    let _ = std::process::Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .status();
 }
 
 #[cfg(not(windows))]
-fn ps_pgid(pid: u32) -> u32 {
-    std::process::Command::new("ps")
-        .args(["-o", "pgid=", "-p", &pid.to_string()])
+fn ps_descendants(pid: u32) -> Vec<u32> {
+    // Snapshot the process table once, then walk parent links from `pid`
+    // recursively. Returns post-order (children before parents) so a
+    // grandchild is killed before the child that may be waiting on it.
+    let out = std::process::Command::new("ps")
+        .args(["-A", "--no-headers", "-o", "ppid=", "-o", "pid="])
         .output()
-        .ok()
-        .and_then(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .trim()
-                .parse::<u32>()
-                .ok()
-        })
-        .unwrap_or(0)
+        .ok();
+    let Some(out) = out else {
+        return Vec::new();
+    };
+    let mut table: Vec<(u32, u32)> = Vec::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let mut it = line.split_whitespace();
+        if let (Some(pp), Some(p)) = (it.next(), it.next()) {
+            if let (Ok(pp), Ok(p)) = (pp.parse::<u32>(), p.parse::<u32>()) {
+                table.push((pp, p));
+            }
+        }
+    }
+    fn collect(table: &[(u32, u32)], parent: u32, result: &mut Vec<u32>) {
+        for &(pp, p) in table {
+            if pp == parent {
+                collect(table, p, result);
+                result.push(p);
+            }
+        }
+    }
+    let mut result = Vec::new();
+    collect(&table, pid, &mut result);
+    result
 }
 #[cfg(test)]
 mod tests {
