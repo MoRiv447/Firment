@@ -2317,6 +2317,25 @@ impl App {
                 picker.query.pop();
                 picker.clamp();
             }
+            KeyCode::Char('c') | KeyCode::Char('C') => {
+                if let Some(session) = picker.filtered().get(picker.selected).cloned() {
+                    match copy_to_clipboard(&session.id) {
+                        Ok(()) => self.items.push(Item::System(format!(
+                            "copied session id to clipboard: {}",
+                            session.id
+                        ))),
+                        Err(e) => self.items.push(Item::System(format!("copy failed: {e}"))),
+                    }
+                }
+            }
+            KeyCode::Char('d') | KeyCode::Char('D') => {
+                if let Some(session) = picker.filtered().get(picker.selected).cloned() {
+                    let id = session.id.clone();
+                    self.send_cmd(AgentCmd::DeleteSession(id.clone()));
+                    self.items
+                        .push(Item::System(format!("deleting session {id}…")));
+                }
+            }
             KeyCode::Char(ch) => {
                 picker.query.push(ch);
                 picker.clamp();
@@ -2571,7 +2590,7 @@ impl App {
             .unwrap_or((command, ""));
         match name {
             "help" => self.items.push(Item::System(
-                "Commands: /new  /plan [on|off]  /agent  /models  /model <id>  /sessions (use ↑/↓ to select)  /session <id>  /delete <id>  /undo  /ledger  /pin <path>  /unpin <path>  /copy  /provider <name>  /add-provider <name> <openai|anthropic> <base_url> <model>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /budget <chars>  /output <tokens>  /context  /config  /clear  /help  /quit\nKeys: ↑/↓ browse history when input is empty, move the input cursor on multi-line input, scroll the transcript on single-line input · Shift+Enter manual newline · PgUp/PgDn/wheel always scroll · Ctrl+P model picker · drag with left mouse to select · right-click copies the selection (pastes when there is no selection) · Ctrl+C copies the selection (copies the last reply when there is none) · Ctrl+V paste · Ctrl+Shift+C copy last reply · ←/→ move the input cursor · y/n/a permission answers · Esc interrupts AI output (Esc twice while working; clears input when idle) · Ctrl+Q quit\nInput box: auto-wraps and grows to up to 5 lines; taller content scrolls, large pastes collapse into 【line x-y】, and the title shows hidden/collapsed line counts before sending"
+                "Commands: /new  /plan [on|off]  /agent  /models  /model <id>  /sessions (use ↑/↓ to select)  /session <id>  /delete <id>  /undo  /ledger  /pin <path>  /unpin <path>  /copy  /provider <name>  /add-provider <name> <openai|anthropic> <base_url> <model>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /budget <chars>  /output <tokens>  /context  /config  /clear  /help  /quit\nKeys: ↑/↓ browse history when input is empty, move the input cursor on multi-line input, scroll the transcript on single-line input · Shift+Enter manual newline · PgUp/PgDn/wheel scroll · Ctrl+P model picker · inside /sessions: c copies the selected id to clipboard, d deletes it (drag-select and right-click are disabled because the TUI captures mouse events; press Esc to dismiss the picker, then your terminal's native selection works in the scrollback) · Ctrl+C copies the selection (copies the last reply when there is none) · Ctrl+V paste · Ctrl+Shift+C copy last reply · ←/→ move the input cursor · y/n/a permission answers · Esc interrupts AI output (Esc twice while working; clears input when idle) · Ctrl+Q quit\nInput box: auto-wraps and grows to up to 5 lines; taller content scrolls, large pastes collapse into 【line x-y】, and the title shows hidden/collapsed line counts before sending"
                     .to_string(),
             )),
             "new" => {
@@ -3195,9 +3214,9 @@ impl App {
                     )));
                 } else {
                     let filtered = picker.filtered();
-                    let start = picker.selected.saturating_sub(6);
-                    for (idx, session) in filtered.iter().enumerate().skip(start).take(12) {
-                        let (marker, style) = if idx == picker.selected {
+                    let start = picker.selected.saturating_sub(4);
+                    for (idx, session) in filtered.iter().enumerate().skip(start).take(6) {
+                        let (marker, row_style) = if idx == picker.selected {
                             (
                                 "❯ ",
                                 Style::default()
@@ -3207,24 +3226,33 @@ impl App {
                         } else {
                             ("  ", Style::default().fg(Color::White))
                         };
-                        let id_short: String = session.id.chars().take(8).collect();
                         let preview = truncate_chars(&session.preview, 42);
+                        // Main line: timestamp + model + preview; full id on the
+                        // next line in dim grey so it is easy to read and select.
                         lines.push(Line::from(Span::styled(
                             format!(
-                                "{marker}{}  {:<22}  {}  ({id_short})",
+                                "{marker}{}  {:<22}  {}",
                                 format_ts(session.updated_at),
                                 session.model,
                                 preview
                             ),
-                            style,
+                            row_style,
                         )));
-                    }
-                    if filtered.len() > 12 {
                         lines.push(Line::from(Span::styled(
-                            format!("… {} more", filtered.len() - 12),
+                            format!("    id: {}", session.id),
                             Style::default().fg(Color::DarkGray),
                         )));
                     }
+                    if filtered.len() > 6 {
+                        lines.push(Line::from(Span::styled(
+                            format!("… {} more", filtered.len() - 6),
+                            Style::default().fg(Color::DarkGray),
+                        )));
+                    }
+                    lines.push(Line::from(Span::styled(
+                        "Keys: ↑/↓ select · Enter open · c copy id · d delete · Esc close",
+                        Style::default().fg(Color::DarkGray),
+                    )));
                 }
                 frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
             }
