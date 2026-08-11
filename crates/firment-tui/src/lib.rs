@@ -312,18 +312,29 @@ fn spawn_agent_task(
                 }
                 AgentCmd::DeleteSession(id) => {
                     let agent = agent.lock().await;
-                    match agent.session_store().delete(&id) {
-                        Ok(()) => {
-                            agent
-                                .emit(AgentEvent::Info(format!(
-                                    "deleted session {id} (transcript, undo, spill, ledger)"
-                                )))
-                                .await;
-                        }
-                        Err(e) => {
-                            agent
-                                .emit(AgentEvent::Error(format!("delete failed: {e}")))
-                                .await;
+                    if id == agent.session().id {
+                        agent
+                            .emit(AgentEvent::Error(
+                                "refusing to delete the active session: the in-memory \
+                                 session would re-create its files on the next save; \
+                                 start a new session first (/new), then delete the old id"
+                                    .to_string(),
+                            ))
+                            .await;
+                    } else {
+                        match agent.session_store().delete(&id) {
+                            Ok(()) => {
+                                agent
+                                    .emit(AgentEvent::Info(format!(
+                                        "deleted session {id} (transcript, undo, spill, ledger)"
+                                    )))
+                                    .await;
+                            }
+                            Err(e) => {
+                                agent
+                                    .emit(AgentEvent::Error(format!("delete failed: {e}")))
+                                    .await;
+                            }
                         }
                     }
                 }
