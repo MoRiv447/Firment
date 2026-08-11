@@ -26,12 +26,14 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: test
         shell: bash
-        timeout-minutes: 20
+        timeout-minutes: 25
         run: |
           set -e
           # Run each crate's tests serially to bound peak memory on hosted
           # runners (parallel test binaries previously OOM'd the job).
+          # Each crate also gets its own hard timeout so a hanging test
+          # fails fast (exit 124) instead of silently burning the step budget.
           for pkg in firment-core firment-tools firment-tui firment-cli; do
             echo "=== cargo test -p $pkg ==="
-            cargo test -p "$pkg" -- --test-threads=1
+            timeout 480 cargo test -p "$pkg" -- --test-threads=1
           done
