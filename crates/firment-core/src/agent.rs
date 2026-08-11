@@ -84,6 +84,7 @@ pub struct Agent {
     /// between turns: `Sender::send` silently fails — leaving the stale value
     /// in place — when every receiver has been dropped, which would leave the
     /// next turn permanently marked cancelled.
+    #[allow(dead_code)] // kept alive solely to hold the channel open for `cancel_tx`
     cancel_rx: watch::Receiver<bool>,
     /// Turn-level cancellation signal shared with tools (and child agents).
     /// `Agent::cancel` sets both this and the watch channel.
@@ -488,7 +489,11 @@ impl Agent {
     }
 
     pub async fn run_turn(&mut self, input: &str) -> Result<String, AgentError> {
-        let mut cancel_rx = self.cancel_rx.clone();
+        // `subscribe()` (not `clone()`): the returned receiver's version is
+        // pinned to the current channel version, so `changed()` only fires on
+        // future sends. Cloning the persistent `cancel_rx` field would inherit
+        // its stale version and make every turn look pre-cancelled.
+        let mut cancel_rx = self.cancel_tx.subscribe();
         if *cancel_rx.borrow() {
             self.sink
                 .event(AgentEvent::Info(

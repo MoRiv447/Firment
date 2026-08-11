@@ -208,6 +208,15 @@ fn spawn_agent_task(
                         agent.reset_cancel();
                         if let Err(e) = agent.run_turn(&text).await {
                             agent.emit(AgentEvent::Error(e.to_string())).await;
+                            // Error paths of run_turn (max iterations, provider
+                            // failure, ...) emit no TurnEnd, so the TUI would
+                            // stay busy forever; close the turn explicitly.
+                            agent
+                                .emit(AgentEvent::TurnEnd {
+                                    text: String::new(),
+                                })
+                                .await;
+                            let _ = agent.save_session();
                         }
                     });
                 }
@@ -4290,6 +4299,11 @@ mod tests {
         ) -> Result<firment_core::ProviderStream, firment_core::ProviderError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.started.notify_one();
+            // A real provider awaits the network before its stream becomes
+            // ready. Without this await, the `select!` in run_turn would
+            // always prefer the (immediately-ready) stream branch and never
+            // expose a premature cancel saying "changed".
+            tokio::time::sleep(Duration::from_millis(50)).await;
             let stream = futures::stream::unfold((), |()| async move {
                 tokio::time::sleep(Duration::from_secs(30)).await;
                 Some((Err(firment_core::ProviderError::StreamEnded), ()))
@@ -4302,24 +4316,43 @@ mod tests {
         }
     }
 
-    /// Pauses until `provider.stream` has been entered `expected` times,
-    /// polling instead of racing a one-shot notification.
-    async fn wait_for_stream(calls: Arc<AtomicUsize>, expected: usize, what: &str) {
+    /// Sends a prompt, waits until `provider.stream` is entered `expected`
+    /// times, then asserts the turn is genuinely still streaming: the first
+    /// event must be `TurnStart` and no second event may arrive within 150ms.
+    /// This catches "cancelled" state leaks that would end the turn right at
+    /// its start (e.g. a stale watch version making `changed()` fire early).
+    async fn start_turn_and_expect_live_stream(
+        cmd_tx: &mpsc::Sender<AgentCmd>,
+        calls: &Arc<AtomicUsize>,
+        expected: usize,
+        event_rx: &mut mpsc::Receiver<AgentEvent>,
+    ) {
+        cmd_tx.send(AgentCmd::User("go".to_string())).await.unwrap();
         for _ in 0..500 {
             if calls.load(Ordering::SeqCst) >= expected {
-                return;
+                break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        panic!(
-            "timed out waiting for {what}: provider.stream called {} of {expected} times",
-            calls.load(Ordering::SeqCst)
+        assert!(
+            calls.load(Ordering::SeqCst) >= expected,
+            "provider.stream must be entered ({expected} times)"
+        );
+        match tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await {
+            Ok(Some(AgentEvent::TurnStart)) => {}
+            Ok(Some(other)) => panic!("first event must be TurnStart, got {other:?}"),
+            Ok(None) => panic!("event stream closed"),
+            Err(_) => panic!("no TurnStart within 1s"),
+        }
+        let premature = tokio::time::timeout(Duration::from_millis(150), event_rx.recv()).await;
+        assert!(
+            premature.is_err(),
+            "turn must stay live while streaming, got premature event {premature:?}"
         );
     }
 
     fn spawn_agent_task_harness(
-        calls: Arc<AtomicUsize>,
-        started: Arc<tokio::sync::Notify>,
+        provider: Box<dyn firment_core::Provider>,
     ) -> (
         mpsc::Sender<AgentCmd>,
         mpsc::Receiver<AgentEvent>,
@@ -4330,10 +4363,7 @@ mod tests {
         let store = SessionStore::new(dir.clone());
         let session = Session::new(dir, "default", "stall");
         let agent = Agent::new(
-            Some(Box::new(StallProvider {
-                calls: calls.clone(),
-                started: started.clone(),
-            })),
+            Some(provider),
             Arc::new(ToolRegistry::new()),
             session,
             store.clone(),
@@ -4377,33 +4407,38 @@ mod tests {
     async fn cancel_command_interrupts_a_running_turn() {
         let calls = Arc::new(AtomicUsize::new(0));
         let started = Arc::new(tokio::sync::Notify::new());
-        let (cmd_tx, mut event_rx, task) = spawn_agent_task_harness(calls.clone(), started.clone());
+        let (cmd_tx, mut event_rx, task) = spawn_agent_task_harness(Box::new(StallProvider {
+            calls: calls.clone(),
+            started: started.clone(),
+        }));
 
-        cmd_tx.send(AgentCmd::User("go".to_string())).await.unwrap();
-        // The turn is live inside provider.stream: its select is what a real
-        // (stalling) API call looks like from the agent's point of view.
-        wait_for_stream(calls.clone(), 1, "first turn").await;
+        // Turn 1: must actually be streaming (TurnStart then silence) before
+        // Cancel arrives, otherwise a stale cancel state would show up here as
+        // a premature end-of-turn event.
+        start_turn_and_expect_live_stream(&cmd_tx, &calls, 1, &mut event_rx).await;
 
         let begin = std::time::Instant::now();
         cmd_tx.send(AgentCmd::Cancel).await.unwrap();
-        // Until the regression fix, Cancel sat behind the running turn in the
-        // serial command loop and the stream's 30s sleep won the race.
-        tokio::time::timeout(Duration::from_secs(5), event_rx.recv())
-            .await
-            .expect("the command loop must act on Cancel while a turn runs")
-            .expect("event stream must stay open");
+        let mut ended = false;
+        for _ in 0..8 {
+            match tokio::time::timeout(Duration::from_secs(5), event_rx.recv()).await {
+                Ok(Some(AgentEvent::TurnEnd { .. })) => {
+                    ended = true;
+                    break;
+                }
+                Ok(Some(_)) => continue,
+                _ => break,
+            }
+        }
+        assert!(ended, "turn must end after its Cancel");
         assert!(
             begin.elapsed() < Duration::from_secs(4),
             "turn must end within 4s of Cancel"
         );
 
-        // The loop survives: a second turn starts (reset_cancel fired), and a
+        // Turn 2: reset_cancel fired; a second turn streams normally and a
         // second Cancel stops it too.
-        cmd_tx
-            .send(AgentCmd::User("again".to_string()))
-            .await
-            .unwrap();
-        wait_for_stream(calls.clone(), 2, "second turn").await;
+        start_turn_and_expect_live_stream(&cmd_tx, &calls, 2, &mut event_rx).await;
         cmd_tx.send(AgentCmd::Cancel).await.unwrap();
         let mut ended = false;
         for _ in 0..8 {
@@ -4417,6 +4452,52 @@ mod tests {
             }
         }
         assert!(ended, "second turn must end after its Cancel");
+        drop(cmd_tx);
+        task.await.unwrap();
+    }
+
+    struct ErrorProvider;
+
+    #[async_trait]
+    impl firment_core::Provider for ErrorProvider {
+        async fn stream(
+            &self,
+            _request: firment_core::ChatRequest,
+        ) -> Result<firment_core::ProviderStream, firment_core::ProviderError> {
+            Err(firment_core::ProviderError::Api {
+                status: 500,
+                message: "boom".to_string(),
+            })
+        }
+
+        fn model(&self) -> &str {
+            "error"
+        }
+    }
+
+    #[tokio::test]
+    async fn turn_error_still_closes_the_turn() {
+        let (cmd_tx, mut event_rx, task) =
+            spawn_agent_task_harness(Box::new(ErrorProvider));
+        cmd_tx.send(AgentCmd::User("go".to_string())).await.unwrap();
+        let mut saw_error = false;
+        let mut saw_turn_end = false;
+        for _ in 0..4 {
+            if saw_error && saw_turn_end {
+                break;
+            }
+            match tokio::time::timeout(Duration::from_secs(5), event_rx.recv()).await {
+                Ok(Some(AgentEvent::Error(_))) => saw_error = true,
+                Ok(Some(AgentEvent::TurnEnd { .. })) => saw_turn_end = true,
+                Ok(Some(_)) => {}
+                _ => break,
+            }
+        }
+        assert!(saw_error, "provider failure must surface as Error");
+        assert!(
+            saw_turn_end,
+            "failed turn must still emit TurnEnd so the TUI un-busies"
+        );
         drop(cmd_tx);
         task.await.unwrap();
     }
