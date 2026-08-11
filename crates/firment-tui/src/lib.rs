@@ -4477,8 +4477,7 @@ mod tests {
 
     #[tokio::test]
     async fn turn_error_still_closes_the_turn() {
-        let (cmd_tx, mut event_rx, task) =
-            spawn_agent_task_harness(Box::new(ErrorProvider));
+        let (cmd_tx, mut event_rx, task) = spawn_agent_task_harness(Box::new(ErrorProvider));
         cmd_tx.send(AgentCmd::User("go".to_string())).await.unwrap();
         let mut saw_error = false;
         let mut saw_turn_end = false;
