@@ -477,7 +477,7 @@ model = "deepseek-v4-flash"
 # Max tool-calling rounds per turn.
 # max_iterations = 30
 # thinking = "medium"   # off / low / medium / high / xhigh / max (reasoning depth)
-# context_budget_chars = 256000   # session context budget in chars; older messages are compacted past this (256k default)
+# context_budget_chars = 262144   # session context budget in chars (256k binary default); older messages are compacted past this
 # max_output_tokens = 32768       # cap on output tokens per reply (32k default; overrides provider max_tokens)
 # compaction_strategy = "summarize"   # default summarize; drop (discard old turns) / off (no auto-compaction)
 
@@ -530,7 +530,7 @@ fn default_max_subagent_depth() -> usize {
 }
 
 fn default_context_budget() -> usize {
-    256_000
+    256 * 1024 // 256k chars (binary)
 }
 
 /// Default cap on output tokens per reply when neither the config nor the

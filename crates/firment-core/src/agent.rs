@@ -157,7 +157,7 @@ impl Agent {
             max_iterations,
             allow_dangerous: false,
             verify_command: None,
-            context_budget_chars: 256_000,
+            context_budget_chars: 256 * 1024,
             ledger_seq_appended: 0,
             compaction_strategy: CompactionStrategy::default(),
             symbols_backend: None,

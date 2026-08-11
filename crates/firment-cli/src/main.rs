@@ -43,14 +43,14 @@ struct Cli {
     provider: Option<String>,
 
     /// Session context budget in characters before auto-compaction kicks in
-    /// (default 256000; overrides config context_budget_chars).
-    #[arg(long = "context-length")]
+    /// (default 256k; accepts a k/m suffix, e.g. 256k, or a plain char count).
+    #[arg(long = "context-length", value_parser = parse_size)]
     context_length: Option<usize>,
 
-    /// Cap on output tokens per reply (default 32768; overrides config
-    /// max_output_tokens / provider max_tokens).
-    #[arg(long = "max-output-tokens")]
-    max_output_tokens: Option<u32>,
+    /// Cap on output tokens per reply (default 32k; accepts a k/m suffix,
+    /// e.g. 32k, or a plain token count).
+    #[arg(long = "max-output-tokens", value_parser = parse_size)]
+    max_output_tokens: Option<usize>,
 
     /// Thinking effort: off/low/medium/high/xhigh/max (Anthropic extended thinking, OpenAI reasoning).
     #[arg(long, value_parser = parse_thinking)]
@@ -259,7 +259,7 @@ async fn main() -> anyhow::Result<()> {
         config.context_budget_chars = length;
     }
     if let Some(tokens) = cli.max_output_tokens {
-        config.max_output_tokens = Some(tokens);
+        config.max_output_tokens = Some(tokens as u32);
     }
     let _ = firment_core::kb::ensure_seed_kb();
 
@@ -723,8 +723,50 @@ fn parse_thinking(s: &str) -> Result<ThinkingLevel, std::io::Error> {
     s.parse()
 }
 
+/// Parse a size with an optional binary suffix: plain chars/tokens, or a
+/// trailing `k`/`m` (1024 / 1024^2), case-insensitive (e.g. 256k = 262144,
+/// 32k = 32768).
+fn parse_size(s: &str) -> Result<usize, std::io::Error> {
+    let s = s.trim();
+    let invalid = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid size '{s}': use a plain number or a k/m suffix, e.g. 262144 or 256k"),
+        )
+    };
+    if s.is_empty() {
+        return Err(invalid());
+    }
+    let (digits, mult) = match s.as_bytes().last() {
+        Some(b'k') | Some(b'K') => (&s[..s.len() - 1], 1024usize),
+        Some(b'm') | Some(b'M') => (&s[..s.len() - 1], 1024usize * 1024),
+        _ => (s, 1usize),
+    };
+    let n: usize = digits.parse().map_err(|_| invalid())?;
+    n.checked_mul(mult).ok_or_else(invalid)
+}
+
 fn format_ts(secs: u64) -> String {
     chrono::DateTime::from_timestamp(secs as i64, 0)
         .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
         .unwrap_or_else(|| secs.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_size;
+
+    #[test]
+    fn size_suffixes_parse_binary() {
+        assert_eq!(parse_size("262144").unwrap(), 262144);
+        assert_eq!(parse_size("256k").unwrap(), 262144);
+        assert_eq!(parse_size("256K").unwrap(), 262144);
+        assert_eq!(parse_size("32k").unwrap(), 32 * 1024);
+        assert_eq!(parse_size("1m").unwrap(), 1024 * 1024);
+        assert_eq!(parse_size("0").unwrap(), 0);
+        assert!(parse_size("").is_err());
+        assert!(parse_size("abc").is_err());
+        assert!(parse_size("1.5k").is_err());
+        assert!(parse_size("-1").is_err());
+    }
 }
