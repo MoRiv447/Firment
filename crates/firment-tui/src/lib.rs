@@ -266,6 +266,46 @@ fn spawn_agent_task(
                         })
                         .await;
                 }
+                AgentCmd::SetContextBudget(chars) => {
+                    let mut agent = agent.lock().await;
+                    agent.set_context_budget_chars(chars);
+                    task_config.context_budget_chars = chars;
+                    let _ = task_config.save(&task_config_path);
+                    let _ = agent.save_session();
+                    agent
+                        .emit(AgentEvent::Info(format!(
+                            "context budget -> {chars} chars (saved)"
+                        )))
+                        .await;
+                }
+                AgentCmd::SetMaxOutputTokens(tokens) => {
+                    let mut agent = agent.lock().await;
+                    task_config.max_output_tokens = Some(tokens);
+                    let _ = task_config.save(&task_config_path);
+                    // Rebuild the provider so the new cap applies to the very
+                    // next request (max_tokens is fixed at provider creation).
+                    let model = agent.session().model.clone();
+                    match task_config.build_provider(Some(&agent.session().provider), Some(&model))
+                    {
+                        Ok(new_provider) => {
+                            agent.set_provider(new_provider);
+                            let _ = agent.save_session();
+                            agent
+                                .emit(AgentEvent::Info(format!(
+                                    "max output tokens -> {tokens} (saved, applies to next \
+                                     request)"
+                                )))
+                                .await;
+                        }
+                        Err(e) => {
+                            agent
+                                .emit(AgentEvent::Error(format!(
+                                    "failed to apply output cap: {e}"
+                                )))
+                                .await;
+                        }
+                    }
+                }
                 AgentCmd::SetMode(mode) => {
                     let mut agent = agent.lock().await;
                     let registry = if mode == SessionMode::Plan {
@@ -644,6 +684,8 @@ enum AgentCmd {
     Cancel,
     SetModel(String),
     SetThinking(ThinkingLevel),
+    SetContextBudget(usize),
+    SetMaxOutputTokens(u32),
     SetMode(SessionMode),
     OpenModelPicker,
     OpenSessionPicker,
@@ -2495,7 +2537,7 @@ impl App {
             .unwrap_or((command, ""));
         match name {
             "help" => self.items.push(Item::System(
-                "Commands: /new  /plan [on|off]  /agent  /models  /model <id>  /sessions (use ↑/↓ to select)  /session <id>  /undo  /ledger  /pin <path>  /unpin <path>  /copy  /provider <name>  /add-provider <name> <openai|anthropic> <base_url> <model>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /config  /clear  /help  /quit\nKeys: ↑/↓ browse history when input is empty, move the input cursor on multi-line input, scroll the transcript on single-line input · Shift+Enter manual newline · PgUp/PgDn/wheel always scroll · Ctrl+P model picker · drag with left mouse to select · right-click copies the selection (pastes when there is no selection) · Ctrl+C copies the selection (copies the last reply when there is none) · Ctrl+V paste · Ctrl+Shift+C copy last reply · ←/→ move the input cursor · y/n/a permission answers · Esc interrupts AI output (Esc twice while working; clears input when idle) · Ctrl+Q quit\nInput box: auto-wraps and grows to up to 5 lines; taller content scrolls, large pastes collapse into 【line x-y】, and the title shows hidden/collapsed line counts before sending"
+                "Commands: /new  /plan [on|off]  /agent  /models  /model <id>  /sessions (use ↑/↓ to select)  /session <id>  /undo  /ledger  /pin <path>  /unpin <path>  /copy  /provider <name>  /add-provider <name> <openai|anthropic> <base_url> <model>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /budget <chars>  /output <tokens>  /config  /clear  /help  /quit\nKeys: ↑/↓ browse history when input is empty, move the input cursor on multi-line input, scroll the transcript on single-line input · Shift+Enter manual newline · PgUp/PgDn/wheel always scroll · Ctrl+P model picker · drag with left mouse to select · right-click copies the selection (pastes when there is no selection) · Ctrl+C copies the selection (copies the last reply when there is none) · Ctrl+V paste · Ctrl+Shift+C copy last reply · ←/→ move the input cursor · y/n/a permission answers · Esc interrupts AI output (Esc twice while working; clears input when idle) · Ctrl+Q quit\nInput box: auto-wraps and grows to up to 5 lines; taller content scrolls, large pastes collapse into 【line x-y】, and the title shows hidden/collapsed line counts before sending"
                     .to_string(),
             )),
             "new" => {
@@ -2567,6 +2609,43 @@ impl App {
                 self.send_cmd(AgentCmd::SetThinking(level));
                 self.items
                     .push(Item::System(format!("thinking -> {}", level.label())));
+            }
+            "budget" => {
+                if arg.is_empty() {
+                    self.items.push(Item::System(
+                        "usage: /budget <chars>  (e.g. 256k, 131072)".to_string(),
+                    ));
+                    return;
+                }
+                match firment_core::config::parse_size(arg) {
+                    Ok(chars) => {
+                        self.send_cmd(AgentCmd::SetContextBudget(chars));
+                        self.items
+                            .push(Item::System(format!("context budget -> {chars} chars…")));
+                    }
+                    Err(e) => {
+                        self.items.push(Item::System(format!("invalid budget: {e}")));
+                    }
+                }
+            }
+            "output" => {
+                if arg.is_empty() {
+                    self.items.push(Item::System(
+                        "usage: /output <tokens>  (e.g. 32k, 16384)".to_string(),
+                    ));
+                    return;
+                }
+                match firment_core::config::parse_size(arg) {
+                    Ok(tokens) => {
+                        let tokens = tokens.min(u32::MAX as usize) as u32;
+                        self.send_cmd(AgentCmd::SetMaxOutputTokens(tokens));
+                        self.items
+                            .push(Item::System(format!("max output tokens -> {tokens}…")));
+                    }
+                    Err(e) => {
+                        self.items.push(Item::System(format!("invalid output cap: {e}")));
+                    }
+                }
             }
             "provider" if !arg.is_empty() => {
                 let _ = self

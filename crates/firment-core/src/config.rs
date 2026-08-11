@@ -405,6 +405,29 @@ impl Config {
     }
 }
 
+/// Parse a size with an optional binary suffix: plain chars/tokens, or a
+/// trailing `k`/`m` (1024 / 1024^2), case-insensitive (e.g. 256k = 262144,
+/// 32k = 32768). Shared by the CLI flags and TUI slash commands.
+pub fn parse_size(s: &str) -> Result<usize, std::io::Error> {
+    let s = s.trim();
+    let invalid = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid size '{s}': use a plain number or a k/m suffix, e.g. 262144 or 256k"),
+        )
+    };
+    if s.is_empty() {
+        return Err(invalid());
+    }
+    let (digits, mult) = match s.as_bytes().last() {
+        Some(b'k') | Some(b'K') => (&s[..s.len() - 1], 1024usize),
+        Some(b'm') | Some(b'M') => (&s[..s.len() - 1], 1024usize * 1024),
+        _ => (s, 1usize),
+    };
+    let n: usize = digits.parse().map_err(|_| invalid())?;
+    n.checked_mul(mult).ok_or_else(invalid)
+}
+
 pub fn config_dir() -> PathBuf {
     if let Ok(dir) = env::var("FIRMENT_CONFIG_DIR") {
         return PathBuf::from(dir);
@@ -625,5 +648,38 @@ mod tests {
         let merged = base.merged_for(dir.path());
         assert!(merged.auto_approve.iter().any(|t| t == "build"));
         assert_eq!(merged.tools.build_command, None);
+    }
+
+    #[test]
+    fn size_suffixes_parse_binary() {
+        assert_eq!(parse_size("262144").unwrap(), 262144);
+        assert_eq!(parse_size("256k").unwrap(), 262144);
+        assert_eq!(parse_size("256K").unwrap(), 262144);
+        assert_eq!(parse_size("32k").unwrap(), 32 * 1024);
+        assert_eq!(parse_size("1m").unwrap(), 1024 * 1024);
+        assert_eq!(parse_size("0").unwrap(), 0);
+        assert!(parse_size("").is_err());
+        assert!(parse_size("abc").is_err());
+        assert!(parse_size("1.5k").is_err());
+        assert!(parse_size("-1").is_err());
+    }
+
+    #[test]
+    fn defaults_are_256k_budget_32k_output() {
+        let config = Config::default_with_provider(
+            "default",
+            ProviderConfig {
+                r#type: "openai".to_string(),
+                base_url: None,
+                api_key_env: None,
+                api_key: None,
+                model: "m".to_string(),
+                max_tokens: None,
+                temperature: None,
+            },
+        );
+        assert_eq!(config.context_budget_chars, 256 * 1024);
+        assert_eq!(config.max_output_tokens, None);
+        assert_eq!(default_max_output_tokens(), 32 * 1024);
     }
 }
