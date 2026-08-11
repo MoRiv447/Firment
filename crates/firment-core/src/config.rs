@@ -181,12 +181,17 @@ impl Config {
         };
         if let Some(value) = project.tools.verify_command {
             config.tools.verify_command = Some(value);
+            // A command coming from the project (i.e. from an untrusted repo
+            // checkout) must not run without an explicit human approval, even
+            // if the user's own config auto-approves it.
+            config.auto_approve.retain(|t| t != "verify");
         }
         if let Some(value) = project.tools.symbols_backend {
             config.tools.symbols_backend = Some(value);
         }
         if let Some(value) = project.tools.build_command {
             config.tools.build_command = Some(value);
+            config.auto_approve.retain(|t| t != "build");
         }
         if let Some(value) = project.tools.default_chip {
             config.tools.default_chip = Some(value);
@@ -530,5 +535,73 @@ mod tests {
     fn tools_elf_defaults_to_none() {
         let config: Config = toml::from_str("").unwrap();
         assert_eq!(config.tools.elf, None);
+    }
+
+    #[test]
+    fn project_config_removes_build_verify_from_auto_approve() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_toml = r#"
+            [tools]
+            build_command = "echo build"
+            verify_command = "echo verify"
+        "#;
+        std::fs::write(dir.path().join(".firment.toml"), project_toml).unwrap();
+
+        let mut base = Config::default_with_provider(
+            "default",
+            ProviderConfig {
+                r#type: "openai".to_string(),
+                base_url: None,
+                api_key_env: None,
+                api_key: None,
+                model: "m".to_string(),
+                max_tokens: None,
+                temperature: None,
+            },
+        );
+        base.auto_approve = vec!["build".to_string(), "verify".to_string()];
+
+        let merged = base.merged_for(dir.path());
+        assert_eq!(
+            merged.tools.build_command.as_deref(),
+            Some("echo build"),
+            "project build_command must be merged"
+        );
+        assert_eq!(
+            merged.tools.verify_command.as_deref(),
+            Some("echo verify"),
+            "project verify_command must be merged"
+        );
+        assert!(
+            !merged.auto_approve.iter().any(|t| t == "build"),
+            "project-provided build command must not be auto-approved: {:?}",
+            merged.auto_approve
+        );
+        assert!(
+            !merged.auto_approve.iter().any(|t| t == "verify"),
+            "project-provided verify command must not be auto-approved: {:?}",
+            merged.auto_approve
+        );
+    }
+
+    #[test]
+    fn no_project_config_keeps_auto_approve() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut base = Config::default_with_provider(
+            "default",
+            ProviderConfig {
+                r#type: "openai".to_string(),
+                base_url: None,
+                api_key_env: None,
+                api_key: None,
+                model: "m".to_string(),
+                max_tokens: None,
+                temperature: None,
+            },
+        );
+        base.auto_approve = vec!["build".to_string()];
+        let merged = base.merged_for(dir.path());
+        assert!(merged.auto_approve.iter().any(|t| t == "build"));
+        assert_eq!(merged.tools.build_command, None);
     }
 }

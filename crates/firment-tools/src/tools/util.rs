@@ -201,12 +201,18 @@ pub(crate) async fn run_command(
         .ok_or_else(|| "stderr handle unavailable".to_string())?;
     let mut out_buf: Vec<u8> = Vec::new();
     let mut err_buf: Vec<u8> = Vec::new();
+    let mut drain_timed_out = false;
     let read_streams = async {
-        let _ = tokio::time::timeout(Duration::from_secs(5), async {
+        // Drain with a firm deadline: a background grandchild holding the
+        // pipe write-ends would otherwise block forever. 15s is generous for
+        // a finished process; if it still fires we mark the output instead
+        // of silently truncating it.
+        drain_timed_out = tokio::time::timeout(Duration::from_secs(15), async {
             let _ = AsyncReadExt::read_to_end(&mut stdout, &mut out_buf).await;
             let _ = AsyncReadExt::read_to_end(&mut stderr, &mut err_buf).await;
         })
-        .await;
+        .await
+        .is_err();
     };
     let mut read_streams = Box::pin(read_streams);
     // Dropping a tokio Child future does NOT kill the child: only explicit
@@ -273,9 +279,14 @@ pub(crate) async fn run_command(
     let status_text = code
         .map(|c| c.to_string())
         .unwrap_or_else(|| "signal".to_string());
+    let drain_note = if drain_timed_out {
+        "\n[output truncated: the process finished but output was still streaming after 15s]"
+    } else {
+        ""
+    };
     Ok((
         format!(
-            "command: {command}\nexit code: {status_text}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+            "command: {command}\nexit code: {status_text}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}{drain_note}"
         ),
         code,
     ))

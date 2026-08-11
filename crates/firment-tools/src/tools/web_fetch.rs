@@ -3,6 +3,7 @@ use super::util::truncate;
 use async_trait::async_trait;
 use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
+use std::net::IpAddr;
 use std::time::Duration;
 
 pub struct WebFetch;
@@ -13,6 +14,58 @@ const MAX_BODY_BYTES: usize = 200_000;
 const MAX_TEXT_CHARS: usize = 60_000;
 
 impl WebFetch {
+    /// Extract the bare host from a URL string: strips scheme, userinfo,
+    /// port, path/query/fragment, and IPv6 brackets.
+    fn parse_host(url: &str) -> Option<String> {
+        let after_scheme = url.split_once("://")?.1;
+        let host_port = after_scheme.split(['/', '?', '#']).next()?;
+        let host = host_port.rsplit('@').next().unwrap_or(host_port);
+        if let Some(rest) = host.strip_prefix('[') {
+            return rest.split(']').next().map(|s| s.to_string());
+        }
+        Some(host.split(':').next().unwrap_or(host).to_string())
+    }
+
+    /// True when `host` is a literal IP in an internal / link-local range
+    /// that an agent must not fetch on its own: private RFC1918, CGNAT,
+    /// link-local / cloud metadata (169.254/16), 0.0.0.0/8. Loopback is
+    /// intentionally allowed (local dev services; tests use 127.0.0.1
+    /// mocks). Hostnames are not DNS-resolved here (DNS rebinding is out of
+    /// scope; documented in the audit report).
+    fn is_blocked_literal_ip(host: &str) -> bool {
+        let Ok(ip) = host.parse::<IpAddr>() else {
+            return false;
+        };
+        match ip {
+            IpAddr::V4(v4) => {
+                let o = v4.octets();
+                o[0] == 0
+                    || o[0] == 10
+                    || (o[0] == 100 && (64..=127).contains(&o[1]))
+                    || (o[0] == 169 && o[1] == 254)
+                    || (o[0] == 172 && (16..=31).contains(&o[1]))
+                    || (o[0] == 192 && o[1] == 168)
+                    || v4.is_broadcast()
+            }
+            IpAddr::V6(v6) => {
+                let seg0 = v6.segments()[0];
+                v6.is_unspecified()
+                    || (seg0 & 0xffc0) == 0xfe80  // fe80::/10 link-local
+                    || (seg0 & 0xfe00) == 0xfc00 // fc00::/7 unique-local
+            }
+        }
+    }
+
+    /// Host of `url` if it is a blocked literal internal IP.
+    fn blocked_host(url: &str) -> Option<String> {
+        let host = Self::parse_host(url)?;
+        if Self::is_blocked_literal_ip(&host) {
+            Some(host)
+        } else {
+            None
+        }
+    }
+
     fn validate_url(url: &str) -> Result<(), ToolError> {
         let lower = url.to_ascii_lowercase();
         let (scheme, host) = match lower.split_once("://") {
@@ -31,6 +84,12 @@ impl WebFetch {
         let host = host.split(['/', '?', '#']).next().unwrap_or(host);
         if host.is_empty() {
             return Err(ToolError::new("[InvalidInput] url has no host"));
+        }
+        if let Some(blocked) = Self::blocked_host(url) {
+            return Err(ToolError::new(format!(
+                "[InvalidInput] url host '{blocked}' is an internal/link-local address; \
+                 web_fetch refuses private, metadata, and link-local endpoints"
+            )));
         }
         Ok(())
     }
@@ -66,6 +125,19 @@ impl Tool for WebFetch {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(20))
             .user_agent("Firment/0.4 (firmware coding agent)")
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                let blocked = attempt
+                    .url()
+                    .host_str()
+                    .map(|h| h.trim_start_matches('[').trim_end_matches(']').to_string())
+                    .filter(|h| Self::is_blocked_literal_ip(h));
+                match blocked {
+                    Some(host) => attempt.error(std::io::Error::other(format!(
+                        "redirect to internal address '{host}' is blocked"
+                    ))),
+                    None => attempt.follow(),
+                }
+            }))
             .build()
             .map_err(|e| ToolError::new(format!("[Io] http client init failed: {e}")))?;
         let response = client
@@ -160,6 +232,42 @@ mod tests {
                 .await
                 .unwrap_err();
             assert!(err.message.contains("[InvalidInput]"), "got: {url} {err}");
+        }
+    }
+
+    #[test]
+    fn rejects_internal_and_link_local_addresses() {
+        for url in [
+            "http://169.254.169.254/latest/meta-data/",
+            "http://10.0.0.1/",
+            "http://192.168.1.1/admin",
+            "http://172.16.0.1/",
+            "http://100.64.0.1/",
+            "http://0.0.0.0/",
+            "http://[fe80::1]/",
+            "http://[fc00::1]/",
+            "http://user:pass@10.0.0.1/x",
+        ] {
+            let err = WebFetch::validate_url(url).unwrap_err();
+            assert!(
+                err.message.contains("internal/link-local"),
+                "should reject: {url} got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn allows_loopback_and_public_addresses() {
+        for url in [
+            "http://127.0.0.1:8080/x",
+            "http://localhost:3000/",
+            "http://[::1]:8080/",
+            "https://example.com/",
+            "https://docs.rs/foo/bar",
+            "http://user:pass@example.com/x",
+            "https://8.8.8.8/",
+        ] {
+            assert!(WebFetch::validate_url(url).is_ok(), "should allow: {url}");
         }
     }
 
