@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.4.0-beta.7 (2026-08-12) — real-world toolchain conflicts + peripheral skeleton expansion
+
+### periph_init — full skeletons for SPI / TIM / ADC
+
+- `spi` / `tim` / `adc` now get complete STM32-HAL skeletons like uart/gpio/i2c (clock enable,
+  GPIO/AF reuse, handle + `HAL_*_Init`, `TODO(fill)` markers, conflict notes); only `dma` still
+  falls back to the generic skeleton + cheatsheet
+- **CubeMX conflict guidance**: if the project already has generated init (`MX_*_Init` /
+  `HAL_*_Init` / `SystemClock_Config` in `main.c` / `*_hal_msp.c`), call the existing functions —
+  never re-initialize, redefine functions **or handle variables** (e.g. `huart1` already exists
+  in CubeMX `main.c`); only handwritten projects should land the skeleton
+- **Framework HAL-duplication warning**: detects `.ioc` (CubeMX) vs `platformio.ini`
+  (PlatformIO) and warns that copying CubeMX `Drivers/` into a PlatformIO project redefines
+  every HAL symbol (the classic two-HAL conflict); CubeMX projects are told to reuse existing
+  init code
+
+### elf_analyze — real stack depth from `.su` files
+
+- GCC/Clang `-fstack-usage` produces per-object `.su` text files, not an ELF `.stack_usage`
+  section — Firment now scans the ELF directory tree for `*.su`, parses the GCC format, and
+  attaches per-function stack depth (with `-O2+` clone-suffix matching, `foo` → `foo.isra.0`);
+  stack depth is reported missing only when neither source exists. Works with stock CubeMX /
+  Makefile builds that add `-fstack-usage`
+
+### monitor — timestamps + baud autodetect
+
+- Every captured line is prefixed with its arrival time `[SS.mmm]` (default on)
+- `autodetect: true` probes common baud rates (9600..921600) and uses the first that yields
+  valid data, reporting the detected rate — no more guessing the target's baud
+
 ## v0.4.0-beta.6 (2026-08-12) — periph_init peripheral code generation + KB reliability
 
 ### New tool: `periph_init`

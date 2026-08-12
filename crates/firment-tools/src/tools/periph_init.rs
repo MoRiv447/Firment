@@ -19,11 +19,11 @@ impl Tool for PeriphInit {
     fn description(&self) -> &'static str {
         "Generate an MCU peripheral initialization skeleton (STM32 HAL style) plus the matching \
          knowledge-base cheatsheet, so you don't start from scratch on chip/peripheral config. \
-         Inputs: part (e.g. stm32f103c8t6), peripheral (uart/gpio/i2c get full skeletons; spi/tim/\
-         adc/dma fall back to a generic skeleton + cheatsheet), optional baudrate / pins / dma / \
-         interrupt. Output is a compile-ready skeleton with TODO(fill) markers and key config \
-         notes (clock domain, DMA channel mapping, common pitfalls) — adapt it to the actual \
-         project (pins, clock tree, CubeMX) before use."
+         Inputs: part (e.g. stm32f103c8t6), peripheral (uart/gpio/i2c/spi/tim/adc get full \
+         skeletons; dma falls back to a generic skeleton + cheatsheet), optional baudrate / pins \
+         / dma / interrupt. Output is a compile-ready skeleton with TODO(fill) markers and key \
+         config notes (clock domain, DMA channel mapping, common pitfalls) — adapt it to the \
+         actual project (pins, clock tree, CubeMX) before use."
     }
 
     fn input_schema(&self) -> Value {
@@ -97,6 +97,9 @@ impl Tool for PeriphInit {
             "uart" => uart_skeleton(baudrate, dma, interrupt, pins.as_deref()),
             "gpio" => gpio_skeleton(pins.as_deref()),
             "i2c" => i2c_skeleton(),
+            "spi" => spi_skeleton(),
+            "tim" => tim_skeleton(),
+            "adc" => adc_skeleton(),
             other => generic_skeleton(other, family),
         };
 
@@ -272,6 +275,72 @@ fn i2c_skeleton() -> String {
     .to_string()
 }
 
+fn spi_skeleton() -> String {
+    "static SPI_HandleTypeDef hspi1;\n\
+     \n\
+     void MX_SPI1_Init(void) {\n\
+     \x20 hspi1.Instance = SPI1;\n\
+     \x20 hspi1.Init.Mode = SPI_MODE_MASTER; /* MASTER / SLAVE */\n\
+     \x20 hspi1.Init.Direction = SPI_DIRECTION_2LINES;\n\
+     \x20 hspi1.Init.DataSize = SPI_DATASIZE_8BIT;\n\
+     \x20 hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;\n\
+     \x20 hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;\n\
+     \x20 hspi1.Init.NSS = SPI_NSS_SOFT;\n\
+     \x20 hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16; /* TODO(fill): 按时钟算 */\n\
+     \x20 hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;\n\
+     \x20 hspi1.Init.TIMode = SPI_TIMODE_DISABLE;\n\
+     \x20 hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;\n\
+     \x20 if (HAL_SPI_Init(&hspi1) != HAL_OK) { Error_Handler(); /* TODO(fill) */ }\n\
+     \x20 // TODO(fill): GPIO 复用 (SCK/MISO/MOSI + AF) 与时钟使能\n\
+     }"
+    .to_string()
+}
+
+fn tim_skeleton() -> String {
+    "static TIM_HandleTypeDef htim2;\n\
+     \n\
+     void MX_TIM2_Init(void) {\n\
+     \x20 TIM_ClockConfigTypeDef sClockSourceConfig = {0};\n\
+     \x20 TIM_MasterConfigTypeDef sMasterConfig = {0};\n\
+     \x20 htim2.Instance = TIM2;\n\
+     \x20 htim2.Init.Prescaler = 71; /* TODO(fill): 预分频，决定时基 */\n\
+     \x20 htim2.Init.CounterMode = TIM_COUNTERMODE_UP;\n\
+     \x20 htim2.Init.Period = 999; /* TODO(fill): 自动重载 */\n\
+     \x20 htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;\n\
+     \x20 htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;\n\
+     \x20 if (HAL_TIM_Base_Init(&htim2) != HAL_OK) { Error_Handler(); /* TODO(fill) */ }\n\
+     \x20 sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;\n\
+     \x20 if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK) { Error_Handler(); }\n\
+     \x20 sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;\n\
+     \x20 sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;\n\
+     \x20 if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK) { Error_Handler(); }\n\
+     \x20 // TODO(fill): PWM 输出用 HAL_TIM_PWM_Start；输入捕获/编码器模式参考 cheatsheet\n\
+     }"
+        .to_string()
+}
+
+fn adc_skeleton() -> String {
+    "static ADC_HandleTypeDef hadc1;\n\
+     \n\
+     void MX_ADC1_Init(void) {\n\
+     \x20 ADC_ChannelConfTypeDef sConfig = {0};\n\
+     \x20 hadc1.Instance = ADC1;\n\
+     \x20 hadc1.Init.ScanConvMode = DISABLE; /* ENABLE 多通道扫描 */\n\
+     \x20 hadc1.Init.ContinuousConvMode = DISABLE; /* ENABLE 连续转换 */\n\
+     \x20 hadc1.Init.DiscontinuousConvMode = DISABLE;\n\
+     \x20 hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;\n\
+     \x20 hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;\n\
+     \x20 hadc1.Init.NbrOfConversion = 1; /* TODO(fill): 转换通道数 */\n\
+     \x20 if (HAL_ADC_Init(&hadc1) != HAL_OK) { Error_Handler(); /* TODO(fill) */ }\n\
+     \x20 /* TODO(fill): 若用了 DMA/定时器触发，在此配置 __HAL_RCC_*_CLK_ENABLE 与 DMA */\n\
+     \x20 sConfig.Channel = ADC_CHANNEL_0; /* TODO(fill): 引脚对应通道 */\n\
+     \x20 sConfig.Rank = 1;\n\
+     \x20 sConfig.SamplingTime = ADC_SAMPLETIME_55CYCLES_5; /* TODO(fill): 按源阻抗 */\n\
+     \x20 if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK) { Error_Handler(); }\n\
+     }"
+    .to_string()
+}
+
 fn generic_skeleton(peripheral: &str, family: Option<&'static str>) -> String {
     format!(
         "// {peripheral} 初始化骨架（无内置模板；请结合 cheatsheet/参考手册填写）\n\
@@ -403,6 +472,40 @@ mod tests {
         assert_eq!(family_for("esp32s3"), Some("esp32s3"));
         assert_eq!(family_for("esp32"), Some("esp32"));
         assert_eq!(family_for("nrf52840"), None);
+    }
+
+    #[tokio::test]
+    async fn spi_tim_adc_skeletons_are_generated() {
+        let dir = tempdir().unwrap();
+        let out = PeriphInit
+            .run(
+                json!({"part": "stm32f103c8t6", "peripheral": "spi"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(out.text.contains("HAL_SPI_Init"), "got: {}", out.text);
+        assert!(out.text.contains("TODO(fill)"), "got: {}", out.text);
+
+        let out = PeriphInit
+            .run(
+                json!({"part": "stm32f103c8t6", "peripheral": "tim"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(out.text.contains("HAL_TIM_Base_Init"), "got: {}", out.text);
+        assert!(out.text.contains("TODO(fill)"), "got: {}", out.text);
+
+        let out = PeriphInit
+            .run(
+                json!({"part": "stm32f103c8t6", "peripheral": "adc"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(out.text.contains("HAL_ADC_Init"), "got: {}", out.text);
+        assert!(out.text.contains("TODO(fill)"), "got: {}", out.text);
     }
 
     #[test]
