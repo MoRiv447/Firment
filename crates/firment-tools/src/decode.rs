@@ -12,7 +12,12 @@ pub fn decode_address(elf: &Path, address: u64) -> Option<String> {
             continue;
         }
         let addr = sym.address();
-        if addr > address {
+        // The symbol must actually cover the address (or be the last symbol
+        // with an unknown size, which old tools may report as 0): an address
+        // in a gap between functions must not be attributed to the previous
+        // one as a huge +0x offset.
+        let size = sym.size();
+        if addr > address || (size > 0 && address >= addr.saturating_add(size)) {
             continue;
         }
         let Ok(name) = sym.name() else { continue };

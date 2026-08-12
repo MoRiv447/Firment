@@ -869,6 +869,10 @@ impl Agent {
             Some(summary) => summary,
             None => compact_summary(&old, DIGEST_CHARS),
         };
+        // Merge the summary into the first surviving message instead of
+        // prepending a separate User message: the original first message is
+        // usually a User turn, and consecutive user roles break providers
+        // that require strict role alternation (e.g. Anthropic returns 400).
         let mut content = format!("[compacted context] summary:\n{summary}");
         if drop_until > 0 {
             content.push_str(
@@ -882,8 +886,24 @@ impl Agent {
         if let Some(pins) = self.pinned_files_text() {
             content.push_str(&format!("\n\n{pins}"));
         }
-        let mut messages = vec![ChatMessage::User { content }];
-        messages.extend(self.session.messages.iter().cloned());
+        let mut messages = Vec::with_capacity(self.session.messages.len() + 1);
+        let mut inserted = false;
+        for msg in self.session.messages.iter().cloned() {
+            if !inserted && matches!(msg, ChatMessage::User { .. }) {
+                let ChatMessage::User { content: old } = msg else {
+                    unreachable!()
+                };
+                messages.push(ChatMessage::User {
+                    content: format!("{}\n\n{old}", content),
+                });
+                inserted = true;
+            } else {
+                messages.push(msg);
+            }
+        }
+        if !inserted {
+            messages.insert(0, ChatMessage::User { content });
+        }
         self.session.messages = messages;
     }
 

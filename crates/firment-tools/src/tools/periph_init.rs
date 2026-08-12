@@ -93,14 +93,22 @@ impl Tool for PeriphInit {
             .and_then(|f| find_cheatsheet(&kb_dir, f, &peripheral))
             .or_else(|| find_cheatsheet(&kb_dir, "stm32", &peripheral));
 
-        let skeleton = match peripheral.as_str() {
-            "uart" => uart_skeleton(baudrate, dma, interrupt, pins.as_deref()),
-            "gpio" => gpio_skeleton(pins.as_deref()),
-            "i2c" => i2c_skeleton(),
-            "spi" => spi_skeleton(),
-            "tim" => tim_skeleton(),
-            "adc" => adc_skeleton(),
-            other => generic_skeleton(other, family),
+        // The full HAL skeletons are STM32-specific. Non-STM32 parts (e.g.
+        // ESP32, which uses its own SDK) must not get STM32 HAL code — emit a
+        // generic skeleton + the cheatsheet instead.
+        let is_stm32 = part.to_lowercase().starts_with("stm32");
+        let skeleton = if is_stm32 {
+            match peripheral.as_str() {
+                "uart" => uart_skeleton(baudrate, dma, interrupt, pins.as_deref()),
+                "gpio" => gpio_skeleton(pins.as_deref()),
+                "i2c" => i2c_skeleton(),
+                "spi" => spi_skeleton(),
+                "tim" => tim_skeleton(),
+                "adc" => adc_skeleton(),
+                other => generic_skeleton(other, family),
+            }
+        } else {
+            generic_skeleton(&peripheral, family)
         };
 
         let mut text = format!(

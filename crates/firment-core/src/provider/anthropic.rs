@@ -89,9 +89,12 @@ impl AnthropicProvider {
 
     fn body(&self, request: &ChatRequest) -> Value {
         let (system, messages) = self.convert(&request.messages);
+        // Per-request max_tokens (e.g. the summarization cap) wins over the
+        // session default so callers can bound token output independently.
+        let max_tokens = request.max_tokens.unwrap_or(self.max_tokens);
         let mut body = json!({
             "model": request.model,
-            "max_tokens": self.max_tokens,
+            "max_tokens": max_tokens,
             "stream": true,
             "messages": messages,
         });

@@ -70,7 +70,7 @@ impl Tool for ReadFile {
         };
         let start = offset.min(effective_total);
         let end = if limit > 0 {
-            (start + limit).min(lines.len())
+            start.saturating_add(limit).min(lines.len())
         } else {
             lines.len()
         };

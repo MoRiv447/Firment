@@ -98,13 +98,29 @@ pub(crate) fn line_hash_prefix(line: &str) -> String {
         .collect()
 }
 
+/// Truncate long text to `max_chars`, keeping the HEAD and the TAIL of the
+/// input: errors (compiler output, tool logs) usually appear at the end, and
+/// dropping the tail would hide the actual failure.
 pub(crate) fn truncate(text: &str, max_chars: usize) -> String {
-    let mut chars: Vec<char> = text.chars().collect();
-    if chars.len() > max_chars {
-        chars.truncate(max_chars);
-        chars.push('…');
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= max_chars {
+        return text.to_string();
     }
-    chars.into_iter().collect()
+    if max_chars < 16 {
+        return chars
+            .into_iter()
+            .take(max_chars)
+            .chain(std::iter::once('…'))
+            .collect();
+    }
+    // Keep the head (context) and tail (errors), mark the middle as dropped.
+    let head = max_chars * 2 / 3;
+    let tail = max_chars - head - 1; // 1 for the ellipsis
+    let mut out: Vec<char> = chars[..head].to_vec();
+    out.extend("…[{} chars dropped]…".chars());
+    let tail_start = chars.len() - tail;
+    out.extend(chars[tail_start..].iter());
+    out.into_iter().collect()
 }
 
 /// Validate a value that will be spliced unquoted into a shell command line

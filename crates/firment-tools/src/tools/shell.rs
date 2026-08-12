@@ -17,6 +17,10 @@ const METAPROGRAMMING_PATTERNS: &[(&str, &str)] = &[
     (">(", "process substitution >()"),
     ("=(", "zsh process substitution =()"),
     ("IFS=", "IFS injection"),
+    (
+        "%",
+        "cmd-style env expansion %VAR% (cannot be verified statically)",
+    ),
     ("/proc/self/", "sensitive /proc access"),
     ("/etc/passwd", "sensitive file access"),
     ("/etc/shadow", "sensitive file access"),

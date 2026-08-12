@@ -1092,8 +1092,8 @@ async fn compaction_strategy_drop_discards_oldest_rounds() {
             .any(|m| matches!(m, ChatMessage::User { content } if content.contains("per the 'drop' strategy"))),
         "drop marker missing"
     );
-    // summary message + last 3 rounds verbatim
-    assert_eq!(messages.len(), 5, "got {} messages", messages.len());
+    // summary merged into the first surviving user message + last 3 rounds verbatim
+    assert_eq!(messages.len(), 4, "got {} messages", messages.len());
 }
 
 #[tokio::test]

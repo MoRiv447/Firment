@@ -2554,6 +2554,18 @@ impl App {
         if text.is_empty() {
             return;
         }
+        if let Some(command) = text.strip_prefix('/') {
+            self.run_command(command);
+            return;
+        }
+        // Check busy BEFORE clearing the input so a stale Enter does not
+        // wipe a draft the user is still composing.
+        if self.busy {
+            self.items.push(Item::System(
+                "Agent is busy; wait for it to finish.".to_string(),
+            ));
+            return;
+        }
         if self.history.last().map(String::as_str) != Some(text.as_str()) {
             self.history.push(text.clone());
             if self.history.len() > 200 {
@@ -2565,16 +2577,6 @@ impl App {
         self.cursor = 0;
         self.input_sel = None;
         self.paste_blocks.clear();
-        if let Some(command) = text.strip_prefix('/') {
-            self.run_command(command);
-            return;
-        }
-        if self.busy {
-            self.items.push(Item::System(
-                "Agent is busy; wait for it to finish.".to_string(),
-            ));
-            return;
-        }
         self.items.push(Item::User(text.clone()));
         self.busy = true;
         self.ai_thinking = true;
@@ -3592,6 +3594,7 @@ mod tests {
         app.input = "first".chars().collect();
         app.cursor = app.input.len();
         app.submit();
+        app.busy = false; // simulate the turn finishing
         app.input = "second".chars().collect();
         app.cursor = app.input.len();
         app.submit();
