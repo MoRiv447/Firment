@@ -158,10 +158,12 @@ impl Tool for WebFetch {
 
         let mut stream = response.bytes_stream();
         let mut body: Vec<u8> = Vec::new();
+        let mut truncated = false;
         use futures::StreamExt;
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| ToolError::new(format!("[Net] read failed: {e}")))?;
             if body.len() + chunk.len() > MAX_BODY_BYTES {
+                truncated = true;
                 break;
             }
             body.extend_from_slice(&chunk);
@@ -178,9 +180,15 @@ impl Tool for WebFetch {
                 text: format!("{url}: empty response body"),
             });
         }
-        Ok(ToolOutput {
-            text: truncate(&text, MAX_TEXT_CHARS),
-        })
+        let mut text = truncate(&text, MAX_TEXT_CHARS);
+        if truncated {
+            // Say so explicitly: silently returning a partial page makes the
+            // model treat truncated content as the complete document.
+            text = format!(
+                "[truncated: page exceeds {MAX_BODY_BYTES} bytes; content below is the first part]\n{text}"
+            );
+        }
+        Ok(ToolOutput { text })
     }
 }
 

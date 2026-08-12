@@ -6,17 +6,19 @@ use regex::Regex;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+type TagCache = Arc<Mutex<HashMap<PathBuf, (Instant, Vec<TagEntry>)>>>;
+
 pub struct Symbols {
-    cache: Mutex<HashMap<PathBuf, (Instant, Vec<TagEntry>)>>,
+    cache: TagCache,
 }
 
 impl Symbols {
     pub fn new() -> Self {
         Self {
-            cache: Mutex::new(HashMap::new()),
+            cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -163,34 +165,45 @@ impl Tool for Symbols {
         let backend = ctx.symbols_backend.as_deref().unwrap_or("auto");
         let use_ctags =
             !references && (backend == "ctags" || (backend == "auto" && ctags_available()));
-        if use_ctags && let Some(entries) = self.ctags_entries(&resolved) {
-            let lower = query.to_lowercase();
-            let mut out = Vec::new();
-            for entry in entries
-                .iter()
-                .filter(|e| e.name.to_lowercase().contains(&lower))
-            {
-                out.push(format!(
-                    "{}:{}: {} {} — {}",
-                    rel_str(&resolved, &entry.path),
-                    entry.line,
-                    entry.kind,
-                    entry.name,
-                    truncate(&entry.snippet, 100)
-                ));
-                if out.len() >= max_results {
-                    out.push(format!("... stopped at {max_results} results"));
-                    break;
+        if use_ctags {
+            // ctags can take a while on large trees: run it on a blocking
+            // thread (with its own 60s timeout) so the async runtime is not
+            // frozen while indexing.
+            let cache = self.cache.clone();
+            let root = resolved.clone();
+            let entries = tokio::task::spawn_blocking(move || Self::ctags_entries(&cache, &root))
+                .await
+                .ok()
+                .flatten();
+            if let Some(entries) = entries {
+                let lower = query.to_lowercase();
+                let mut out = Vec::new();
+                for entry in entries
+                    .iter()
+                    .filter(|e| e.name.to_lowercase().contains(&lower))
+                {
+                    out.push(format!(
+                        "{}:{}: {} {} — {}",
+                        rel_str(&resolved, &entry.path),
+                        entry.line,
+                        entry.kind,
+                        entry.name,
+                        truncate(&entry.snippet, 100)
+                    ));
+                    if out.len() >= max_results {
+                        out.push(format!("... stopped at {max_results} results"));
+                        break;
+                    }
                 }
-            }
-            if out.is_empty() {
+                if out.is_empty() {
+                    return Ok(ToolOutput {
+                        text: format!("no symbols found for {query:?}"),
+                    });
+                }
                 return Ok(ToolOutput {
-                    text: format!("no symbols found for {query:?}"),
+                    text: out.join("\n"),
                 });
             }
-            return Ok(ToolOutput {
-                text: out.join("\n"),
-            });
         }
 
         let mut out = Vec::new();
@@ -264,21 +277,16 @@ struct TagEntry {
 }
 
 impl Symbols {
-    /// Run universal-ctags in JSON mode over the root, with a 60s cache.
-    /// Returns None when ctags is missing or fails (caller falls back).
-    fn ctags_entries(&self, root: &Path) -> Option<Vec<TagEntry>> {
-        if let Some((at, entries)) = self.cache.lock().ok()?.get(root)
+    /// Run universal-ctags in JSON mode over the root, with a 60s cache and a
+    /// hard 60s timeout on the command itself (a huge repo must not hang the
+    /// tool). Returns None when ctags is missing/fails/times out.
+    fn ctags_entries(cache: &TagCache, root: &Path) -> Option<Vec<TagEntry>> {
+        if let Some((at, entries)) = cache.lock().ok()?.get(root)
             && at.elapsed() < Duration::from_secs(60)
         {
             return Some(entries.clone());
         }
-        let output = std::process::Command::new("ctags")
-            .args(["-R", "--output-format=json", "--fields=+n"])
-            .arg("--languages=C,C++,Rust,Python,JavaScript,TypeScript,Go,Java")
-            .arg(".")
-            .current_dir(root)
-            .output()
-            .ok()?;
+        let output = run_ctags(root)?;
         if !output.status.success() {
             return None;
         }
@@ -314,11 +322,48 @@ impl Symbols {
                 snippet,
             });
         }
-        if let Ok(mut cache) = self.cache.lock() {
+        if let Ok(mut cache) = cache.lock() {
             cache.insert(root.to_path_buf(), (Instant::now(), entries.clone()));
         }
         Some(entries)
     }
+}
+
+/// Run universal-ctags with a hard 60s timeout. The child is killed on
+/// timeout instead of hanging the caller forever.
+fn run_ctags(root: &Path) -> Option<std::process::Output> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("ctags")
+        .args(["-R", "--output-format=json", "--fields=+n"])
+        .arg("--languages=C,C++,Rust,Python,JavaScript,TypeScript,Go,Java")
+        .arg(".")
+        .current_dir(root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let status = loop {
+        match child.try_wait().ok()? {
+            Some(status) => break status,
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            None => std::thread::sleep(Duration::from_millis(20)),
+        }
+    };
+    let mut stdout = Vec::new();
+    if let Some(mut pipe) = child.stdout.take() {
+        let _ = pipe.read_to_end(&mut stdout);
+    }
+    Some(std::process::Output {
+        status,
+        stdout,
+        stderr: Vec::new(),
+    })
 }
 
 fn scan_definitions(

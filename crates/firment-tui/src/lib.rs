@@ -377,11 +377,20 @@ fn spawn_agent_task(
                         .await;
                 }
                 AgentCmd::OpenModelPicker => {
-                    let agent = agent.lock().await;
-                    let provider_name = agent.session().provider.clone();
+                    // Fetch the provider name under a short lock, then run the
+                    // (slow, network) model list request OUTSIDE the agent lock
+                    // so a laggy provider cannot freeze the command loop.
+                    let provider_name = {
+                        let agent = agent.lock().await;
+                        agent.session().provider.clone()
+                    };
                     match task_config.list_models(&provider_name).await {
-                        Ok(models) => agent.emit(AgentEvent::Models(models)).await,
+                        Ok(models) => {
+                            let agent = agent.lock().await;
+                            agent.emit(AgentEvent::Models(models)).await;
+                        }
                         Err(e) => {
+                            let agent = agent.lock().await;
                             agent
                                 .emit(AgentEvent::Error(format!(
                                     "failed to fetch the model list: {e}"
@@ -617,10 +626,15 @@ fn spawn_agent_task(
                     }
                 }
                 AgentCmd::ListModels => {
-                    let agent = agent.lock().await;
-                    let provider_name = agent.session().provider.clone();
+                    // Short lock for the provider name, network call outside
+                    // the lock (same reason as OpenModelPicker).
+                    let provider_name = {
+                        let agent = agent.lock().await;
+                        agent.session().provider.clone()
+                    };
                     match task_config.list_models(&provider_name).await {
                         Ok(models) => {
+                            let agent = agent.lock().await;
                             let providers: Vec<String> =
                                 task_config.providers.keys().cloned().collect();
                             let mut msg = format!(
@@ -639,6 +653,7 @@ fn spawn_agent_task(
                             agent.emit(AgentEvent::Info(msg)).await;
                         }
                         Err(e) => {
+                            let agent = agent.lock().await;
                             agent
                                 .emit(AgentEvent::Error(format!(
                                     "failed to fetch the model list: {e}"

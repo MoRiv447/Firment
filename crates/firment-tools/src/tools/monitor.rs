@@ -16,6 +16,7 @@ fn read_serial(
     timeout_ms: u64,
     elf: Option<&Path>,
     timestamp: bool,
+    cancel: Option<firment_core::Cancellable>,
 ) -> Result<String, String> {
     use std::io::Read;
     let mut reader = serialport::new(port, baud)
@@ -44,6 +45,12 @@ fn read_serial(
             line.clear();
         };
     loop {
+        // A cancelled turn must not keep holding the serial port until the
+        // full timeout elapses.
+        if cancel.as_ref().is_some_and(|c| c.is_cancelled()) {
+            lines.push("(monitor interrupted by turn cancellation)".to_string());
+            break;
+        }
         if Instant::now() >= deadline {
             break;
         }
@@ -203,6 +210,7 @@ impl Tool for Monitor {
             .unwrap_or(10_000);
 
         let port_clone = port.clone();
+        let cancel = ctx.cancel.clone();
         let captured = tokio::task::spawn_blocking(move || -> Result<String, String> {
             let baud = if autodetect {
                 match detect_baud(&port_clone, 300)? {
@@ -217,7 +225,14 @@ impl Tool for Monitor {
             } else {
                 baud
             };
-            let text = read_serial(&port_clone, baud, timeout_ms, elf.as_deref(), timestamp)?;
+            let text = read_serial(
+                &port_clone,
+                baud,
+                timeout_ms,
+                elf.as_deref(),
+                timestamp,
+                Some(cancel.clone()),
+            )?;
             let header = if autodetect {
                 format!("monitor {port_clone} (autodetected {baud} baud, {timeout_ms} ms)")
             } else {
