@@ -37,16 +37,21 @@ impl Tool for ReadFile {
             .ok_or_else(|| ToolError::new("missing 'path'"))?;
         let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         let limit_arg = args.get("limit").and_then(|v| v.as_u64());
-        // No explicit range -> default to the first chunk; an explicit
-        // offset without a limit reads to the end (paging forward).
-        let limit =
-            limit_arg
-                .map(|v| v as usize)
-                .unwrap_or(if offset == 0 { DEFAULT_LIMIT } else { 0 });
         let hashlines = args
             .get("hashlines")
             .and_then(|h| h.as_bool())
             .unwrap_or(false);
+        // No explicit range -> default to the first chunk; an explicit
+        // offset without a limit reads to the end (paging forward).
+        // hashline mode keeps reading the whole file so large-file hash
+        // anchors stay valid across the entire content.
+        let limit = limit_arg
+            .map(|v| v as usize)
+            .unwrap_or(if offset == 0 && !hashlines {
+                DEFAULT_LIMIT
+            } else {
+                0
+            });
         let resolved =
             resolve_within(&ctx.cwd, path, &ctx.allowed_roots).map_err(ToolError::new)?;
         let content = read_text(&resolved).map_err(|e| {
@@ -185,6 +190,33 @@ mod tests {
         assert!(out.text.contains("1 | one"), "got: {}", out.text);
         assert!(out.text.contains("3 | three"), "got: {}", out.text);
         assert!(!out.text.contains("[truncated]"), "got: {}", out.text);
+    }
+
+    #[tokio::test]
+    async fn hashline_mode_reads_the_whole_file() {
+        let dir = tempdir().unwrap();
+        let body = (0..2500)
+            .map(|i| format!("line{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(dir.path().join("big.txt"), &body).unwrap();
+        let out = ReadFile
+            .run(
+                json!({"path": "big.txt", "hashlines": true}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(
+            out.text.contains("line2499"),
+            "hashline mode must cover the whole file, got tail: {}",
+            out.text
+        );
+        assert!(
+            !out.text.contains("[truncated]"),
+            "hashline mode must not truncate: {}",
+            out.text
+        );
     }
 
     #[tokio::test]
