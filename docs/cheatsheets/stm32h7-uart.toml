@@ -1,0 +1,31 @@
+# stm32h7-uart.toml — STM32H7 USART/DMA original cheatsheet (engineering experience + RM0468)
+[meta]
+family = "STM32H7xx (H723/H725/H730, single-core CM7)"
+topic = "USART / DMA / cache coherency"
+confidence = "verified"
+last_reviewed = "2026-08-12"
+source = "Engineering experience cross-checked with RM0468"
+
+[overview]
+usarts = "H723 has USART1/2/3/6 + UART4/5/7/8 + LPUART1; USART1/6 on APB2, the rest on APB1 (both in the D2 power domain)"
+clock = "APB1/APB2 in D2 domain are programmable (default up to 120 MHz for H723); BRR is computed from the real PCLK — never assume 36/72 MHz"
+d2_sram = "SRAM1/SRAM2/SRAM3 live in the D2 domain and are the natural DMA/CPU communication buffers; AXI SRAM (D1 domain) is not directly reachable by some DMA streams"
+
+[hal_flow]
+init = "MX_USARTx_UART_Init / HAL_UART_Init as usual; the peripheral clock enable macros gate the D2-domain RCC (__HAL_RCC_USARTx_CLK_ENABLE)"
+dma_tx = "HAL_UART_Transmit_DMA(huart, buf, len); H7 uses MDMA/DMA1/DMA2 — match the stream to the buffer domain (D2 SRAM works with both)"
+dma_rx = "HAL_UART_Receive_DMA() fixed-length; idle-line + DMA remaining counter for variable length, same pattern as G4"
+
+[cache_coherency]
+critical = "D-Cache coherency is the #1 H7 gotcha: with D-Cache enabled (typical), CPU writes to a DMA buffer are NOT visible to DMA until the line is flushed, and DMA writes are stale in cache until invalidated."
+cpu_to_dma = "After filling a TX buffer on the CPU side, call SCB_CleanDCache_by_Addr(buffer, len) (or SCB_CleanDCache()) BEFORE starting the DMA transfer"
+dma_to_cpu = "After a DMA RX completes, call SCB_InvalidateDCache_by_Addr(buffer, len) BEFORE reading the buffer"
+alternative = "Simplest robust setup: configure an MPU region over the shared buffers as non-cacheable (attribute 0xC) — then no manual clean/invalidate is needed; trade speed for simplicity"
+notes = "Interrupt-driven (non-DMA) UART paths are unaffected by D-Cache because the CPU always accesses the buffers itself"
+
+[common_mistake]
+- "DMA TX 'never sends' or sends garbage with D-Cache enabled — missing SCB_CleanDCache on the buffer"
+- "DMA RX data looks random/outdated — reading before SCB_InvalidateDCache"
+- "Using a stack/heap buffer in the D1 AXI SRAM with a DMA stream that only reaches D2 SRAM (BDMA/DMA2 routing)"
+- "Baud errors because PCLK was assumed instead of read from the RCC (APB prescalers in the D2 domain)"
+- "HAL_UART_Transmit_DMA with a length > 64KB needs the circular/byte-count handling — check UART_CR2/DMA NDTR width"

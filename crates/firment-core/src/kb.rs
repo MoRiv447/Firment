@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 
 /// Bump when the bundled seed knowledge base changes (forces re-materialization).
-pub const SEED_VERSION: &str = "2";
+pub const SEED_VERSION: &str = "3";
 
 const SEED_FILES: &[(&str, &str)] = &[
     (
@@ -49,6 +49,14 @@ const SEED_FILES: &[(&str, &str)] = &[
     (
         "cheatsheets/stm32g0-uart.toml",
         include_str!("../../../docs/cheatsheets/stm32g0-uart.toml"),
+    ),
+    (
+        "cheatsheets/stm32g4-uart.toml",
+        include_str!("../../../docs/cheatsheets/stm32g4-uart.toml"),
+    ),
+    (
+        "cheatsheets/stm32h7-uart.toml",
+        include_str!("../../../docs/cheatsheets/stm32h7-uart.toml"),
     ),
 ];
 

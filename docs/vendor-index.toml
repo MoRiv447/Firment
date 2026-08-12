@@ -136,3 +136,45 @@ doc_section = "ESP32-S3 TRM UART"
 hal_functions = ["uart_driver_install", "uart_write_bytes"]
 confidence = "verified"
 common_mistake = ["Enabling both UART0 and USB-CDC for logs at once produces garbled output; monitor defaults to 115200"]
+
+# ───────────────────────── STM32G4 ─────────────────────────
+[stm32.g4]
+family = "STM32G4xx (G431/G474, Cortex-M4F)"
+reference_manual = { name = "RM0440", url = "https://www.st.com/resource/en/reference_manual/rm0440-stm32g4-series-advanced-armbased-32bit-mcus-stmicroelectronics.pdf", pages = 1734 }
+hal_repo = "https://github.com/STMicroelectronics/STM32CubeG4"
+sdk_version = "STM32CubeG4 HAL v1.5.x"
+last_reviewed = "2026-08-12"
+
+[[stm32.g4.quickref]]
+topic = "USART / DMA (DMAMUX)"
+cheatsheet = "cheatsheets/stm32g4-uart.toml"
+doc_section = "RM0440 Section 28 (USART) / 19 (DMA+DMAMUX)"
+hal_functions = ["HAL_UART_Transmit_DMA", "HAL_UART_Receive_DMA", "HAL_DMA_Init"]
+key_registers = ["DMAMUX1_REQ0..REQx", "DMA_SxCR", "USART_BRR"]
+confidence = "verified"
+notes = "G4 has NO fixed DMA channel mapping — requests route through DMAMUX1; compute BRR from the actual PCLK1/PCLK2"
+
+[[stm32.g4.quickref]]
+topic = "Math accelerator"
+cheatsheet = ""
+doc_section = "RM0440 Section 8 (CORDIC) / 9 (FMAC)"
+hal_functions = ["HAL_CORDIC_Calculate", "HAL_FMAC_Process"]
+confidence = "verified"
+notes = "CORDIC (sin/cos/atan/vector) and FMAC (FIR/IIR) are hardware math units unique to G4 — offload DSP loops instead of libm"
+
+# ───────────────────────── STM32H7 ─────────────────────────
+[stm32.h7]
+family = "STM32H7xx (H723/H725/H730 single-core CM7)"
+reference_manual = { name = "RM0468", url = "https://www.st.com/resource/en/reference_manual/rm0468-stm32h723xx-stm32h725xx-stm32h730xx-and-stm32h735xx-advanced-armbased-32bit-mcus-stmicroelectronics.pdf", pages = 2804 }
+hal_repo = "https://github.com/STMicroelectronics/STM32CubeH7"
+sdk_version = "STM32CubeH7 HAL v1.11.x"
+last_reviewed = "2026-08-12"
+
+[[stm32.h7.quickref]]
+topic = "USART / DMA / D-Cache coherency"
+cheatsheet = "cheatsheets/stm32h7-uart.toml"
+doc_section = "RM0468 Section 33 (USART) / 22 (DMA) / cache + MPU"
+hal_functions = ["HAL_UART_Transmit_DMA", "SCB_CleanDCache_by_Addr", "SCB_InvalidateDCache_by_Addr"]
+key_registers = ["SCB_CTRL", "MPU_RNR", "MPU_RBAR"]
+confidence = "verified"
+notes = "D-Cache coherency is the #1 H7 bug: clean before DMA TX, invalidate after DMA RX, or make shared buffers non-cacheable via MPU"

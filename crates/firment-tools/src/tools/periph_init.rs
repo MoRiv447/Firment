@@ -147,8 +147,12 @@ fn family_for(part: &str) -> Option<&'static str> {
         Some("stm32f1")
     } else if p.starts_with("stm32f4") {
         Some("stm32f4")
+    } else if p.starts_with("stm32g4") {
+        Some("stm32g4")
     } else if p.starts_with("stm32g0") {
         Some("stm32g0")
+    } else if p.starts_with("stm32h7") {
+        Some("stm32h7")
     } else if p.starts_with("esp32s3") {
         Some("esp32s3")
     } else if p.starts_with("esp32") {
@@ -477,9 +481,43 @@ mod tests {
         assert_eq!(family_for("stm32f103c8t6"), Some("stm32f1"));
         assert_eq!(family_for("STM32F407VGT6"), Some("stm32f4"));
         assert_eq!(family_for("stm32g070"), Some("stm32g0"));
+        assert_eq!(family_for("stm32g431rbt6"), Some("stm32g4"));
+        assert_eq!(family_for("stm32h723vgt6"), Some("stm32h7"));
         assert_eq!(family_for("esp32s3"), Some("esp32s3"));
         assert_eq!(family_for("esp32"), Some("esp32"));
         assert_eq!(family_for("nrf52840"), None);
+    }
+
+    #[tokio::test]
+    async fn g4_and_h7_uart_cheatsheets_are_injected() {
+        let dir = tempdir().unwrap();
+        let out = PeriphInit
+            .run(
+                json!({"part": "stm32g431rbt6", "peripheral": "uart", "baudrate": 115200}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(out.text.contains("HAL_UART_Init"), "got: {}", out.text);
+        assert!(
+            out.text.contains("stm32g4-uart.toml") || out.text.contains("DMAMUX"),
+            "G4 cheatsheet (DMAMUX) must be injected, got: {}",
+            out.text
+        );
+
+        let out = PeriphInit
+            .run(
+                json!({"part": "stm32h723vgt6", "peripheral": "uart", "baudrate": 115200}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(out.text.contains("HAL_UART_Init"), "got: {}", out.text);
+        assert!(
+            out.text.contains("stm32h7-uart.toml") || out.text.contains("D-Cache"),
+            "H7 cheatsheet (D-Cache) must be injected, got: {}",
+            out.text
+        );
     }
 
     #[tokio::test]
