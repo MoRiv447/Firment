@@ -3542,8 +3542,10 @@ fn find_subslice(haystack: &[char], needle: &[char], from: usize) -> Option<usiz
 /// outside a git repository or when git is unavailable — the bar just omits
 /// the segment.
 async fn git_info(cwd: &Path) -> Option<GitInfo> {
+    // branch --show-current also resolves the unborn branch name of a fresh
+    // repo (rev-parse fails before the first commit).
     let branch = tokio::process::Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .args(["branch", "--show-current"])
         .current_dir(cwd)
         .output()
         .await
@@ -3663,6 +3665,73 @@ mod tests {
             None,
             Vec::new(),
         )
+    }
+
+    #[tokio::test]
+    async fn git_info_reports_branch_changes_and_none_outside_repo() {
+        use tokio::process::Command;
+        async fn run_git(root: &Path, args: &[&str]) -> std::process::Output {
+            Command::new("git")
+                .args(args)
+                .current_dir(root)
+                .output()
+                .await
+                .unwrap()
+        }
+        async fn run_commit(root: &Path, args: &[&str]) -> std::process::Output {
+            Command::new("git")
+                .args(args)
+                .current_dir(root)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .await
+                .unwrap()
+        }
+        // tui has no dev-dependencies; use a unique temp dir and clean up.
+        let dir = std::env::temp_dir().join(format!(
+            "firment-git-test-{}-{:.6}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_micros()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cleanup = dir.clone();
+
+        // Not a git repo yet -> None.
+        assert!(git_info(&dir).await.is_none());
+
+        let init = run_git(&dir, &["init", "-b", "main"]).await;
+        assert!(init.status.success(), "git init failed");
+
+        // Dirty work tree -> branch + changes >= 1.
+        std::fs::write(dir.join("a.txt"), "hi").unwrap();
+        let info = git_info(&dir).await.expect("repo should yield info");
+        assert_eq!(info.branch, "main");
+        assert!(
+            info.changes >= 1,
+            "expected dirty changes, got {}",
+            info.changes
+        );
+
+        // Clean after commit -> changes == 0.
+        let add = run_git(&dir, &["add", "a.txt"]).await;
+        assert!(add.status.success());
+        let commit = run_commit(&dir, &["commit", "-m", "t"]).await;
+        assert!(commit.status.success(), "commit failed");
+        let clean = git_info(&dir).await.expect("repo still yields info");
+        assert_eq!(clean.branch, "main");
+        assert_eq!(
+            clean.changes, 0,
+            "expected clean tree, got {}",
+            clean.changes
+        );
+
+        let _ = std::fs::remove_dir_all(&cleanup);
     }
 
     #[test]
