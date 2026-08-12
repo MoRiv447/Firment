@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.4.0-beta.5 (2026-08-12) — Read/Edit efficiency loop + on-demand KB seed + TUI session fixes
+
+### Read/Edit efficiency loop (audit consensus across Claude Code / opencode / oh-my-pi / pi)
+
+- **`edit_file` echoes a unified diff** of the change (capped 4k) instead of only line
+  counts, so the model sees exactly what landed and no longer needs to re-read the file to
+  confirm; system prompt updated accordingly (use the smallest unique `old_text`, 2-4 lines;
+  re-read only when the diff is missing)
+- **`read_file` now prefixes every line with a line number** (`"  123 | content"`) for
+  precise edit anchors and `path:line` references; without an explicit range it returns at
+  most 1000 lines with a `[truncated: file has N lines; pass offset=N]` paging hint
+  (explicit `offset` still reads to the end)
+- `hashlines=true` keeps reading the whole file so large-file hash anchors stay valid
+  (fixed a regression where the 1000-line cap also applied to hashline mode)
+
+### On-demand knowledge base (context fixed-cost)
+
+- The built-in vendor index (~12k chars) is no longer embedded in every system prompt;
+  the prompt now tells the model to `read_file` `config-dir/kb/vendor-index.toml` on
+  demand — saves ~12k chars per request. Project-level `vendor-index.toml` hints are
+  unchanged
+
+### TUI session management fixes
+
+- `/delete <id>` refuses to delete the **active** session (the in-memory session would
+  re-create its files on the next save and the removed undo dirs break edit rollback);
+  start `/new` first
+- `/sessions` picker now shows the **full UUID** on its own line (was truncated to 8 hex
+  chars), with new keys: `c` copies the selected id to the clipboard, `d` deletes it;
+  `/help` updated to document that drag-select is unavailable inside the TUI (mouse
+  capture) — use `c` instead
+
 ## v0.4.0-beta.4 (2026-08-11) — security audit fixes + context/output tuning + TUI commands
 
 ### Security fixes (audit findings P0-1/P0-2, P1-1/P1-2/P1-3)
