@@ -41,8 +41,11 @@ struct FunctionInfo {
 struct ElfReport {
     mem: MemoryStats,
     functions: Vec<FunctionInfo>,
-    /// Set when the ELF carries no `.stack_usage` section.
+    /// True when no stack info was available at all: no `.stack_usage`
+    /// section and no parsed `.su` files.
     stack_section_missing: bool,
+    /// Number of functions whose stack info was resolved from `.su` files.
+    su_records: usize,
     /// Section names of non-code/non-data sections we skip (informative).
     skipped: Vec<String>,
 }
@@ -198,6 +201,89 @@ fn read_le32(data: &[u8], at: usize) -> u32 {
     u32::from_le_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]])
 }
 
+/// GCC/Clang `-fstack-usage` produces a `.su` text file per translation unit
+/// (e.g. `build/obj/main.su`) with lines like:
+/// `src/main.c:12:5:main 48 static`
+/// `src/main.c:30:6:foo 24 dynamic`
+/// This is the real-world source of per-function stack depth — the ELF
+/// `.stack_usage` section only exists for exotic toolchains. Parse these files
+/// and attach records to the report's functions by name (exact match first,
+/// then a `.isra`/`.constprop`/`.part`-suffix prefix match, which -O2+ adds).
+fn parse_su_files(paths: &[PathBuf], report: &mut ElfReport) -> usize {
+    let mut matched = 0usize;
+    for path in paths {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            // `path:line:col:func size qualifier` — split on the last ':' to
+            // isolate the `func size qualifier` tail.
+            let Some((_, tail)) = line.rsplit_once(':') else {
+                continue;
+            };
+            let mut words = tail.split_whitespace();
+            let Some(func) = words.next() else {
+                continue;
+            };
+            let Some(size) = words.next().and_then(|s| s.parse::<u32>().ok()) else {
+                continue;
+            };
+            let dynamic = words.next().is_some_and(|q| q.contains("dynamic"));
+            // Exact match first, then an -O2+ clone-suffix prefix match
+            // (foo -> foo.isra.0 / foo.constprop.1 / foo.part.2).
+            let idx = report
+                .functions
+                .iter()
+                .position(|f| f.name == func)
+                .or_else(|| {
+                    report
+                        .functions
+                        .iter()
+                        .position(|f| f.name.starts_with(&format!("{func}.")))
+                });
+            if let Some(idx) = idx {
+                let info = &mut report.functions[idx];
+                info.stack = Some(size);
+                info.stack_dynamic |= dynamic;
+                matched += 1;
+            }
+        }
+    }
+    matched
+}
+
+/// Discover `.su` files by scanning the ELF directory tree (depth-limited).
+/// Covers common build layouts where the ELF and per-object `.su` files live
+/// under the same `build/` tree.
+fn discover_su_files(elf_dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![elf_dir.to_path_buf()];
+    let mut depth = 0;
+    while !stack.is_empty() && depth < 4 {
+        depth += 1;
+        let mut next = Vec::new();
+        for dir in stack.drain(..) {
+            let Ok(read) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in read.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    next.push(path);
+                } else if path.extension().is_some_and(|e| e == "su") {
+                    out.push(path);
+                }
+            }
+        }
+        stack = next;
+    }
+    out
+}
+
 /// Human-readable analysis output.
 fn format_analyze(elf: &Path, report: &ElfReport) -> String {
     let mut out = format!(
@@ -214,8 +300,9 @@ fn format_analyze(elf: &Path, report: &ElfReport) -> String {
     }
     if report.stack_section_missing {
         out.push_str(
-            "\nStack usage: not available (no .stack_usage section). Rebuild with \
-             `-fstack-usage` (GCC/Clang) to get per-function stack depth.",
+            "\nStack usage: not available. Rebuild with `-fstack-usage` (GCC/Clang) to get \
+             per-function stack depth — Firment auto-reads the resulting .su files next to \
+             the ELF; keep the ELF and .su files under the same build directory.",
         );
     } else {
         let deepest = report.deepest_stack(10);
@@ -370,7 +457,18 @@ impl Tool for ElfAnalyze {
                 elf.display()
             )));
         }
-        let current = analyze(&elf)?;
+        let mut current = analyze(&elf)?;
+        // Per-function stack depth comes from `-fstack-usage` `.su` files in
+        // the real world (GCC/Clang do not emit an ELF `.stack_usage`
+        // section); scan the ELF tree and attach the records.
+        let su_files = discover_su_files(elf.parent().unwrap_or_else(|| Path::new(".")));
+        if !su_files.is_empty() {
+            let matched = parse_su_files(&su_files, &mut current);
+            current.su_records = matched;
+            if matched > 0 {
+                current.stack_section_missing = false;
+            }
+        }
 
         // Explicit baseline argument wins; otherwise use the cached baseline.
         let baseline_arg = args.get("baseline").and_then(|b| b.as_str());
@@ -502,6 +600,81 @@ mod tests {
         let report2 = analyze(&elf2).unwrap();
         assert_eq!(report2.functions[0].stack, Some(64));
         assert!(report2.functions[0].stack_dynamic);
+    }
+
+    #[test]
+    fn su_files_are_parsed_and_attached() {
+        let dir = tempdir().unwrap();
+        let elf = dir.path().join("fw.elf");
+        write_test_elf(&elf, 512, None);
+        let mut report = analyze(&elf).unwrap();
+        assert!(report.stack_section_missing);
+
+        // GCC-style .su text next to the ELF; the test ELF only defines a
+        // `main` symbol, so `foo` records are ignored (must attach only to
+        // functions that actually exist in the binary).
+        std::fs::write(
+            dir.path().join("main.su"),
+            "src/main.c:12:5:main 48 static\nsrc/foo.c:3:6:foo 24 dynamic\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("util.su"),
+            "src/util.c:7:6:nonexistent 96 static\n",
+        )
+        .unwrap();
+        let files = discover_su_files(dir.path());
+        assert_eq!(files.len(), 2, "both .su files found");
+        let matched = parse_su_files(&files, &mut report);
+        assert_eq!(matched, 1, "only functions present in the ELF attach");
+        let main = report.functions.iter().find(|f| f.name == "main").unwrap();
+        assert_eq!(main.stack, Some(48));
+        assert!(!main.stack_dynamic);
+    }
+
+    #[test]
+    fn su_clone_suffix_matches_optimized_symbols() {
+        // -O2+ renames static helpers: the .su line says `foo`, the ELF
+        // symbol is `foo.isra.0` — the prefix match must attach the record.
+        let dir = tempdir().unwrap();
+        let mut report = ElfReport {
+            functions: vec![FunctionInfo {
+                name: "foo.isra.0".to_string(),
+                size: 16,
+                address: 0,
+                stack: None,
+                stack_dynamic: false,
+            }],
+            ..ElfReport::default()
+        };
+        std::fs::write(dir.path().join("util.su"), "src/util.c:7:6:foo 96 static\n").unwrap();
+        let files = discover_su_files(dir.path());
+        let matched = parse_su_files(&files, &mut report);
+        assert_eq!(matched, 1, "clone-suffix prefix match");
+        assert_eq!(report.functions[0].stack, Some(96));
+        assert!(!report.functions[0].stack_dynamic);
+    }
+
+    #[test]
+    fn run_reads_su_files_next_to_the_elf() {
+        let dir = tempdir().unwrap();
+        let elf = dir.path().join("fw.elf");
+        write_test_elf(&elf, 512, None);
+        std::fs::write(
+            dir.path().join("main.su"),
+            "src/main.c:12:5:main 48 static\n",
+        )
+        .unwrap();
+        let out = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(ElfAnalyze.run(json!({"file": "fw.elf"}), &ctx(dir.path(), false)))
+            .unwrap();
+        assert!(
+            out.text.contains("Stack usage (max static depth)"),
+            "run output should show stack usage from .su, got: {}",
+            out.text
+        );
+        assert!(out.text.contains("main"), "got: {}", out.text);
     }
 
     #[test]

@@ -114,7 +114,7 @@ model = "deepseek-v4-flash"   # or deepseek-v4-pro
 # monitor_baud = 115200                   # default baud rate for `firm monitor`
 # web_search = "duckduckgo"               # web_search provider: duckduckgo (no key) / tavily / brave
 # web_search_api_key_env = "TAVILY_API_KEY"  # env var holding the search API key (or web_search_api_key inline)
-# elf = "build/fw.elf"                       # glob of the firmware ELF: harness auto-seeds a binary baseline and runs elf_analyze (flash/RAM, function size, stack depth) after each edited turn (add -fstack-usage to your build flags for stack depth)
+# elf = "build/fw.elf"                       # glob of the firmware ELF: harness auto-seeds a binary baseline and runs elf_analyze (flash/RAM, function size, stack depth) after each edited turn (stack depth needs -fstack-usage in your build flags; Firment auto-reads the resulting .su files next to the ELF)
 # max_subagent_depth = 2                  # recursion limit for the `task` subagent tool
 ```
 
