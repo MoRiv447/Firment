@@ -127,6 +127,10 @@ pub async fn run(
     // through the agent lock: extract the turn's cancellation handles up
     // front and fire them directly from the command loop.
     let (cancel_tx, cancel_signal) = agent.cancel_handle();
+    // Keep a copy for the app so Esc can fire cancel directly (bypassing the
+    // command channel); the originals are moved into the agent task.
+    let app_cancel_tx = cancel_tx.clone();
+    let app_cancel_signal = cancel_signal.clone();
     let agent = Arc::new(tokio::sync::Mutex::new(agent));
     // Serializes turns: a queued message waits for the running turn instead
     // of running two agent loops against the same session.
@@ -173,6 +177,11 @@ pub async fn run(
         startup_hint,
         initial_messages,
     );
+    // Wire the pre-extracted cancel handles into the app so Esc can fire them
+    // directly (bypassing the command channel that may be blocked on the
+    // agent lock while a turn runs).
+    app.cancel_tx = Some(app_cancel_tx);
+    app.cancel_signal = Some(app_cancel_signal);
     let result = run_loop(&mut terminal, &mut app, event_rx, perm_rx, ask_rx, ui_rx).await;
     restore_terminal(&mut terminal)?;
     agent_task.abort();
@@ -847,6 +856,11 @@ struct App {
     /// While busy, the first Esc arms an interrupt confirmation window (5s);
     /// a second Esc inside it actually cancels the turn.
     interrupt_armed_at: Option<Instant>,
+    /// Pre-extracted cancellation handles, wired in by `run` only, so the
+    /// Esc interrupt fires them directly without going through the (possibly
+    /// blocked) command channel.
+    cancel_tx: Option<watch::Sender<bool>>,
+    cancel_signal: Option<firment_core::Cancellable>,
     permission: Option<PermissionRequest>,
     /// Pending `ask_user` question shown as a modal; the agent is blocked until
     /// the user answers or dismisses it.
@@ -1227,6 +1241,8 @@ impl App {
             question_input: Vec::new(),
             interrupting: false,
             interrupt_armed_at: None,
+            cancel_tx: None,
+            cancel_signal: None,
             scroll: 0,
             max_offset: 0,
             follow: true,
@@ -1827,7 +1843,16 @@ impl App {
             return;
         }
         self.interrupting = true;
-        self.send_cmd(AgentCmd::Cancel);
+        // Cancel directly instead of queueing AgentCmd::Cancel: while a turn
+        // holds the agent lock, the command loop can be blocked on a queued
+        // command's lock wait (e.g. /model), which would otherwise stall the
+        // channel and make Esc unable to interrupt a long turn.
+        if let Some(tx) = &self.cancel_tx {
+            let _ = tx.send(true);
+        }
+        if let Some(signal) = &self.cancel_signal {
+            signal.cancel();
+        }
         self.items
             .push(Item::System("⏹ Interrupt request sent…".to_string()));
     }
@@ -3644,15 +3669,15 @@ mod tests {
         assert!(app.interrupt_armed_at.is_some());
         assert!(cmd_rx.try_recv().is_err());
 
-        // Second Esc inside the window cancels for real.
+        // Second Esc inside the window cancels for real. The cancel now fires
+        // the pre-extracted handles directly (wired by `run`; not present in
+        // this harness) instead of queueing an AgentCmd — so no command is
+        // enqueued, but the interrupt is flagged and the draft is kept.
         app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(app.interrupting);
         assert!(app.interrupt_armed_at.is_none());
         assert_eq!(app.input.iter().collect::<String>(), "draft");
-        match cmd_rx.try_recv().unwrap() {
-            AgentCmd::Cancel => {}
-            _ => panic!("expected Cancel"),
-        }
+        assert!(cmd_rx.try_recv().is_err());
 
         // The interrupt request can only be sent once.
         app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));

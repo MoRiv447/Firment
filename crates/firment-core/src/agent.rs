@@ -438,7 +438,23 @@ impl Agent {
         let dir = self.store.spill_dir(&self.session.id);
         // Spill files live only as long as the messages referencing them; on
         // each spill, drop files older than a day so long sessions do not
-        // accumulate unbounded disk usage.
+        // accumulate unbounded disk usage. Files still referenced by the
+        // current transcript are kept even past the cutoff: deleting them
+        // would make the stored spill path unreadable after a session reload.
+        let referenced: std::collections::HashSet<String> = self
+            .session
+            .messages
+            .iter()
+            .flat_map(|m| match m {
+                ChatMessage::System { content }
+                | ChatMessage::User { content }
+                | ChatMessage::Assistant { content, .. }
+                | ChatMessage::Tool { content, .. } => Some(content.as_str()),
+            })
+            .flat_map(|t| t.split_whitespace())
+            .filter(|w| w.starts_with("spill") || w.ends_with(".txt"))
+            .map(|w| w.rsplit('/').next().unwrap_or(w).to_string())
+            .collect();
         let _ = fs::create_dir_all(&dir);
         if let Ok(read) = fs::read_dir(&dir) {
             let cutoff =
@@ -446,7 +462,8 @@ impl Agent {
             for entry in read.flatten() {
                 let Ok(meta) = entry.metadata() else { continue };
                 let expired = cutoff.is_some_and(|c| meta.modified().ok().is_some_and(|t| t < c));
-                if expired {
+                let file_name = entry.file_name().to_string_lossy().into_owned();
+                if expired && !referenced.contains(&file_name) {
                     let _ = fs::remove_file(entry.path());
                 }
             }
@@ -528,12 +545,14 @@ impl Agent {
                     "⏹ Interrupted (no work started yet)".to_string(),
                 ))
                 .await;
+            // Persist BEFORE TurnEnd: clients that refresh the transcript on
+            // turn_end must not read a stale store.
+            let _ = self.store.save(&self.session);
             self.sink
                 .event(AgentEvent::TurnEnd {
                     text: String::new(),
                 })
                 .await;
-            let _ = self.store.save(&self.session);
             return Ok(String::new());
         }
         let (delta, last_seq) = Ledger::new(self.store.ledger_path(&self.session.id))
@@ -589,12 +608,12 @@ impl Agent {
                         "⏹ Interrupted; rolled back this turn's edits: {summary}"
                     )))
                     .await;
+                let _ = self.store.save(&self.session);
                 self.sink
                     .event(AgentEvent::TurnEnd {
                         text: String::new(),
                     })
                     .await;
-                let _ = self.store.save(&self.session);
                 return Ok(String::new());
             }
             let request = self.build_request();
@@ -608,12 +627,12 @@ impl Agent {
                             "⏹ Interrupted; rolled back this turn's edits: {summary}"
                         )))
                         .await;
+                    let _ = self.store.save(&self.session);
                     self.sink
                         .event(AgentEvent::TurnEnd {
                             text: String::new(),
                         })
                         .await;
-                    let _ = self.store.save(&self.session);
                     return Ok(String::new());
                 }
             };
@@ -670,12 +689,12 @@ impl Agent {
                         "⏹ Interrupted; rolled back this turn's edits: {summary}"
                     )))
                     .await;
+                let _ = self.store.save(&self.session);
                 self.sink
                     .event(AgentEvent::TurnEnd {
                         text: content.clone(),
                     })
                     .await;
-                let _ = self.store.save(&self.session);
                 return Ok(content);
             }
 
@@ -800,12 +819,14 @@ impl Agent {
                             .await;
                     }
                 }
+                self.store.save(&self.session)?;
+                // Persist BEFORE TurnEnd so transcript-refreshing clients see
+                // the final message.
                 self.sink
                     .event(AgentEvent::TurnEnd {
                         text: content.clone(),
                     })
                     .await;
-                self.store.save(&self.session)?;
                 return Ok(content);
             }
 
