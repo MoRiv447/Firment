@@ -41,7 +41,7 @@ impl Tool for PeriphInit {
         })
     }
 
-    async fn run(&self, args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+    async fn run(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let part = args
             .get("part")
             .and_then(|p| p.as_str())
@@ -118,10 +118,13 @@ impl Tool for PeriphInit {
             "\n## 用法\n\
              - 先检查工程是否已有 CubeMX/厂商工具生成的初始化（在 main.c / *_hal_msp.c 里 grep \
              MX_*_Init、HAL_*_Init、SystemClock_Config）：如果已有，直接调用现有函数，\
-             **不要重复初始化或重新定义同名函数**；仅当工程是纯手写（无生成代码）时才落盘此骨架。\n\
-             - 骨架里的 TODO(fill) 需要按项目实际（引脚、时钟树）填写；函数名若与已有代码冲突请改名（如加后缀）。\n\
+             **不要重复初始化、重新定义同名函数或句柄变量**；仅当工程是纯手写（无生成代码）时才落盘此骨架。\n\
+             - 骨架里的 TODO(fill) 需要按项目实际（引脚、时钟树）填写；函数名/句柄名若与已有代码冲突请改名（如加后缀）。\n\
              - 生成后交给 edit_file / write_file 落盘，并结合 build 验证编译。",
         );
+        if let Some(hal_note) = project_hal_note(&ctx.cwd) {
+            text.push_str(&format!("\n## 工程注意\n{hal_note}"));
+        }
         Ok(ToolOutput { text })
     }
 }
@@ -156,6 +159,42 @@ fn find_cheatsheet(kb_dir: &Path, family: &str, periph: &str) -> Option<(PathBuf
     }
 }
 
+/// Detect the project's build framework and warn about the classic HAL
+/// duplication trap: PlatformIO ships its own STM32Cube HAL, and copying a
+/// CubeMX-generated `Drivers/` into such a project redefines every HAL symbol
+/// (the exact conflict that makes people abandon PlatformIO).
+fn project_hal_note(cwd: &Path) -> Option<String> {
+    let has_ioc = find_file_up(cwd, ".ioc");
+    let has_pio = find_file_up(cwd, "platformio.ini");
+    match (has_ioc, has_pio) {
+        (true, _) => Some(
+            "检测到 CubeMX 工程（.ioc）：HAL 驱动由 CubeMX 生成于 Drivers/。使用本骨架时\
+             复用现有 MX_*_Init / HAL_*_MspInit，不要引入第二份 HAL 驱动。"
+                .to_string(),
+        ),
+        (_, true) => Some(
+            "检测到 PlatformIO 工程（platformio.ini）：PlatformIO 自带 STM32Cube HAL\
+             （framework=stm32cube）。切勿把 CubeMX 生成的 Drivers/ 复制进工程——两套 HAL\
+             驱动会重复定义所有 HAL 符号；直接在 platformio.ini 里配置外设或调用自带 HAL。"
+                .to_string(),
+        ),
+        _ => None,
+    }
+}
+
+fn find_file_up(cwd: &Path, name: &str) -> bool {
+    cwd.ancestors().any(|dir| {
+        let Ok(read) = fs::read_dir(dir) else {
+            return false;
+        };
+        read.flatten().any(|entry| {
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+            file_name == name || file_name.ends_with(name)
+        })
+    })
+}
+
 fn uart_skeleton(baudrate: u64, dma: bool, interrupt: bool, pins: Option<&str>) -> String {
     let pin_note = pins.unwrap_or("TODO(fill): e.g. USART1 TX=PA9 RX=PA10");
     let dma_block = if dma {
@@ -173,8 +212,9 @@ fn uart_skeleton(baudrate: u64, dma: bool, interrupt: bool, pins: Option<&str>) 
     };
     format!(
         "// {pin_note}\n\
-         // NOTE: 若工程已有 CubeMX 生成的同名 MX_*_Init（main.c / *_hal_msp.c），\
-         直接调用它，不要重复初始化或重新定义；仅纯手写工程才使用本函数。\n\
+         // NOTE: 若工程已有 CubeMX 生成的初始化（MX_*_Init 在 main.c，HAL_UART_MspInit 在 \
+         *_hal_msp.c），直接调用现有函数；句柄 huart1 也已在 main.c 定义，切勿重复定义。\
+         仅纯手写工程才使用本函数。\n\
          static UART_HandleTypeDef huart1;\n\
          \n\
          void MX_USART1_UART_Init(void) {{\n\
@@ -363,5 +403,29 @@ mod tests {
         assert_eq!(family_for("esp32s3"), Some("esp32s3"));
         assert_eq!(family_for("esp32"), Some("esp32"));
         assert_eq!(family_for("nrf52840"), None);
+    }
+
+    #[test]
+    fn project_framework_detection_warns_about_hal_duplication() {
+        let dir = tempdir().unwrap();
+        // CubeMX project: .ioc present.
+        std::fs::write(dir.path().join("fw.ioc"), "Mcu.Family=STM32F1\n").unwrap();
+        let note = project_hal_note(dir.path()).unwrap();
+        assert!(note.contains("CubeMX"), "got: {note}");
+
+        // PlatformIO project: platformio.ini present, and the note must warn
+        // about the classic two-HAL conflict.
+        let pio = tempdir().unwrap();
+        std::fs::write(
+            pio.path().join("platformio.ini"),
+            "[env:nucleo_f103rb]\nplatform = ststm32\nframework = stm32cube\n",
+        )
+        .unwrap();
+        let note = project_hal_note(pio.path()).unwrap();
+        assert!(note.contains("PlatformIO"), "got: {note}");
+        assert!(
+            note.contains("重复定义") || note.contains("两套 HAL"),
+            "must warn about HAL duplication, got: {note}"
+        );
     }
 }
