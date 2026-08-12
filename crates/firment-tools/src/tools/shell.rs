@@ -6,8 +6,7 @@ use std::collections::HashMap;
 
 pub struct Shell;
 
-/// Statically detectable shell metaprogramming / sensitive-access patterns
-/// (expanded from Claude Code's bashSecurity command-substitution table).
+/// Statically detectable shell metaprogramming / sensitive-access patterns.
 /// These cannot be verified by a token blacklist alone — e.g. `d$(echo el)`
 /// rebuilds `del` at expansion time — so any hit is flagged outright.
 const METAPROGRAMMING_PATTERNS: &[(&str, &str)] = &[

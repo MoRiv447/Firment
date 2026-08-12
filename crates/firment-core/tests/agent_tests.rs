@@ -448,6 +448,8 @@ fn system_prompt_covers_core_guidance_and_plan_contract() {
         "verify",
         "Hardware knowledge base",
         "vendor-index.toml",
+        "periph_init",
+        "Build loop",
         "Report outcomes faithfully",
         "Use this board's HAL layer",
     ] {

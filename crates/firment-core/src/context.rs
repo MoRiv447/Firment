@@ -66,6 +66,14 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          hashlines=true to get an [8-hex content hash] per line, then target edit_file with \
          hashline / end_hashline. If the hash is missing the file changed \
          ([ConcurrentChange]); re-read first, never guess.\n\
+         - For MCU peripheral bring-up (UART / GPIO / I2C / SPI / TIM / ADC / DMA), call \
+         periph_init with the part number and peripheral name to get a HAL init skeleton plus \
+         the matching knowledge-base cheatsheet (clock domain, DMA channel mapping, pitfalls). \
+         Then adapt the TODO(fill) markers to the actual project (pins, clock tree, CubeMX) and \
+         land it with edit_file / write_file — do not write such init code from scratch.\n\
+         - Build loop: when build fails ([CompileError]), read the failing lines (read_file with \
+         the reported path:line), fix with edit_file (the returned diff confirms the change), \
+         and rebuild — iterate until the build passes or the error is genuinely unrelated.\n\
          - Research: web_search finds sources (datasheets, errata, vendor docs) and web_fetch \
          reads them; task runs a read-only research subagent that returns a report; ask_user \
          asks the user only for decisions or information that only they have; todo keeps a \

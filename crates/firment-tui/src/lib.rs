@@ -1783,9 +1783,9 @@ impl App {
             }
             KeyCode::Esc => {
                 if self.busy {
-                    // Double-Esc confirmation (aligned with opencode): the
-                    // first Esc arms a short window, the second Esc inside it
-                    // actually cancels the turn. A stale arm is just a hint.
+                    // Double-Esc confirmation: the first Esc arms a short
+                    // window, the second Esc inside it actually cancels the
+                    // turn. A stale arm is just a hint.
                     const ESC_CONFIRM_WINDOW: Duration = Duration::from_secs(5);
                     let armed = self
                         .interrupt_armed_at

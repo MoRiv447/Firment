@@ -8,6 +8,7 @@ mod grep;
 mod html;
 mod list_dir;
 mod monitor;
+mod periph_init;
 mod read_file;
 mod run;
 mod shell;
@@ -30,6 +31,7 @@ pub fn all() -> Vec<Arc<dyn Tool>> {
         Arc::new(read_file::ReadFile),
         Arc::new(run::Run),
         Arc::new(monitor::Monitor),
+        Arc::new(periph_init::PeriphInit),
         Arc::new(write_file::WriteFile),
         Arc::new(flash::Flash),
         Arc::new(edit_file::EditFile),

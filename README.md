@@ -172,13 +172,12 @@ Keys: `↑/↓` browse history when the input is empty, otherwise scroll; `PgUp/
 
 ### 🏆 Benchmark (2026-08-07)
 
-In a five-agent benchmark (19 cases × 5 agents, same `deepseek-v4-flash` model, one-shot mode), Firment ranks **#1 with 4.95**:
+In a four-agent benchmark (19 cases × 4 agents, same `deepseek-v4-flash` model, one-shot mode), Firment ranks **#1 with 4.95**:
 
 | Agent | Weighted score |
 |---|---|
 | **Firment** | **4.95** |
 | Codex | 4.88 |
-| Claude Code | 4.60 |
 | opencode | 4.55 |
 | oh-my-pi | 4.30 |
 

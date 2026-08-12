@@ -309,7 +309,7 @@ impl Config {
     }
 
     /// Fetch the model list from the provider's `/models` endpoint
-    /// (OpenAI-compatible) or `/v1/models` (Anthropic), like opencode.
+    /// (OpenAI-compatible) or `/v1/models` (Anthropic).
     pub async fn list_models(&self, name: &str) -> Result<Vec<String>, ConfigError> {
         let provider = self.provider(Some(name))?.clone();
         let key = self.api_key_for(&provider, name).unwrap_or_default();
@@ -486,12 +486,12 @@ model = "deepseek-v4-flash"
 # max_tokens = 8192
 # temperature = 0.2
 
-# Multiple-provider example (switch in the TUI with /provider claude)
-# [providers.claude]
+# Multiple-provider example (switch in the TUI with /provider example)
+# [providers.example]
 # type = "anthropic"
 # base_url = "https://api.anthropic.com"
 # api_key_env = "ANTHROPIC_API_KEY"
-# model = "claude-sonnet-4-5"
+# model = "example-sonnet"
 
 # Tools that skip confirmation prompts (write_file, edit_file, shell).
 # build is auto-approved by default (it runs a user-configured command); flash always asks.

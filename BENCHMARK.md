@@ -2,13 +2,12 @@
 
 ## 2026-08-07 复测（S1/T1 加固后）
 
-五家通用编码 Agent 横向评测（19 用例 × 5 agent），统一模型 `deepseek-v4-flash`（thinking=max）、one-shot 非交互模式、自动批准等效权限。
+四家通用编码 Agent 横向评测（19 用例 × 4 agent），统一模型 `deepseek-v4-flash`（thinking=max）、one-shot 非交互模式、自动批准等效权限。
 
 | Agent | 加权总分 |
 |---|---|
 | **Firment** | **4.95** |
 | Codex | 4.88 |
-| Claude Code | 4.60 |
 | opencode | 4.55 |
 | oh-my-pi | 4.30 |
 
@@ -66,7 +65,7 @@
 
 - 五家使用**同一模型端点** `deepseek-v4-flash`（thinking=max）、one-shot 非交互模式、自动批准等效权限；差异仅来自 agent 壳（系统提示词、工具设计、上下文管理、错误恢复）。
 - temperature / max_tokens 未单独记录，使用各家默认值；如需完全复现，请以报告日期（2026-08-07）时的各 agent 版本为准。
-- **测试集为另外四家（opencode / Claude Code / oh-my-pi / Codex）设计，Firment 是后加入的，未对该测试集做任何适配**——分数不含“专门训练”成分。
+- **测试集为另外三家（opencode / oh-my-pi / Codex）设计，Firment 是后加入的，未对该测试集做任何适配**——分数不含“专门训练”成分。
 - 完整评分表（含各家 evidence）与逐例日志存档在评测方本地，未随仓库分发。
 
 ## 核验方式

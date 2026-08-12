@@ -35,6 +35,7 @@ pub fn plan_registry() -> Arc<ToolRegistry> {
                 | "todo"
                 | "ask_user"
                 | "elf_analyze"
+                | "periph_init"
         ) {
             registry.register(tool);
         }
