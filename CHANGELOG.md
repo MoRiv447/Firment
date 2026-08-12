@@ -2,7 +2,7 @@
 
 ## v0.4.0-beta.5 (2026-08-12) — Read/Edit efficiency loop + on-demand KB seed + TUI session fixes
 
-### Read/Edit efficiency loop (audit consensus across Claude Code / opencode / oh-my-pi / pi)
+### Read/Edit efficiency loop
 
 - **`edit_file` echoes a unified diff** of the change (capped 4k) instead of only line
   counts, so the model sees exactly what landed and no longer needs to re-read the file to
