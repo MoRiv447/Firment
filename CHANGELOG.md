@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.4.0-beta.6 (2026-08-12) — periph_init peripheral code generation + KB reliability
+
+### New tool: `periph_init`
+
+- Generates MCU peripheral **initialization skeletons** (STM32 HAL style) with the matching
+  knowledge-base cheatsheet injected (clock domain, DMA channel mapping, common pitfalls) —
+  so peripheral bring-up starts from a correct frame instead of scratch
+- Full skeletons for `uart` / `gpio` / `i2c` (baudrate, pins, DMA and interrupt options);
+  `spi` / `tim` / `adc` / `dma` fall back to a generic skeleton + cheatsheet
+- Part-number family auto-detection (`stm32f1` / `stm32f4` / `stm32g0` / `esp32` / `esp32s3`),
+  with fallback to a family-generic cheatsheet (e.g. `stm32-dma.toml`) when no family-specific
+  one exists; unknown families degrade gracefully with an explicit hint
+- Output carries `TODO(fill)` markers for project-specific parameters (pins, clock tree,
+  CubeMX config); available in plan mode; 5 tests
+- Prompt guidance: use `periph_init` for peripheral bring-up (do not write init code from
+  scratch) and a build-fix-rebuild loop (`[CompileError]` → `path:line` → edit → rebuild)
+
+### Knowledge-base reliability
+
+- Seed KB materialization is now **atomic** (tmp-file + rename) and serialized behind a
+  process-wide lock in `periph_init`, so concurrent callers never observe a half-written
+  cheatsheet (fixed a CI test race: exit 101 on both ubuntu and windows)
+
+### Housekeeping
+
+- Removed third-party agent product names from README / BENCHMARK and code comments
+  (project convention); README built-in-tools list updated
+
 ## v0.4.0-beta.5 (2026-08-12) — Read/Edit efficiency loop + on-demand KB seed + TUI session fixes
 
 ### Read/Edit efficiency loop
