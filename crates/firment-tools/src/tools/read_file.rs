@@ -13,7 +13,7 @@ impl Tool for ReadFile {
     }
 
     fn description(&self) -> &'static str {
-        "Read a text file. Optionally slice by line offset and limit."
+        "Read a text file. Output lines carry a line-number prefix (\"  123 | content\") so edit_file can target exact ranges; without offset/limit at most the first 1000 lines are returned and a [truncated] hint tells you how to read on."
     }
 
     fn input_schema(&self) -> Value {
@@ -23,19 +23,26 @@ impl Tool for ReadFile {
                 "path": {"type": "string", "description": "File path, absolute or relative to the workspace; output appends [file-sha256: ...] as metadata"},
                 "offset": {"type": "integer", "minimum": 0, "description": "0-based line offset to start reading from"},
                 "limit": {"type": "integer", "minimum": 1, "description": "Maximum number of lines to read"},
-                "hashlines": {"type": "boolean", "default": false, "description": "prefix every line with its [8-hex content hash] anchor for hashline edits"}
+                "hashlines": {"type": "boolean", "default": false, "description": "prefix every line with its [8-hex content hash] anchor for hashline edits (instead of line numbers)"}
             },
             "required": ["path"]
         })
     }
 
     async fn run(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+        const DEFAULT_LIMIT: usize = 1000;
         let path = args
             .get("path")
             .and_then(|p| p.as_str())
             .ok_or_else(|| ToolError::new("missing 'path'"))?;
         let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-        let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+        let limit_arg = args.get("limit").and_then(|v| v.as_u64());
+        // No explicit range -> default to the first chunk; an explicit
+        // offset without a limit reads to the end (paging forward).
+        let limit =
+            limit_arg
+                .map(|v| v as usize)
+                .unwrap_or(if offset == 0 { DEFAULT_LIMIT } else { 0 });
         let hashlines = args
             .get("hashlines")
             .and_then(|h| h.as_bool())
@@ -50,35 +57,51 @@ impl Tool for ReadFile {
             }
         })?;
 
-        let text = if offset > 0 || limit > 0 {
-            let lines: Vec<&str> = content.split('\n').collect();
-            let start = offset.min(lines.len());
-            let end = if limit > 0 {
-                (start + limit).min(lines.len())
-            } else {
-                lines.len()
-            };
-            format!(
-                "--- {} (lines {}..{}) ---\n{}",
-                resolved.display(),
-                start,
-                end,
-                lines[start..end].join("\n")
-            )
+        let lines: Vec<&str> = content.split('\n').collect();
+        let effective_total = if content.ends_with('\n') {
+            lines.len().saturating_sub(1)
         } else {
-            content
+            lines.len()
         };
-        let digest = firment_core::hash::sha256_hex(
-            &fs::read(&resolved).map_err(|e| ToolError::new(format!("[Io] {e}")))?,
-        );
-        let text = if hashlines {
-            text.lines()
+        let start = offset.min(effective_total);
+        let end = if limit > 0 {
+            (start + limit).min(lines.len())
+        } else {
+            lines.len()
+        };
+        let truncated = end < effective_total;
+        let slice = &lines[start..end];
+        let body = if hashlines {
+            slice
+                .iter()
                 .map(|line| format!("[{}] {}", crate::tools::util::line_hash_prefix(line), line))
                 .collect::<Vec<_>>()
                 .join("\n")
         } else {
-            text
+            // Line-number prefix so edit_file can target exact ranges (and
+            // the model can report locations as path:line).
+            slice
+                .iter()
+                .enumerate()
+                .map(|(i, line)| format!("{:>6} | {}", start + i + 1, line))
+                .collect::<Vec<_>>()
+                .join("\n")
         };
+        let mut text = format!(
+            "--- {} (lines {}..{}) ---\n{}",
+            resolved.display(),
+            start,
+            end,
+            body
+        );
+        if truncated {
+            text.push_str(&format!(
+                "\n[truncated: file has {effective_total} lines; pass offset={end} to read the next chunk]"
+            ));
+        }
+        let digest = firment_core::hash::sha256_hex(
+            &fs::read(&resolved).map_err(|e| ToolError::new(format!("[Io] {e}")))?,
+        );
         Ok(ToolOutput {
             text: format!("{text}\n[file-sha256: {digest}]"),
         })
@@ -147,6 +170,50 @@ mod tests {
         assert!(
             out.text.contains(&format!("[file-sha256: {expected}]")),
             "got: {}",
+            out.text
+        );
+    }
+
+    #[tokio::test]
+    async fn default_read_adds_line_numbers() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), "one\ntwo\nthree\n").unwrap();
+        let out = ReadFile
+            .run(json!({"path": "a.txt"}), &ctx(dir.path()))
+            .await
+            .unwrap();
+        assert!(out.text.contains("1 | one"), "got: {}", out.text);
+        assert!(out.text.contains("3 | three"), "got: {}", out.text);
+        assert!(!out.text.contains("[truncated]"), "got: {}", out.text);
+    }
+
+    #[tokio::test]
+    async fn large_file_is_capped_with_offset_hint() {
+        let dir = tempdir().unwrap();
+        let body = (0..2500)
+            .map(|i| format!("line{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(dir.path().join("big.txt"), &body).unwrap();
+        let out = ReadFile
+            .run(json!({"path": "big.txt"}), &ctx(dir.path()))
+            .await
+            .unwrap();
+        assert!(out.text.contains("1 | line0"), "got: {}", out.text);
+        assert!(
+            out.text
+                .contains("[truncated: file has 2500 lines; pass offset=1000"),
+            "got tail: {}",
+            out.text
+        );
+        let out = ReadFile
+            .run(json!({"path": "big.txt", "offset": 1000}), &ctx(dir.path()))
+            .await
+            .unwrap();
+        assert!(out.text.contains("1001 | line1000"), "got: {}", out.text);
+        assert!(
+            out.text.contains("2500 | line2499"),
+            "got tail: {}",
             out.text
         );
     }

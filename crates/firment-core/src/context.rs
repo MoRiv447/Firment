@@ -50,10 +50,14 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          old_text anchor or line range), write_file for create/overwrite, list_dir/glob/grep for \
          discovery, and symbols for definition/reference lookup in large codebases. Reserve \
          shell for commands that need it: builds, tests, git, toolchains.\n\
-         - For edit_file, include enough surrounding context in old_text to uniquely locate the \
-         hunk (enclosing function/while/if structure), especially inside loops; after editing, \
-         read_file the affected region and confirm the change landed in the right place before \
-         continuing. If it did not, fix it with another edit instead of moving on.\n\
+         - read_file prefixes every line with a line number (\"  123 | content\") so you can \
+         report locations as path:line and target edit_file precisely; large files are capped \
+         at 1000 lines per call — page forward with offset=<n> (the [truncated] hint tells you \
+         where to continue).\n\
+         - For edit_file, use the smallest old_text that is clearly unique (usually 2-4 adjacent \
+         lines); the tool echoes a unified diff of what changed, so you normally do NOT need to \
+         re-read the file to confirm the edit landed — only re-read when the diff is missing or \
+         an edit failed. If it failed, fix it with another edit instead of resubmitting.\n\
          - read_file appends `[file-sha256: ...]` (full-file hash) to its output. If you worry \
          the file may have changed concurrently, pass that value to edit_file / write_file as \
          expected_sha256; a mismatch returns [ConcurrentChange] with the current hash — \
@@ -124,16 +128,14 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          project config first; ask the user or write_file to fill in anything missing, then \
          call build / flash / run. Use /config to inspect global configuration.\n",
     );
-    let seed = crate::kb::seed_index_text();
-    let seed: String = seed.chars().take(12000).collect();
+    let kb_dir = crate::kb::seed_kb_dir();
     prompt.push_str(&format!(
-        "\n\n# Hardware knowledge base (built-in seed)\n\
-         A built-in hardware knowledge base index is available:\n{seed}\n\
-         Read cheatsheets under {} (for example cheatsheets/stm32f1-uart.toml) with read_file \
-         whenever you need details.\n\
-         For questions about chips, peripherals, registers, HAL, or hardware configuration, \
-         consult the knowledge base first and cite the source file.",
-        crate::kb::seed_kb_dir().display()
+        "\n\n# Hardware knowledge base\n\
+         A built-in hardware knowledge base ships with Firment. Before answering questions \
+         about chips, peripherals, registers, HAL, or hardware configuration, read the index \
+         first with read_file ({}), pick the matching cheatsheet (e.g. \
+         cheatsheets/stm32f1-uart.toml), read it with read_file, and cite the source file.",
+        kb_dir.join("vendor-index.toml").display()
     ));
     if let Some(hint) = load_vendor_index_hint(cwd) {
         prompt.push_str(&hint);

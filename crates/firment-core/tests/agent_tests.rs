@@ -446,8 +446,8 @@ fn system_prompt_covers_core_guidance_and_plan_contract() {
         "path:line",
         "AGENTS.md",
         "verify",
-        "Hardware knowledge base (built-in seed)",
-        "STM32F4xx",
+        "Hardware knowledge base",
+        "vendor-index.toml",
         "Report outcomes faithfully",
         "Use this board's HAL layer",
     ] {

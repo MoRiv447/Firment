@@ -105,9 +105,12 @@ impl Tool for EditFile {
             .map_err(|e| ToolError::new(format!("[Io] write failed: {e}")))?;
         let old_lines = original.lines().count();
         let new_lines = new_content.lines().count();
+        // Echo the actual change as a unified diff so the model sees exactly
+        // what landed and does not need to re-read the file to confirm.
+        let diff = simple_diff(&resolved, &original, &new_content, 4000);
         Ok(ToolOutput {
             text: format!(
-                "Edited {} ({} lines -> {} lines)",
+                "Edited {} ({} lines -> {} lines)\n{diff}",
                 resolved.display(),
                 old_lines,
                 new_lines
@@ -281,6 +284,16 @@ mod tests {
             .await
             .unwrap();
         assert!(ok.text.contains("Edited"));
+        assert!(
+            ok.text.contains("-bbb"),
+            "diff should show removed line: {}",
+            ok.text
+        );
+        assert!(
+            ok.text.contains("+XXX"),
+            "diff should show added line: {}",
+            ok.text
+        );
         assert_eq!(
             std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
             "aaa\nXXX\nccc\n"
