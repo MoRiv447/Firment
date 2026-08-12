@@ -1,5 +1,51 @@
 # Changelog
 
+## v0.4.0-beta.8 (2026-08-12) — audit-driven hardening + experience fixes + TUI polish
+
+### Full-crate audit fixes (3 parallel reviews, 44 findings; 19 fixed)
+
+- `read_file`: `saturating_add` on offset+limit (a huge limit could panic / wrap);
+  header line range now 1-based, matching the body prefixes
+- **Compaction**: the summary is folded into the first user message instead of
+  prepending a second consecutive user turn — role-alternation providers
+  (Anthropic) 400'd on the first compaction; per-request `max_tokens` (the
+  summarization cap) is now honored by the Anthropic provider
+- `decode_address`: symbols must cover the address (addr < addr+size), so gap
+  addresses are no longer attributed as huge +0x offsets
+- `shell`: cmd-style `%VAR%` expansion is flagged (indirect execution)
+- `periph_init`: non-STM32 parts (ESP32) no longer receive STM32 HAL skeletons
+- `truncate`: keeps head + tail, so trailing compiler errors survive truncation
+- **Esc interrupt** now fires the pre-extracted cancel handles directly from the
+  event loop (bypassing a command channel that can be blocked on the agent lock
+  during a long turn); busy submits no longer wipe the draft input
+- Spill cleanup skips files still referenced by the current transcript
+- Session state: rollback after MaxIterations is persisted; `replace_session`
+  resets per-turn bookkeeping (ledger seq, read hashes, elf gate); project
+  config merges max_iterations / thinking / context_budget_chars
+  (auto_approve is deliberately NOT merged — a project must not grant itself
+  tool auto-approval)
+- CLI `--max-output-tokens` clamps to u32 (was silent wraparound); TUI
+  `/provider` `/session` `/pin` `/unpin` report a full channel instead of
+  silently dropping the command; todo saves atomically (tmp+rename)
+
+### Experience fixes
+
+- TUI model-picker / `/models` run the (network) model-list request outside the
+  agent lock — a slow provider no longer freezes the command loop
+- `symbols`: ctags runs on a blocking thread with a hard 60s timeout (child
+  killed) — huge trees no longer freeze the async runtime or hang forever
+- `monitor`: the read loop checks the turn cancellation flag, releasing the
+  serial port immediately on cancel
+- `web_fetch`: oversized pages are explicitly marked `[truncated...]` instead
+  of silently returning a partial body
+
+### TUI polish
+
+- **Git status bar**: `git: <branch> · N` (branch + working-tree change count),
+  refreshed every 4s in the background, hidden outside a repo; uses
+  `branch --show-current` so fresh repos (pre-first-commit) still show the name
+- Input placeholder decluttered (keybindings now live only in `/help`)
+
 ## v0.4.0-beta.7 (2026-08-12) — real-world toolchain conflicts + peripheral skeleton expansion
 
 ### periph_init — full skeletons for SPI / TIM / ADC
