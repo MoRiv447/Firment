@@ -156,7 +156,6 @@ notes = "G4 has NO fixed DMA channel mapping — requests route through DMAMUX1;
 
 [[stm32.g4.quickref]]
 topic = "Math accelerator"
-cheatsheet = ""
 doc_section = "RM0440 Section 8 (CORDIC) / 9 (FMAC)"
 hal_functions = ["HAL_CORDIC_Calculate", "HAL_FMAC_Process"]
 confidence = "verified"

@@ -5,7 +5,11 @@ fn collect_cheatsheets(value: &Value, out: &mut Vec<String>) {
         if let Some(quickrefs) = table.get("quickref").and_then(|q| q.as_array()) {
             for quickref in quickrefs {
                 if let Some(path) = quickref.get("cheatsheet").and_then(|c| c.as_str()) {
-                    out.push(path.to_string());
+                    // Skip empty links: a quickref may exist without a
+                    // cheatsheet file (e.g. a pure doc_section pointer).
+                    if !path.is_empty() {
+                        out.push(path.to_string());
+                    }
                 }
             }
         }
