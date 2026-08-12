@@ -70,9 +70,15 @@ pub fn ensure_seed_kb_in(dir: &Path) -> Result<(), String> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        fs::write(&path, content).map_err(|e| e.to_string())?;
+        // Atomic write (tmp + rename) so a concurrent reader never sees a
+        // half-written file while the seed KB is being materialized.
+        let tmp = path.with_extension("tmp");
+        fs::write(&tmp, content).map_err(|e| e.to_string())?;
+        fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
     }
-    fs::write(&stamp, SEED_VERSION).map_err(|e| e.to_string())?;
+    let stamp_tmp = dir.join("VERSION.tmp");
+    fs::write(&stamp_tmp, SEED_VERSION).map_err(|e| e.to_string())?;
+    fs::rename(&stamp_tmp, &stamp).map_err(|e| e.to_string())?;
     Ok(())
 }
 

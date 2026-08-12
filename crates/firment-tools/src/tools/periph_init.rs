@@ -2,8 +2,13 @@ use async_trait::async_trait;
 use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
 use std::fs;
+use std::path::{Path, PathBuf};
 
 pub struct PeriphInit;
+
+/// Serializes seed-KB materialization so concurrent callers (e.g. parallel
+/// tests, parallel tool waves) never read a half-written cheatsheet.
+static KB_SEED_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
 
 #[async_trait]
 impl Tool for PeriphInit {
@@ -71,19 +76,22 @@ impl Tool for PeriphInit {
             .and_then(|i| i.as_bool())
             .unwrap_or(false);
 
-        // Materialize the bundled seed KB once (idempotent), then locate a
+        // Materialize the bundled seed KB once (idempotent), serialized so
+        // parallel callers never race the materialization; then locate a
         // matching cheatsheet: {family}-{peripheral}.toml under cheatsheets/.
+        let _guard = KB_SEED_LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let _ = firment_core::kb::ensure_seed_kb();
+        drop(_guard);
         let kb_dir = firment_core::kb::seed_kb_dir();
         let family = family_for(part);
+        // Family-specific cheatsheet first ({family}-{periph}.toml), then a
+        // family-generic one (stm32-{periph}.toml, e.g. stm32-dma / stm32-clock).
         let cheatsheet = family
-            .and_then(|f| {
-                let path = kb_dir
-                    .join("cheatsheets")
-                    .join(format!("{f}-{peripheral}.toml"));
-                path.is_file().then_some(path)
-            })
-            .and_then(|p| fs::read_to_string(&p).ok().map(|text| (p, text)));
+            .and_then(|f| find_cheatsheet(&kb_dir, f, &peripheral))
+            .or_else(|| find_cheatsheet(&kb_dir, "stm32", &peripheral));
 
         let skeleton = match peripheral.as_str() {
             "uart" => uart_skeleton(baudrate, dma, interrupt, pins.as_deref()),
@@ -127,6 +135,18 @@ fn family_for(part: &str) -> Option<&'static str> {
         Some("esp32s3")
     } else if p.starts_with("esp32") {
         Some("esp32")
+    } else {
+        None
+    }
+}
+
+/// Locate a cheatsheet under `<kb>/cheatsheets/<name>-<periph>.toml` and read it.
+fn find_cheatsheet(kb_dir: &Path, family: &str, periph: &str) -> Option<(PathBuf, String)> {
+    let path = kb_dir
+        .join("cheatsheets")
+        .join(format!("{family}-{periph}.toml"));
+    if path.is_file() {
+        fs::read_to_string(&path).ok().map(|text| (path, text))
     } else {
         None
     }
@@ -282,6 +302,25 @@ mod tests {
         assert!(
             out.text.contains("没有") || out.text.contains("参考"),
             "must hint about missing cheatsheet: {}",
+            out.text
+        );
+    }
+
+    #[tokio::test]
+    async fn generic_family_cheatsheet_is_used_when_no_family_specific_one() {
+        let dir = tempdir().unwrap();
+        // stm32f4 has no stm32f4-dma.toml; the family-generic stm32-dma.toml
+        // must be injected instead.
+        let out = PeriphInit
+            .run(
+                json!({"part": "stm32f407vgt6", "peripheral": "dma"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(
+            out.text.contains("stm32-dma.toml"),
+            "generic cheatsheet must be injected, got: {}",
             out.text
         );
     }
