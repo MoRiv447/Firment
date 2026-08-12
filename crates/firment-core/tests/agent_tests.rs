@@ -450,6 +450,7 @@ fn system_prompt_covers_core_guidance_and_plan_contract() {
         "vendor-index.toml",
         "periph_init",
         "Build loop",
+        "never re-initialize",
         "Report outcomes faithfully",
         "Use this board's HAL layer",
     ] {

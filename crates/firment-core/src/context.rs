@@ -69,8 +69,10 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          - For MCU peripheral bring-up (UART / GPIO / I2C / SPI / TIM / ADC / DMA), call \
          periph_init with the part number and peripheral name to get a HAL init skeleton plus \
          the matching knowledge-base cheatsheet (clock domain, DMA channel mapping, pitfalls). \
-         Then adapt the TODO(fill) markers to the actual project (pins, clock tree, CubeMX) and \
-         land it with edit_file / write_file — do not write such init code from scratch.\n\
+         First check whether the project already has generated init code (grep MX_*_Init / \
+         HAL_*_Init / SystemClock_Config in main.c or *_hal_msp.c): if it does, call the \
+         existing functions — never re-initialize or redefine them. Only land the skeleton \
+         (adapting TODO(fill) markers) when the project is handwritten.\n\
          - Build loop: when build fails ([CompileError]), read the failing lines (read_file with \
          the reported path:line), fix with edit_file (the returned diff confirms the change), \
          and rebuild — iterate until the build passes or the error is genuinely unrelated.\n\

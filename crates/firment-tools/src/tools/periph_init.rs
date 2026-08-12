@@ -115,8 +115,12 @@ impl Tool for PeriphInit {
             ));
         }
         text.push_str(
-            "\n## 用法\n- 骨架里的 TODO(fill) 需要按项目实际（引脚、时钟树、CubeMX 生成的工程）填写；\
-             \n- 生成后交给 edit_file / write_file 落盘，并结合 build 验证编译。",
+            "\n## 用法\n\
+             - 先检查工程是否已有 CubeMX/厂商工具生成的初始化（在 main.c / *_hal_msp.c 里 grep \
+             MX_*_Init、HAL_*_Init、SystemClock_Config）：如果已有，直接调用现有函数，\
+             **不要重复初始化或重新定义同名函数**；仅当工程是纯手写（无生成代码）时才落盘此骨架。\n\
+             - 骨架里的 TODO(fill) 需要按项目实际（引脚、时钟树）填写；函数名若与已有代码冲突请改名（如加后缀）。\n\
+             - 生成后交给 edit_file / write_file 落盘，并结合 build 验证编译。",
         );
         Ok(ToolOutput { text })
     }
@@ -169,6 +173,8 @@ fn uart_skeleton(baudrate: u64, dma: bool, interrupt: bool, pins: Option<&str>) 
     };
     format!(
         "// {pin_note}\n\
+         // NOTE: 若工程已有 CubeMX 生成的同名 MX_*_Init（main.c / *_hal_msp.c），\
+         直接调用它，不要重复初始化或重新定义；仅纯手写工程才使用本函数。\n\
          static UART_HandleTypeDef huart1;\n\
          \n\
          void MX_USART1_UART_Init(void) {{\n\
@@ -280,6 +286,13 @@ mod tests {
         assert!(out.text.contains("USART1"), "got: {}", out.text);
         assert!(out.text.contains("115200"), "got: {}", out.text);
         assert!(out.text.contains("TODO(fill)"), "got: {}", out.text);
+        // Must warn against re-initializing when the project already has
+        // generated MX_*_Init code (CubeMX-style projects).
+        assert!(
+            out.text.contains("不要重复初始化") || out.text.contains("CubeMX"),
+            "must warn about existing generated init code, got: {}",
+            out.text
+        );
         // Seed KB cheatsheet must be injected for stm32f1 uart.
         assert!(
             out.text.contains("stm32f1-uart.toml") || out.text.contains("cheatsheets"),
