@@ -23,9 +23,10 @@ dma_to_cpu = "After a DMA RX completes, call SCB_InvalidateDCache_by_Addr(buffer
 alternative = "Simplest robust setup: configure an MPU region over the shared buffers as non-cacheable (attribute 0xC) — then no manual clean/invalidate is needed; trade speed for simplicity"
 notes = "Interrupt-driven (non-DMA) UART paths are unaffected by D-Cache because the CPU always accesses the buffers itself"
 
-[common_mistake]
-- "DMA TX 'never sends' or sends garbage with D-Cache enabled — missing SCB_CleanDCache on the buffer"
-- "DMA RX data looks random/outdated — reading before SCB_InvalidateDCache"
-- "Using a stack/heap buffer in the D1 AXI SRAM with a DMA stream that only reaches D2 SRAM (BDMA/DMA2 routing)"
-- "Baud errors because PCLK was assumed instead of read from the RCC (APB prescalers in the D2 domain)"
-- "HAL_UART_Transmit_DMA with a length > 64KB needs the circular/byte-count handling — check UART_CR2/DMA NDTR width"
+common_mistake = [
+  "DMA TX 'never sends' or sends garbage with D-Cache enabled — missing SCB_CleanDCache on the buffer",
+  "DMA RX data looks random/outdated — reading before SCB_InvalidateDCache",
+  "Using a stack/heap buffer in the D1 AXI SRAM with a DMA stream that only reaches D2 SRAM (BDMA/DMA2 routing)",
+  "Baud errors because PCLK was assumed instead of read from the RCC (APB prescalers in the D2 domain)",
+  "HAL_UART_Transmit_DMA with a length > 64KB needs the circular/byte-count handling — check UART_CR2/DMA NDTR width",
+]

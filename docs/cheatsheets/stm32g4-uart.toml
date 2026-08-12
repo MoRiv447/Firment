@@ -22,8 +22,9 @@ example = "USART1_TX -> DMAMUX1_REQ0 -> pick DMA1_Channel1; the same request can
 dma_mux_registers = ["DMAMUX1_REQ0..", "DMAMUX1_C0CR .. C7CR"]
 dma_requests = "USART1_TX=DMAMUX1_REQ0, USART1_RX=DMAMUX1_REQ1, USART2_TX=REQ4, USART2_RX=REQ5 (verify against RM0440 Table 60 for the exact part)"
 
-[common_mistake]
-- "Porting F1/F4 code and 'knowing' USART1_TX must be DMA channel 4 — G4 has no fixed channel; the DMAMUX decides"
-- "Computing BRR from a hardcoded 72 MHz PCLK — G4 APB clocks are programmable; read the actual clock (SystemCoreClock / APB prescalers)"
-- "Forgetting to configure the DMAMUX request: HAL_UART_Transmit_DMA works only after the request routing is set up"
-- "Enabling DMA but not __HAL_RCC_DMA1_CLK_ENABLE() (and the DMAMUX clock on parts where it is gated)"
+common_mistake = [
+  "Porting F1/F4 code and 'knowing' USART1_TX must be DMA channel 4 — G4 has no fixed channel; the DMAMUX decides",
+  "Computing BRR from a hardcoded 72 MHz PCLK — G4 APB clocks are programmable; read the actual clock (SystemCoreClock / APB prescalers)",
+  "Forgetting to configure the DMAMUX request: HAL_UART_Transmit_DMA works only after the request routing is set up",
+  "Enabling DMA but not __HAL_RCC_DMA1_CLK_ENABLE() (and the DMAMUX clock on parts where it is gated)",
+]
