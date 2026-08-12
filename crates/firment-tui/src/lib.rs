@@ -20,7 +20,7 @@ use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
 use std::collections::{HashSet, VecDeque};
 use std::io::{self, Stdout};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -853,6 +853,12 @@ impl Asker for TuiAsker {
     }
 }
 
+/// Branch + working-tree change count shown in the status bar.
+struct GitInfo {
+    branch: String,
+    changes: usize,
+}
+
 struct App {
     items: Vec<Item>,
     input: Vec<char>,
@@ -876,6 +882,8 @@ struct App {
     /// blocked) command channel.
     cancel_tx: Option<watch::Sender<bool>>,
     cancel_signal: Option<firment_core::Cancellable>,
+    /// Lazily-refreshed git state for the status bar (None outside a repo).
+    git: Option<GitInfo>,
     permission: Option<PermissionRequest>,
     /// Pending `ask_user` question shown as a modal; the agent is blocked until
     /// the user answers or dismisses it.
@@ -1258,6 +1266,7 @@ impl App {
             interrupt_armed_at: None,
             cancel_tx: None,
             cancel_signal: None,
+            git: None,
             scroll: 0,
             max_offset: 0,
             follow: true,
@@ -3054,13 +3063,21 @@ impl App {
         if cwd_str.width() > 36 {
             cwd_str = format!("…{}", truncate_tail(&cwd_str, 35));
         }
+        let git_str = match &self.git {
+            Some(GitInfo { branch, changes }) if *changes > 0 => {
+                format!(" git: {branch} · {changes}")
+            }
+            Some(GitInfo { branch, .. }) => format!(" git: {branch}"),
+            None => String::new(),
+        };
         let left = format!(
-            " {} {}/{} · T:{} · {}  ",
+            " {} {}/{} · T:{} · {}{}  ",
             self.mode.label().to_uppercase(),
             self.provider,
             self.model,
             self.thinking.label(),
-            cwd_str
+            cwd_str,
+            git_str
         );
         let right = if self.interrupt_armed_at.is_some() {
             format!(" {} · {state} · ⏸ Esc again to interrupt ", spinner)
@@ -3097,7 +3114,7 @@ impl App {
         let content = if self.input.is_empty() {
             self.input_scroll = 0;
             Paragraph::new(Line::from(Span::styled(
-                "Type a task, Enter to send · Shift+Enter newline · Esc×2 interrupt · Ctrl+C copy · Ctrl+V paste · Ctrl+P model · Ctrl+Q quit · /help",
+                "Type a message (or /help for commands & keys)",
                 Style::default().fg(Color::DarkGray),
             )))
             .block(block)
@@ -3521,6 +3538,30 @@ fn find_subslice(haystack: &[char], needle: &[char], from: usize) -> Option<usiz
         .find(|&i| haystack[i..i + needle.len()] == *needle)
 }
 
+/// Branch + working-tree change count for the status bar. Returns None
+/// outside a git repository or when git is unavailable — the bar just omits
+/// the segment.
+async fn git_info(cwd: &Path) -> Option<GitInfo> {
+    let branch = tokio::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(cwd)
+        .output()
+        .await
+        .ok()?;
+    if !branch.status.success() {
+        return None;
+    }
+    let branch = String::from_utf8_lossy(&branch.stdout).trim().to_string();
+    let status = tokio::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(cwd)
+        .output()
+        .await
+        .ok()?;
+    let changes = String::from_utf8_lossy(&status.stdout).lines().count();
+    Some(GitInfo { branch, changes })
+}
+
 async fn run_loop(
     terminal: &mut Tui,
     app: &mut App,
@@ -3531,10 +3572,16 @@ async fn run_loop(
 ) -> anyhow::Result<()> {
     // A 25ms tick lands paste-burst buffers on time without slowing animations.
     let mut ticker = tokio::time::interval(Duration::from_millis(25));
+    // Refresh the git status bar every few seconds (cheap; skipped outside repos).
+    let mut git_ticker = tokio::time::interval(Duration::from_secs(4));
     let mut dirty = true;
     loop {
         let mut spinner_tick = false;
         tokio::select! {
+            _ = git_ticker.tick() => {
+                app.git = git_info(&app.cwd).await;
+                dirty = true;
+            }
             event = event_rx.recv() => {
                 if let Some(event) = event {
                     app.on_agent(event);
