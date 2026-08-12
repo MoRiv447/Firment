@@ -95,7 +95,7 @@ impl Tool for ReadFile {
         let mut text = format!(
             "--- {} (lines {}..{}) ---\n{}",
             resolved.display(),
-            start,
+            start + 1, // 1-based, matching the line-number prefixes in the body
             end,
             body
         );

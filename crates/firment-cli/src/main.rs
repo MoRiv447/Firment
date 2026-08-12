@@ -259,7 +259,9 @@ async fn main() -> anyhow::Result<()> {
         config.context_budget_chars = length;
     }
     if let Some(tokens) = cli.max_output_tokens {
-        config.max_output_tokens = Some(tokens as u32);
+        // Clamp like the TUI's /output command: values above u32::MAX would
+        // otherwise silently wrap around and shrink the budget.
+        config.max_output_tokens = Some(tokens.min(u32::MAX as usize) as u32);
     }
     let _ = firment_core::kb::ensure_seed_kb();
 

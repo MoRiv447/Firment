@@ -504,8 +504,16 @@ impl Agent {
 
     /// Replace the whole session (used when switching to another saved session
     /// inside the TUI). The caller is responsible for rebuilding the provider.
+    /// Per-turn bookkeeping that is scoped to the old session must be reset,
+    /// otherwise change-ledger deltas, read hashes and the elf gate from the
+    /// previous session leak into the new one.
     pub fn replace_session(&mut self, session: Session) {
         self.session = session;
+        self.ledger_seq_appended = 0;
+        self.read_hashes.clear();
+        self.recent_read_paths.clear();
+        self.elf_gate_done = false;
+        self.set_elf_glob(None);
     }
 
     pub fn save_session(&self) -> Result<(), crate::session::SessionError> {
@@ -847,6 +855,10 @@ impl Agent {
                 "reached max iterations; rolled back this turn's edits: {summary}"
             )))
             .await;
+        // Persist the rollback so a crash right after this error does not
+        // leave disk state containing tool results whose file edits were
+        // already undone (transcript/disk would otherwise disagree).
+        let _ = self.store.save(&self.session);
         Err(AgentError::MaxIterations(self.max_iterations))
     }
 

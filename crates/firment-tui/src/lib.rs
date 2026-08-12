@@ -2743,9 +2743,7 @@ impl App {
                     .push(Item::System(format!("deleting session {arg}…")));
             }
             "provider" if !arg.is_empty() => {
-                let _ = self
-                    .cmd_tx
-                    .try_send(AgentCmd::SetProvider(arg.to_string()));
+                self.send_cmd(AgentCmd::SetProvider(arg.to_string()));
                 self.items
                     .push(Item::System(format!("Switching to provider {arg}…")));
             }
@@ -2769,9 +2767,7 @@ impl App {
                 self.open_session_picker();
             }
             "session" if !arg.is_empty() => {
-                let _ = self
-                    .cmd_tx
-                    .try_send(AgentCmd::LoadSession(arg.to_string()));
+                self.send_cmd(AgentCmd::LoadSession(arg.to_string()));
                 self.items
                     .push(Item::System(format!("Loading session {arg}…")));
             }
@@ -2789,9 +2785,7 @@ impl App {
                 self.items.push(Item::System("Reading the change ledger…".to_string()));
             }
             "pin" if !arg.is_empty() => {
-                let _ = self
-                    .cmd_tx
-                    .try_send(AgentCmd::Pin { path: arg.to_string() });
+                self.send_cmd(AgentCmd::Pin { path: arg.to_string() });
                 self.items
                     .push(Item::System(format!("Pinning {arg}…")));
             }
@@ -2802,9 +2796,7 @@ impl App {
                 ));
             }
             "unpin" if !arg.is_empty() => {
-                let _ = self
-                    .cmd_tx
-                    .try_send(AgentCmd::Unpin { path: arg.to_string() });
+                self.send_cmd(AgentCmd::Unpin { path: arg.to_string() });
                 self.items
                     .push(Item::System(format!("Unpinning {arg}…")));
             }

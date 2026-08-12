@@ -229,6 +229,18 @@ impl Config {
         if project.max_output_tokens.is_some() {
             config.max_output_tokens = project.max_output_tokens;
         }
+        // Per-run behavior knobs from the project config. auto_approve is
+        // deliberately NOT merged: a project checkout must never grant itself
+        // tool auto-approval (build/verify already opt out above).
+        if project.max_iterations != default_max_iterations() {
+            config.max_iterations = project.max_iterations;
+        }
+        if project.thinking != ThinkingLevel::default() {
+            config.thinking = project.thinking;
+        }
+        if project.context_budget_chars != default_context_budget() {
+            config.context_budget_chars = project.context_budget_chars;
+        }
         config
     }
 

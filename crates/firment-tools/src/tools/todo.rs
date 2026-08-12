@@ -34,11 +34,15 @@ fn save_todos(path: &PathBuf, todos: &[TodoItem]) -> Result<(), ToolError> {
         fs::create_dir_all(parent)
             .map_err(|e| ToolError::new(format!("[Io] cannot create todo dir: {e}")))?;
     }
+    // Atomic write (tmp + rename) so an interrupted save never leaves a
+    // truncated/corrupt todos.json.
+    let tmp = path.with_extension("json.tmp");
     fs::write(
-        path,
+        &tmp,
         serde_json::to_string_pretty(todos).unwrap_or_default(),
     )
-    .map_err(|e| ToolError::new(format!("[Io] cannot write todos: {e}")))
+    .map_err(|e| ToolError::new(format!("[Io] cannot write todos: {e}")))?;
+    fs::rename(&tmp, path).map_err(|e| ToolError::new(format!("[Io] cannot write todos: {e}")))
 }
 
 /// Resolve a `1`-based item number, falling back to an exact text match.
