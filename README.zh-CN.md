@@ -1,14 +1,14 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.4.0--beta.8-orange)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.5.0-blue)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![CI](https://img.shields.io/badge/CI-Rust%20%2B%20Web%20%2B%20IDE-green)](.github/workflows/ci.yml)
 
 [English](README.md) | **简体中文**
 
-> ⚠️ **状态：beta，活跃开发中。** 第一层（通用编码 Agent）已可日常使用、
+> ⚠️ **状态：v0.5.0。** 第一层（通用编码 Agent）已可日常使用、
 > CI 全绿；第二层（嵌入式工具链闭环）已部分落地。接口与 TUI 仍在演进。
 
 **Firmware + Agent = Firment**——一个面向固件与嵌入式开发的通用编码

@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.5.0 (2026-08-13) — unified versioning + IDE turn-hang fixes
+
+- **Versioning**: CLI/TUI, IDE and Web now share one version (0.5.0); the
+  beta marker is dropped
+- **IDE**: tool waves that miss their permission dialog no longer wedge the
+  whole batch — permission requests are queued in the UI and time out
+  (120s) on the backend if unanswered; `ask_user` also times out (180s)
+- **IDE**: a running turn can now be interrupted by switching/creating a
+  session (the switch auto-cancels the turn first); `Info` events (stall /
+  tool-wave timeout / compaction notices) are shown in the chat with a
+  live `idle Ns` / `tool Nm Ns` counter so a slow model is distinguishable
+  from a wedged turn
+- **Agent kernel**: hard timeouts so a turn can never hang forever — the
+  provider stream is bounded (120s mid-stream stall guard) and each tool
+  wave is bounded (600s + 5s grace), both configurable per agent
+- **web_search (bing)**: challenge pages and empty results are now detected
+  and reported instead of silently returning zero results (all surfaces)
+
 ## v0.4.0-beta.8 (2026-08-12) — audit-driven hardening + experience fixes + TUI polish
 
 ### Full-crate audit fixes (3 parallel reviews, 44 findings; 19 fixed)

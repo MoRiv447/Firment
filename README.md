@@ -1,14 +1,14 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.4.0--beta.8-orange)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.5.0-blue)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![CI](https://img.shields.io/badge/CI-Rust%20%2B%20Web%20%2B%20IDE-green)](.github/workflows/ci.yml)
 
 **English** | [简体中文](README.zh-CN.md)
 
-> ⚠️ **Status: beta, actively developed.** Layer 1 (general coding agent) is
+> ⚠️ **Status: v0.5.0.** Layer 1 (general coding agent) is
 > production-usable and CI-green; Layer 2 (embedded toolchain loop) is
 > partially shipped. APIs and the TUI keep evolving.
 
