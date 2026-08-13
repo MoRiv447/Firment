@@ -1737,9 +1737,9 @@ mod tests {
 
     // --- provider stream stall / tool wave timeout -------------------------
 
+    use crate::AutoApprove;
     use crate::provider::{ProviderStream, StopReason};
     use crate::tool::{Tool, ToolError, ToolOutput};
-    use crate::AutoApprove;
 
     struct CollectingSink(Arc<Mutex<Vec<AgentEvent>>>);
 
@@ -1784,14 +1784,9 @@ mod tests {
 
     #[async_trait]
     impl Provider for MidStreamStallProvider {
-        async fn stream(
-            &self,
-            _request: ChatRequest,
-        ) -> Result<ProviderStream, ProviderError> {
-            let stream = futures::stream::iter(vec![Ok(ProviderEvent::Text(
-                "hello".to_string(),
-            ))])
-            .chain(futures::stream::pending());
+        async fn stream(&self, _request: ChatRequest) -> Result<ProviderStream, ProviderError> {
+            let stream = futures::stream::iter(vec![Ok(ProviderEvent::Text("hello".to_string()))])
+                .chain(futures::stream::pending());
             Ok(Box::pin(stream))
         }
 
@@ -1825,7 +1820,9 @@ mod tests {
             "expected a stall Info event, got: {infos:?}"
         );
         assert!(
-            events.iter().any(|e| matches!(e, AgentEvent::TurnEnd { .. })),
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::TurnEnd { .. })),
             "expected TurnEnd after the stall, got: {events:?}"
         );
     }
@@ -1856,10 +1853,7 @@ mod tests {
 
     #[async_trait]
     impl Provider for ToolWaveProvider {
-        async fn stream(
-            &self,
-            _request: ChatRequest,
-        ) -> Result<ProviderStream, ProviderError> {
+        async fn stream(&self, _request: ChatRequest) -> Result<ProviderStream, ProviderError> {
             let stream = futures::stream::iter(vec![
                 Ok(ProviderEvent::ToolCall(ToolCall {
                     id: "t1".to_string(),
@@ -1911,7 +1905,9 @@ mod tests {
             "expected a wave-timeout Info event, got: {infos:?}"
         );
         assert!(
-            events.iter().any(|e| matches!(e, AgentEvent::TurnEnd { .. })),
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::TurnEnd { .. })),
             "expected TurnEnd after the wave timeout, got: {events:?}"
         );
     }

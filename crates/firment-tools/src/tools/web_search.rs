@@ -978,12 +978,14 @@ mod tests {
     async fn bing_empty_page_without_no_results_message_is_reported() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .respond_with(ResponseTemplate::new(200).set_body_raw(
-                "<html><body><ol id=\"b_results\"></ol></body></html>"
-                    .as_bytes()
-                    .to_vec(),
-                "text/html",
-            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(
+                    "<html><body><ol id=\"b_results\"></ol></body></html>"
+                        .as_bytes()
+                        .to_vec(),
+                    "text/html",
+                ),
+            )
             .mount(&server)
             .await;
         let err = bing_html(&server.uri(), "zzz", 5).await.unwrap_err();
