@@ -43,6 +43,16 @@ export default function App() {
   // in the event handler below.
   const [turnState, dispatchTurn] = useReducer(turnReducer, undefined, initialTurnState);
   const { running, turn } = turnState;
+  // Latest `running` value for event-handler closures (registered once with
+  // [] deps) without stale-state captures.
+  const runningRef = useRef(running);
+  runningRef.current = running;
+  // A session switch requested while a turn is running: cancel first, then
+  // run the pending action when turn_end lands.
+  const pendingSwitchRef = useRef<(() => void) | null>(null);
+  // Info events (stall / tool-wave timeout / compaction notices) surfaced in
+  // the chat so the user can tell a slow model from a wedged turn.
+  const [infos, setInfos] = useState<{ id: number; text: string }[]>([]);
   const [view, setView] = useState<ViewKey>('chat');
   const [permReq, setPermReq] = useState<PermissionRequest | null>(null);
   const [askReq, setAskReq] = useState<AskRequest | null>(null);
@@ -65,6 +75,9 @@ export default function App() {
       onAgentEvent((e) => {
         switch (e.type) {
           case 'turn_start':
+            setInfos([]);
+            dispatchTurn(e);
+            break;
           case 'text_delta':
           case 'tool_start':
           case 'tool_end':
@@ -75,6 +88,16 @@ export default function App() {
             break;
           case 'turn_end':
             dispatchTurn(e);
+            // A session switch queued while the turn was running: the cancel
+            // fired from the sidebar handler lands here, so run it now that
+            // the turn is truly over (the transcript refresh below would
+            // otherwise race the session swap).
+            const pending = pendingSwitchRef.current;
+            pendingSwitchRef.current = null;
+            if (pending) {
+              pending();
+              break;
+            }
             // Clear the streaming turn so the transcript (refreshed below)
             // is the single source of truth — otherwise the same reply shows
             // twice (once in turn.text, once in session.messages).
@@ -91,6 +114,9 @@ export default function App() {
             break;
           case 'info':
             console.info('[firm]', e.message);
+            // Surface timeouts/stalls in the chat (sticky, newest last) so
+            // the user can tell a slow model from a wedged turn.
+            setInfos((prev) => [...prev.slice(-4), { id: Date.now(), text: e.message }]);
             break;
           default:
             break;
@@ -128,23 +154,40 @@ export default function App() {
   }, [session?.id]);
 
   const handleNewSession = async (mode: 'agent' | 'plan') => {
-    try {
-      const s = await api.newSession(workCwd || 'C:\\', mode);
-      setSession(s);
-      setView('chat');
-      void api.listSessions().then(setSessions);
-    } catch (err) {
-      console.error(err);
+    const run = () => {
+      void api
+        .newSession(workCwd || 'C:\\', mode)
+        .then((s) => {
+          setSession(s);
+          setView('chat');
+          void api.listSessions().then(setSessions);
+        })
+        .catch(console.error);
+    };
+    if (runningRef.current) {
+      // Cancel the in-flight turn; turn_end fires the queued action.
+      pendingSwitchRef.current = run;
+      void api.cancelTurn().catch(console.error);
+    } else {
+      run();
     }
   };
 
   const handleSelectSession = async (id: string) => {
-    try {
-      const s = await api.loadSession(id);
-      setSession(s);
-      setView('chat');
-    } catch (err) {
-      console.error(err);
+    const run = () => {
+      void api
+        .loadSession(id)
+        .then((s) => {
+          setSession(s);
+          setView('chat');
+        })
+        .catch(console.error);
+    };
+    if (runningRef.current) {
+      pendingSwitchRef.current = run;
+      void api.cancelTurn().catch(console.error);
+    } else {
+      run();
     }
   };
 
@@ -354,6 +397,7 @@ export default function App() {
                 session={session}
                 running={running}
                 turn={turn}
+                infos={infos}
                 onSend={handleSend}
                 onCancel={handleCancel}
               />

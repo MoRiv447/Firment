@@ -79,6 +79,18 @@ pub enum AgentError {
 /// the entire turn hangs and the IDE/TUI never sees TurnEnd.
 const STREAM_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Hard upper bound on a single tool wave. Every tool carries its own
+/// internal timeout (shell/build/run/flash/monitor), but a few cannot bound
+/// themselves: the `task` subagent inherits its provider's stream behaviour
+/// and `ask_user` waits on a human. This cap guarantees the wave always
+/// makes progress even if one tool wedges.
+const TOOL_WAVE_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// After the wave timeout fires, the shared cancel signal is signalled so
+/// cooperating tools (shell/run/build kill their process trees) get a short
+/// window to wind down before the wave futures are dropped.
+const TOOL_CANCEL_GRACE: Duration = Duration::from_secs(5);
+
 pub struct Agent {
     provider: Option<Box<dyn Provider>>,
     registry: Arc<ToolRegistry>,
@@ -137,6 +149,13 @@ pub struct Agent {
     read_hashes: HashMap<PathBuf, String>,
     /// Recently read paths (most recent last), for post-compact re-injection.
     recent_read_paths: VecDeque<PathBuf>,
+    /// No-events cap for a provider stream (creation and mid-stream). See
+    /// `STREAM_TIMEOUT`. Configurable so tests can use tiny values.
+    stream_timeout: Duration,
+    /// Hard cap on a single tool wave. See `TOOL_WAVE_TIMEOUT`.
+    tool_wave_timeout: Duration,
+    /// Grace window after the wave timeout fires. See `TOOL_CANCEL_GRACE`.
+    tool_cancel_grace: Duration,
 }
 
 impl Agent {
@@ -185,6 +204,9 @@ impl Agent {
             elf_gate_dirty: false,
             read_hashes: HashMap::new(),
             recent_read_paths: VecDeque::new(),
+            stream_timeout: STREAM_TIMEOUT,
+            tool_wave_timeout: TOOL_WAVE_TIMEOUT,
+            tool_cancel_grace: TOOL_CANCEL_GRACE,
         }
     }
 
@@ -230,6 +252,22 @@ impl Agent {
     /// parent agent's cancel into nested agents.
     pub fn cancel_signal(&self) -> Cancellable {
         self.cancel.clone()
+    }
+
+    /// Override the provider-stream no-events cap (default `STREAM_TIMEOUT`).
+    /// Tests use tiny values to exercise the stall/timeout paths quickly.
+    pub fn set_stream_timeout(&mut self, timeout: Duration) {
+        self.stream_timeout = timeout;
+    }
+
+    /// Override the tool-wave hard cap (default `TOOL_WAVE_TIMEOUT`).
+    pub fn set_tool_wave_timeout(&mut self, timeout: Duration) {
+        self.tool_wave_timeout = timeout;
+    }
+
+    /// Override the tool-wave cancel grace window (default `TOOL_CANCEL_GRACE`).
+    pub fn set_tool_cancel_grace(&mut self, grace: Duration) {
+        self.tool_cancel_grace = grace;
     }
 
     /// Handles to cancel the currently running turn from outside (e.g. a test
@@ -654,12 +692,12 @@ impl Agent {
                 // socket, model stalled, network blackhole) we must NOT
                 // hang the whole turn — surface the failure to the UI and
                 // end the turn so the user can react / retry.
-                _ = tokio::time::sleep(STREAM_TIMEOUT) => {
+                _ = tokio::time::sleep(self.stream_timeout) => {
                     let summary = rollback_journal(&journal);
                     self.sink
                         .event(AgentEvent::Info(format!(
                             "⚠ Provider stream timed out after {}s; ending turn. Partial edits rolled back: {summary}",
-                            STREAM_TIMEOUT.as_secs()
+                            self.stream_timeout.as_secs()
                         )))
                         .await;
                     let _ = self.store.save(&self.session);
@@ -674,11 +712,20 @@ impl Agent {
             let mut content = String::new();
             let mut tool_calls: Vec<ToolCall> = Vec::new();
             let mut cancelled = false;
+            let mut stalled = false;
 
             while let Some(event) = tokio::select! {
                 next = stream.next() => next,
                 _ = cancel_rx.changed() => {
                     cancelled = true;
+                    None
+                }
+                // Mid-stream stall: the provider produced events and then went
+                // silent (dead socket, connection dropped between chunks). The
+                // outer select only bounds stream *creation*; this bounds the
+                // iteration itself so a stall can never wedge the turn.
+                _ = tokio::time::sleep(self.stream_timeout) => {
+                    stalled = true;
                     None
                 }
             } {
@@ -706,8 +753,8 @@ impl Agent {
 
             // Never persist tool calls that were never executed: an assistant
             // message with dangling tool_calls would make the next request an
-            // invalid provider sequence. On cancel, keep only the text.
-            let saved_calls = if cancelled {
+            // invalid provider sequence. On cancel/stall, keep only the text.
+            let saved_calls = if cancelled || stalled {
                 Vec::new()
             } else {
                 tool_calls.clone()
@@ -722,6 +769,23 @@ impl Agent {
                 self.sink
                     .event(AgentEvent::Info(format!(
                         "⏹ Interrupted; rolled back this turn's edits: {summary}"
+                    )))
+                    .await;
+                let _ = self.store.save(&self.session);
+                self.sink
+                    .event(AgentEvent::TurnEnd {
+                        text: content.clone(),
+                    })
+                    .await;
+                return Ok(content);
+            }
+
+            if stalled {
+                let summary = rollback_journal(&journal);
+                self.sink
+                    .event(AgentEvent::Info(format!(
+                        "⚠ Provider stream stalled (no events for {}s); ending turn. Partial edits rolled back: {summary}",
+                        self.stream_timeout.as_secs()
                     )))
                     .await;
                 let _ = self.store.save(&self.session);
@@ -866,6 +930,22 @@ impl Agent {
             }
 
             let stats = execute_tool_calls(self, &tool_calls, &ctx, &journal).await;
+            if stats.timed_out {
+                let summary = rollback_journal(&journal);
+                self.sink
+                    .event(AgentEvent::Info(format!(
+                        "⚠ Tool wave timed out after {}s; ending turn. Partial edits rolled back: {summary}",
+                        self.tool_wave_timeout.as_secs()
+                    )))
+                    .await;
+                let _ = self.store.save(&self.session);
+                self.sink
+                    .event(AgentEvent::TurnEnd {
+                        text: String::new(),
+                    })
+                    .await;
+                return Ok(String::new());
+            }
             mutations_since_verify += stats.mutations;
             if stats.mutations > 0 {
                 self.elf_gate_done = false;
@@ -1119,6 +1199,7 @@ fn tool_call_dependencies(tool_calls: &[ToolCall]) -> Vec<Vec<usize>> {
 struct ToolRunStats {
     mutations: usize,
     verify_passed: bool,
+    timed_out: bool,
 }
 
 /// Execute the turn's tool calls in dependency waves: independent calls run
@@ -1164,13 +1245,35 @@ async fn execute_tool_calls(
         // (tools themselves kill their child processes via the shared cancel
         // signal), every pending tool_call_id gets a `[cancelled]` answer so
         // the transcript stays a valid provider message sequence, and the
-        // iteration checkpoint in run_turn performs the rollback.
+        // iteration checkpoint in run_turn performs the rollback. A hard
+        // wave timeout has the same shape but fires the cancel signal itself
+        // (so cooperating tools wind down within a short grace window before
+        // the futures are dropped), then fabricates `[timed out]` answers.
         let mut wave_cancelled = false;
+        let mut wave_timed_out = false;
+        let wave = futures::future::join_all(futures);
+        tokio::pin!(wave);
         let results = tokio::select! {
-            results = futures::future::join_all(futures) => results,
+            results = &mut wave => results,
             _ = agent.cancel.cancelled() => {
                 wave_cancelled = true;
                 Vec::new()
+            }
+            _ = tokio::time::sleep(agent.tool_wave_timeout) => {
+                wave_timed_out = true;
+                agent.cancel.cancel();
+                let grace = tokio::time::sleep(agent.tool_cancel_grace);
+                tokio::pin!(grace);
+                let out = tokio::select! {
+                    results = &mut wave => results,
+                    _ = &mut grace => Vec::new(),
+                };
+                // The grace window is over. Reset the tool-layer signal we
+                // just fired so the *next* wave is not instantly cancelled;
+                // the user's own cancel rides the watch channel and is
+                // unaffected by this reset.
+                agent.cancel.reset();
+                out
             }
         };
         if wave_cancelled {
@@ -1208,6 +1311,53 @@ async fn execute_tool_calls(
             return ToolRunStats {
                 mutations,
                 verify_passed,
+                timed_out: false,
+            };
+        }
+
+        // Hard wave timeout: the grace window expired and the tools never
+        // returned. Fabricate `[timed out]` answers for every call so the
+        // transcript stays a valid provider sequence, then end the turn in
+        // run_turn (rollback + TurnEnd) like the cancel path does.
+        if wave_timed_out && results.is_empty() {
+            let note = format!(
+                "[timed out: tool exceeded the {}s wave timeout]",
+                agent.tool_wave_timeout.as_secs()
+            );
+            for (k, &i) in ready.iter().enumerate() {
+                let call = &tool_calls[i];
+                agent
+                    .sink
+                    .event(AgentEvent::ToolEnd {
+                        name: call.name.clone(),
+                        ok: false,
+                        summary: format!("timed out after {}s", agent.tool_wave_timeout.as_secs()),
+                        seq: call_seqs[k],
+                    })
+                    .await;
+                agent.session.push(ChatMessage::Tool {
+                    tool_call_id: call.id.clone(),
+                    name: call.name.clone(),
+                    content: note.clone(),
+                });
+                done[i] = true;
+            }
+            // Calls that never reached a wave still need their tool_call_id
+            // answered for the assistant message to remain a valid sequence.
+            for i in 0..n {
+                if !done[i] {
+                    agent.session.push(ChatMessage::Tool {
+                        tool_call_id: tool_calls[i].id.clone(),
+                        name: tool_calls[i].name.clone(),
+                        content: note.clone(),
+                    });
+                    done[i] = true;
+                }
+            }
+            return ToolRunStats {
+                mutations,
+                verify_passed,
+                timed_out: true,
             };
         }
 
@@ -1288,6 +1438,7 @@ async fn execute_tool_calls(
     ToolRunStats {
         mutations,
         verify_passed,
+        timed_out: false,
     }
 }
 
@@ -1582,5 +1733,186 @@ mod tests {
         assert!(glob_match("**", "anything/at/all.elf"));
         assert!(glob_match("**", "single"));
         assert!(!glob_match("**/*.elf", "fw.bin"));
+    }
+
+    // --- provider stream stall / tool wave timeout -------------------------
+
+    use crate::provider::{ProviderStream, StopReason};
+    use crate::tool::{Tool, ToolError, ToolOutput};
+    use crate::AutoApprove;
+
+    struct CollectingSink(Arc<Mutex<Vec<AgentEvent>>>);
+
+    #[async_trait]
+    impl EventSink for CollectingSink {
+        async fn event(&self, event: AgentEvent) {
+            self.0.lock().unwrap().push(event);
+        }
+    }
+
+    fn harness(
+        provider: Box<dyn Provider>,
+        registry: ToolRegistry,
+        stream_timeout: Duration,
+        wave_timeout: Duration,
+    ) -> (Arc<Mutex<Vec<AgentEvent>>>, tokio::task::JoinHandle<()>) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+        let session = Session::new(dir.path().to_path_buf(), "mock", "mock");
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut agent = Agent::new(
+            Some(provider),
+            Arc::new(registry),
+            session,
+            store,
+            Arc::new(AutoApprove::everything()),
+            Arc::new(CollectingSink(events.clone())),
+            4,
+        );
+        agent.set_stream_timeout(stream_timeout);
+        agent.set_tool_wave_timeout(wave_timeout);
+        agent.set_tool_cancel_grace(Duration::from_millis(50));
+        let handle = tokio::spawn(async move {
+            let _ = agent.run_turn("go").await;
+        });
+        (events, handle)
+    }
+
+    /// Provider that yields one text chunk then goes silent forever, as if the
+    /// connection died mid-stream.
+    struct MidStreamStallProvider;
+
+    #[async_trait]
+    impl Provider for MidStreamStallProvider {
+        async fn stream(
+            &self,
+            _request: ChatRequest,
+        ) -> Result<ProviderStream, ProviderError> {
+            let stream = futures::stream::iter(vec![Ok(ProviderEvent::Text(
+                "hello".to_string(),
+            ))])
+            .chain(futures::stream::pending());
+            Ok(Box::pin(stream))
+        }
+
+        fn model(&self) -> &str {
+            "stall"
+        }
+    }
+
+    #[tokio::test]
+    async fn mid_stream_stall_ends_the_turn() {
+        let (events, task) = harness(
+            Box::new(MidStreamStallProvider),
+            ToolRegistry::new(),
+            Duration::from_millis(300),
+            Duration::from_secs(600),
+        );
+        tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .expect("turn must end promptly after a mid-stream stall")
+            .unwrap();
+        let events = events.lock().unwrap();
+        let infos: Vec<String> = events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::Info(m) => Some(m.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            infos.iter().any(|m| m.contains("stalled")),
+            "expected a stall Info event, got: {infos:?}"
+        );
+        assert!(
+            events.iter().any(|e| matches!(e, AgentEvent::TurnEnd { .. })),
+            "expected TurnEnd after the stall, got: {events:?}"
+        );
+    }
+
+    /// Tool that never returns, like a wedged `task` subagent or an unanswered
+    /// `ask_user`.
+    struct HangingTool;
+
+    #[async_trait]
+    impl Tool for HangingTool {
+        fn name(&self) -> &'static str {
+            "hang"
+        }
+        fn description(&self) -> &'static str {
+            "hangs forever"
+        }
+        fn input_schema(&self) -> Value {
+            json!({"type": "object", "properties": {}})
+        }
+        async fn run(&self, _args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+            std::future::pending().await
+        }
+    }
+
+    /// Provider that asks for one tool call then ends the round, so the tool
+    /// wave runs the hanging tool.
+    struct ToolWaveProvider;
+
+    #[async_trait]
+    impl Provider for ToolWaveProvider {
+        async fn stream(
+            &self,
+            _request: ChatRequest,
+        ) -> Result<ProviderStream, ProviderError> {
+            let stream = futures::stream::iter(vec![
+                Ok(ProviderEvent::ToolCall(ToolCall {
+                    id: "t1".to_string(),
+                    name: "hang".to_string(),
+                    arguments: json!({}),
+                })),
+                Ok(ProviderEvent::Stop(StopReason::EndTurn)),
+            ]);
+            Ok(Box::pin(stream))
+        }
+
+        fn model(&self) -> &str {
+            "toolwave"
+        }
+    }
+
+    #[tokio::test]
+    async fn hanging_tool_wave_is_bounded_by_the_timeout() {
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(HangingTool));
+        let (events, task) = harness(
+            Box::new(ToolWaveProvider),
+            registry,
+            Duration::from_secs(600),
+            Duration::from_millis(300),
+        );
+        tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .expect("turn must end promptly after the tool wave timeout")
+            .unwrap();
+        let events = events.lock().unwrap();
+        let timed_out_ends: Vec<&AgentEvent> = events
+            .iter()
+            .filter(|e| matches!(e, AgentEvent::ToolEnd { ok: false, .. }))
+            .collect();
+        assert!(
+            !timed_out_ends.is_empty(),
+            "expected a failed ToolEnd for the hung tool, got: {events:?}"
+        );
+        let infos: Vec<String> = events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::Info(m) => Some(m.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            infos.iter().any(|m| m.contains("Tool wave timed out")),
+            "expected a wave-timeout Info event, got: {infos:?}"
+        );
+        assert!(
+            events.iter().any(|e| matches!(e, AgentEvent::TurnEnd { .. })),
+            "expected TurnEnd after the wave timeout, got: {events:?}"
+        );
     }
 }

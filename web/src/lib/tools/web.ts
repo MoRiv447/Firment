@@ -165,6 +165,11 @@ async function bingSearch(query: string, maxResults: number): Promise<SearchResu
       : '';
     results.push({ title, url: hrefMatch[1], snippet });
   }
+  if (results.length === 0 && !/no results/i.test(html)) {
+    throw new Error(
+      'Web search failed: bing returned a page without results or a "no results" message (rate-limited or blocked from this network). Try web_fetch on a known URL instead.',
+    );
+  }
   return results;
 }
 

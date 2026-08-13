@@ -355,6 +355,24 @@ async fn bing_html(
         });
         rest = block;
     }
+    if items.is_empty() {
+        if looks_blocked(&body) {
+            return Err(ToolError::new(
+                "[Blocked] bing served its anti-bot challenge page (no results in the \
+                 response). The search provider may be rate-limited or blocked from \
+                 this network/region. Fall back to web_fetch on a known URL (vendor \
+                 page, datasheet, RSS feed) instead.",
+            ));
+        }
+        if !looks_like_no_results(&body) {
+            return Err(ToolError::new(
+                "[Blocked] bing returned a page without any results or a \"no results\" \
+                 message — typical of rate limiting after a burst of requests or a CN \
+                 network hiccup. Retry the query or fall back to web_fetch on a known \
+                 URL (vendor page, datasheet, RSS feed).",
+            ));
+        }
+    }
     Ok(items)
 }
 
@@ -937,6 +955,40 @@ mod tests {
             .await;
         let items = bing_html(&server.uri(), "zzz", 5).await.unwrap();
         assert!(items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn bing_challenge_page_is_reported_not_empty() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                "<html><body><h1>Bing</h1><p>Anomaly detected. Please verify you are a human.</p></body></html>"
+                    .as_bytes()
+                    .to_vec(),
+                "text/html",
+            ))
+            .mount(&server)
+            .await;
+        let err = bing_html(&server.uri(), "stm32", 5).await.unwrap_err();
+        assert!(err.message.contains("[Blocked]"), "got: {err}");
+        assert!(err.message.contains("web_fetch"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn bing_empty_page_without_no_results_message_is_reported() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                "<html><body><ol id=\"b_results\"></ol></body></html>"
+                    .as_bytes()
+                    .to_vec(),
+                "text/html",
+            ))
+            .mount(&server)
+            .await;
+        let err = bing_html(&server.uri(), "zzz", 5).await.unwrap_err();
+        assert!(err.message.contains("[Blocked]"), "got: {err}");
+        assert!(err.message.contains("rate limit"), "got: {err}");
     }
 
     #[tokio::test]
