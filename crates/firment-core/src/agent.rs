@@ -13,6 +13,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::sync::watch;
 
 #[derive(Debug, Clone)]
@@ -71,6 +72,12 @@ pub enum AgentError {
     #[error("no final text produced")]
     NoOutput,
 }
+
+/// Hard upper bound on a single provider stream call. If the network/model
+/// stalls (dead socket, model never finishes thinking, dropped connection
+/// mid-stream) the stream will never return on its own; without this cap
+/// the entire turn hangs and the IDE/TUI never sees TurnEnd.
+const STREAM_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub struct Agent {
     provider: Option<Box<dyn Provider>>,
@@ -633,6 +640,26 @@ impl Agent {
                     self.sink
                         .event(AgentEvent::Info(format!(
                             "⏹ Interrupted; rolled back this turn's edits: {summary}"
+                        )))
+                        .await;
+                    let _ = self.store.save(&self.session);
+                    self.sink
+                        .event(AgentEvent::TurnEnd {
+                            text: String::new(),
+                        })
+                        .await;
+                    return Ok(String::new());
+                }
+                // Hard timeout: if the provider stream never returns (dead
+                // socket, model stalled, network blackhole) we must NOT
+                // hang the whole turn — surface the failure to the UI and
+                // end the turn so the user can react / retry.
+                _ = tokio::time::sleep(STREAM_TIMEOUT) => {
+                    let summary = rollback_journal(&journal);
+                    self.sink
+                        .event(AgentEvent::Info(format!(
+                            "⚠ Provider stream timed out after {}s; ending turn. Partial edits rolled back: {summary}",
+                            STREAM_TIMEOUT.as_secs()
                         )))
                         .await;
                     let _ = self.store.save(&self.session);
