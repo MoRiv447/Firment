@@ -320,6 +320,54 @@ impl Config {
         save_auth(&auth)
     }
 
+    /// Add or update a provider definition (type, base URL, model) and persist
+    /// the whole config. When `name` equals `default_provider`, the updated
+    /// values take effect for the next turn automatically.
+    pub fn set_provider(
+        &mut self,
+        name: &str,
+        provider_type: &str,
+        base_url: Option<String>,
+        model: &str,
+    ) -> Result<(), ConfigError> {
+        let entry = self.providers.entry(name.to_string()).or_insert_with(|| ProviderConfig {
+            r#type: provider_type.to_string(),
+            base_url: base_url.clone(),
+            api_key_env: None,
+            api_key: None,
+            model: model.to_string(),
+            max_tokens: None,
+            temperature: None,
+        });
+        entry.r#type = provider_type.to_string();
+        if base_url.is_some() {
+            entry.base_url = base_url;
+        }
+        entry.model = model.to_string();
+        self.save(&config_path())
+    }
+
+    /// Remove a provider definition. If the removed provider was the default,
+    /// the default is repointed to the first remaining provider (deterministic:
+    /// sorted by name). Deleting the last remaining provider is rejected.
+    pub fn remove_provider(&mut self, name: &str) -> Result<(), ConfigError> {
+        if !self.providers.contains_key(name) {
+            return Ok(());
+        }
+        self.providers.remove(name);
+        if self.default_provider == name {
+            let mut remaining: Vec<&String> = self.providers.keys().collect();
+            remaining.sort();
+            let Some(next) = remaining.first() else {
+                return Err(ConfigError::UnknownProvider(
+                    "cannot delete the last provider — at least one must remain".to_string(),
+                ));
+            };
+            self.default_provider = (*next).clone();
+        }
+        self.save(&config_path())
+    }
+
     /// Fetch the model list from the provider's `/models` endpoint
     /// (OpenAI-compatible) or `/v1/models` (Anthropic).
     pub async fn list_models(&self, name: &str) -> Result<Vec<String>, ConfigError> {

@@ -70,6 +70,16 @@ export interface SettingsDto {
   monitor_baud: number;
   web_search: string | null;
   thinking: string;
+  providers: ProviderEntryDto[];
+}
+
+export interface ProviderEntryDto {
+  name: string;
+  type: string;
+  base_url: string | null;
+  model: string;
+  is_default: boolean;
+  api_key: string | null;
 }
 
 export interface ToolCardState {

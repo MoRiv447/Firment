@@ -27,6 +27,9 @@ export const api = {
   setApiKey: (provider: string, key: string) => invoke('set_api_key', { provider, key }),
   getSettings: () => invoke<SettingsDto>('get_settings'),
   saveSettings: (settings: SettingsDto) => invoke('save_settings', { settings }),
+  setProvider: (name: string, providerType: string, baseUrl: string | null, model: string) =>
+    invoke('set_provider', { name, providerType, baseUrl, model }),
+  removeProvider: (name: string) => invoke('remove_provider', { name }),
   // hardware
   listPorts: () => invoke<string[]>('list_ports'),
   monitorStart: (port: string, baud: number, elf: string | null) =>

@@ -89,6 +89,8 @@ pub fn run() {
             commands::set_api_key,
             commands::get_settings,
             commands::save_settings,
+            commands::set_provider,
+            commands::remove_provider,
             commands::list_ports,
             commands::monitor_start,
             commands::monitor_stop,

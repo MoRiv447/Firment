@@ -1,7 +1,21 @@
-import { Alert, Button, Card, Form, Input, InputNumber, Select, Space, Tag, Typography } from 'antd';
+import {
+  Alert,
+  Button,
+  Card,
+  Form,
+  Input,
+  InputNumber,
+  Select,
+  Space,
+  Tag,
+  Typography,
+  Popconfirm,
+  Divider,
+} from 'antd';
+import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
-import type { SettingsDto } from '../types';
+import type { ProviderEntryDto, SettingsDto } from '../types';
 
 const { Text } = Typography;
 
@@ -9,19 +23,29 @@ export function SettingsView() {
   const [settings, setSettings] = useState<SettingsDto | null>(null);
   const [models, setModels] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
-  const [keyProvider, setKeyProvider] = useState('openai');
-  const [keyValue, setKeyValue] = useState('');
   const [keyMsg, setKeyMsg] = useState('');
   const [form] = Form.useForm<SettingsDto>();
 
-  useEffect(() => {
+  // new-provider form
+  const [newName, setNewName] = useState('');
+  const [newType, setNewType] = useState('openai');
+  const [newBaseUrl, setNewBaseUrl] = useState('');
+  const [newModel, setNewModel] = useState('');
+  const [newMsg, setNewMsg] = useState('');
+
+  const load = () => {
     void api.getSettings().then((s) => {
       setSettings(s);
       form.setFieldsValue(s);
     });
+  };
+
+  useEffect(() => {
+    load();
   }, [form]);
 
   const refreshModels = async (provider: string) => {
+    if (!provider) return;
     try {
       const list = await api.fetchModels(provider);
       setModels(list);
@@ -37,50 +61,189 @@ export function SettingsView() {
       const values = form.getFieldsValue() as SettingsDto;
       await api.saveSettings(values);
       setSaving(false);
+      load();
     } catch (err) {
       setSaving(false);
       console.error(err);
     }
   };
 
-  const saveKey = async () => {
-    if (!keyValue.trim()) return;
+  const upsertProvider = async () => {
+    const name = newName.trim();
+    if (!name || !newModel.trim()) {
+      setNewMsg('name and model are required');
+      return;
+    }
     try {
-      await api.setApiKey(keyProvider, keyValue.trim());
-      setKeyValue('');
-      setKeyMsg(`saved for ${keyProvider}`);
+      await api.setProvider(name, newType, newBaseUrl.trim() || null, newModel.trim());
+      setNewMsg(`saved provider "${name}"`);
+      setNewName('');
+      setNewModel('');
+      setNewBaseUrl('');
+      load();
+    } catch (err) {
+      setNewMsg(`failed: ${err}`);
+      console.error(err);
+    }
+  };
+
+  const editProvider = async (p: ProviderEntryDto) => {
+    try {
+      await api.setProvider(p.name, p.type, p.base_url, p.model);
+      load();
     } catch (err) {
       console.error(err);
     }
   };
+
+  const removeProvider = async (p: ProviderEntryDto) => {
+    try {
+      await api.removeProvider(p.name);
+      load();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // per-provider API key editing: update local state on change, persist on save
+  const setProviderKeyLocal = (p: ProviderEntryDto, key: string) => {
+    setSettings((s) =>
+      s
+        ? {
+            ...s,
+            providers: s.providers.map((x) => (x.name === p.name ? { ...x, api_key: key } : x)),
+          }
+        : s,
+    );
+  };
+
+  const saveProviderKey = async (p: ProviderEntryDto) => {
+    const key = p.api_key?.trim() ?? '';
+    if (!key) {
+      setKeyMsg(`empty key for ${p.name} — nothing saved (env fallback still applies)`);
+      return;
+    }
+    try {
+      await api.setApiKey(p.name, key);
+      setKeyMsg(`key saved for ${p.name}`);
+      load();
+    } catch (err) {
+      setKeyMsg(`failed: ${err}`);
+      console.error(err);
+    }
+  };
+
+  const providerOptions = (settings?.providers ?? []).map((p) => ({ label: p.name, value: p.name }));
 
   return (
     <div style={{ padding: 20, maxWidth: 760 }}>
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         {!settings && <Alert type="info" showIcon message="Loading settings…" />}
 
-        <Card title="API key" size="small">
-          <Space direction="vertical" style={{ width: '100%' }}>
-            <Space>
+        <Card title="Providers" size="small">
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              Each provider has its own API key, base URL and model. The default provider is
+              used for new sessions; delete any provider — the default automatically moves to
+              the next one.
+            </Text>
+            {(settings?.providers ?? []).map((p) => (
+              <div
+                key={p.name}
+                style={{
+                  border: '2px solid #000',
+                  padding: 10,
+                  background: '#12151b',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <Text strong style={{ color: '#f2f4f8' }}>{p.name}</Text>
+                  {p.is_default && (
+                    <Tag color="#facc15" style={{ borderRadius: 0, border: '2px solid #000', color: '#000', fontWeight: 700 }}>
+                      DEFAULT
+                    </Tag>
+                  )}
+                  <div style={{ flex: 1 }} />
+                  <Popconfirm
+                    title={`Delete "${p.name}"?`}
+                    description="The default (if this one) moves to another provider."
+                    onConfirm={() => removeProvider(p)}
+                  >
+                    <Button size="small" danger icon={<DeleteOutlined />} />
+                  </Popconfirm>
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <Select
+                    style={{ width: 120 }}
+                    value={p.type}
+                    onChange={(v) => editProvider({ ...p, type: v })}
+                    options={[{ label: 'openai', value: 'openai' }, { label: 'anthropic', value: 'anthropic' }]}
+                  />
+                  <Input
+                    style={{ flex: 1, minWidth: 200, fontFamily: 'Consolas, monospace' }}
+                    placeholder="base url"
+                    value={p.base_url ?? ''}
+                    onChange={(e) => editProvider({ ...p, base_url: e.target.value || null })}
+                  />
+                  <Input
+                    style={{ flex: 1, minWidth: 140 }}
+                    placeholder="model"
+                    value={p.model}
+                    onChange={(e) => editProvider({ ...p, model: e.target.value })}
+                  />
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <Input.Password
+                    style={{ flex: 1, minWidth: 260, fontFamily: 'Consolas, monospace' }}
+                    placeholder={`api key for ${p.name} (empty = use env)`}
+                    value={p.api_key ?? ''}
+                    onChange={(e) => setProviderKeyLocal(p, e.target.value)}
+                  />
+                  <Button size="small" onClick={() => saveProviderKey(p)}>
+                    Save key
+                  </Button>
+                </div>
+              </div>
+            ))}
+            <Divider style={{ margin: '4px 0' }} />
+            <Text strong style={{ color: '#e6e9ef' }}>Add provider</Text>
+            <Space wrap>
+              <Input
+                style={{ width: 130 }}
+                placeholder="name (e.g. deepseek)"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+              />
               <Select
-                style={{ width: 180 }}
-                placeholder="provider"
-                value={keyProvider}
-                onChange={(p) => setKeyProvider(p ?? 'openai')}
+                style={{ width: 120 }}
+                value={newType}
+                onChange={(v) => setNewType(v ?? 'openai')}
                 options={[{ label: 'openai', value: 'openai' }, { label: 'anthropic', value: 'anthropic' }]}
               />
-              <Input.Password
-                style={{ width: 320 }}
-                placeholder="sk-…"
-                value={keyValue}
-                onChange={(e) => setKeyValue(e.target.value)}
+              <Input
+                style={{ width: 260, fontFamily: 'Consolas, monospace' }}
+                placeholder="base url (e.g. https://api.deepseek.com/v1)"
+                value={newBaseUrl}
+                onChange={(e) => setNewBaseUrl(e.target.value)}
               />
-              <Button onClick={saveKey}>Save</Button>
+              <Input
+                style={{ width: 180 }}
+                placeholder="model (e.g. deepseek-v4-flash)"
+                value={newModel}
+                onChange={(e) => setNewModel(e.target.value)}
+              />
+              <Button type="primary" icon={<PlusOutlined />} onClick={upsertProvider}>
+                Save provider
+              </Button>
             </Space>
-            {keyMsg && <Text type="success">{keyMsg}</Text>}
+            {newMsg && <Text type="secondary" style={{ fontSize: 12 }}>{newMsg}</Text>}
+            {keyMsg && <Text type="success" style={{ fontSize: 12 }}>{keyMsg}</Text>}
             <Text type="secondary" style={{ fontSize: 12 }}>
-              Keys are stored in auth.json next to config.toml. Use the /models flow below to
-              verify connectivity.
+              Providers are stored in config.toml; keys in auth.json. Pick the default in the
+              Agent card below.
             </Text>
           </Space>
         </Card>
@@ -90,8 +253,9 @@ export function SettingsView() {
             <Space size={16} wrap>
               <Form.Item name="default_provider" label="Default provider" style={{ minWidth: 180 }}>
                 <Select
-                  options={[{ label: 'openai', value: 'openai' }, { label: 'anthropic', value: 'anthropic' }]}
+                  options={providerOptions}
                   onChange={(v) => refreshModels(v)}
+                  showSearch
                 />
               </Form.Item>
               <Form.Item name="default_model" label="Model">

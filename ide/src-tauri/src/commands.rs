@@ -203,6 +203,21 @@ pub struct SettingsDto {
     pub monitor_baud: u32,
     pub web_search: Option<String>,
     pub thinking: String,
+    /// All configured providers (name + resolved connection info) so the IDE
+    /// can edit base_url / model without hand-editing config.toml.
+    pub providers: Vec<ProviderEntryDto>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ProviderEntryDto {
+    pub name: String,
+    pub r#type: String,
+    pub base_url: Option<String>,
+    pub model: String,
+    pub is_default: bool,
+    /// Resolved API key (from auth.json / inline / env). Sent back so the
+    /// settings UI can show per-provider keys; it never leaves the local app.
+    pub api_key: Option<String>,
 }
 
 #[tauri::command]
@@ -211,6 +226,19 @@ pub async fn get_settings(
 ) -> Result<SettingsDto, String> {
     let config = shared.config.lock().unwrap().clone();
     let (_, model) = default_provider_model(&config);
+    let mut providers: Vec<ProviderEntryDto> = config
+        .providers
+        .iter()
+        .map(|(name, p)| ProviderEntryDto {
+            name: name.clone(),
+            r#type: p.r#type.clone(),
+            base_url: p.base_url.clone(),
+            model: p.model.clone(),
+            is_default: name == &config.default_provider,
+            api_key: config.api_key_for(p, name),
+        })
+        .collect();
+    providers.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(SettingsDto {
         default_provider: config.default_provider.clone(),
         default_model: model,
@@ -223,6 +251,7 @@ pub async fn get_settings(
         monitor_baud: config.tools.monitor_baud,
         web_search: config.tools.web_search.clone(),
         thinking: config.thinking.label().to_string(),
+        providers,
     })
 }
 
@@ -254,6 +283,33 @@ pub async fn save_settings(
         .save(&shared.config_path)
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Add or update a provider (type / base URL / model) in config.toml.
+#[tauri::command]
+pub async fn set_provider(
+    shared: tauri::State<'_, Arc<Shared>>,
+    name: String,
+    provider_type: String,
+    base_url: Option<String>,
+    model: String,
+) -> Result<(), String> {
+    let mut config = shared.config.lock().unwrap();
+    config
+        .set_provider(&name, &provider_type, base_url, &model)
+        .map_err(|e| e.to_string())
+}
+
+/// Remove a provider definition (except the default one).
+#[tauri::command]
+pub async fn remove_provider(
+    shared: tauri::State<'_, Arc<Shared>>,
+    name: String,
+) -> Result<(), String> {
+    let mut config = shared.config.lock().unwrap();
+    config
+        .remove_provider(&name)
+        .map_err(|e| e.to_string())
 }
 
 // ---------- hardware ----------
