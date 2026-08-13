@@ -330,15 +330,18 @@ impl Config {
         base_url: Option<String>,
         model: &str,
     ) -> Result<(), ConfigError> {
-        let entry = self.providers.entry(name.to_string()).or_insert_with(|| ProviderConfig {
-            r#type: provider_type.to_string(),
-            base_url: base_url.clone(),
-            api_key_env: None,
-            api_key: None,
-            model: model.to_string(),
-            max_tokens: None,
-            temperature: None,
-        });
+        let entry = self
+            .providers
+            .entry(name.to_string())
+            .or_insert_with(|| ProviderConfig {
+                r#type: provider_type.to_string(),
+                base_url: base_url.clone(),
+                api_key_env: None,
+                api_key: None,
+                model: model.to_string(),
+                max_tokens: None,
+                temperature: None,
+            });
         entry.r#type = provider_type.to_string();
         if base_url.is_some() {
             entry.base_url = base_url;

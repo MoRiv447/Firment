@@ -80,9 +80,7 @@ async fn run_probe_rs_download(
         }
     };
     let _ = (&mut read_streams).await;
-    let code = status
-        .map_err(|e| format!("wait failed: {e}"))?
-        .code();
+    let code = status.map_err(|e| format!("wait failed: {e}"))?.code();
 
     let stdout = String::from_utf8_lossy(&out_buf).to_string();
     let stderr = String::from_utf8_lossy(&err_buf).to_string();
@@ -161,7 +159,8 @@ impl Tool for Flash {
         }
 
         let command = flash_command(&chip, &resolved.to_string_lossy(), probe.as_deref());
-        let result = run_probe_rs_download(&chip, &resolved, probe.as_deref(), &ctx.cwd, timeout_ms).await;
+        let result =
+            run_probe_rs_download(&chip, &resolved, probe.as_deref(), &ctx.cwd, timeout_ms).await;
         match result {
             Ok((text, Some(0))) => Ok(ToolOutput {
                 text: format!("flash passed (exit 0)\n{text}"),

@@ -73,7 +73,7 @@ jobs:
           npm run build
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Tauri Linux dependencies
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev pkg-config
       - name: Rust check (src-tauri)
         working-directory: ide/src-tauri
         run: cargo check
