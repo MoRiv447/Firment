@@ -55,9 +55,9 @@ pub struct ToolsConfig {
     /// Default baud rate for `firm monitor`.
     #[serde(default = "default_monitor_baud")]
     pub monitor_baud: u32,
-    /// Web search provider: `duckduckgo` (no key, default) / `tavily` /
-    /// `brave`.
-    #[serde(default)]
+    /// Web search provider: `bing` (no key, default — reachable from CN), or
+    /// `duckduckgo` / `tavily` / `brave`.
+    #[serde(default = "default_web_search")]
     pub web_search: Option<String>,
     /// Web search API key (tavily / brave).
     #[serde(default)]
@@ -577,7 +577,7 @@ model = "deepseek-v4-flash"
 # default_chip = "stm32f407vetx"          # default chip for the flash tool (probe-rs chip name)
 # monitor_port = "COM3"                   # default serial port for firm monitor
 # monitor_baud = 115200                   # default baud rate for firm monitor
-# web_search = "duckduckgo"               # web_search provider: duckduckgo (no key) / tavily / brave
+# web_search = "bing"                     # default: bing (no key, CN-reachable); duckduckgo / tavily / brave also work
 # web_search_api_key_env = "TAVILY_API_KEY"  # API key env for tavily / brave (or set web_search_api_key inline)
 # elf = "build/fw.elf"                       # glob of the firmware ELF: harness seeds a binary baseline and auto-runs elf_analyze before finishing each edited turn (needs -fstack-usage for stack depth)
 # max_subagent_depth = 2                  # recursion limit for the task subagent tool
@@ -609,6 +609,14 @@ fn default_max_iterations() -> usize {
 
 fn default_monitor_baud() -> u32 {
     115_200
+}
+
+/// Default web search provider: `bing` — no key, no cookie, reachable from
+/// mainland China where DuckDuckGo is unreliable. International users can
+/// set `web_search = "duckduckgo"` (or tavily/brave with an API key) to
+/// prefer English-first results.
+fn default_web_search() -> Option<String> {
+    Some("bing".to_string())
 }
 
 fn default_max_subagent_depth() -> usize {

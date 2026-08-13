@@ -53,7 +53,7 @@ export const DEFAULT_CONFIG: Config = {
   },
   defaultProvider: 'default',
   tools: {
-    webSearch: 'duckduckgo',
+    webSearch: 'bing',
     maxSubagentDepth: 2,
   },
   contextBudgetChars: 60000,

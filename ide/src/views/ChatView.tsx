@@ -1,4 +1,4 @@
-import { Button, Input, Space, Spin, Tag, Typography } from 'antd';
+import { Alert, Button, Input, Space, Spin, Tag, Typography } from 'antd';
 import { SendOutlined, StopOutlined } from '@ant-design/icons';
 import { useEffect, useRef, useState } from 'react';
 import { MessageList } from '../components/MessageList';
@@ -23,6 +23,28 @@ export function ChatView({
 }) {
   const [input, setInput] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Detect a stuck agent: running is on but nothing has changed in the
+  // visible turn (text delta or new tool) for too long. Cheap proxy for
+  // "the provider stream is dead but Rust has not yet emitted TurnEnd" —
+  // shows a banner telling the user to hit Stop instead of waiting forever.
+  const lastChangeRef = useRef<number>(Date.now());
+  const [stuck, setStuck] = useState(false);
+  const turnKey = `${turn?.text.length}:${turn?.tools ? Object.keys(turn.tools).length : 0}`;
+  useEffect(() => {
+    lastChangeRef.current = Date.now();
+    setStuck(false);
+  }, [turnKey]);
+  useEffect(() => {
+    if (!running) {
+      setStuck(false);
+      return;
+    }
+    const tick = setInterval(() => {
+      if (Date.now() - lastChangeRef.current > 60_000) setStuck(true);
+    }, 10_000);
+    return () => clearInterval(tick);
+  }, [running]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -53,13 +75,26 @@ export function ChatView({
         {session && (
           <>
             <MessageList messages={session.messages} />
-            {turn && turn.text === '' && toolList.length === 0 && running && (
+            {running && (
               <div style={{ margin: '12px 0', display: 'flex', alignItems: 'center', gap: 10 }}>
                 <Spin size="small" />
                 <Text type="secondary" style={{ fontSize: 13 }}>
-                  thinking…
+                  {toolList.length > 0
+                    ? `running ${toolList[toolList.length - 1].name}…`
+                    : turn && turn.text === ''
+                      ? 'thinking…'
+                      : 'generating…'}
                 </Text>
               </div>
+            )}
+            {stuck && (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ margin: '8px 0', borderRadius: 0 }}
+                message="Agent has been running with no new events for 60s."
+                description="The provider stream may be stalled. Click Stop below to cancel the turn — your input will be re-enabled."
+              />
             )}
             {toolList.map((t) => (
               <ToolCard key={t.seq} tool={t} />

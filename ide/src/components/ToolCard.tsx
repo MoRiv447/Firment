@@ -64,7 +64,7 @@ export function ToolCard({ tool, standalone }: { tool: ToolCardState; standalone
           {tool.status !== 'running' && <Text strong>{icon}</Text>}
           <Tag
             color={color}
-            style={{ borderRadius: 0, border: '2px solid #000', color: '#000', fontWeight: 700 }}
+            style={{ borderRadius: 0, border: '2px solid #000', color: '#e6e9ef', fontWeight: 700 }}
           >
             {tool.status === 'running' ? `${icon} ${tool.name}` : tool.name}
           </Tag>

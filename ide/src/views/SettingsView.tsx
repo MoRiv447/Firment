@@ -331,11 +331,20 @@ export function SettingsView() {
             <Form.Item name="context_budget_chars" label="Context budget (chars)">
               <InputNumber min={10000} step={10000} style={{ width: 200 }} />
             </Form.Item>
-            <Form.Item name="web_search" label="Web search provider">
+            <Form.Item
+              name="web_search"
+              label="Web search provider"
+              extra="Default: bing (no key, CN-reachable). Set to duckduckgo for international."
+            >
               <Select
                 allowClear
-                placeholder="none"
-                options={['duckduckgo', 'tavily', 'brave'].map((t) => ({ label: t, value: t }))}
+                placeholder="bing (default)"
+                options={[
+                  { label: 'bing (default — no key, CN-reachable)', value: 'bing' },
+                  { label: 'duckduckgo (no key)', value: 'duckduckgo' },
+                  { label: 'tavily (API key)', value: 'tavily' },
+                  { label: 'brave (API key)', value: 'brave' },
+                ]}
               />
             </Form.Item>
             <Button type="primary" onClick={save} loading={saving}>
