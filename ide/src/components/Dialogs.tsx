@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, Modal, Space, Typography } from 'antd';
+import { Alert, Button, Input, Modal, Space, Typography } from 'antd';
 import { api } from '../lib/api';
 import { ToolCard } from './ToolCard';
 import type { PermissionRequest, ToolCardState } from '../types';
@@ -53,10 +53,13 @@ export function AskDialog({
   req: { id: number; question: string; options: string[] };
 }) {
   const [busy, setBusy] = useState(false);
+  const [custom, setCustom] = useState('');
   const respond = async (answer: string | null) => {
+    if (answer !== null && !answer.trim()) return;
     setBusy(true);
     try {
       await api.respondAsk(req.id, answer);
+      setCustom('');
     } finally {
       setBusy(false);
     }
@@ -68,6 +71,7 @@ export function AskDialog({
       closable={false}
       maskClosable={false}
       width={480}
+      onCancel={() => respond(null)}
       footer={
         req.options.length > 0 ? (
           <Space wrap>
@@ -85,13 +89,36 @@ export function AskDialog({
             </Button>
           </Space>
         ) : (
-          <Button loading={busy} onClick={() => respond(null)}>
-            Dismiss
-          </Button>
+          <Space>
+            <Button
+              type="primary"
+              loading={busy}
+              disabled={!custom.trim()}
+              onClick={() => respond(custom)}
+            >
+              Reply
+            </Button>
+            <Button loading={busy} onClick={() => respond(null)}>
+              Dismiss
+            </Button>
+          </Space>
         )
       }
     >
       <Text>{req.question}</Text>
+      {req.options.length === 0 && (
+        <Input.TextArea
+          style={{ marginTop: 10 }}
+          rows={2}
+          placeholder="Type your answer and press Send (or press Enter)"
+          value={custom}
+          onChange={(e) => setCustom(e.target.value)}
+          onPressEnter={(e) => {
+            if (!e.shiftKey) respond(custom);
+          }}
+          autoFocus
+        />
+      )}
     </Modal>
   );
 }
