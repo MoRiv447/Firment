@@ -136,7 +136,7 @@ export function SettingsView() {
   const providerOptions = (settings?.providers ?? []).map((p) => ({ label: p.name, value: p.name }));
 
   return (
-    <div style={{ padding: 20, maxWidth: 760 }}>
+    <div style={{ padding: 20, maxWidth: 760, height: '100%', overflowY: 'auto' }}>
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         {!settings && <Alert type="info" showIcon message="Loading settings…" />}
 

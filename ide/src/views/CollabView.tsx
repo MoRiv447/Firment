@@ -11,7 +11,7 @@ const { Text } = Typography;
  */
 export function CollabView() {
   return (
-    <div style={{ padding: 20, maxWidth: 760 }}>
+    <div style={{ padding: 20, maxWidth: 760, height: '100%', overflowY: 'auto' }}>
       <Card size="small" title="Team collaboration">
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
           <Text type="secondary">
