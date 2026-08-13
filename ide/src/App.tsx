@@ -45,8 +45,6 @@ export default function App() {
   const [askReq, setAskReq] = useState<AskRequest | null>(null);
   const [monitorLines, setMonitorLines] = useState<Record<string, MonitorLine[]>>({});
   const [workCwd, setWorkCwd] = useState('C:\\');
-  const monRef = useRef(monitorLines);
-  monRef.current = monitorLines;
   // The event listeners are registered once ([] deps), so the closure would
   // otherwise capture the FIRST render's `session` (null) forever. Keep a ref
   // to the latest session so turn_end can refresh the transcript.
@@ -121,7 +119,14 @@ export default function App() {
             console.info('[firm]', e.message);
             break;
           case 'error':
-            setTurn((t) => (t ? { ...t, text: `${t.text}\n⚠ ${e.message}` } : t));
+            // If the turn never started (e.g. the agent failed to build
+            // because no provider is configured), `turn` is null and the
+            // error must still surface instead of being dropped.
+            setTurn((t) =>
+              t
+                ? { ...t, text: `${t.text}\n⚠ ${e.message}` }
+                : { text: `⚠ ${e.message}`, tools: {}, startedAt: Date.now() },
+            );
             setRunning(false);
             break;
           default:
@@ -183,7 +188,19 @@ export default function App() {
   const handleDeleteSession = async (id: string) => {
     try {
       await api.deleteSession(id);
-      void api.listSessions().then(setSessions);
+      const list = await api.listSessions();
+      setSessions(list);
+      // If the current session was deleted, switch to the newest remaining
+      // one (or clear) so the UI never keeps showing a deleted session that
+      // the agent would silently re-persist on the next turn.
+      if (sessionRef.current?.id === id) {
+        if (list.length > 0) {
+          const s = await api.loadSession(list[0].id);
+          setSession(s);
+        } else {
+          setSession(null);
+        }
+      }
     } catch (err) {
       console.error(err);
     }

@@ -58,6 +58,9 @@ pub async fn monitor_start(
     baud: u32,
     elf: Option<String>,
 ) -> Result<(), String> {
+    if shared.monitors.lock().unwrap().contains_key(&port) {
+        return Err(format!("a monitor is already running on {port}"));
+    }
     let mut handle = serialport::new(&port, baud)
         .timeout(Duration::from_millis(100))
         .open()
@@ -95,14 +98,18 @@ pub async fn monitor_start(
                 Ok(n) => {
                     let text = String::from_utf8_lossy(&buf[..n]).to_string();
                     partial.push_str(&text);
-                    // Emit complete lines immediately; keep any trailing
-                    // partial line buffered so ELF decoding sees whole lines.
+                    // Emit complete lines immediately, KEEPING the trailing
+                    // '\n'. The frontend uses the '\n' to detect line
+                    // boundaries (a newline-less chunk is glued onto the
+                    // current line), so stripping it here merges every line
+                    // into one.
                     while let Some(pos) = partial.find('\n') {
                         let line = partial[..=pos].trim_end().to_string();
-                        let decoded = firment_tools::decode::decode_line(&line, elf_path.as_deref());
+                        let decoded =
+                            firment_tools::decode::decode_line(&line, elf_path.as_deref());
                         let _ = app.emit(
                             "monitor-output",
-                            json!({ "port": port_out, "kind": "stdout", "line": decoded }),
+                            json!({ "port": port_out, "kind": "stdout", "line": format!("{decoded}\n") }),
                         );
                         partial.drain(..=pos);
                     }

@@ -81,6 +81,11 @@ pub async fn new_session(
     mode: String,
 ) -> Result<crate::events::SessionDto, String> {
     let shared = shared.inner().clone();
+    // Swapping the agent while a turn runs would block on the agent lock
+    // until the turn finishes — reject instead so the UI stays responsive.
+    if shared.running.load(Ordering::SeqCst) {
+        return Err("an agent turn is running — wait for it or cancel it before switching sessions".to_string());
+    }
     let (provider, model) = {
         let config = shared.config.lock().unwrap().clone();
         default_provider_model(&config)
@@ -113,6 +118,10 @@ pub async fn load_session(
     id: String,
 ) -> Result<crate::events::SessionDto, String> {
     let shared = shared.inner().clone();
+    // Same guard as new_session: don't block on the agent lock mid-turn.
+    if shared.running.load(Ordering::SeqCst) {
+        return Err("an agent turn is running — wait for it or cancel it before switching sessions".to_string());
+    }
     let store = shared.store.lock().unwrap().clone();
     let session = store.load(&id).map_err(|e| e.to_string())?;
     let agent = build_agent(&shared, session.clone()).map_err(|e| e.to_string())?;
@@ -402,5 +411,7 @@ pub async fn firm_run(
     }
     args.push("--timeout".to_string());
     args.push(timeout_secs.to_string());
-    hardware::run_hardware_command(shared.inner().clone(), "run".to_string(), args, cwd, timeout_secs.max(60)).await
+    // Wait at most as long as the UI's requested timeout (clamped to a
+    // minimum so a 0/accidental value can't spawn a forever-wait).
+    hardware::run_hardware_command(shared.inner().clone(), "run".to_string(), args, cwd, timeout_secs.max(5)).await
 }

@@ -113,6 +113,19 @@ export function SettingsView() {
     }
   };
 
+  // per-provider editing: update local state on change so typing never
+  // triggers an RPC + reload per keystroke; persist on blur / save button.
+  const setProviderLocal = (p: ProviderEntryDto, patch: Partial<ProviderEntryDto>) => {
+    setSettings((s) =>
+      s
+        ? {
+            ...s,
+            providers: s.providers.map((x) => (x.name === p.name ? { ...x, ...patch } : x)),
+          }
+        : s,
+    );
+  };
+
   // per-provider API key editing: update local state on change, persist on save
   const setProviderKeyLocal = (p: ProviderEntryDto, key: string) => {
     setSettings((s) =>
@@ -194,13 +207,15 @@ export function SettingsView() {
                     style={{ flex: 1, minWidth: 200, fontFamily: 'Consolas, monospace' }}
                     placeholder="base url"
                     value={p.base_url ?? ''}
-                    onChange={(e) => editProvider({ ...p, base_url: e.target.value || null })}
+                    onChange={(e) => setProviderLocal(p, { base_url: e.target.value || null })}
+                    onBlur={() => editProvider(p)}
                   />
                   <Input
                     style={{ flex: 1, minWidth: 140 }}
                     placeholder="model"
                     value={p.model}
-                    onChange={(e) => editProvider({ ...p, model: e.target.value })}
+                    onChange={(e) => setProviderLocal(p, { model: e.target.value })}
+                    onBlur={() => editProvider(p)}
                   />
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>

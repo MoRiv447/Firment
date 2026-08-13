@@ -1,7 +1,7 @@
 import { Button, Card, Checkbox, Input, InputNumber, Select, Space, Tag, Typography } from 'antd';
 import { CaretRightOutlined, SendOutlined, StopOutlined } from '@ant-design/icons';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api } from '../lib/api';
+import { api, onMonitorExited } from '../lib/api';
 import type { MonitorLine } from '../types';
 
 const { Text } = Typography;
@@ -31,6 +31,20 @@ export function SerialView({ lines }: { lines: Record<string, MonitorLine[]> }) 
   useEffect(() => {
     void refreshPorts();
     void api.activeMonitors().then(setActive).catch(console.error);
+  }, []);
+
+  // A monitor can exit on its own (port unplugged, reader error). Refresh the
+  // active list so Stop/Send buttons don't keep claiming the port is live.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    void onMonitorExited(() => {
+      void api.activeMonitors().then(setActive).catch(console.error);
+    }).then((u) => {
+      unlisten = u;
+    });
+    return () => {
+      unlisten?.();
+    };
   }, []);
 
   useEffect(() => {
