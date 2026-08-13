@@ -151,6 +151,9 @@ enum Command {
         #[arg(long, default_value_t = 30)]
         timeout: u64,
     },
+    /// Print the tool registry specs as JSON — the single source of truth
+    /// for tool names/descriptions/schemas (consumed by web/IDE surfaces).
+    Tools,
 }
 
 #[tokio::main]
@@ -246,6 +249,10 @@ async fn main() -> anyhow::Result<()> {
                     config.tools.monitor_baud
                 };
                 run_monitor(&port, baud, elf.clone(), *timeout)?;
+            }
+            Command::Tools => {
+                let registry = firment_tools::default_registry();
+                println!("{}", serde_json::to_string_pretty(&registry.specs())?);
             }
         }
         return Ok(());

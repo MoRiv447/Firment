@@ -1,0 +1,569 @@
+[
+  {
+    "name": "ask_user",
+    "description": "Ask the human user (the person running this session) a question and return their answer. Use only for decisions or information only the user has (which board/chip variant, hardware wiring, whether to install a toolchain, preference between approaches). Prefer 2-5 short options; the user can also type a free-form answer. Never ask something you can find out yourself with read_file / web_search / web_fetch, and never use this to ask another AI for information — spawn a `task` subagent for that.",
+    "input_schema": {
+      "properties": {
+        "options": {
+          "description": "Optional short answer options the user can pick from",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 9,
+          "type": "array"
+        },
+        "question": {
+          "description": "The question, phrased as a single clear request",
+          "type": "string"
+        }
+      },
+      "required": [
+        "question"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "build",
+    "description": "Run the project's configured build command (config [tools] build_command, e.g. \"cmake --build build\" or Keil/IAR CLI). A non-zero exit means the build failed.",
+    "input_schema": {
+      "properties": {
+        "timeout_ms": {
+          "default": 600000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "edit_file",
+    "description": "Edit a file by exact old_text anchor (must match exactly once) or by 1-based line range.",
+    "input_schema": {
+      "oneOf": [
+        {
+          "required": [
+            "old_text"
+          ]
+        },
+        {
+          "required": [
+            "start_line"
+          ]
+        },
+        {
+          "required": [
+            "hashline"
+          ]
+        }
+      ],
+      "properties": {
+        "end_hashline": {
+          "description": "8-hex content hash of the last line of the range (optional, same mode as hashline)",
+          "type": "string"
+        },
+        "end_line": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "expected_sha256": {
+          "description": "Optional SHA-256 of the file content as read (from read_file footer); mismatches abort with [ConcurrentChange]",
+          "type": "string"
+        },
+        "hashline": {
+          "description": "8-hex content hash anchor of the first line to replace (from read_file hashlines=true); the file must still contain exactly one line with this hash",
+          "type": "string"
+        },
+        "new_text": {
+          "description": "Replacement text",
+          "type": "string"
+        },
+        "old_text": {
+          "description": "Exact text to replace; must occur exactly once",
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "start_line": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "new_text"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "elf_analyze",
+    "description": "Analyze a compiled firmware binary (ELF) without running it: flash/RAM usage per section, largest functions, and per-function stack depth when the build used -fstack-usage (GCC/Clang). Pass the same file again after rebuilding to get a diff against the previous build (baseline is cached per path in the session). Use after build/flash to catch flash growth, RAM growth, and stack depth increases that still compile fine. If stack usage is missing, the report says so and you should note it rather than guess.",
+    "input_schema": {
+      "properties": {
+        "baseline": {
+          "description": "Optional explicit previous ELF to diff against; when omitted, the last analyzed build of this exact path is used",
+          "type": "string"
+        },
+        "file": {
+          "description": "Path to the firmware ELF (inside the workspace), e.g. build/fw.elf",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "flash",
+    "description": "Flash a firmware ELF to the target via probe-rs (ST-Link / J-Link / CMSIS-DAP / DFU). Requires `probe-rs` on PATH and a chip id (e.g. stm32f407vetx).",
+    "input_schema": {
+      "properties": {
+        "chip": {
+          "description": "probe-rs chip id, e.g. stm32f407vetx",
+          "type": "string"
+        },
+        "file": {
+          "description": "Path to the firmware ELF (must be inside the workspace)",
+          "type": "string"
+        },
+        "probe": {
+          "description": "Optional probe serial/id when multiple probes are attached",
+          "type": "string"
+        },
+        "timeout_ms": {
+          "default": 180000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "file"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "glob",
+    "description": "Find files matching a glob pattern (e.g. **/*.rs) inside the workspace, respecting .gitignore.",
+    "input_schema": {
+      "properties": {
+        "include_hidden": {
+          "default": false,
+          "type": "boolean"
+        },
+        "limit": {
+          "default": 200,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "pattern": {
+          "type": "string"
+        },
+        "root": {
+          "default": ".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "grep",
+    "description": "Search file contents with a regular expression. Optionally filter by glob and line count.",
+    "input_schema": {
+      "properties": {
+        "case_sensitive": {
+          "default": false,
+          "type": "boolean"
+        },
+        "glob": {
+          "description": "Optional file glob filter, e.g. **/*.c",
+          "type": "string"
+        },
+        "include_hidden": {
+          "default": false,
+          "type": "boolean"
+        },
+        "max_results": {
+          "default": 100,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "path": {
+          "default": ".",
+          "type": "string"
+        },
+        "pattern": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_dir",
+    "description": "List entries in a directory. Set recursive=true to walk subdirectories.",
+    "input_schema": {
+      "properties": {
+        "limit": {
+          "default": 200,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "path": {
+          "default": ".",
+          "type": "string"
+        },
+        "recursive": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    }
+  },
+  {
+    "name": "monitor",
+    "description": "Open a serial port (UART) for a bounded time and return the captured log lines, each prefixed with its arrival time [SS.mmm]. Optionally decode hex code addresses (e.g. panic backtraces) using an ELF. With autodetect=true, tries common baud rates (9600..921600) and reports the first one that yields valid data. Use after flash/run when the target logs over a physical UART.",
+    "input_schema": {
+      "properties": {
+        "autodetect": {
+          "default": false,
+          "description": "Probe common baud rates (9600..921600) and use the first that yields valid data; overrides baud",
+          "type": "boolean"
+        },
+        "baud": {
+          "description": "Baud rate (defaults to [tools] monitor_baud)",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "elf": {
+          "description": "Optional path to the firmware ELF (inside the workspace) for decoding hex code addresses in log lines",
+          "type": "string"
+        },
+        "port": {
+          "description": "Serial port, e.g. COM3 or /dev/ttyUSB0 (defaults to [tools] monitor_port)",
+          "type": "string"
+        },
+        "timeout_ms": {
+          "default": 10000,
+          "description": "How long to listen before returning captured output",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "timestamp": {
+          "default": true,
+          "description": "Prefix each line with its arrival time [SS.mmm]",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "periph_init",
+    "description": "Generate an MCU peripheral initialization skeleton (STM32 HAL style) plus the matching knowledge-base cheatsheet, so you don't start from scratch on chip/peripheral config. Inputs: part (e.g. stm32f103c8t6), peripheral (uart/gpio/i2c/spi/tim/adc get full skeletons; dma falls back to a generic skeleton + cheatsheet), optional baudrate / pins / dma / interrupt. Output is a compile-ready skeleton with TODO(fill) markers and key config notes (clock domain, DMA channel mapping, common pitfalls) — adapt it to the actual project (pins, clock tree, CubeMX) before use.",
+    "input_schema": {
+      "properties": {
+        "baudrate": {
+          "description": "UART baud rate (default 115200)",
+          "type": "integer"
+        },
+        "dma": {
+          "default": false,
+          "description": "Enable DMA on the peripheral (uart only for now)",
+          "type": "boolean"
+        },
+        "interrupt": {
+          "default": false,
+          "description": "Enable the peripheral interrupt (uart only for now)",
+          "type": "boolean"
+        },
+        "part": {
+          "description": "MCU part number, e.g. stm32f103c8t6 or esp32s3",
+          "type": "string"
+        },
+        "peripheral": {
+          "description": "Peripheral to initialize",
+          "enum": [
+            "uart",
+            "gpio",
+            "i2c",
+            "spi",
+            "tim",
+            "adc",
+            "dma"
+          ],
+          "type": "string"
+        },
+        "pins": {
+          "description": "Pin names, e.g. PA9/PA10",
+          "type": "string"
+        }
+      },
+      "required": [
+        "part",
+        "peripheral"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "read_file",
+    "description": "Read a text file. Output lines carry a line-number prefix (\"  123 | content\") so edit_file can target exact ranges; without offset/limit at most the first 1000 lines are returned and a [truncated] hint tells you how to read on.",
+    "input_schema": {
+      "properties": {
+        "hashlines": {
+          "default": false,
+          "description": "prefix every line with its [8-hex content hash] anchor for hashline edits (instead of line numbers)",
+          "type": "boolean"
+        },
+        "limit": {
+          "description": "Maximum number of lines to read",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "offset": {
+          "description": "0-based line offset to start reading from",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "description": "File path, absolute or relative to the workspace; output appends [file-sha256: ...] as metadata",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "run",
+    "description": "Flash and run the firmware on the target via probe-rs, streaming RTT logs. Use a bounded timeout so you can observe the output.",
+    "input_schema": {
+      "properties": {
+        "chip": {
+          "description": "probe-rs chip id, e.g. stm32f407vetx",
+          "type": "string"
+        },
+        "file": {
+          "description": "Path to the firmware ELF (must be inside the workspace)",
+          "type": "string"
+        },
+        "probe": {
+          "description": "Optional probe serial/id",
+          "type": "string"
+        },
+        "timeout_ms": {
+          "default": 30000,
+          "description": "0 = wait forever",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "file"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "shell",
+    "description": "Run a shell command in the workspace. Supports pipes and conditionals via the platform shell.",
+    "input_schema": {
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "cwd": {
+          "description": "Working directory, defaults to workspace root",
+          "type": "string"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "timeout_ms": {
+          "default": 120000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "symbols",
+    "description": "Find symbol definitions (ctags-level) or references in the workspace. Supports C/C++, Rust, Python, JS/TS, Go, Java.",
+    "input_schema": {
+      "properties": {
+        "max_results": {
+          "default": 200,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "path": {
+          "default": ".",
+          "type": "string"
+        },
+        "query": {
+          "type": "string"
+        },
+        "references": {
+          "default": false,
+          "description": "find all occurrences instead of definitions",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "task",
+    "description": "Run a read-only research subagent that investigates on its own and returns a report. Use for long, self-contained investigations (code archaeology, datasheet research, writing a design summary) so you can keep working. The subagent can read files, search the web, fetch pages, and keep todos, but cannot modify the workspace or ask the user. Its report is returned as text; recursion depth is bounded.",
+    "input_schema": {
+      "properties": {
+        "cwd": {
+          "description": "Optional subdirectory of the workspace to focus the subagent on",
+          "type": "string"
+        },
+        "model": {
+          "description": "Optional model override for the subagent (defaults to the session model)",
+          "type": "string"
+        },
+        "prompt": {
+          "description": "What the subagent should investigate and what to report back. Be specific about the expected output format.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "prompt"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "todo",
+    "description": "Keep a session-scoped todo list (persists for the whole session, survives context compaction). Operations: list (op=list), add (op=add, text=...), mark done (op=done, text=item number or text), remove (op=rm, text=item number or text), clear (op=clear). Use it to track multi-step tasks and to hand off remaining steps.",
+    "input_schema": {
+      "properties": {
+        "op": {
+          "description": "Operation to perform",
+          "enum": [
+            "list",
+            "add",
+            "done",
+            "rm",
+            "clear"
+          ],
+          "type": "string"
+        },
+        "text": {
+          "description": "Item text (op=add) or item number/text to target (op=done / op=rm)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "verify",
+    "description": "Run the project's configured verification command (config [tools] verify_command, e.g. \"cargo check\"). Use it after code changes before declaring the task done; a non-zero exit means verification failed.",
+    "input_schema": {
+      "properties": {
+        "timeout_ms": {
+          "default": 120000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "web_fetch",
+    "description": "Fetch a URL (http/https) and return its readable text. HTML pages are converted to plain text. Use for datasheets, errata, vendor documentation, GitHub pages, or any web resource the user points to. Content is truncated; very large pages may be cut off.",
+    "input_schema": {
+      "properties": {
+        "url": {
+          "description": "The URL to fetch, e.g. https://docs.example.com/datasheet",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "web_search",
+    "description": "Search the web and return the top results (title, URL, snippet). Provider is configured via [tools] web_search (duckduckgo needs no key; tavily and brave need a key). The free duckduckgo endpoint rate-limits aggressively: space out searches, combine keywords into one query, and prefer fetching known URLs directly with web_fetch (datasheets, vendor pages, RSS).",
+    "input_schema": {
+      "properties": {
+        "max_results": {
+          "default": 5,
+          "maximum": 8,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "query": {
+          "description": "The search query, e.g. STM32F407 EXTI rising edge glitch",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "write_file",
+    "description": "Create or overwrite a file with the given text content. Parent directories are created if needed.",
+    "input_schema": {
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "expected_sha256": {
+          "description": "Optional SHA-256 of the existing file (from read_file footer); mismatches abort with [ConcurrentChange]",
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "content"
+      ],
+      "type": "object"
+    }
+  }
+]

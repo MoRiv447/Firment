@@ -61,78 +61,21 @@ export const DEFAULT_CONFIG: Config = {
   thinking: 'off',
 };
 
-export const WEB_TOOL_SPECS: ToolSpec[] = [
-  {
-    name: 'read_file',
-    description: 'Read a text file. Optionally slice by line offset and limit.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'File path, absolute or relative to the workspace' },
-        offset: { type: 'integer', minimum: 0, description: '0-based line offset to start reading from' },
-        limit: { type: 'integer', minimum: 1, description: 'Maximum number of lines to read' },
-      },
-      required: ['path'],
-    },
-  },
-  {
-    name: 'list_dir',
-    description: 'List directory contents with optional depth.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'Directory path, defaults to current directory' },
-        depth: { type: 'integer', description: 'Maximum directory depth to traverse', default: 3 },
-      },
-      required: ['path'],
-    },
-  },
-  {
-    name: 'glob',
-    description: 'Find files matching a glob pattern.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        pattern: { type: 'string', description: 'Glob pattern, e.g. "*.ts" or "**/*.rs"' },
-        path: { type: 'string', description: 'Base directory to search in', default: '.' },
-      },
-      required: ['pattern'],
-    },
-  },
-  {
-    name: 'grep',
-    description: 'Search for a pattern in files.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        pattern: { type: 'string', description: 'Regular expression pattern to search for' },
-        file_pattern: { type: 'string', description: 'File pattern to search in, e.g. "*.ts"' },
-        max_results: { type: 'integer', description: 'Maximum number of results', default: 20 },
-      },
-      required: ['pattern'],
-    },
-  },
-  {
-    name: 'web_search',
-    description: 'Search the web and return the top results (title, URL, snippet).',
-    input_schema: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: 'The search query' },
-        max_results: { type: 'integer', minimum: 1, maximum: 8, default: 5 },
-      },
-      required: ['query'],
-    },
-  },
-  {
-    name: 'web_fetch',
-    description: 'Fetch a URL and return its readable text content.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        url: { type: 'string', description: 'The URL to fetch' },
-      },
-      required: ['url'],
-    },
-  },
-];
+// Tool specs come from the core registry (`firm tools`), not a hand-written
+// copy — this is the single source of truth. Only the subset the web tool
+// executor (tools/index.ts) actually implements is exposed to the model, so
+// the model never sees a tool the web surface cannot run.
+import toolSpecsJson from './tools/specs.json';
+
+const WEB_TOOL_WHITELIST = new Set([
+  'read_file',
+  'list_dir',
+  'glob',
+  'grep',
+  'web_search',
+  'web_fetch',
+]);
+
+export const WEB_TOOL_SPECS: ToolSpec[] = (toolSpecsJson as ToolSpec[]).filter(
+  (t) => WEB_TOOL_WHITELIST.has(t.name),
+);
