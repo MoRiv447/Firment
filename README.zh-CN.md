@@ -1,219 +1,213 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.4.0--beta.3-orange)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.4.0--beta.8-orange)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
-[![Benchmark](https://img.shields.io/badge/benchmark-4.95-%231-green)]()
+[![CI](https://img.shields.io/badge/CI-Rust%20%2B%20Web%20%2B%20IDE-green)](.github/workflows/ci.yml)
 
 [English](README.md) | **简体中文**
 
-> ⚠️ **状态：半成品，活跃开发中。**
-> Firment 目前还只是半成品。第一层（通用编码 Agent）已经能跑、也做了测试，但 TUI、配置格式和工具接口都还在快速演进，随时可能调整，暂时不建议用于生产或关键任务。欢迎拿来试用，遇到问题请告诉我们。
+> ⚠️ **状态：beta，活跃开发中。** 第一层（通用编码 Agent）已可日常使用、
+> CI 全绿；第二层（嵌入式工具链闭环）已部分落地。接口与 TUI 仍在演进。
 
-**Firmware + Agent = Firment**——一个面向固件与嵌入式开发的通用编码 Agent。名字取自 *firmament*（苍穹），故意少一个 a，把 firmware + agent 融成一个词。第一层（通用编码 Agent 层）当前可用，但整体仍是半成品；后续构建、烧录、调试、UART 等层通过统一的 `Tool` trait 接入同一内核。
+**Firmware + Agent = Firment**——一个面向固件与嵌入式开发的通用编码
+Agent。名字取自 *firmament*（苍穹，每个嵌入式工程师头上的那片天），故意
+少一个 a，把 firmware + agent 融成一个词。内核是一个 Rust 编码 Agent，
+带着嵌入式优先的工具链闭环：写代码、编译、烧录、运行、串口监控、ELF
+分析——全部在同一次对话里完成。
 
----
+**一个仓库，三端入口（monorepo）：**
 
-**分层定位。** 第一层（当前版本）是通用编码 Agent，与其他终端编码 Agent 同类，但在设计上为固件/嵌入式工作流预留接口。嵌入式专属能力（构建、烧录、调试、UART）属于**第二层**，正在开发中，详见 Roadmap。
-### ✨ 特性**第一层 — 通用能力**
+| 端 | 路径 | 技术栈 |
+|---|---|---|
+| **CLI / TUI** | [`crates/`](crates/) | Rust (ratatui)——核心 Agent |
+| **IDE 客户端** | [`ide/`](ide/) | Tauri + React/Vite (TypeScript) |
+| **Web** | [`web/`](web/) | Next.js + Tailwind（Vercel 部署） |
 
-- **多模型接入**：Anthropic 兼容（`/v1/messages`）与 OpenAI 兼容（`/chat/completions`，覆盖 DeepSeek / GLM / Qwen / Ollama）流式工具调用；DeepSeek V4 自动走官方 `thinking` + `reasoning_effort`
-- **思考深度分级**：`off / low / medium / high / xhigh / max`
-- **内置工具**：`read_file`、`write_file`、`edit_file`（锚点/行范围编辑）、`list_dir`、`glob`、`grep`、`shell`、`web_search`（DuckDuckGo 免 key / Tavily / Brave）、`web_fetch`、`task`（只读研究子代理）、`todo`、`ask_user`、`elf_analyze`（构建产物 flash/RAM 与栈深分析）
-- **只读 Plan 模式**：`--plan` / `/plan` 只暴露读工具（外加联网研究、todo、ask_user），plan 提示词要求“决策完整、执行者零决策”
-- **并行工具调用**：独立工具并发执行；同文件读写与 shell/verify/grep 等宽泛工具自动排序
-- **工程化系统提示词**：分节内建（沟通 / 工程原则 / 工具策略 / 验证 / 安全）+ `AGENTS.md` / `FIRMENT.md` 项目指令注入
-- **会话管理**：JSONL 持久化、`--continue`、`--list`、TUI `/sessions` 上下键选择器
-- **输出复制**：鼠标左键选择 + 右键复制（无选区时粘贴），`Ctrl+Shift+C` / `/copy` 复制最后回复
-- **全局安装**：`firm install` 写用户 PATH + PowerShell 补全；`firm update` 自更新
+CLI 是事实标准；IDE 与 Web 端通过统一的 `Tool` trait 和会话格式接入
+同一 Agent 内核。
 
-**上下文管理**
+### ✨ 第一层特性（通用编码 Agent）
 
-- **模型摘要压缩**：超预算时由主模型把旧轮次压成摘要（本地摘要兜底），最近 3 轮逐字保留，绝不拆散工具调用配对
-- **上下文压缩**：长会话自动把早期消息压缩成摘要（`context_budget_chars`）
-- **缓存稳定前缀**：系统提示词保持字节不变以命中 Provider 前缀缓存；动态状态（改动台账）以增量合并进用户消息
-- **重复读取去重**：未变化的文件重复读取时返回桩引用而非重复内容；压缩后自动回填最近读取的文件
-- **Pin 固定**：`/pin <路径>` 标记文件在压缩时保留全文（逐字回填）；`/unpin <路径>` 取消
-- **工具输出外溢**：超长工具输出自动落盘到会话外溢目录，对话里只留短摘录 + `read_file` 路径指针
-- **改动台账**：每回合已提交的改动（路径/行数/hunk）写入会话台账，恢复时注入上下文；`/ledger` 查看
-- **符号索引**：定义/引用查找自动优先 universal-ctags（JSON 输出），未安装时回退内置正则扫描；`[tools] symbols_backend = auto | ctags | regex`（Plan 模式也可用）
+- **多提供商**：Anthropic 兼容（`/v1/messages`）与 OpenAI 兼容
+  （`/chat/completions`，覆盖 DeepSeek / GLM / Qwen / Ollama）流式工具调用；
+  DeepSeek V4 自动使用官方 `thinking` + `reasoning_effort`
+- **思考级别**：`off / low / medium / high / xhigh / max`
+- **内置工具**：`read_file`（带行号分页）、`write_file`、`edit_file`
+  （锚点/行区间/hashline 编辑，回显统一 diff）、`list_dir`、`glob`、
+  `grep`、`shell`、`web_search`（DuckDuckGo / Tavily / Brave）、`web_fetch`、
+  `task`（只读研究子代理）、`todo`、`ask_user`、`periph_init`、
+  `elf_analyze`、`monitor`
+- **只读计划模式**：`--plan` / `/plan` 只暴露只读工具，要求给出可执行的完整计划
+- **并行工具调用**：独立调用并发执行；同文件读写与粗粒度工具自动串行
+- **工程级系统提示词**：沟通、工程原则、工具策略、验证、安全等分节，
+  支持 `AGENTS.md` / `FIRMENT.md` 项目指令
+- **会话管理**：JSONL 持久化、`--continue`、`--list`、交互式 `/sessions`
+  选择器、变更台账 + `/undo`
+- **复制支持**：左键拖选、右键复制、`Ctrl+Shift+C` 复制最后一条回复
+- **全局安装**：`firm install` 加入 PATH + 补全；`firm update` 自更新
 
-**安全与可靠性**
+### 🛠️ 第二层——嵌入式工具链闭环（逐步落地）
 
-- **事务编辑 + 撤销**：一个回合内的所有写/编辑统一备份，任一修改失败整批回滚；`/undo` 恢复上一次已提交的改动（按会话持久化）
-- **CAS + SHA-256 哈希锚定**：写/编辑前逐字节重新校验；`read_file` 返回 `[file-sha256: ...]`，`edit_file` / `write_file` 支持 `expected_sha256` 前置校验，哈希不符以 `[ConcurrentChange]` 拒绝；`read_file hashlines=true` 输出逐行内容哈希，`edit_file` 支持 `hashline` / `end_hashline` 精确定位
-- **diff-first 批准**：写/编辑的权限弹窗直接展示 unified diff，批准前先看改动
-- **verify 硬门**：可选 `verify` 工具执行配置的构建/检查命令；发生文件改动后由程序强制运行 verify，未通过就不接受完成。**二进制分析（软门·自动）**：配置 `[tools] elf = "build/fw.elf"` 后，harness 每回合自动建立二进制基线，并在接受完成前自动运行 `elf_analyze` 分析最新的固件产物——flash/RAM 占用、最大函数与每函数栈深（需 `-fstack-usage`），把"能编译但有害"的栈深增长与体积回退的差分报告交给 agent 审阅
-- **路径沙箱**：文件工具被限制在工作区内（canonicalize 校验，外溢目录等额外根目录显式放行），越界路径以 `[Permission]` 拒绝
-- **危险命令安全闸**：`-y` 一次性模式下默认拦截 `del/rm/Remove-Item/mv/move/git clean/git reset --hard` 及脚本删除 API，防止包装绕过；TUI 中标注 ⚠ 并弹权限确认
-- **参数 schema 校验**：工具参数在执行前按 JSON Schema 校验，非法参数以 `[InvalidInput]` 拒绝
-- **失败分类**：工具错误带 `[NotFound]`、`[CompileError]`、`[Timeout]`、`[Permission]`、`[ConcurrentChange]` 等标签
+- **`periph_init`** —— MCU 外设初始化骨架 + 知识库 cheatsheet。STM32
+  （F1/F4/G0/**G4**/**H7**）完整 UART/GPIO/I2C/SPI/TIM/ADC HAL 骨架，
+  ESP32/ESP32-S3 指引，CubeMX/PlatformIO HAL 重复警告。内置知识库覆盖
+  真实工程坑：**G4 的 DMAMUX**（没有固定 DMA 通道——F1→G4 迁移经典坑）
+  与 **H7 的 D-Cache 一致性**（DMA TX 前 clean、RX 后 invalidate）
+- **`elf_analyze`** —— flash/RAM 占用、函数体积、`-fstack-usage` `.su`
+  文件的真实栈深度；每次编辑回合后自动重新分析
+- **`monitor`** —— 串口监控，逐行时间戳 + 波特率自动检测；取消回合立即
+  释放串口
+- **`build` / `flash` / `run`** —— CMake/Make/Keil 构建命令、probe-rs
+  烧录（芯片自动识别），全部接入 Agent 循环
 
-**第二层 — 嵌入式专属（编译/烧录已可用，其余开发中）**
-
-- 编译 / 烧录 / 运行 / 监控：`firm build`、`firm flash`、`firm run`（probe-rs RTT 日志）与 `firm monitor`（串口 + ELF 符号解码）现已可用
-- 调试（probe-rs）、UART / 串口日志分析（含 ELF 符号解码栈回溯）
-- MCU 自动识别（`.ioc` / CubeMX 芯片库）
-- 寄存器 / 外设感知（芯片寄存器映射、`.ioc`、设备树）
 ### 🚀 快速开始
 
-环境要求：Rust 1.85+，推荐 Windows Terminal 或任意现代终端。
-
-一行安装（无需本地 Rust 工具链）：
-
-```powershell
-# Windows
-irm https://raw.githubusercontent.com/MoRiv447/Firment/main/install.ps1 | iex
+```bash
+cargo build --release
+./target/release/firm            # 开启新会话
+./target/release/firm --continue # 恢复上次会话
 ```
 
+Windows 一行安装（加入 PATH + PowerShell 补全）：
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass; iex (irm https://raw.githubusercontent.com/MoRiv447/Firment/main/install.ps1)
+```
+
+macOS / Linux：
+
 ```bash
-# macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | sh
 ```
 
-国内加速：先设置镜像根地址再执行安装脚本（目录结构 `{mirror}/{tag}/{asset}`，例如阿里云 OSS）。
+### ⚙️ 配置
 
-> **安全说明**：安装脚本从 GitHub Releases 下载二进制，并在运行前用该 release 的 `SHA256SUMS` 做 SHA-256 校验；脚本本身很小、走 HTTPS、可在本仓库审阅。想先预览不执行，在运行一行命令前设置 `FIRMENT_DRY_RUN=1`；需要固定版本用 `FIRMENT_VERSION`。
-从源码构建：
-
-```powershell
-cargo build --release
-.\target\release\firm install      # 安装到 PATH，之后新开终端直接输入 firm
-firm --doctor                       # 检查配置、Provider 连通性与安装状态
-firm                                # 进入交互式 TUI
-firm -p "把 src/main.rs 里的 greet 函数改成打印 Hello"
-```
-
-升级新版本（从构建目录运行，避免覆盖正在运行的安装文件）：
-
-```powershell
-cargo build --release
-.\target\release\firm update
-```
-
-### ⚙️ 配置 API
-
-首次运行自动生成 `%APPDATA%\firment\config.toml`（Unix 为 `~/.config/firment/config.toml`，可用 `FIRMENT_CONFIG_DIR` 或 `--config` 指定）。默认 Provider 指向 DeepSeek V4（`deepseek-v4-flash`）；没配 key 也能进 TUI，`/apikey sk-xxx` 即可。
+`firm config` 打开配置文件（首次运行自动生成；Windows 在
+`%APPDATA%\firment\config.toml`，其他系统在 `~/.config/firment/config.toml`）：
 
 ```toml
-[providers.default]
-type = "openai"
-base_url = "https://api.deepseek.com/v1"
+[provider.default]
+base_url = "https://api.deepseek.com/v1"   # OpenAI 兼容端点
+model = "deepseek-chat"
 api_key_env = "DEEPSEEK_API_KEY"
-model = "deepseek-v4-flash"   # 或 deepseek-v4-pro
 
-# thinking = "medium"      # off / low / medium / high / xhigh / max
-# context_budget_chars = 60000       # 会话上下文字符预算，超出自动压缩早期对话
-# compaction_strategy = "summarize"  # 默认 summarize；可选 drop（超预算直接丢弃旧轮）/ off（不自动压缩）
+thinking = "medium"        # off / low / medium / high / xhigh / max
+context_budget_chars = 60000
+compaction_strategy = "summarize"   # summarize / drop / off
 
-[tools]
-# verify_command = "cargo check"   # 改动后先跑通再宣布完成（如 cmake --build build）
-# symbols_backend = "auto"         # auto / ctags / regex（符号索引后端）
-# build_command = "cmake --build build"   # build 工具（Keil: uv4 -j0 -b project.uvprojx）
-# default_chip = "stm32f407vetx"          # firm flash 默认芯片（probe-rs 芯片名）
-# monitor_port = "COM3"                   # firm monitor 默认串口
-# monitor_baud = 115200                   # firm monitor 默认波特率
-# web_search = "duckduckgo"               # web_search 提供商：duckduckgo（免 key）/ tavily / brave
-# web_search_api_key_env = "TAVILY_API_KEY"  # 搜索 API key 所在环境变量（或直接 web_search_api_key 内联）
-# elf = "build/fw.elf"                       # 固件 ELF 的 glob：harness 自动建立二进制基线，每次有改动的回合结束前自动跑 elf_analyze（flash/RAM、函数体积、栈深差分；栈深需构建加 -fstack-usage）
-# max_subagent_depth = 2                  # task 子代理工具的递归深度上限
+verify_command = "cargo check"        # 声明完成前运行
+symbols_backend = "auto"              # auto / ctags / regex
+build_command = "cmake --build build" # Keil: uv4 -j0 -b project.uvprojx
+default_chip = "stm32f407vetx"        # probe-rs 烧录芯片
+monitor_port = "COM3"                 # 串口监控端口
+monitor_baud = 115200
+elf = "build/fw.elf"                  # 自动建立 elf_analyze 基线
 ```
 
-多 Provider 追加配置后用 `--provider <名字>` 或 TUI 内 `/provider <名字>` 切换；`/models`、`Ctrl+P` 可直接拉取并选择模型，不用手改文件。
+项目级配置（仓库内 `.firment/config.toml`）会叠加合并；模型也会被引导
+阅读 `AGENTS.md` / `FIRMENT.md` 保持自律。
 
 ### 📚 硬件知识库（可选）
 
-在固件项目里放 `docs/vendor-index.toml`（外加 `docs/cheatsheets/` 原创速查表），Firment 会自动发现，并在提示词里要求 agent 优先查询；涉及芯片/外设/寄存器/HAL 的问题会先查知识库再作答。模板见 [docs/vendor-index.toml](docs/vendor-index.toml)，说明见 [docs/vendor-index.md](docs/vendor-index.md)。
+`periph_init` 使用随附的种子知识库（物化到配置目录）：`vendor-index.toml`
+（芯片家族 ↔ 参考手册 ↔ cheatsheet 链接）+ `cheatsheets/*.toml`（原创工程
+经验，已对照参考手册核验）。项目仓库可在 `.firment/` 旁放自己的
+`vendor-index.toml`，模型会合并两者。
 
-### 📁 项目级配置（让 AI 自己干活）
+### 🖥️ CLI
 
-在项目根目录放 `.firment.toml`，把构建/烧录/串口配置写进 `[tools]`（可提交进版本库）：
-
-```toml
-[tools]
-build_command = "cmake --build build"   # 或 uv4 -j0 -b project.uvprojx
-default_chip = "stm32f407vetx"
-monitor_port = "COM3"
+```
+firm           开始新会话
+firm --continue 恢复上次会话
+firm --plan    只读计划模式
+firm /sessions 交互式会话选择器
+firm install   加入 PATH + 补全
+firm update    自更新
+firm config    打开配置文件
 ```
 
-项目配置会覆盖全局 `config.toml` 的对应项。进 TUI 后直接说“构建并烧录”，agent 会自己读取/修改这份文件并调用 `build` / `flash` / `run`；`build` 默认免确认，`flash` 始终弹确认。
+### 🎮 TUI
 
-### 🖥️ 命令行
-
-| 命令 | 说明 |
-|---|---|
-| `firm` | 交互式 TUI |
-| `firm -p "任务"` | 单次执行 |
-| `firm --plan -p "调研并给出实现计划"` | 只读 Plan 模式 |
-| `firm -y -p "任务"` | 自动批准写/编辑/shell |
-| `firm -y --allow-dangerous -p "任务"` | 放行危险 shell 命令（默认拦截） |
-| `firm --continue [<id>]` | 恢复最近/指定会话 |
-| `firm --thinking xhigh -p "任务"` | 指定思考深度 |
-| `firm --list` / `firm --doctor` | 会话列表 / 配置+安装检查 |
-| `firm install` / `firm update [<exe>]` | 全局安装 / 自更新 |
-| `firm build` | 执行配置的构建命令（`[tools] build_command`，如 CMake/Make/Keil/IAR 命令行） |
-| `firm flash [--chip <芯片>] <elf>` | 用 probe-rs 烧录固件（ST-Link / J-Link / CMSIS-DAP / DFU） |
-| `firm run [--chip <芯片>] [--timeout <秒>] <elf>` | 烧录并复位运行目标，流式输出 RTT 日志 |
-| `firm monitor [--port <COMx>] [--baud <波特率>] [--elf <elf>]` | 串口监控；带 `--elf` 时对日志中的栈地址做符号解码 |
-| `firm --set-key default=sk-xxx` | 写入 API key |
-
-### 🎮 TUI 交互
-
-斜杠命令：`/new`、`/plan [on|off]`、`/agent`、`/models`、`/model <id>`、`/sessions`（↑/↓ 选择）、`/session <id>`、`/undo`、`/ledger`、`/pin <路径>`、`/unpin <路径>`、`/provider <名字>`、`/add-provider`、`/apikey`、`/thinking`、`/copy`、`/config`、`/clear`、`/help`、`/quit`。
-
-键位：`↑/↓` 空输入时浏览历史、非空时滚动；`PgUp/PgDn`/滚轮始终滚动；`Ctrl+P` 模型选择器；鼠标左键选择 + 右键复制（无选区时粘贴）；`Ctrl+Shift+C` 复制最后回复；`←/→`、`Home/End`、`Ctrl+A/E` 移动光标；权限弹窗 `y`/`n`/`a`。
+- 状态栏显示模式、提供商/模型、思考级别、**git 分支 + 工作树变更数**
+  （每 4 秒后台刷新，非 git 仓库自动隐藏）
+- 运行中按 `Esc` 两次中断（带 5 秒确认窗口）；空闲时按一次清空输入
+- 斜杠命令：`/new`、`/plan [on|off]`、`/agent`、`/models`、`/model <id>`、
+  `/sessions`、`/session <id>`、`/undo`、`/ledger`、`/pin`、`/unpin`、
+  `/provider`、`/add-provider`、`/apikey`、`/thinking`、`/budget`、`/output`、
+  `/copy`、`/context`、`/config`、`/clear`、`/help`、`/quit`——完整命令与
+  快捷键清单见 `/help`
+- `Ctrl+P` 打开模型选择器；`↑/↓` 历史/滚动；`PgUp/PgDn` + 滚轮滚动；
+  左键拖选 + 右键复制；`Ctrl+Shift+C` 复制最后回复
 
 ### 🔒 安全模型
 
-- **免责声明**：危险命令安全闸是基于命令名扫描的 best-effort 启发式拦截，不是操作系统级沙箱。文件工具由路径沙箱约束；`shell` 仅靠权限确认兜底。需要强隔离请在容器/VM 中运行。
-- 写文件 / 编辑 / shell 默认需要权限确认（TUI 弹窗，`y`/`n`/`a`）
-- `-y` 自动批准模式仍受**危险命令安全闸**约束：`del/erase/rm/rmdir/rd/Remove-Item/mv/move/ren/git clean/git reset --hard/强推/format/taskkill` 以及脚本删除 API 全部拦截，需要显式 `--allow-dangerous`
-- Plan 模式只暴露只读工具，权限层再硬拒写/编辑/shell
-- 系统提示词内置“忠实汇报”约束：运行过的命令必须照实描述，禁止声称操作被“完全拦截”而实际已改变工作区
+- **声明**：危险命令防护是尽力而为的启发式（命令名扫描），不是操作系统
+  沙箱。文件工具受路径沙箱约束；`shell` 仅靠权限确认。需要强隔离请在
+  容器/虚拟机里运行 Firment。
+- 写/改/shell 默认需要权限确认（TUI 弹窗，`y`/`n`/`a`）；`-y` 依然受
+  危险命令防护约束（`rm/rmdir/del/erase/Remove-Item/mv/ren/git clean/
+  git reset --hard`、强推、`format`、`taskkill`、脚本删除 API、cmd 风格
+  `%VAR%` 间接调用——除非传 `--allow-dangerous`）
+- 计划模式只暴露只读工具；权限层硬拒写/改/shell
+- 事务化编辑 + undo 台账；内容寻址编辑（SHA-256）保证同一次编辑只会
+  生效一次；路径沙箱 + spill 配额
+- 系统提示词要求如实汇报：准确描述实际执行的命令，绝不在工作区已变更时
+  谎称"已被完全拦截"
 
-### 🏆 横向评测（2026-08-07）
+### 🏆 基准测试（2026-08-07）
 
-在五家通用编码 Agent 横向评测（19 用例 × 5 agent，同一 `deepseek-v4-flash` 模型、one-shot 模式）中，Firment 以 **4.95 分位列第一**：
+四 Agent 基准（19 用例 × 4 Agent，同一 `deepseek-v4-flash` 模型，一次
+生成模式），Firment 以 **4.95 分第一**：
 
-| Agent | 加权总分 |
+| Agent | 加权分 |
 |---|---|
 | **Firment** | **4.95** |
 | Codex | 4.88 |
-| Claude Code | 4.60 |
 | opencode | 4.55 |
 | oh-my-pi | 4.30 |
 
-评测口径与明细见 [BENCHMARK.md](BENCHMARK.md)。S1（危险删库）经三轮安全闸加固后成为五家唯一做到“先警告、求确认”的 agent。
+方法与细节：[BENCHMARK.md](BENCHMARK.md)。三轮加固后，S1（危险删除）
+中只有 Firment 会先警告并请求确认。
 
 ### 📦 项目结构
 
 ```text
 crates/
-  firment-core/   Provider 抽象、Agent 循环、会话、配置、权限、Tool trait、系统提示词
-  firment-tools/  内置文件/搜索/shell 工具（含危险命令安全闸）
-  firment-tui/    ratatui 终端界面（选择复制、会话/模型选择器）
-  firment-cli/    clap 入口（bin: firm）+ 安装/更新/补全
+  firment-core/   Provider 抽象、Agent 循环、会话、配置、权限、Tool trait、系统提示词、KB 种子
+  firment-tools/  文件/搜索/shell 工具、危险命令防护、periph_init/elf_analyze/monitor（第二层）
+  firment-tui/    ratatui 终端界面（git 状态栏、模型/会话选择器）
+  firment-cli/    clap 入口（bin: firm）+ install/update/补全
+ide/              Tauri IDE 客户端（React/Vite + src-tauri）
+web/              Next.js 前端（Vercel）
+docs/             vendor-index.toml + cheatsheets/*.toml（硬件知识库）
+.github/workflows/  CI：Rust（fmt/clippy/test）+ web-check + ide-check
 ```
 
 ### 🧪 开发
 
 ```powershell
-cargo test
+cargo test               # 单元 + 集成测试（4 个 crate）
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
+# web / ide
+cd web && npm ci && npx tsc --noEmit && npm run build
+cd ide && npm ci && npx tsc --noEmit && npm run build
 ```
 
-### 🗺️ Roadmap
+### 🗺️ 路线图
 
-- 第二层：构建系统集成（CMake/Make/Keil/IAR）、烧录与调试（OpenOCD/ST-Link）、UART/日志
-- 语法感知：tree-sitter 结构化编辑与补全
-- 插件 / MCP：统一工具注册表上开放第三方扩展
-- Web / 云端：Rust 后端容器化 + 可选 Web 前端
+- **调试器集成（probe-rs）**：断点、寄存器、内存、变量全部进 Agent 循环——
+  硬件闭环的最后一块拼图
+- TUI 命令面板（模糊查找）与流式 token 动画
+- tree-sitter 结构化编辑与补全
+- 基于统一工具注册表的插件 / MCP
+- Web 后端：容器化 Rust Agent 支撑 Web 前端
 
 ### 🤝 贡献
 
-欢迎 Issue、PR 和评测反馈。请先运行质量门三项并附上对应测试。
+欢迎 Issue、PR 与基准反馈。请先跑通三个质量门禁并附上相关测试。
 
 ### 📄 许可证
 
@@ -221,4 +215,6 @@ cargo fmt --check
 
 ### 🙏 致谢
 
-架构与体验参考了 [opencode](https://github.com/anomalyco/opencode)、[pi](https://github.com/earendil-works/pi) 与 [oh-my-pi](https://github.com/can1357/oh-my-pi)，感谢这些优秀开源作品。
+架构与交互设计受 [opencode](https://github.com/anomalyco/opencode)、
+[pi](https://github.com/earendil-works/pi) 与
+[oh-my-pi](https://github.com/can1357/oh-my-pi) 启发。

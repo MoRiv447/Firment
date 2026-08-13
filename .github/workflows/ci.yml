@@ -37,3 +37,43 @@ jobs:
             echo "=== cargo test -p $pkg ==="
             timeout 480 cargo test -p "$pkg" -- --test-threads=1
           done
+
+  # Web (Next.js): type-check + production build.
+  web-check:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run build
+
+  # IDE (Tauri): frontend type-check/build + src-tauri Rust check.
+  ide-check:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ide/package-lock.json
+      - name: Frontend check
+        working-directory: ide
+        run: |
+          npm ci
+          npx tsc --noEmit
+          npm run build
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Tauri Linux dependencies
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev pkg-config
+      - name: Rust check (src-tauri)
+        working-directory: ide/src-tauri
+        run: cargo check
