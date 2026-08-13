@@ -56,7 +56,7 @@ export function FlashView() {
   };
 
   return (
-    <div style={{ padding: 20, maxWidth: 760, height: '100%', overflowY: 'auto' }}>
+    <div style={{ padding: 20, height: '100%', overflowY: 'auto' }}>
       <Card size="small" title="Flash / Run (probe-rs)">
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
           <Input

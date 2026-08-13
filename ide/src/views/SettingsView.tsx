@@ -136,7 +136,7 @@ export function SettingsView() {
   const providerOptions = (settings?.providers ?? []).map((p) => ({ label: p.name, value: p.name }));
 
   return (
-    <div style={{ padding: 20, maxWidth: 760, height: '100%', overflowY: 'auto' }}>
+    <div style={{ padding: 20, height: '100%', overflowY: 'auto' }}>
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         {!settings && <Alert type="info" showIcon message="Loading settings…" />}
 
@@ -270,6 +270,11 @@ export function SettingsView() {
               <Form.Item name="max_iterations" label="Max iterations">
                 <InputNumber min={1} max={100} />
               </Form.Item>
+              <Form.Item>
+                <Button type="primary" size="small" onClick={save} loading={saving}>
+                  Save agent settings
+                </Button>
+              </Form.Item>
             </Space>
             <Button size="small" style={{ marginBottom: 12 }} onClick={() => refreshModels(form.getFieldValue('default_provider'))}>
               Fetch models
@@ -321,10 +326,6 @@ export function SettingsView() {
             </Form.Item>
           </Form>
         </Card>
-
-        <Button type="primary" onClick={save} loading={saving}>
-          Save settings
-        </Button>
       </Space>
     </div>
   );
