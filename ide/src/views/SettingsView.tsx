@@ -24,6 +24,8 @@ export function SettingsView() {
   const [models, setModels] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [keyMsg, setKeyMsg] = useState('');
+  const [saveMsg, setSaveMsg] = useState('');
+  const [saveErr, setSaveErr] = useState('');
   const [form] = Form.useForm<SettingsDto>();
 
   // new-provider form
@@ -57,13 +59,17 @@ export function SettingsView() {
 
   const save = async () => {
     setSaving(true);
+    setSaveMsg('');
+    setSaveErr('');
     try {
       const values = form.getFieldsValue() as SettingsDto;
       await api.saveSettings(values);
       setSaving(false);
+      setSaveMsg('saved ✓');
       load();
     } catch (err) {
       setSaving(false);
+      setSaveErr(`save failed: ${err}`);
       console.error(err);
     }
   };
@@ -270,11 +276,6 @@ export function SettingsView() {
               <Form.Item name="max_iterations" label="Max iterations">
                 <InputNumber min={1} max={100} />
               </Form.Item>
-              <Form.Item>
-                <Button type="primary" size="small" onClick={save} loading={saving}>
-                  Save agent settings
-                </Button>
-              </Form.Item>
             </Space>
             <Button size="small" style={{ marginBottom: 12 }} onClick={() => refreshModels(form.getFieldValue('default_provider'))}>
               Fetch models
@@ -288,11 +289,7 @@ export function SettingsView() {
                 ))}
               </Space>
             )}
-          </Form>
-        </Card>
-
-        <Card title="Workspace / tools" size="small">
-          <Form form={form} layout="vertical">
+            <Divider style={{ margin: '8px 0' }} />
             <Space size={16} wrap>
               <Form.Item name="build_command" label="Build command">
                 <Input style={{ width: 280 }} placeholder="e.g. cargo build" />
@@ -324,6 +321,11 @@ export function SettingsView() {
                 options={['duckduckgo', 'tavily', 'brave'].map((t) => ({ label: t, value: t }))}
               />
             </Form.Item>
+            <Button type="primary" onClick={save} loading={saving}>
+              Save settings
+            </Button>
+            {saveMsg && <Text type="success" style={{ fontSize: 12 }}>{saveMsg}</Text>}
+            {saveErr && <Text type="danger" style={{ fontSize: 12 }}>{saveErr}</Text>}
           </Form>
         </Card>
       </Space>
