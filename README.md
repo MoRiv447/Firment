@@ -25,7 +25,7 @@ same conversation.
 |---|---|---|
 | **CLI / TUI** | [`crates/`](crates/) | Rust (ratatui) — the core agent |
 | **IDE client** | [`ide/`](ide/) | Tauri + React/Vite (TypeScript) |
-| **Web** | [`web/`](web/) | Next.js + Tailwind (deployed on Vercel) |
+| **Web** | [`web/`](web/) | Next.js + Tailwind (deployed on Vercel) — try it at [firment-web.vercel.app](https://firment-web.vercel.app) |
 
 The CLI is the source of truth; the IDE and Web surfaces talk to the same
 agent kernel through the unified `Tool` trait and session format.

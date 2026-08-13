@@ -23,7 +23,7 @@ Agent。名字取自 *firmament*（苍穹，每个嵌入式工程师头上的那
 |---|---|---|
 | **CLI / TUI** | [`crates/`](crates/) | Rust (ratatui)——核心 Agent |
 | **IDE 客户端** | [`ide/`](ide/) | Tauri + React/Vite (TypeScript) |
-| **Web** | [`web/`](web/) | Next.js + Tailwind（Vercel 部署） |
+| **Web** | [`web/`](web/) | Next.js + Tailwind（Vercel 部署）——在线体验：[firment-web.vercel.app](https://firment-web.vercel.app) |
 
 CLI 是事实标准；IDE 与 Web 端通过统一的 `Tool` trait 和会话格式接入
 同一 Agent 内核。
