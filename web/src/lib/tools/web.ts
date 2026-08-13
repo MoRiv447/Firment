@@ -27,6 +27,12 @@ function isPrivateIpv4(ip: string): boolean {
 function isPrivateIpv6(ip: string): boolean {
   const h = ip.toLowerCase();
   if (h === '::1' || h === '::') return true; // loopback / unspecified
+  // IPv4-mapped (::ffff:1.2.3.4) and IPv4-compatible (::1.2.3.4) forms embed
+  // a real IPv4 address — validate it with the IPv4 rules. Without this, a
+  // literal like [::ffff:127.0.0.1] would connect to 127.0.0.1 (verified:
+  // Node fetch honors the mapped form).
+  const mapped = h.match(/^::(?:ffff:)?(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) return isPrivateIpv4(mapped[1]);
   if (h.startsWith('fc') || h.startsWith('fd')) return true; // ULA fc00::/7
   if (h.startsWith('fe8') || h.startsWith('fe9') || h.startsWith('fea') || h.startsWith('feb')) {
     return true; // link-local fe80::/10

@@ -179,9 +179,16 @@ export default function ChatPage() {
     streamingSessionRef.current = session.id;
 
     try {
+      // The deployment gate (route.ts) requires this key when
+      // FIRMENT_WEB_API_KEY is set server-side; NEXT_PUBLIC_* is inlined at
+      // build time so the same build works with or without a key.
+      const webApiKey = process.env.NEXT_PUBLIC_FIRMENT_WEB_API_KEY;
       const res = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(webApiKey ? { Authorization: `Bearer ${webApiKey}` } : {}),
+        },
         body: JSON.stringify({
           messages: base.messages,
           userInput: text,
