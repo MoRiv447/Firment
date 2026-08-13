@@ -7,11 +7,11 @@ pub struct Flash;
 
 /// Build the probe-rs command line for flashing (exposed for tests). Arguments
 /// are shell-quoted so hostile values cannot break out of the command line.
+///
+/// Note: newer probe-rs removed the `--format` flag (format is inferred from
+/// the file extension, e.g. `.elf`/`.bin`), so it must not be passed.
 pub fn flash_command(chip: &str, file: &str, probe: Option<&str>) -> String {
-    let mut cmd = format!(
-        "probe-rs download --chip {} --format elf",
-        shell_quote(chip)
-    );
+    let mut cmd = format!("probe-rs download --chip {}", shell_quote(chip));
     if let Some(probe) = probe {
         cmd.push_str(&format!(" --probe {}", shell_quote(probe)));
     }
