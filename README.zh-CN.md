@@ -103,6 +103,7 @@ build_command = "cmake --build build" # Keil: uv4 -j0 -b project.uvprojx
 default_chip = "stm32f407vetx"        # probe-rs 烧录芯片
 monitor_port = "COM3"                 # 串口监控端口
 monitor_baud = 115200
+web_search = "duckduckgo"       # duckduckgo（免 key）/ bing（免 key，国内可达）/ tavily / brave
 elf = "build/fw.elf"                  # 自动建立 elf_analyze 基线
 ```
 

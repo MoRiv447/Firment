@@ -114,6 +114,7 @@ build_command = "cmake --build build" # Keil: uv4 -j0 -b project.uvprojx
 default_chip = "stm32f407vetx"        # probe-rs chip for `firm flash`
 monitor_port = "COM3"                 # serial port for `firm monitor`
 monitor_baud = 115200
+web_search = "duckduckgo"       # duckduckgo (no key) / bing (no key, CN-reachable) / tavily / brave
 elf = "build/fw.elf"                  # auto-seed elf_analyze baselines
 ```
 
