@@ -34,10 +34,10 @@ export const api = {
   monitorStop: (port: string) => invoke('monitor_stop', { port }),
   monitorSend: (port: string, data: string) => invoke('monitor_send', { port, data }),
   activeMonitors: () => invoke<string[]>('active_monitors'),
-  flash: (file: string, chip: string | null, probe: string | null) =>
-    invoke('flash', { file, chip, probe }),
-  firmRun: (file: string, chip: string | null, probe: string | null, timeoutSecs: number) =>
-    invoke('firm_run', { file, chip, probe, timeoutSecs }),
+  flash: (file: string, chip: string | null, probe: string | null, cwd: string | null) =>
+    invoke('flash', { file, chip, probe, cwd }),
+  firmRun: (file: string, chip: string | null, probe: string | null, cwd: string | null, timeoutSecs: number) =>
+    invoke('firm_run', { file, chip, probe, cwd, timeoutSecs }),
 };
 
 // ---------- event wiring ----------

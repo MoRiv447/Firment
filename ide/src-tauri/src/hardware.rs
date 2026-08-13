@@ -159,10 +159,13 @@ pub fn active_monitors(shared: &Arc<Shared>) -> Vec<String> {
 }
 
 /// Run a one-shot `firm flash`/`firm run` and emit the collected output.
+/// `cwd` (optional) sets the working directory of the firm subprocess so the
+/// CLI's workspace sandbox resolves relative paths against it.
 pub async fn run_hardware_command(
     shared: Arc<Shared>,
     kind: String,
     args: Vec<String>,
+    cwd: Option<String>,
     timeout_secs: u64,
 ) -> Result<(), String> {
     let firm = find_firm_binary().ok_or_else(|| {
@@ -172,6 +175,9 @@ pub async fn run_hardware_command(
     cmd.args(&args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    if let Some(dir) = cwd.as_ref().filter(|d| !d.trim().is_empty()) {
+        cmd.current_dir(dir);
+    }
     let out = timeout(
         Duration::from_secs(timeout_secs.max(5)),
         cmd.output(),
@@ -192,7 +198,18 @@ pub async fn run_hardware_command(
         }),
     );
     if !out.status.success() {
-        return Err(format!("{kind} failed with exit code {code}"));
+        // Include stdout/stderr in the Err so the IDE's catch fallback (when
+        // the emit didn't render in time) still has the real probe-rs
+        // diagnostic. The frontend will normally have already received the
+        // emit and rendered these in the Alert description.
+        let mut msg = format!("{kind} failed with exit code {code}");
+        if !stdout.trim().is_empty() {
+            msg.push_str(&format!("\n--- stdout ---\n{stdout}"));
+        }
+        if !stderr.trim().is_empty() {
+            msg.push_str(&format!("\n--- stderr ---\n{stderr}"));
+        }
+        return Err(msg);
     }
     Ok(())
 }

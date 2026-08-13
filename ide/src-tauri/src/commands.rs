@@ -304,8 +304,12 @@ pub async fn flash(
     file: String,
     chip: Option<String>,
     probe: Option<String>,
+    cwd: Option<String>,
 ) -> Result<(), String> {
-    let mut args = vec!["flash".to_string(), "--file".to_string(), file];
+    // firm flash <FILE> --chip <CHIP> [--probe <PROBE>]
+    // NOTE: file is a POSITIONAL arg in the firm CLI (not --file), so it must
+    // not be passed as a named option.
+    let mut args = vec!["flash".to_string(), file];
     if let Some(chip) = chip {
         args.push("--chip".to_string());
         args.push(chip);
@@ -314,7 +318,7 @@ pub async fn flash(
         args.push("--probe".to_string());
         args.push(probe);
     }
-    hardware::run_hardware_command(shared.inner().clone(), "flash".to_string(), args, 120).await
+    hardware::run_hardware_command(shared.inner().clone(), "flash".to_string(), args, cwd, 120).await
 }
 
 #[tauri::command]
@@ -323,9 +327,12 @@ pub async fn firm_run(
     file: String,
     chip: Option<String>,
     probe: Option<String>,
+    cwd: Option<String>,
     timeout_secs: u64,
 ) -> Result<(), String> {
-    let mut args = vec!["run".to_string(), "--file".to_string(), file];
+    // firm run <FILE> --chip <CHIP> [--probe <PROBE>] --timeout <SECS>
+    // NOTE: file is a POSITIONAL arg in the firm CLI (not --file).
+    let mut args = vec!["run".to_string(), file];
     if let Some(chip) = chip {
         args.push("--chip".to_string());
         args.push(chip);
@@ -336,5 +343,5 @@ pub async fn firm_run(
     }
     args.push("--timeout".to_string());
     args.push(timeout_secs.to_string());
-    hardware::run_hardware_command(shared.inner().clone(), "run".to_string(), args, timeout_secs.max(60)).await
+    hardware::run_hardware_command(shared.inner().clone(), "run".to_string(), args, cwd, timeout_secs.max(60)).await
 }

@@ -8,6 +8,7 @@ const { Text } = Typography;
 
 export function FlashView() {
   const [file, setFile] = useState('');
+  const [cwd, setCwd] = useState('');
   const [chip, setChip] = useState('');
   const [probe, setProbe] = useState('');
   const [timeoutSecs, setTimeoutSecs] = useState(60);
@@ -28,18 +29,27 @@ export function FlashView() {
     setResult(null);
     setBusy(kind);
     try {
+      const workDir = cwd.trim() || null;
       if (kind === 'flash') {
-        await api.flash(file, chip.trim() || null, probe.trim() || null);
+        await api.flash(file, chip.trim() || null, probe.trim() || null, workDir);
       } else {
-        await api.firmRun(file, chip.trim() || null, probe.trim() || null, timeoutSecs);
+        await api.firmRun(file, chip.trim() || null, probe.trim() || null, workDir, timeoutSecs);
       }
     } catch (err) {
-      setResult({
-        kind,
-        code: -1,
-        stdout: '',
-        stderr: String(err),
-      });
+      // If Rust emits the hardware-exit event before returning Err, the
+      // listener already set a full result (real stdout/stderr). Don't
+      // overwrite it with a stripped synthetic entry — fall back only
+      // when no emit fired (e.g. spawn failure).
+      setResult((prev) =>
+        prev
+          ? prev
+          : {
+              kind,
+              code: -1,
+              stdout: '',
+              stderr: String(err),
+            },
+      );
     } finally {
       setBusy(null);
     }
@@ -49,6 +59,12 @@ export function FlashView() {
     <div style={{ padding: 20, maxWidth: 760 }}>
       <Card size="small" title="Flash / Run (probe-rs)">
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Input
+            placeholder="working dir (firm sandbox root; e.g. D:\...\Debug)"
+            style={{ width: '100%' }}
+            value={cwd}
+            onChange={(e) => setCwd(e.target.value)}
+          />
           <Space wrap>
             <Input
               placeholder="path to .elf/.bin (absolute)"
