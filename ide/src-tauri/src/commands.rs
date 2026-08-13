@@ -272,28 +272,47 @@ pub async fn save_settings(
     shared: tauri::State<'_, Arc<Shared>>,
     settings: SettingsDto,
 ) -> Result<(), String> {
-    let mut config = shared.config.lock().unwrap();
-    config.default_provider = settings.default_provider.clone();
-    if !settings.default_model.is_empty() {
-        let provider_name = config.default_provider.clone();
-        if let Some(p) = config.providers.get_mut(&provider_name) {
-            p.model = settings.default_model.clone();
+    {
+        let mut config = shared.config.lock().unwrap();
+        config.default_provider = settings.default_provider.clone();
+        if !settings.default_model.is_empty() {
+            let provider_name = config.default_provider.clone();
+            if let Some(p) = config.providers.get_mut(&provider_name) {
+                p.model = settings.default_model.clone();
+            }
+        }
+        config.auto_approve = settings.auto_approve;
+        config.max_iterations = settings.max_iterations;
+        config.context_budget_chars = settings.context_budget_chars;
+        config.tools.build_command = settings.build_command;
+        config.tools.default_chip = settings.default_chip;
+        config.tools.monitor_port = settings.monitor_port;
+        config.tools.monitor_baud = settings.monitor_baud;
+        config.tools.web_search = settings.web_search;
+        if let Ok(level) = settings.thinking.parse::<firment_core::ThinkingLevel>() {
+            config.thinking = level;
+        }
+        config
+            .save(&shared.config_path)
+            .map_err(|e| e.to_string())?;
+    }
+
+    // Rebuild the running agent so the new settings apply to the NEXT turn
+    // immediately — the old agent kept the pre-save provider/model/tools.
+    // Skipped while a turn is in flight (it would tear down the lock the
+    // turn holds); the next new/load session picks the new settings anyway.
+    let shared = shared.inner().clone();
+    if !shared.running.load(Ordering::SeqCst) {
+        let session = {
+            let guard = shared.agent.lock().await;
+            guard.as_ref().map(|a| a.session().clone())
+        };
+        if let Some(session) = session {
+            if let Ok(agent) = build_agent(&shared, session) {
+                *shared.agent.lock().await = Some(agent);
+            }
         }
     }
-    config.auto_approve = settings.auto_approve;
-    config.max_iterations = settings.max_iterations;
-    config.context_budget_chars = settings.context_budget_chars;
-    config.tools.build_command = settings.build_command;
-    config.tools.default_chip = settings.default_chip;
-    config.tools.monitor_port = settings.monitor_port;
-    config.tools.monitor_baud = settings.monitor_baud;
-    config.tools.web_search = settings.web_search;
-    if let Ok(level) = settings.thinking.parse::<firment_core::ThinkingLevel>() {
-        config.thinking = level;
-    }
-    config
-        .save(&shared.config_path)
-        .map_err(|e| e.to_string())?;
     Ok(())
 }
 

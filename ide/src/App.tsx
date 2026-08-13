@@ -84,10 +84,19 @@ export default function App() {
           case 'text_delta':
           case 'tool_start':
           case 'tool_end':
-          case 'error':
             // Pure state transitions live in turnReducer (unit-tested);
             // dispatch keeps App.tsx free of the accumulation logic.
             dispatchTurn(e);
+            break;
+          case 'error':
+            // Error ends the turn WITHOUT a turn_end (start_turn emits only
+            // Error on failure), so the queued session switch must run here
+            // too — otherwise switching mid-turn that dies with an error
+            // would silently never happen. Also drop stale dialogs.
+            dispatchTurn(e);
+            setPermQueue([]);
+            setAskReq(null);
+            runPendingSwitch();
             break;
           case 'turn_end':
             dispatchTurn(e);
@@ -95,10 +104,9 @@ export default function App() {
             // fired from the sidebar handler lands here, so run it now that
             // the turn is truly over (the transcript refresh below would
             // otherwise race the session swap).
-            const pending = pendingSwitchRef.current;
-            pendingSwitchRef.current = null;
-            if (pending) {
-              pending();
+            setPermQueue([]);
+            setAskReq(null);
+            if (runPendingSwitch()) {
               break;
             }
             // Clear the streaming turn so the transcript (refreshed below)
@@ -156,6 +164,18 @@ export default function App() {
     }
   }, [session?.id]);
 
+  // Run the session switch queued while a turn was running. Returns true when
+  // a switch was pending (the caller must skip its own post-turn work).
+  const runPendingSwitch = () => {
+    const pending = pendingSwitchRef.current;
+    pendingSwitchRef.current = null;
+    if (pending) {
+      pending();
+      return true;
+    }
+    return false;
+  };
+
   const handleNewSession = async (mode: 'agent' | 'plan') => {
     const run = () => {
       void api
@@ -195,23 +215,32 @@ export default function App() {
   };
 
   const handleDeleteSession = async (id: string) => {
-    try {
-      await api.deleteSession(id);
-      const list = await api.listSessions();
-      setSessions(list);
-      // If the current session was deleted, switch to the newest remaining
-      // one (or clear) so the UI never keeps showing a deleted session that
-      // the agent would silently re-persist on the next turn.
-      if (sessionRef.current?.id === id) {
-        if (list.length > 0) {
-          const s = await api.loadSession(list[0].id);
-          setSession(s);
-        } else {
-          setSession(null);
-        }
-      }
-    } catch (err) {
-      console.error(err);
+    const run = () => {
+      void api
+        .deleteSession(id)
+        .then(async () => {
+          const list = await api.listSessions();
+          setSessions(list);
+          // If the current session was deleted, switch to the newest remaining
+          // one (or clear) so the UI never keeps showing a deleted session.
+          if (sessionRef.current?.id === id) {
+            if (list.length > 0) {
+              const s = await api.loadSession(list[0].id);
+              setSession(s);
+            } else {
+              setSession(null);
+            }
+          }
+        })
+        .catch(console.error);
+    };
+    // Deleting while a turn runs would let run_turn's final save resurrect
+    // the session — cancel first, delete when the turn actually ends.
+    if (runningRef.current && sessionRef.current?.id === id) {
+      pendingSwitchRef.current = run;
+      void api.cancelTurn().catch(console.error);
+    } else {
+      run();
     }
   };
 
