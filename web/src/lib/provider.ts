@@ -30,12 +30,19 @@ export class FirmentProvider {
 
   constructor(config: ProviderConfig) {
     this.config = config;
+    // The web build only speaks the OpenAI-compatible wire format. The
+    // official Anthropic endpoint is not compatible, so fail fast with a
+    // clear message instead of sending broken requests.
+    if (config.type === 'anthropic' && /api\.anthropic\.com/i.test(config.baseUrl || '')) {
+      throw new Error(
+        'The Anthropic official endpoint is not OpenAI-compatible and is not supported in web mode. ' +
+          'Use an OpenAI-compatible gateway URL, or switch the provider type to "OpenAI Compatible".'
+      );
+    }
     const opts: ConstructorParameters<typeof OpenAI>[0] = {
       baseURL: config.baseUrl || undefined,
       apiKey: config.apiKey,
     };
-    // Anthropic 官方端点不是 OpenAI 格式，这里走 OpenAI 兼容网关。
-    // 如果是 anthropic 类型且填的是官方地址，给出明确提示由调用方处理。
     this.client = new OpenAI(opts);
   }
 
@@ -52,14 +59,18 @@ export class FirmentProvider {
       },
     }));
 
-    const response = await this.client.chat.completions.create({
+    const params: OpenAI.Chat.ChatCompletionCreateParamsStreaming = {
       model: request.model || this.config.model,
       messages: this.convertMessages(request.messages),
       tools: tools.length > 0 ? tools : undefined,
       stream: true,
       max_tokens: request.maxTokens || this.config.maxTokens,
       temperature: request.temperature ?? this.config.temperature,
-    });
+    };
+    const thinkingParams = this.buildThinkingParams(request.thinking);
+    if (thinkingParams) Object.assign(params, thinkingParams);
+
+    const response = await this.client.chat.completions.create(params);
 
     let fullText = '';
     let toolCalls: Array<{ id: string; name: string; args: string }> = [];
@@ -101,6 +112,27 @@ export class FirmentProvider {
     }
 
     return { text: fullText, toolCalls: parsed };
+  }
+
+  /**
+   * Map the `thinking` level (off/low/medium/high/xhigh/max) to the
+   * provider-specific request params, mirroring the CLI behavior:
+   * - DeepSeek V4 requires thinking to be explicitly enabled and only
+   *   accepts reasoning_effort high/max (low/medium/high -> high,
+   *   xhigh/max -> max).
+   * - Other OpenAI-compatible endpoints get reasoning_effort passed through.
+   * `off` sends nothing.
+   */
+  private buildThinkingParams(thinking: string | undefined): Record<string, any> | null {
+    if (!thinking || thinking === 'off') return null;
+    const haystack = `${this.config.baseUrl} ${this.config.model}`.toLowerCase();
+    if (haystack.includes('deepseek')) {
+      return {
+        thinking: { type: 'enabled' },
+        reasoning_effort: ['low', 'medium', 'high'].includes(thinking) ? 'high' : 'max',
+      };
+    }
+    return { reasoning_effort: thinking };
   }
 
   private convertMessages(messages: ChatMessage[]): any[] {

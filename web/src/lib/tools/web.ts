@@ -53,6 +53,7 @@ async function duckduckgoSearch(query: string, maxResults: number): Promise<Sear
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
       signal: controller.signal,
     });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     html = await res.text();
   } catch (err: any) {
     throw new Error(`Web search failed: ${err?.message || 'timeout or network error'}`);

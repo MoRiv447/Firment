@@ -78,19 +78,29 @@ export async function runAgentTurn(
   while (iteration < maxIterations) {
     iteration++;
 
-    // Context compaction: keep the system prompt (index 0) and the recent
-    // tail of history; only the OLD history (before this turn's new
-    // messages) is compacted, so `newStart` stays valid.
+    // Context compaction: keep the system prompt (index 0) and a recent tail
+    // of history; only the OLD history (before this turn's new messages) is
+    // compacted, so `newStart` stays valid. It can run again within the same
+    // turn: after the first pass the layout is system, digest, tail(8); a
+    // second pass folds the digest + tail into a single digest.
     const totalChars = messages.reduce((sum, m) => sum + (m.content?.length || 0), 0);
-    if (totalChars > contextBudget && newStart > 12) {
-      const tail = messages.slice(newStart - 8, newStart);
-      messages.splice(1, newStart - 9, {
-        role: 'user',
+    if (totalChars > contextBudget && newStart > 2) {
+      const digest = {
+        role: 'user' as const,
         content:
           '[Context was compacted. Please continue helping with the current task based on the recent messages.]',
-      });
-      // After the splice the layout is: system, digest, tail(8), new messages…
-      newStart = 1 + 1 + tail.length;
+      };
+      if (newStart > 10) {
+        const tail = messages.slice(newStart - 8, newStart);
+        messages.splice(1, newStart - 9, digest);
+        // After the splice the layout is: system, digest, tail(8), new messages…
+        newStart = 1 + 1 + tail.length;
+      } else {
+        // Already compacted (or history too short): merge everything old
+        // (digest + tail) into a single digest at index 1.
+        messages.splice(1, newStart - 1, digest);
+        newStart = 2;
+      }
     }
 
     const result = await provider.streamChat(

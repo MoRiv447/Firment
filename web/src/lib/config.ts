@@ -135,15 +135,4 @@ export const WEB_TOOL_SPECS: ToolSpec[] = [
       required: ['url'],
     },
   },
-  {
-    name: 'task',
-    description: 'Run a read-only research sub-agent to investigate a topic.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        prompt: { type: 'string', description: 'The research task to perform' },
-      },
-      required: ['prompt'],
-    },
-  },
 ];

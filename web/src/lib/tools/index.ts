@@ -52,25 +52,6 @@ export async function executeTool(
         return { success: true, output: content };
       }
 
-      case 'task': {
-        // Sub-agents are not implemented in the web (serverless) build.
-        // Report failure honestly so the model falls back to web_search/web_fetch.
-        return {
-          success: false,
-          output: '',
-          error:
-            'The task (sub-agent) tool is not available in the web build. Use web_search / web_fetch for research instead.',
-        };
-      }
-
-      case 'todo': {
-        return {
-          success: false,
-          output: '',
-          error: 'The todo tool is not available in the web build. Track steps in your reply instead.',
-        };
-      }
-
       default:
         return {
           success: false,

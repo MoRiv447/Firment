@@ -46,6 +46,7 @@ export default function ChatPage() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const streamingSessionRef = useRef<string | null>(null);
 
   useEffect(() => {
     const loaded = loadSessions();
@@ -72,9 +73,10 @@ export default function ChatPage() {
   const displayMessages: ChatMessage[] = current
     ? current.messages.filter((m) => m.role !== 'tool')
     : [];
-  const renderMessages: ChatMessage[] = liveAssistant
-    ? [...displayMessages, { role: 'assistant', content: liveAssistant.content, tool_calls: liveAssistant.tool_calls }]
-    : displayMessages;
+  const renderMessages: ChatMessage[] =
+    liveAssistant && streamingSessionRef.current === currentId
+      ? [...displayMessages, { role: 'assistant', content: liveAssistant.content, tool_calls: liveAssistant.tool_calls }]
+      : displayMessages;
 
   const upsertSession = useCallback((updated: LocalSession) => {
     setSessions((prev) => {
@@ -174,6 +176,7 @@ export default function ChatPage() {
     setIsLoading(true);
     setLiveAssistant({ content: '', tool_calls: [] });
     setToolStatus('');
+    streamingSessionRef.current = session.id;
 
     try {
       const res = await fetch('/api/chat', {
@@ -206,6 +209,7 @@ export default function ChatPage() {
       const decoder = new TextDecoder();
       let buffer = '';
       let streamed = '';
+      let committed = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -233,15 +237,16 @@ export default function ChatPage() {
           } else if (evt.type === 'tool_end') {
             setToolStatus(evt.toolOk === false ? `⚠️ ${evt.toolName} failed` : `✅ ${evt.toolName}`);
           } else if (evt.type === 'done') {
+            committed = true;
             const newMessages: ChatMessage[] = evt.newMessages || [];
             const finalText: string = evt.finalText || streamed;
-            const committed: ChatMessage[] = newMessages.length
+            const committedMsgs: ChatMessage[] = newMessages.length
               ? newMessages
               : [{ role: 'assistant', content: finalText || 'No response from model' }];
             const upd: LocalSession = {
               ...base,
               updatedAt: Date.now(),
-              messages: [...base.messages, ...committed],
+              messages: [...base.messages, ...committedMsgs],
             };
             upsertSession(upd);
             setLiveAssistant(null);
@@ -250,6 +255,27 @@ export default function ChatPage() {
             throw new Error(evt.error || 'Unknown error');
           }
         }
+      }
+
+      // The stream ended without a `done` frame (server timeout, network
+      // drop, tab closed). Commit whatever text already streamed so the
+      // partial reply is not silently lost.
+      if (!committed) {
+        const partial = streamed;
+        const upd: LocalSession = {
+          ...base,
+          updatedAt: Date.now(),
+          messages: [
+            ...base.messages,
+            {
+              role: 'assistant',
+              content: partial || '(connection interrupted — no response was received)',
+            },
+          ],
+        };
+        upsertSession(upd);
+        setLiveAssistant(null);
+        setToolStatus('');
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Unknown error';
@@ -262,6 +288,7 @@ export default function ChatPage() {
       setLiveAssistant(null);
       setToolStatus('');
     } finally {
+      streamingSessionRef.current = null;
       setIsLoading(false);
     }
   }
@@ -578,6 +605,12 @@ export default function ChatPage() {
                             <option value="openai">OpenAI Compatible</option>
                             <option value="anthropic">Anthropic</option>
                           </select>
+                          {provider.type === 'anthropic' && (
+                            <p className="text-xs text-yellow-500/80 mt-1">
+                              Anthropic official API is not supported directly in web mode — use an
+                              OpenAI-compatible gateway URL.
+                            </p>
+                          )}
                         </div>
                         <div>
                           <label className="block text-xs text-gray-400 mb-1">Base URL</label>
