@@ -265,6 +265,99 @@ async fn duckduckgo_lite(
 /// (the free endpoint rate-limits after a burst), retry once with a backoff
 /// when the HTML endpoint is blocked, then try the Lite endpoint before giving
 /// up with a combined error.
+/// Bing (cn.bing.com) — no API key, reachable from mainland China where
+/// DuckDuckGo is unreliable. Results are plain `<li class="b_algo">` blocks
+/// with direct hrefs (no redirect wrapper), so parsing is simple. The
+/// regional market is zh-CN; swap the base_url to www.bing.com for the
+/// international index.
+async fn bing_html(
+    base_url: &str,
+    query: &str,
+    max_results: usize,
+) -> Result<Vec<ResultItem>, ToolError> {
+    let client = http_client();
+    let url = format!(
+        "{base_url}?q={}&count={}&mkt=zh-CN",
+        url_encode(query),
+        max_results
+    );
+    let response = client
+        .get(&url)
+        .header(
+            reqwest::header::USER_AGENT,
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        )
+        .send()
+        .await
+        .map_err(|e| ToolError::new(format!("[Net] bing request failed: {e}")))?;
+    if !response.status().is_success() {
+        return Err(ToolError::new(format!(
+            "[Net] bing returned HTTP {}",
+            response.status()
+        )));
+    }
+    let body = response
+        .text()
+        .await
+        .map_err(|e| ToolError::new(format!("[Net] read failed: {e}")))?;
+    let mut items = Vec::new();
+    let mut rest = body.as_str();
+    while items.len() < max_results {
+        let Some(block) = find_after(rest, "b_algo") else {
+            break;
+        };
+        // Title anchor is the first <h2> in the block; the first href
+        // inside it is the result link (attributes vary, so match loosely).
+        let Some(h2) = find_after(block, "<h2") else {
+            rest = block;
+            continue;
+        };
+        let Some(href) = find_between(h2, "href=\"", "\"") else {
+            rest = block;
+            continue;
+        };
+        // Bing result links are direct hrefs (no redirect wrapper for
+        // organic results); /ck/a wrappers (ads) are rare and left as-is.
+        let url = href.to_string();
+        let Some(title_open) = h2.find('>') else {
+            rest = block;
+            continue;
+        };
+        let title_body = &h2[title_open + 1..];
+        let Some(title_end) = title_body.find("</a>") else {
+            rest = block;
+            continue;
+        };
+        let title = strip_html(&title_body[..title_end]).trim().to_string();
+        if title.is_empty() {
+            rest = block;
+            continue;
+        }
+        // Snippet: the first <p> inside the block.
+        let snippet = match find_after(block, "<p") {
+            Some(p_start) => match p_start.find('>') {
+                Some(p_open) => {
+                    let p_body = &p_start[p_open + 1..];
+                    p_body
+                        .split("</p>")
+                        .next()
+                        .map(|s| strip_html(s).trim().to_string())
+                        .unwrap_or_default()
+                }
+                None => String::new(),
+            },
+            None => String::new(),
+        };
+        items.push(ResultItem {
+            title,
+            url,
+            snippet,
+        });
+        rest = block;
+    }
+    Ok(items)
+}
+
 async fn duckduckgo(
     html_url: &str,
     lite_url: &str,
@@ -542,9 +635,10 @@ impl Tool for WebSearch {
                 )
                 .await?
             }
+            "bing" => bing_html("https://cn.bing.com/search", query, max_results).await?,
             other => {
                 return Err(ToolError::new(format!(
-                    "[InvalidInput] unknown web_search provider '{other}' (expected duckduckgo / tavily / brave)"
+                    "[InvalidInput] unknown web_search provider '{other}' (expected duckduckgo / bing / tavily / brave)"
                 )));
             }
         };
@@ -801,6 +895,48 @@ mod tests {
         .unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].title, "STM32");
+    }
+
+    #[tokio::test]
+    async fn bing_html_parses_b_algo_results() {
+        let server = MockServer::start().await;
+        let html = r#"<html><body><ol id="b_results">
+<li class="b_algo"><h2 class=""><a target="_blank" href="https://www.st.com/en/microcontrollers-microprocessors/stm32g4-series.html"><strong>STM32G4 Series</strong></a></h2><div class="b_caption"><p class="b_lineclamp2">High-performance microcontrollers with DSP and FPU.</p></div></li>
+<li class="b_algo"><h2 class=""><a target="_blank" href="https://github.com/STMicroelectronics/STM32CubeG4"><strong>STM32CubeG4</strong></a></h2><div class="b_caption"><p class="b_lineclamp2">HAL drivers for the G4 family.</p></div></li>
+</ol></body></html>"#;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(html.as_bytes().to_vec(), "text/html"),
+            )
+            .mount(&server)
+            .await;
+        let items = bing_html(&server.uri(), "stm32g4", 5).await.unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].title, "STM32G4 Series");
+        assert_eq!(
+            items[0].url,
+            "https://www.st.com/en/microcontrollers-microprocessors/stm32g4-series.html"
+        );
+        assert!(
+            items[0].snippet.contains("DSP"),
+            "got: {}",
+            items[0].snippet
+        );
+        assert_eq!(items[1].title, "STM32CubeG4");
+    }
+
+    #[tokio::test]
+    async fn bing_html_empty_results_is_ok() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                b"<html><body><p>No results found.</p></body></html>".to_vec(),
+                "text/html",
+            ))
+            .mount(&server)
+            .await;
+        let items = bing_html(&server.uri(), "zzz", 5).await.unwrap();
+        assert!(items.is_empty());
     }
 
     #[tokio::test]

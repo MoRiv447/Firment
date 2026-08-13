@@ -112,10 +112,60 @@ async function fetchWithSafeRedirect(
 }
 
 export async function webSearch(query: string, maxResults = 5, provider = 'duckduckgo'): Promise<SearchResult[]> {
+  if (provider === 'bing') {
+    return bingSearch(query, maxResults);
+  }
   if (provider !== 'duckduckgo') {
-    throw new Error(`Web search provider "${provider}" is not supported in web mode (only duckduckgo).`);
+    throw new Error(`Web search provider "${provider}" is not supported in web mode (only duckduckgo / bing).`);
   }
   return duckduckgoSearch(query, maxResults);
+}
+
+/**
+ * Bing (cn.bing.com) — no API key, reachable from mainland China where
+ * DuckDuckGo is unreliable. Mirrors the core CLI parser: split on
+ * `b_algo`, take the first href inside the `<h2>` (loose match — attributes
+ * vary), strip tags from the title, and read the first `<p>` as snippet.
+ */
+async function bingSearch(query: string, maxResults: number): Promise<SearchResult[]> {
+  const url = await assertSafeUrl(
+    `https://cn.bing.com/search?q=${encodeURIComponent(query)}&count=${maxResults}&mkt=zh-CN`,
+  );
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  let html: string;
+  try {
+    const res = await fetchWithSafeRedirect(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    html = await res.text();
+  } catch (err: any) {
+    throw new Error(`Web search failed: ${err?.message || 'timeout or network error'}`);
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const results: SearchResult[] = [];
+  const blocks = html.split('b_algo').slice(1);
+  for (const block of blocks) {
+    if (results.length >= maxResults) break;
+    const h2 = block.split('<h2')[1];
+    if (!h2) continue;
+    const hrefMatch = h2.match(/href="([^"]+)"/);
+    if (!hrefMatch) continue;
+    const titleMatch = h2.match(/>([\s\S]*?)<\/a>/);
+    if (!titleMatch) continue;
+    const title = titleMatch[1].replace(/<[^>]+>/g, '').trim();
+    if (!title) continue;
+    const snippetMatch = block.match(/<p[^>]*>([\s\S]*?)<\/p>/);
+    const snippet = snippetMatch
+      ? snippetMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
+      : '';
+    results.push({ title, url: hrefMatch[1], snippet });
+  }
+  return results;
 }
 
 async function duckduckgoSearch(query: string, maxResults: number): Promise<SearchResult[]> {
