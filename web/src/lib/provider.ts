@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { ChatMessage, ToolSpec, AgentEvent, ToolCall } from './types';
+import { accumulateToolCalls } from './events';
 
 export interface ProviderConfig {
   type: 'openai' | 'anthropic';
@@ -73,7 +74,7 @@ export class FirmentProvider {
     const response = await this.client.chat.completions.create(params);
 
     let fullText = '';
-    let toolCalls: Array<{ id: string; name: string; args: string }> = [];
+    let toolChunks: Array<{ index: number; id?: string; name?: string; args?: string }> = [];
 
     for await (const chunk of response) {
       const delta = chunk.choices[0]?.delta;
@@ -85,28 +86,19 @@ export class FirmentProvider {
 
       if (delta?.tool_calls) {
         for (const tc of delta.tool_calls) {
-          if (!toolCalls[tc.index]) {
-            toolCalls[tc.index] = { id: tc.id!, name: tc.function?.name || '', args: '' };
-          }
-          toolCalls[tc.index].args += tc.function?.arguments || '';
+          toolChunks.push({
+            index: tc.index,
+            id: tc.id ?? undefined,
+            name: tc.function?.name ?? undefined,
+            args: tc.function?.arguments ?? undefined,
+          });
         }
       }
     }
 
-    const parsed: ToolCall[] = [];
-    // toolCalls is an array indexed by `tc.index`; filter out any holes so a
-    // non-contiguous index sequence cannot produce `undefined` entries.
-    for (const tc of toolCalls.filter(Boolean)) {
-      let args: Record<string, any> = {};
-      try {
-        args = JSON.parse(tc.args || '{}');
-      } catch {
-        args = {};
-      }
-      if (tc.name) {
-        parsed.push({ id: tc.id, name: tc.name, arguments: args });
-      }
-    }
+    // Shared event-contract helper (see events.ts) — the same chunk-to-call
+    // accumulation used by the UI contract tests.
+    const parsed = accumulateToolCalls(toolChunks);
     if (parsed.length > 0) {
       await onEvent({ type: 'tool_calls', toolCalls: parsed });
     }

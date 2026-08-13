@@ -53,6 +53,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
       - run: npx tsc --noEmit
+      - run: npm test
       - run: npm run build
 
   # IDE (Tauri): frontend type-check/build + src-tauri Rust check.
@@ -67,6 +68,11 @@ jobs:
           cache-dependency-path: ide/package-lock.json
       - name: Frontend check
         working-directory: ide
+        run: |
+          npm ci
+          npx tsc --noEmit
+          npm test
+          npm run build
         run: |
           npm ci
           npx tsc --noEmit

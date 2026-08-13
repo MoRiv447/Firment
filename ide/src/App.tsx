@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
 import { Button, ConfigProvider, Layout, Menu, Tag, theme } from 'antd';
 import {
   ApiOutlined,
@@ -19,7 +19,6 @@ import type {
   AskRequest,
   MonitorLine,
   PermissionRequest,
-  RunningTurn,
   SessionDto,
   SessionSummaryDto,
 } from './types';
@@ -28,6 +27,7 @@ import { ChatView } from './views/ChatView';
 import { SessionSidebar } from './views/SessionSidebar';
 import { SettingsView } from './views/SettingsView';
 import { SerialView } from './views/SerialView';
+import { initialTurnState, turnReducer } from './lib/turnReducer';
 import { FlashView } from './views/FlashView';
 import { CollabView } from './views/CollabView';
 
@@ -38,8 +38,11 @@ type ViewKey = 'chat' | 'settings' | 'serial' | 'flash' | 'collab';
 export default function App() {
   const [sessions, setSessions] = useState<SessionSummaryDto[]>([]);
   const [session, setSession] = useState<SessionDto | null>(null);
-  const [running, setRunning] = useState(false);
-  const [turn, setTurn] = useState<RunningTurn | null>(null);
+  // Turn lifecycle state is driven by the pure turnReducer (unit-tested in
+  // __tests__/turnReducer.test.ts); side effects (transcript refresh) stay
+  // in the event handler below.
+  const [turnState, dispatchTurn] = useReducer(turnReducer, undefined, initialTurnState);
+  const { running, turn } = turnState;
   const [view, setView] = useState<ViewKey>('chat');
   const [permReq, setPermReq] = useState<PermissionRequest | null>(null);
   const [askReq, setAskReq] = useState<AskRequest | null>(null);
@@ -62,48 +65,19 @@ export default function App() {
       onAgentEvent((e) => {
         switch (e.type) {
           case 'turn_start':
-            setRunning(true);
-            setTurn({ text: '', tools: {}, startedAt: Date.now() });
-            break;
           case 'text_delta':
-            setTurn((t) => (t ? { ...t, text: t.text + e.text } : t));
-            break;
           case 'tool_start':
-            setTurn((t) =>
-              t
-                ? {
-                    ...t,
-                    tools: {
-                      ...t.tools,
-                      [e.seq]: { seq: e.seq, name: e.name, args: e.args, status: 'running' },
-                    },
-                  }
-                : t,
-            );
-            break;
           case 'tool_end':
-            setTurn((t) =>
-              t && t.tools[e.seq]
-                ? {
-                    ...t,
-                    tools: {
-                      ...t.tools,
-                      [e.seq]: {
-                        ...t.tools[e.seq],
-                        status: e.ok ? 'ok' : 'failed',
-                        summary: e.summary,
-                      },
-                    },
-                  }
-                : t,
-            );
+          case 'error':
+            // Pure state transitions live in turnReducer (unit-tested);
+            // dispatch keeps App.tsx free of the accumulation logic.
+            dispatchTurn(e);
             break;
           case 'turn_end':
-            setRunning(false);
+            dispatchTurn(e);
             // Clear the streaming turn so the transcript (refreshed below)
             // is the single source of truth — otherwise the same reply shows
             // twice (once in turn.text, once in session.messages).
-            setTurn(null);
             const sid = sessionRef.current?.id;
             if (sid) {
               void api.sessionTranscript(sid).then(setSession).catch(console.error);
@@ -117,17 +91,6 @@ export default function App() {
             break;
           case 'info':
             console.info('[firm]', e.message);
-            break;
-          case 'error':
-            // If the turn never started (e.g. the agent failed to build
-            // because no provider is configured), `turn` is null and the
-            // error must still surface instead of being dropped.
-            setTurn((t) =>
-              t
-                ? { ...t, text: `${t.text}\n⚠ ${e.message}` }
-                : { text: `⚠ ${e.message}`, tools: {}, startedAt: Date.now() },
-            );
-            setRunning(false);
             break;
           default:
             break;
