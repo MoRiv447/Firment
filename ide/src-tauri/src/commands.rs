@@ -205,6 +205,9 @@ pub struct SettingsDto {
     pub thinking: String,
     /// All configured providers (name + resolved connection info) so the IDE
     /// can edit base_url / model without hand-editing config.toml.
+    /// Defaulted so save_settings from older clients (which don't round-trip
+    /// the provider list) still deserialize.
+    #[serde(default)]
     pub providers: Vec<ProviderEntryDto>,
 }
 

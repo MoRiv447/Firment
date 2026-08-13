@@ -63,6 +63,8 @@ export function SettingsView() {
     setSaveErr('');
     try {
       const values = form.getFieldsValue() as SettingsDto;
+      // providers is not part of the antd form; carry it over from state
+      values.providers = settings?.providers ?? [];
       await api.saveSettings(values);
       setSaving(false);
       setSaveMsg('saved ✓');
