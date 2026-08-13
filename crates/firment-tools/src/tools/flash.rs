@@ -1,7 +1,12 @@
-use super::util::{resolve_within, run_command, shell_quote, token_arg};
+use super::util::{resolve_within, shell_quote, token_arg};
 use async_trait::async_trait;
 use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
+use std::path::Path;
+use std::process::Stdio;
+use std::time::Duration;
+use tokio::io::AsyncReadExt;
+use tokio::process::Command;
 
 pub struct Flash;
 
@@ -17,6 +22,71 @@ pub fn flash_command(chip: &str, file: &str, probe: Option<&str>) -> String {
     }
     cmd.push_str(&format!(" {}", shell_quote(file)));
     cmd
+}
+
+/// Executes `probe-rs download` directly with an argument array (no shell).
+///
+/// Running through `cmd /C <string>` is NOT used here: cmd.exe keeps the
+/// quotes inside quoted arguments when the whole command is passed as one
+/// string (e.g. `--chip "STM32G431RB"` arrives at probe-rs as `"STM32G431RB"`
+/// including the quotes), which makes chip lookup fail with "chip not found".
+/// Spawning with explicit args avoids quoting entirely and is equally safe.
+async fn run_probe_rs_download(
+    chip: &str,
+    file: &Path,
+    probe: Option<&str>,
+    cwd: &Path,
+    timeout_ms: u64,
+) -> Result<(String, Option<i32>), String> {
+    let mut cmd = Command::new("probe-rs");
+    cmd.arg("download").arg("--chip").arg(chip);
+    if let Some(probe) = probe {
+        cmd.arg("--probe").arg(probe);
+    }
+    cmd.arg(file)
+        .current_dir(cwd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let mut child = cmd.spawn().map_err(|e| format!("spawn failed: {e}"))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "stdout handle unavailable".to_string())?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "stderr handle unavailable".to_string())?;
+    let mut out_buf: Vec<u8> = Vec::new();
+    let mut err_buf: Vec<u8> = Vec::new();
+    let read_streams = async {
+        let _ = AsyncReadExt::read_to_end(&mut stdout, &mut out_buf).await;
+        let _ = AsyncReadExt::read_to_end(&mut stderr, &mut err_buf).await;
+    };
+    let mut read_streams = Box::pin(read_streams);
+
+    let status = tokio::select! {
+        status = child.wait() => status,
+        _ = tokio::time::sleep(Duration::from_millis(timeout_ms)) => {
+            let _ = child.kill().await;
+            return Err(format!(
+                "[Timeout] probe-rs download timed out after {timeout_ms} ms and was killed"
+            ));
+        }
+    };
+    let _ = (&mut read_streams).await;
+    let code = status
+        .map_err(|e| format!("wait failed: {e}"))?
+        .code();
+
+    let stdout = String::from_utf8_lossy(&out_buf).to_string();
+    let stderr = String::from_utf8_lossy(&err_buf).to_string();
+    Ok((format!("{stdout}{stderr}"), code))
 }
 
 #[async_trait]
@@ -91,12 +161,13 @@ impl Tool for Flash {
         }
 
         let command = flash_command(&chip, &resolved.to_string_lossy(), probe.as_deref());
-        match run_command(&command, &ctx.cwd, timeout_ms, None, Some(&ctx.cancel)).await {
+        let result = run_probe_rs_download(&chip, &resolved, probe.as_deref(), &ctx.cwd, timeout_ms).await;
+        match result {
             Ok((text, Some(0))) => Ok(ToolOutput {
                 text: format!("flash passed (exit 0)\n{text}"),
             }),
             Ok((text, Some(code))) => Err(ToolError::new(format!(
-                "[Io] flash failed (exit {code})\n{text}"
+                "[Io] flash failed (exit {code})\ncommand: {command}\n{text}"
             ))),
             Ok((text, None)) => Err(ToolError::new(format!("[Timeout] flash timed out\n{text}"))),
             Err(e) if e.contains("spawn failed") => Err(ToolError::new(format!(
