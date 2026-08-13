@@ -385,8 +385,8 @@ export default function App() {
           </Content>
         </Layout>
       </Layout>
-      {permReq && <PermissionDialog req={permReq} />}
-      {askReq && <AskDialog req={askReq} />}
+      {permReq && <PermissionDialog req={permReq} onClose={() => setPermReq(null)} />}
+      {askReq && <AskDialog req={askReq} onClose={() => setAskReq(null)} />}
     </ConfigProvider>
   );
 }

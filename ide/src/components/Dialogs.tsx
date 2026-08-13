@@ -6,7 +6,13 @@ import type { PermissionRequest, ToolCardState } from '../types';
 
 const { Text } = Typography;
 
-export function PermissionDialog({ req }: { req: PermissionRequest }) {
+export function PermissionDialog({
+  req,
+  onClose,
+}: {
+  req: PermissionRequest;
+  onClose: () => void;
+}) {
   const [busy, setBusy] = useState(false);
   const toolCard: ToolCardState = {
     seq: 0,
@@ -18,6 +24,7 @@ export function PermissionDialog({ req }: { req: PermissionRequest }) {
     setBusy(true);
     try {
       await api.respondPermission(req.id, allowed);
+      onClose();
     } finally {
       setBusy(false);
     }
@@ -49,8 +56,10 @@ export function PermissionDialog({ req }: { req: PermissionRequest }) {
 
 export function AskDialog({
   req,
+  onClose,
 }: {
   req: { id: number; question: string; options: string[] };
+  onClose: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [custom, setCustom] = useState('');
@@ -60,6 +69,7 @@ export function AskDialog({
     try {
       await api.respondAsk(req.id, answer);
       setCustom('');
+      onClose();
     } finally {
       setBusy(false);
     }
