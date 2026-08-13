@@ -1,0 +1,38 @@
+[package]
+name = "firment-ide"
+version = "0.1.0"
+description = "Firment IDE - firmware agent desktop client"
+authors = ["Firment"]
+edition = "2021"
+
+# Keep this crate OUT of the root Firment workspace (it has its own dependency
+# tree / lockfile). An empty [workspace] table marks it as an independent package.
+[workspace]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "firment_ide_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+firment-core = { path = "../../crates/firment-core" }
+firment-tools = { path = "../../crates/firment-tools" }
+anyhow = "1"
+async-trait = "0.1"
+chrono = "0.4"
+dirs = "5"
+serialport = "4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "process", "io-util", "sync"] }
+uuid = { version = "1", features = ["v4"] }
+

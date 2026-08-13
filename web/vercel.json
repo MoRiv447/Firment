@@ -1,0 +1,6 @@
+{
+  "buildCommand": "next build",
+  "outputDirectory": ".next",
+  "installCommand": "npm install --no-audit --no-fund",
+  "framework": "nextjs"
+}

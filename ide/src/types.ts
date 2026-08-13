@@ -1,0 +1,100 @@
+export interface ToolCall {
+  id: string;
+  name: string;
+  arguments: unknown;
+}
+
+export interface ChatMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string;
+  tool_calls?: ToolCall[];
+  tool_call_id?: string;
+  name?: string;
+}
+
+export interface SessionDto {
+  id: string;
+  cwd: string;
+  provider: string;
+  model: string;
+  mode: string;
+  thinking: string;
+  created_at: number;
+  updated_at: number;
+  messages: ChatMessage[];
+}
+
+export interface SessionSummaryDto {
+  id: string;
+  updated_at: number;
+  model: string;
+  cwd: string;
+  preview: string;
+}
+
+export type FrontendEvent =
+  | { type: 'turn_start' }
+  | { type: 'text_delta'; text: string }
+  | { type: 'tool_start'; name: string; args: unknown; seq: number }
+  | { type: 'tool_end'; name: string; ok: boolean; summary: string; seq: number }
+  | { type: 'turn_end'; text: string }
+  | { type: 'info'; message: string }
+  | { type: 'settings'; provider: string | null; model: string | null; thinking: string | null; mode: string | null }
+  | { type: 'models'; models: string[] }
+  | { type: 'sessions'; sessions: SessionSummaryDto[] }
+  | { type: 'session_loaded'; session: SessionDto }
+  | { type: 'error'; message: string };
+
+export interface PermissionRequest {
+  id: number;
+  tool: string;
+  args: unknown;
+  reason: string;
+}
+
+export interface AskRequest {
+  id: number;
+  question: string;
+  options: string[];
+}
+
+export interface SettingsDto {
+  default_provider: string;
+  default_model: string;
+  auto_approve: string[];
+  max_iterations: number;
+  context_budget_chars: number;
+  build_command: string | null;
+  default_chip: string | null;
+  monitor_port: string | null;
+  monitor_baud: number;
+  web_search: string | null;
+  thinking: string;
+}
+
+export interface ToolCardState {
+  seq: number;
+  name: string;
+  args: unknown;
+  status: 'running' | 'ok' | 'failed';
+  summary?: string;
+}
+
+export interface RunningTurn {
+  text: string;
+  tools: Record<number, ToolCardState>;
+  startedAt: number;
+}
+
+export interface MonitorLine {
+  port: string;
+  kind: 'stdout' | 'stderr';
+  line: string;
+}
+
+export interface HardwareExit {
+  kind: string;
+  code: number;
+  stdout: string;
+  stderr: string;
+}

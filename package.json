@@ -1,0 +1,15 @@
+{
+  "name": "firment",
+  "version": "0.4.0-beta.8",
+  "private": true,
+  "description": "Firment monorepo — CLI core (Rust) + IDE (Tauri) + Web (Next.js)",
+  "scripts": {
+    "ide:dev": "cd ide && npm run tauri dev",
+    "ide:build": "cd ide && npm run tauri build",
+    "web:dev": "cd web && npm run dev",
+    "web:build": "cd web && npm run build",
+    "web:deploy": "cd web && npx vercel deploy --prod --yes",
+    "cli:build": "cargo build --release",
+    "cli:test": "cargo test --workspace"
+  }
+}

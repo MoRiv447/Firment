@@ -29,8 +29,31 @@ Desktop.ini
 *.log
 *.tmp
 *.temp
+*.bak
+*.tsbuildinfo
+.bak-*/
 
 # 环境变量 / 密钥（万一有人放 .env 覆盖默认配置）
 .env
 .env.*
 !.env.example
+
+# ---------- Firment IDE (Tauri) ----------
+/ide/node_modules
+/ide/dist
+/ide/dist-new
+/ide/src-tauri/target
+/ide/src-tauri/target-*/
+/ide/.vercel
+
+# ---------- Firment Web (Next.js) ----------
+/web/node_modules
+/web/.next
+/web/out
+/web/dist
+/web/.vercel
+/web/.npm-cache
+
+# 迁移期残留（旧目录构建产物，确认后删除）
+/firment-ide/src-tauri/target
+/firment-ide/src-tauri/target-*
