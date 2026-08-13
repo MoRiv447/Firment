@@ -6,11 +6,21 @@ use firment_core::PermissionChecker;
 use firment_core::PermissionError;
 use serde_json::json;
 use std::sync::Arc;
+use std::time::Duration;
 use tauri::Emitter;
 use tokio::sync::oneshot;
+use tokio::time::timeout;
 
 use crate::events::frontend_event;
 use crate::state::{Shared, next_seq};
+
+/// How long a permission dialog may stay unanswered before the tool call is
+/// denied. The GUI waves run tools concurrently, so an unrendered dialog must
+/// never wedge the whole batch forever.
+const PERMISSION_TIMEOUT: Duration = Duration::from_secs(120);
+/// Same guard for `ask_user`: the agent waits on a human, but a missing
+/// dialog must not stall the turn past this.
+const ASK_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Forwards agent events onto the Tauri event bus ("agent-event") and the
 /// collaboration bus. Mirrors the TUI's `ChannelSink`, exchanging the mpsc
@@ -43,7 +53,7 @@ impl PermissionChecker for GuiPermission {
     ) -> Result<(), PermissionError> {
         let always = {
             let config = self.shared.config.lock().unwrap();
-            config.auto_approve.iter().cloned().collect::<Vec<_>>()
+            config.auto_approve.to_vec()
         };
         if always.iter().any(|t| t == tool) {
             return Ok(());
@@ -55,10 +65,17 @@ impl PermissionChecker for GuiPermission {
             "permission-request",
             json!({ "id": id, "tool": tool, "args": args, "reason": reason }),
         );
-        match rx.await {
-            Ok(true) => Ok(()),
-            Ok(false) => Err(PermissionError::denied(format!("user denied tool '{tool}'"))),
-            Err(_) => Err(PermissionError::denied("permission dialog closed")),
+        match timeout(PERMISSION_TIMEOUT, rx).await {
+            Ok(Ok(true)) => Ok(()),
+            Ok(Ok(false)) => Err(PermissionError::denied(format!("user denied tool '{tool}'"))),
+            Ok(Err(_)) => Err(PermissionError::denied("permission dialog closed")),
+            Err(_) => {
+                self.shared.perm_waiters.lock().unwrap().remove(&id);
+                Err(PermissionError::denied(format!(
+                    "permission request for tool '{tool}' timed out after {}s",
+                    PERMISSION_TIMEOUT.as_secs()
+                )))
+            }
         }
     }
 }
@@ -78,10 +95,14 @@ impl Asker for GuiAsker {
         let _ = self.shared
             .app
             .emit("ask-request", json!({ "id": id, "question": question, "options": options }));
-        match rx.await {
-            Ok(Some(answer)) => Ok(answer),
-            Ok(None) => Err("user dismissed the question".to_string()),
-            Err(e) => Err(e.to_string()),
+        match timeout(ASK_TIMEOUT, rx).await {
+            Ok(Ok(Some(answer))) => Ok(answer),
+            Ok(Ok(None)) => Err("user dismissed the question".to_string()),
+            Ok(Err(e)) => Err(e.to_string()),
+            Err(_) => {
+                self.shared.ask_waiters.lock().unwrap().remove(&id);
+                Err(format!("question timed out after {}s", ASK_TIMEOUT.as_secs()))
+            }
         }
     }
 }

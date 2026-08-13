@@ -54,7 +54,10 @@ export default function App() {
   // the chat so the user can tell a slow model from a wedged turn.
   const [infos, setInfos] = useState<{ id: number; text: string }[]>([]);
   const [view, setView] = useState<ViewKey>('chat');
-  const [permReq, setPermReq] = useState<PermissionRequest | null>(null);
+  // Permission requests arrive concurrently (tool waves run in parallel), so
+  // they must be queued — a single overwriting state would leave the first
+  // request unanswered forever and wedge its tool (and the whole wave).
+  const [permQueue, setPermQueue] = useState<PermissionRequest[]>([]);
   const [askReq, setAskReq] = useState<AskRequest | null>(null);
   const [monitorLines, setMonitorLines] = useState<Record<string, MonitorLine[]>>({});
   const [workCwd, setWorkCwd] = useState('C:\\');
@@ -125,7 +128,7 @@ export default function App() {
     );
 
     unlisteners.push(
-      onPermissionRequest((req) => setPermReq(req)),
+      onPermissionRequest((req) => setPermQueue((q) => [...q, req])),
       onAskRequest((req) => setAskReq(req)),
       onMonitorOutput((line) => {
         setMonitorLines((prev) => ({
@@ -409,7 +412,12 @@ export default function App() {
           </Content>
         </Layout>
       </Layout>
-      {permReq && <PermissionDialog req={permReq} onClose={() => setPermReq(null)} />}
+      {permQueue[0] && (
+        <PermissionDialog
+          req={permQueue[0]}
+          onClose={() => setPermQueue((q) => q.slice(1))}
+        />
+      )}
       {askReq && <AskDialog req={askReq} onClose={() => setAskReq(null)} />}
     </ConfigProvider>
   );
