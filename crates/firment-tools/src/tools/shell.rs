@@ -121,6 +121,22 @@ pub fn dangerous_reason(command: &str) -> Option<&'static str> {
     }
 }
 
+/// Models frequently wrap the whole command in double quotes (e.g.
+/// `"probe-rs --version 2>&1"`), which makes `cmd /C` treat the quoted string
+/// as the program name. Strip a single pair of outer double quotes only when
+/// the inner text contains no unescaped double quote (so `echo "hello"` and
+/// `cmd /c "del a.txt"` are left intact).
+fn strip_outer_quotes(command: &str) -> String {
+    let trimmed = command.trim();
+    if trimmed.len() >= 2 && trimmed.starts_with('"') && trimmed.ends_with('"') {
+        let inner = &trimmed[1..trimmed.len() - 1];
+        if !inner.contains('"') {
+            return inner.to_string();
+        }
+    }
+    command.to_string()
+}
+
 #[async_trait]
 impl Tool for Shell {
     fn name(&self) -> &'static str {
@@ -128,14 +144,14 @@ impl Tool for Shell {
     }
 
     fn description(&self) -> &'static str {
-        "Run a shell command in the workspace. Supports pipes and conditionals via the platform shell."
+        "Run a shell command in the workspace. The command string is passed verbatim to the platform shell: do NOT wrap it in quotes and do NOT prefix it with `cmd /c` or `powershell -Command`. Supports pipes and conditionals. Default timeout is 120s; pass timeout_ms explicitly for long commands (builds, uploads)."
     }
 
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
-                "command": {"type": "string"},
+                "command": {"type": "string", "description": "Raw shell command, passed verbatim to the platform shell. Do NOT wrap in quotes and do NOT prefix with 'cmd /c' or 'powershell -Command'."},
                 "cwd": {"type": "string", "description": "Working directory, defaults to workspace root"},
                 "timeout_ms": {"type": "integer", "minimum": 1, "default": 120000},
                 "env": {"type": "object", "additionalProperties": {"type": "string"}}
@@ -153,11 +169,15 @@ impl Tool for Shell {
     }
 
     async fn run(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
-        let command = args
+        let raw = args
             .get("command")
             .and_then(|c| c.as_str())
             .ok_or_else(|| ToolError::new("missing 'command'"))?;
-        if let Some(reason) = dangerous_reason(command)
+        // Models frequently wrap the whole command in double quotes (e.g.
+        // `"probe-rs --version 2>&1"`), which makes `cmd /C` treat the quoted
+        // string as the program name. Strip one outer pair when it is safe.
+        let command = strip_outer_quotes(raw);
+        if let Some(reason) = dangerous_reason(&command)
             && !ctx.allow_dangerous
         {
             return Err(ToolError::new(format!(
@@ -188,7 +208,7 @@ impl Tool for Shell {
                 .collect::<HashMap<String, String>>()
         });
         let (text, _code) =
-            super::util::run_command(command, &cwd, timeout_ms, env.as_ref(), Some(&ctx.cancel))
+            super::util::run_command(&command, &cwd, timeout_ms, env.as_ref(), Some(&ctx.cancel))
                 .await
                 .map_err(ToolError::new)?;
         Ok(ToolOutput { text })
@@ -197,12 +217,36 @@ impl Tool for Shell {
 
 #[cfg(test)]
 mod tests {
-    use super::dangerous_reason;
+    use super::{dangerous_reason, strip_outer_quotes};
     use crate::tools::shell::Shell;
     use firment_core::{AutoApprove, Tool, ToolContext};
     use serde_json::json;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn strip_outer_quotes_removes_model_wrapping() {
+        // The whole-command wrapping that breaks cmd /C is stripped.
+        assert_eq!(
+            strip_outer_quotes("\"probe-rs --version 2>&1\""),
+            "probe-rs --version 2>&1"
+        );
+        assert_eq!(
+            strip_outer_quotes("\"where arm-none-eabi-gcc\""),
+            "where arm-none-eabi-gcc"
+        );
+        // Legitimate inner quoting is preserved.
+        assert_eq!(strip_outer_quotes("echo \"hello\""), "echo \"hello\"");
+        assert_eq!(
+            strip_outer_quotes("cmd /c \"del a.txt\""),
+            "cmd /c \"del a.txt\""
+        );
+        // Already-unwrapped commands pass through unchanged.
+        assert_eq!(
+            strip_outer_quotes("probe-rs --version"),
+            "probe-rs --version"
+        );
+    }
 
     #[test]
     fn detects_destructive_commands() {

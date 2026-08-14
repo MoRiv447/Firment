@@ -248,7 +248,7 @@
   },
   {
     "name": "monitor",
-    "description": "Open a serial port (UART) for a bounded time and return the captured log lines, each prefixed with its arrival time [SS.mmm]. Optionally decode hex code addresses (e.g. panic backtraces) using an ELF. With autodetect=true, tries common baud rates (9600..921600) and reports the first one that yields valid data. Use after flash/run when the target logs over a physical UART.",
+    "description": "Open a serial port (UART) for a bounded time and return the captured log lines, each prefixed with its arrival time [SS.mmm]. Optionally decode hex code addresses (e.g. panic backtraces) using an ELF. With autodetect=true, tries common baud rates (9600..921600) and reports the first one that yields valid data. Use after flash/run when the target logs over a physical UART. If no port is passed or configured, the tool reports the serial ports it detected on this host.",
     "input_schema": {
       "properties": {
         "autodetect": {
@@ -395,10 +395,11 @@
   },
   {
     "name": "shell",
-    "description": "Run a shell command in the workspace. Supports pipes and conditionals via the platform shell.",
+    "description": "Run a shell command in the workspace. The command string is passed verbatim to the platform shell: do NOT wrap it in quotes and do NOT prefix it with `cmd /c` or `powershell -Command`. Supports pipes and conditionals. Default timeout is 120s; pass timeout_ms explicitly for long commands (builds, uploads).",
     "input_schema": {
       "properties": {
         "command": {
+          "description": "Raw shell command, passed verbatim to the platform shell. Do NOT wrap in quotes and do NOT prefix with 'cmd /c' or 'powershell -Command'.",
           "type": "string"
         },
         "cwd": {

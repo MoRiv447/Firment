@@ -7,7 +7,7 @@ mod glob;
 mod grep;
 mod html;
 mod list_dir;
-mod monitor;
+pub mod monitor;
 mod periph_init;
 mod read_file;
 mod run;

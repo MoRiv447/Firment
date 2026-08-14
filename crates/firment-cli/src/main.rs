@@ -240,7 +240,9 @@ async fn main() -> anyhow::Result<()> {
                     .or(config.tools.monitor_port.clone())
                     .ok_or_else(|| {
                         anyhow::anyhow!(
-                            "missing serial port: use --port COMx or set monitor_port in config.toml"
+                            "missing serial port: use --port COMx or set monitor_port in config.toml. \
+                             Detected ports: {}",
+                            firment_tools::tools::monitor::enumerate_ports()
                         )
                     })?;
                 let baud = if *baud > 0 {

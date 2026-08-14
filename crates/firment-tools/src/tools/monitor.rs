@@ -140,6 +140,43 @@ fn probe_baud(port: &str, baud: u32, probe_ms: u64) -> Result<bool, String> {
     Ok(bytes > 0 && (junk as f64 / bytes as f64) < 0.9)
 }
 
+/// Human-readable description of a serial port (manufacturer / product /
+/// serial number when available) for the missing-port error message.
+pub fn port_label(port: &serialport::SerialPortInfo) -> String {
+    match &port.port_type {
+        serialport::SerialPortType::UsbPort(usb) => {
+            let mut parts: Vec<String> = Vec::new();
+            for s in [
+                usb.manufacturer.clone(),
+                usb.product.clone(),
+                usb.serial_number.clone(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                parts.push(s);
+            }
+            if parts.is_empty() {
+                port.port_name.clone()
+            } else {
+                format!("{} ({})", port.port_name, parts.join(" "))
+            }
+        }
+        _ => port.port_name.clone(),
+    }
+}
+
+/// Enumerate serial ports so the agent can pick one when neither the call
+/// nor [tools] monitor_port provides it (instead of failing blind).
+pub fn enumerate_ports() -> String {
+    match serialport::available_ports() {
+        Ok(ports) if !ports.is_empty() => {
+            ports.iter().map(port_label).collect::<Vec<_>>().join(", ")
+        }
+        _ => "none detected".to_string(),
+    }
+}
+
 #[async_trait]
 impl Tool for Monitor {
     fn name(&self) -> &'static str {
@@ -147,7 +184,7 @@ impl Tool for Monitor {
     }
 
     fn description(&self) -> &'static str {
-        "Open a serial port (UART) for a bounded time and return the captured log lines, each prefixed with its arrival time [SS.mmm]. Optionally decode hex code addresses (e.g. panic backtraces) using an ELF. With autodetect=true, tries common baud rates (9600..921600) and reports the first one that yields valid data. Use after flash/run when the target logs over a physical UART."
+        "Open a serial port (UART) for a bounded time and return the captured log lines, each prefixed with its arrival time [SS.mmm]. Optionally decode hex code addresses (e.g. panic backtraces) using an ELF. With autodetect=true, tries common baud rates (9600..921600) and reports the first one that yields valid data. Use after flash/run when the target logs over a physical UART. If no port is passed or configured, the tool reports the serial ports it detected on this host."
     }
 
     fn input_schema(&self) -> Value {
@@ -180,10 +217,11 @@ impl Tool for Monitor {
             .map(|s| s.to_string())
             .or_else(|| ctx.monitor_port.clone())
             .ok_or_else(|| {
-                ToolError::new(
-                    "[InvalidInput] missing port: pass a port parameter or set monitor_port in \
-                     [tools] of config.toml (e.g. COM3)",
-                )
+                ToolError::new(format!(
+                    "[InvalidInput] missing port: pass a port parameter (e.g. COM3) or set \
+                     monitor_port in [tools] of config.toml. Detected ports: {}",
+                    enumerate_ports()
+                ))
             })?;
         let baud = args
             .get("baud")
@@ -274,6 +312,35 @@ mod tests {
         );
         assert_eq!(ts, "[12.345] hello");
         assert!(ts.starts_with('['), "got: {ts}");
+    }
+
+    #[test]
+    fn port_label_joins_usb_identity_and_falls_back_to_name() {
+        let usb = serialport::SerialPortInfo {
+            port_name: "COM7".into(),
+            port_type: serialport::SerialPortType::UsbPort(serialport::UsbPortInfo {
+                vid: 0x0483,
+                pid: 0x374e,
+                serial_number: Some("SN123".into()),
+                manufacturer: Some("STMicroelectronics".into()),
+                product: Some("STM32 STLink".into()),
+            }),
+        };
+        assert_eq!(
+            port_label(&usb),
+            "COM7 (STMicroelectronics STM32 STLink SN123)"
+        );
+        let plain = serialport::SerialPortInfo {
+            port_name: "COM9".into(),
+            port_type: serialport::SerialPortType::Unknown,
+        };
+        assert_eq!(port_label(&plain), "COM9");
+    }
+
+    #[test]
+    fn enumerate_ports_returns_string() {
+        let text = enumerate_ports();
+        assert!(!text.is_empty(), "enumerate_ports must never return empty");
     }
 
     fn ctx(dir: &Path, monitor_port: Option<&str>) -> ToolContext {

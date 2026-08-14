@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.5.2 (unreleased) — embedded-workflow guidance + out-of-the-box flash/serial
+
+### Agent guidance
+
+- **System prompt rewritten to be directional**: a new "Embedded firmware workflow"
+  section gives the agent a five-step decision chain (reconnaissance → configure
+  → build → flash → verify) so it knows what each step should produce instead of
+  casting around.
+- **Prefer tools over filesystem hunting**: the prompt tells the agent to use the
+  dedicated firmware tools (which know the configured toolchain) and to report a
+  missing binary and ask the user instead of hunting the filesystem for
+  compilers or probe-rs; `probe-rs list` / serial enumeration / `probe-rs chip
+  list` are reserved for when a step genuinely needs that specific fact.
+- **Tool priority**: dedicated firmware tools (build / flash / monitor /
+  elf_analyze / periph_init) are preferred over raw shell; the prompt no longer
+  suggests Keil/IAR as alternative toolchains and says to reuse the project's
+  existing build system.
+- **Failure-diagnosis rules**: no more resubmitting the same command with
+  different shell syntax (cmd /c vs powershell -Command vs quoting); no
+  recursive whole-drive directory scans — use glob/grep instead.
+
+### Tools
+
+- **shell**: strips a model-added outer pair of double quotes (the common
+  `"probe-rs --version 2>&1"` wrapping that broke `cmd /C`) and its description
+  now states the command is passed verbatim — do not quote it or prefix it with
+  `cmd /c` / `powershell -Command`. Default timeout stays 120s.
+- **monitor**: when no port is configured, the tool now enumerates serial ports
+  and lists them (`COMx (manufacturer product serial)`) in the error guidance.
+- **flash**: a missing chip id now points the agent at `default_chip`, the
+  project config, `probe-rs chip list`, or the startup file instead of failing
+  silently.
+
+### Configuration
+
+- Global `[tools]` defaults (`default_chip`, `monitor_baud`) are documented in
+  the prompt so build / flash / monitor work out of the box without a per-project
+  `.firment.toml`.
+
 ## v0.5.1 (2026-08-14) — ELF gate completion + correctness fixes
 
 ### ELF binary-analysis gate (Layer 2)

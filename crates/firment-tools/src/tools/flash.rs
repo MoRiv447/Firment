@@ -131,8 +131,10 @@ impl Tool for Flash {
             .or_else(|| ctx.default_chip.clone())
             .ok_or_else(|| {
                 ToolError::new(
-                    "[InvalidInput] missing chip: pass a chip parameter or set default_chip in \
-                     [tools] of config.toml (e.g. stm32f407vetx)",
+                    "[InvalidInput] missing chip: pass a chip parameter (e.g. stm32g431rb) or \
+                     set default_chip in [tools] of config.toml. To find the right chip id: run \
+                     `probe-rs chip list` and match the MCU family (e.g. an STM32G431RB is \
+                     \"stm32g431rb\"); verify the board is connected with `probe-rs list` first.",
                 )
             })?;
         let probe = args
