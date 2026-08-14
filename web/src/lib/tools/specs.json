@@ -115,6 +115,10 @@
           "description": "Internal (harness gate): flash growth in KiB that blocks",
           "type": "integer"
         },
+        "ram_threshold_kib": {
+          "description": "Internal (harness gate): RAM growth in KiB that blocks",
+          "type": "integer"
+        },
         "stack_threshold": {
           "description": "Internal (harness gate): per-function stack-depth increase in bytes; when set with flash_threshold_kib, the output starts with a [GATE:...] marker (BLOCK when a threshold is exceeded, OK when changes are benign, CLEAN when unchanged)",
           "type": "integer"

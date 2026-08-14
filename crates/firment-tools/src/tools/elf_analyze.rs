@@ -370,11 +370,21 @@ fn diff_reports(old: &ElfReport, new: &ElfReport) -> ElfDiff {
 
     let mut stack_deltas: Vec<(String, u32, u32)> = Vec::new();
     for (name, f) in &new_map {
-        if let Some(stack) = f.stack
-            && let Some(old_f) = old_map.get(name).and_then(|o| o.stack)
-            && stack != old_f
-        {
-            stack_deltas.push((name.to_string(), old_f, stack));
+        let Some(stack) = f.stack else { continue };
+        match old_map.get(name) {
+            Some(old_f) => {
+                if let Some(old_stack) = old_f.stack
+                    && stack != old_stack
+                {
+                    stack_deltas.push((name.to_string(), old_stack, stack));
+                }
+            }
+            None => {
+                // A function new to the build has no prior stack baseline, so
+                // its entire stack depth counts as growth (the common case for
+                // new code that blows the stack).
+                stack_deltas.push((name.to_string(), 0, stack));
+            }
         }
     }
 
@@ -466,18 +476,21 @@ fn gate_blocks(
     diff: Option<&ElfDiff>,
     stack_threshold: u32,
     flash_threshold_kib: u64,
+    ram_threshold_kib: u64,
 ) -> Option<bool> {
     let diff = diff?;
     if !diff.has_changes() {
         return None;
     }
     let flash_bytes = flash_threshold_kib.saturating_mul(1024) as i64;
+    let ram_bytes = ram_threshold_kib.saturating_mul(1024) as i64;
     let stack_grew = diff
         .stack_deltas
         .iter()
         .any(|(_, old, new)| *new > *old && (*new - *old) as u64 > stack_threshold as u64);
     let flash_grew = diff.flash_delta > flash_bytes;
-    Some(stack_grew || flash_grew)
+    let ram_grew = diff.ram_delta > ram_bytes;
+    Some(stack_grew || flash_grew || ram_grew)
 }
 
 /// `[GATE:BLOCK]` / `[GATE:OK]` / `[GATE:CLEAN]` marker for the agent's
@@ -486,11 +499,14 @@ fn gate_marker(
     diff: Option<&ElfDiff>,
     stack_threshold: Option<u32>,
     flash_threshold_kib: Option<u64>,
+    ram_threshold_kib: Option<u64>,
 ) -> String {
-    let (Some(stack_t), Some(flash_t)) = (stack_threshold, flash_threshold_kib) else {
+    let (Some(stack_t), Some(flash_t), Some(ram_t)) =
+        (stack_threshold, flash_threshold_kib, ram_threshold_kib)
+    else {
         return String::new();
     };
-    match gate_blocks(diff, stack_t, flash_t) {
+    match gate_blocks(diff, stack_t, flash_t, ram_t) {
         Some(true) => "[GATE:BLOCK]".to_string(),
         Some(false) => "[GATE:OK]".to_string(),
         None => "[GATE:CLEAN]".to_string(),
@@ -514,7 +530,8 @@ impl Tool for ElfAnalyze {
                 "file": {"type": "string", "description": "Path to the firmware ELF (inside the workspace), e.g. build/fw.elf"},
                 "baseline": {"type": "string", "description": "Optional explicit previous ELF to diff against; when omitted, the last analyzed build of this exact path is used"},
                 "stack_threshold": {"type": "integer", "description": "Internal (harness gate): per-function stack-depth increase in bytes; when set with flash_threshold_kib, the output starts with a [GATE:...] marker (BLOCK when a threshold is exceeded, OK when changes are benign, CLEAN when unchanged)"},
-                "flash_threshold_kib": {"type": "integer", "description": "Internal (harness gate): flash growth in KiB that blocks"}
+                "flash_threshold_kib": {"type": "integer", "description": "Internal (harness gate): flash growth in KiB that blocks"},
+                "ram_threshold_kib": {"type": "integer", "description": "Internal (harness gate): RAM growth in KiB that blocks"}
             },
             "required": ["file"]
         })
@@ -553,13 +570,19 @@ impl Tool for ElfAnalyze {
             .and_then(|v| v.as_u64())
             .map(|v| v as u32);
         let flash_threshold_kib = args.get("flash_threshold_kib").and_then(|v| v.as_u64());
+        let ram_threshold_kib = args.get("ram_threshold_kib").and_then(|v| v.as_u64());
         let baseline_arg = args.get("baseline").and_then(|b| b.as_str());
         if let Some(baseline) = baseline_arg {
             let old_path =
                 resolve_within(&ctx.cwd, baseline, &ctx.allowed_roots).map_err(ToolError::new)?;
             let old = analyze(&old_path)?;
             let diff = diff_reports(&old, &current);
-            let mut out = gate_marker(Some(&diff), stack_threshold, flash_threshold_kib);
+            let mut out = gate_marker(
+                Some(&diff),
+                stack_threshold,
+                flash_threshold_kib,
+                ram_threshold_kib,
+            );
             if !out.is_empty() {
                 out.push('\n');
             }
@@ -583,7 +606,12 @@ impl Tool for ElfAnalyze {
         } else {
             None
         };
-        let marker = gate_marker(cached_diff.as_ref(), stack_threshold, flash_threshold_kib);
+        let marker = gate_marker(
+            cached_diff.as_ref(),
+            stack_threshold,
+            flash_threshold_kib,
+            ram_threshold_kib,
+        );
         if !marker.is_empty() {
             baseline_text.insert_str(0, &format!("{marker}\n"));
         }
@@ -819,53 +847,82 @@ mod tests {
         }
     }
 
+    fn diff_ram(ram_delta: i64) -> ElfDiff {
+        ElfDiff {
+            ram_delta,
+            ..ElfDiff::default()
+        }
+    }
+
     #[test]
-    fn gate_blocks_on_stack_or_flash_threshold() {
-        assert_eq!(gate_blocks(Some(&diff(0, vec![])), 32, 1), None);
+    fn gate_blocks_on_stack_flash_or_ram_threshold() {
+        assert_eq!(gate_blocks(Some(&diff(0, vec![])), 32, 1, 1), None);
         assert_eq!(
-            gate_blocks(Some(&diff(100, vec![])), 32, 1),
+            gate_blocks(Some(&diff(100, vec![])), 32, 1, 1),
             Some(false),
             "sub-threshold flash growth is benign"
         );
         assert_eq!(
-            gate_blocks(Some(&diff(2048, vec![])), 32, 1),
+            gate_blocks(Some(&diff(2048, vec![])), 32, 1, 1),
             Some(true),
             "flash growth over 1 KiB blocks"
         );
         assert_eq!(
-            gate_blocks(Some(&diff(0, vec![("foo".into(), 16, 48)])), 32, 1),
+            gate_blocks(Some(&diff(0, vec![("foo".into(), 16, 48)])), 32, 1, 1),
             Some(false),
             "stack growth equal to the threshold is benign, not blocking"
         );
         assert_eq!(
-            gate_blocks(Some(&diff(0, vec![("foo".into(), 16, 64)])), 32, 1),
+            gate_blocks(Some(&diff(0, vec![("foo".into(), 16, 64)])), 32, 1, 1),
             Some(true),
             "stack growth over 32 B blocks"
         );
         assert_eq!(
-            gate_blocks(Some(&diff(0, vec![("foo".into(), 64, 16)])), 32, 1),
+            gate_blocks(Some(&diff(0, vec![("foo".into(), 64, 16)])), 32, 1, 1),
             Some(false),
             "stack shrink never blocks"
         );
-        assert_eq!(gate_blocks(None, 32, 1), None);
+        // A function new to the build carries its whole stack depth as growth
+        // (old = 0), so a new 64 B frame blocks at threshold 32.
+        assert_eq!(
+            gate_blocks(Some(&diff(0, vec![("new_fn".into(), 0, 64)])), 32, 1, 1),
+            Some(true),
+            "a newly added function's full stack depth must count as growth"
+        );
+        assert_eq!(
+            gate_blocks(Some(&diff_ram(2048)), 32, 1, 1),
+            Some(true),
+            "RAM growth over 1 KiB blocks"
+        );
+        assert_eq!(
+            gate_blocks(Some(&diff_ram(512)), 32, 1, 1),
+            Some(false),
+            "sub-threshold RAM growth is benign"
+        );
+        assert_eq!(gate_blocks(None, 32, 1, 1), None);
     }
 
     #[test]
     fn gate_marker_reflects_verdict() {
         assert_eq!(
-            gate_marker(Some(&diff(100, vec![])), Some(32), Some(1)),
+            gate_marker(Some(&diff(100, vec![])), Some(32), Some(1), Some(1)),
             "[GATE:OK]"
         );
         assert_eq!(
-            gate_marker(Some(&diff(2048, vec![])), Some(32), Some(1)),
+            gate_marker(Some(&diff(2048, vec![])), Some(32), Some(1), Some(1)),
             "[GATE:BLOCK]"
         );
         assert_eq!(
-            gate_marker(Some(&diff(0, vec![])), Some(32), Some(1)),
+            gate_marker(Some(&diff(0, vec![])), Some(32), Some(1), Some(1)),
             "[GATE:CLEAN]"
         );
         assert_eq!(
-            gate_marker(Some(&diff(100, vec![])), None, None),
+            gate_marker(Some(&diff_ram(2048)), Some(32), Some(1), Some(1)),
+            "[GATE:BLOCK]",
+            "RAM-only growth must block"
+        );
+        assert_eq!(
+            gate_marker(Some(&diff(100, vec![])), None, None, None),
             "",
             "no thresholds, no marker"
         );

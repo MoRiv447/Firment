@@ -127,7 +127,13 @@ fn classify_gate(text: &str, cfg: &ElfConfig) -> ElfGateOutcome {
     if text.starts_with("[GATE:CLEAN]") {
         return ElfGateOutcome::Silent;
     }
-    ElfGateOutcome::Report(text.to_string())
+    // Fail closed: run_elf_gate always passes threshold args, so elf_analyze
+    // must return a [GATE:...] marker. A missing marker means the gate verdict
+    // could not be determined (tool output drift / regression), so treat it as
+    // blocking rather than silently downgrading to a soft review.
+    ElfGateOutcome::Blocked(format!(
+        "gate verdict missing ([GATE:...] marker not found); treating as blocked:\n{text}"
+    ))
 }
 
 /// How a blocking elf-gate diff is resolved.
@@ -485,6 +491,7 @@ impl Agent {
             "file": elf.to_string_lossy(),
             "stack_threshold": cfg.stack_threshold,
             "flash_threshold_kib": cfg.flash_threshold_kib,
+            "ram_threshold_kib": cfg.ram_threshold_kib,
         });
         match tool.run(args, ctx).await {
             Ok(out) => Some(classify_gate(&out.text, &cfg)),

@@ -48,6 +48,9 @@ pub struct ElfConfig {
     /// Flash growth (KiB) that blocks completion until user approval.
     #[serde(default = "default_elf_flash_threshold")]
     pub flash_threshold_kib: u64,
+    /// RAM growth (KiB) that blocks completion until user approval.
+    #[serde(default = "default_elf_ram_threshold")]
+    pub ram_threshold_kib: u64,
     /// Surface benign (below-threshold) diffs to the model as a review
     /// round. Default `false`: below-threshold changes are swallowed so
     /// the model is not trained to dismiss every diff as noise.
@@ -68,12 +71,17 @@ fn default_elf_flash_threshold() -> u64 {
     1
 }
 
+fn default_elf_ram_threshold() -> u64 {
+    1
+}
+
 impl Default for ElfConfig {
     fn default() -> Self {
         Self {
             glob: String::new(),
             stack_threshold: default_elf_stack_threshold(),
             flash_threshold_kib: default_elf_flash_threshold(),
+            ram_threshold_kib: default_elf_ram_threshold(),
             report_benign: false,
             strict: false,
         }
@@ -94,6 +102,8 @@ impl<'de> Deserialize<'de> for ElfConfig {
                 stack_threshold: u32,
                 #[serde(default = "default_elf_flash_threshold")]
                 flash_threshold_kib: u64,
+                #[serde(default = "default_elf_ram_threshold")]
+                ram_threshold_kib: u64,
                 #[serde(default)]
                 report_benign: bool,
                 #[serde(default)]
@@ -109,12 +119,14 @@ impl<'de> Deserialize<'de> for ElfConfig {
                 glob,
                 stack_threshold,
                 flash_threshold_kib,
+                ram_threshold_kib,
                 report_benign,
                 strict,
             } => Ok(ElfConfig {
                 glob,
                 stack_threshold,
                 flash_threshold_kib,
+                ram_threshold_kib,
                 report_benign,
                 strict,
             }),
@@ -319,6 +331,7 @@ impl Config {
                     existing.glob = elf.glob.clone();
                     existing.stack_threshold = elf.stack_threshold;
                     existing.flash_threshold_kib = elf.flash_threshold_kib;
+                    existing.ram_threshold_kib = elf.ram_threshold_kib;
                     existing.report_benign = elf.report_benign;
                     // strict is a tightening (blocking) flag, the opposite of
                     // auto_approve, so a checkout may enable it (e.g. CI).
@@ -689,6 +702,7 @@ model = "deepseek-v4-flash"
 # glob = "build/fw.elf"
 # stack_threshold = 32        # stack-depth increase (bytes) that blocks completion until user approval
 # flash_threshold_kib = 1     # flash growth (KiB) that blocks completion until user approval
+# ram_threshold_kib = 1       # RAM growth (KiB) that blocks completion until user approval
 # report_benign = false       # surface below-threshold diffs as a review round (default false: swallow noise)
 # strict = false              # headless/CI: block completion until fixed instead of downgrading to a soft report
 # max_subagent_depth = 2                  # recursion limit for the task subagent tool
@@ -759,6 +773,7 @@ mod tests {
         assert_eq!(elf.glob, "build/*.elf");
         assert_eq!(elf.stack_threshold, default_elf_stack_threshold());
         assert_eq!(elf.flash_threshold_kib, default_elf_flash_threshold());
+        assert_eq!(elf.ram_threshold_kib, default_elf_ram_threshold());
         assert!(!elf.report_benign);
         assert!(!elf.strict);
     }
@@ -770,6 +785,7 @@ mod tests {
             glob = "build/*.elf"
             stack_threshold = 64
             flash_threshold_kib = 2
+            ram_threshold_kib = 4
             report_benign = true
             strict = true
         "#;
@@ -778,6 +794,7 @@ mod tests {
         assert_eq!(elf.glob, "build/*.elf");
         assert_eq!(elf.stack_threshold, 64);
         assert_eq!(elf.flash_threshold_kib, 2);
+        assert_eq!(elf.ram_threshold_kib, 4);
         assert!(elf.report_benign);
         assert!(elf.strict);
     }
