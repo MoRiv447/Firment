@@ -39,13 +39,13 @@ Desktop.ini
 .env.*
 !.env.example
 
-# ---------- Firment IDE (Tauri) ----------
-/ide/node_modules
-/ide/dist
-/ide/dist-new
-/ide/src-tauri/target
-/ide/src-tauri/target-*/
-/ide/.vercel
+# ---------- Firment GUI (Tauri) ----------
+/gui/node_modules
+/gui/dist
+/gui/dist-new
+/gui/src-tauri/target
+/gui/src-tauri/target-*/
+/gui/.vercel
 
 # ---------- Firment Web (Next.js) ----------
 /web/node_modules

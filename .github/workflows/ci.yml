@@ -66,8 +66,8 @@ jobs:
       - run: npm test
       - run: npm run build
 
-  # IDE (Tauri): frontend type-check/build + src-tauri Rust check.
-  ide-check:
+  # GUI (Tauri): frontend type-check/build + src-tauri Rust check.
+  gui-check:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -75,9 +75,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: ide/package-lock.json
+          cache-dependency-path: gui/package-lock.json
       - name: Frontend check
-        working-directory: ide
+        working-directory: gui
         run: |
           npm ci
           npx tsc --noEmit
@@ -87,5 +87,5 @@ jobs:
       - name: Install Tauri + firment-core Linux dependencies
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev pkg-config libudev-dev
       - name: Rust check (src-tauri)
-        working-directory: ide/src-tauri
+        working-directory: gui/src-tauri
         run: cargo check

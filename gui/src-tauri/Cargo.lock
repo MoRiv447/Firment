@@ -1140,7 +1140,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "firment-ide"
+name = "firment-gui"
 version = "0.5.1"
 dependencies = [
  "anyhow",

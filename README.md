@@ -85,7 +85,7 @@ snapshot (`web/src/lib/tools/specs.json`).
 
 | Surface | Screenshot |
 |---|---|
-| **IDE** — Tauri + React; tool cards stream live with success/failure, status pill tracks `idle Ns` / `tool Nm Ns`; the agent kernel lives in the same Rust binary as the CLI | <img src="docs/screenshots/ide.png" alt="Firment IDE: tool cards (list_dir ✓, read_file ✕, todo ✓) with the running periph_init… tool 16s counter" width="900"> |
+| **GUI** — Tauri + React; tool cards stream live with success/failure, status pill tracks `idle Ns` / `tool Nm Ns`; the agent kernel lives in the same Rust binary as the CLI | <img src="docs/screenshots/ide.png" alt="Firment GUI: tool cards (list_dir ✓, read_file ✕, todo ✓) with the running periph_init… tool 16s counter" width="900"> |
 | **Web** — Next.js on Vercel (`firment-web.vercel.app`); the same agent kernel reachable from any browser, with the same `Tool` trait and tool-spec snapshot | <img src="docs/screenshots/web.png" alt="Firment Web: ask 'Search for GPIO configuration patterns' — agent invokes grep/glob/list_dir/read_file and answers that the workspace is Next.js, not firmware" width="900"> |
 
 ### 🚀 Quick Start

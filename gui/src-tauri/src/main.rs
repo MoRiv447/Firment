@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    firment_ide_lib::run()
+    firment_gui_lib::run()
 }

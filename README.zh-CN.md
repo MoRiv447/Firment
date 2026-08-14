@@ -73,7 +73,7 @@ trait 和会话格式），Web 端是 TypeScript 重新实现，通过提交的�
 
 | 端 | 截图 |
 |---|---|
-| **IDE** —— Tauri + React；工具卡片实时流式（成功/失败红绿），状态徽章显示 `idle Ns` / `tool Nm Ns`；Agent 内核和 CLI 共用同一份 Rust 字节码 | <img src="docs/screenshots/ide.png" alt="Firment IDE：工具卡片（list_dir ✓、read_file ✕、todo ✓）与 running periph_init… tool 16s 状态条" width="900"> |
+| **GUI** —— Tauri + React；工具卡片实时流式（成功/失败红绿），状态徽章显示 `idle Ns` / `tool Nm Ns`；Agent 内核和 CLI 共用同一份 Rust 字节码 | <img src="docs/screenshots/ide.png" alt="Firment GUI：工具卡片（list_dir ✓、read_file ✕、todo ✓）与 running periph_init… tool 16s 状态条" width="900"> |
 | **Web** —— Next.js，部署在 Vercel（`firment-web.vercel.app`）；同一套 Agent 内核 + `Tool` trait + tool-spec 快照，浏览器即可用 | <img src="docs/screenshots/web.png" alt="Firment Web：问「Search for GPIO configuration patterns」—— Agent 调起 grep/glob/list_dir/read_file 后诚实告知当前是 Next.js 工程没有固件代码" width="900"> |
 
 ### 🚀 快速开始
