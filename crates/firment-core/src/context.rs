@@ -103,10 +103,10 @@ pub fn default_system_prompt(cwd: &Path) -> String {
           not accepted until verify passes.\n\
           - If `[tools] elf` is configured, the harness automatically seeds an ELF baseline and \
           runs elf_analyze on the newest matching firmware before each turned-in completion; a \
-          binary diff (flash/RAM, function sizes, stack depth) is handed to you to review. If the \
-          diff shows regressions you introduced, fix them rather than accepting; you may treat \
-          benign growth as acceptable if you can explain it. The report is informational — \
-          completing is always allowed.\n\
+          binary diff (flash/RAM, function sizes, stack depth) is handed to you to review. Fix \
+          regressions you introduced rather than accepting them. When the diff exceeds the \
+          configured thresholds, completion is NOT accepted until you fix it or the user \
+          explicitly approves it; keep fixing until the gate clears.\n\
          - Never claim a build, test, or check passed unless you actually ran it and saw exit \
          code 0.\n\
          - A change ledger may be attached to this session; use it as ground truth when \

@@ -56,7 +56,9 @@ CLI 是事实标准；IDE 与 Web 端通过统一的 `Tool` trait 和会话格�
   真实工程坑：**G4 的 DMAMUX**（没有固定 DMA 通道——F1→G4 迁移经典坑）
   与 **H7 的 D-Cache 一致性**（DMA TX 前 clean、RX 后 invalidate）
 - **`elf_analyze`** —— flash/RAM 占用、函数体积、`-fstack-usage` `.su`
-  文件的真实栈深度；每次编辑回合后自动重新分析
+  文件的真实栈深度；每次编辑回合后自动重新分析。增长超过配置阈值时，
+  完成会被拦截，直到你批准（headless + `strict` 模式则直到模型修复）；
+  低于阈值的变化默认静默吞掉
 - **`monitor`** —— 串口监控，逐行时间戳 + 波特率自动检测；取消回合立即
   释放串口
 - **`build` / `flash` / `run`** —— CMake/Make/Keil 构建命令、probe-rs
@@ -105,6 +107,14 @@ monitor_port = "COM3"                 # 串口监控端口
 monitor_baud = 115200
 web_search = "duckduckgo"       # duckduckgo（免 key）/ bing（免 key，国内可达）/ tavily / brave
 elf = "build/fw.elf"                  # 自动建立 elf_analyze 基线
+
+# ELF 门禁完整策略（表格形式；上面的字符串形式使用默认值）：
+# [tools.elf]
+# glob = "build/fw.elf"
+# stack_threshold = 32        # 栈深增长（字节）超过即拦截完成
+# flash_threshold_kib = 1     # flash 增长（KiB）超过即拦截完成
+# report_benign = false       # 是否把低于阈值的变化交给模型审查（false=吞掉）
+# strict = false              # headless/CI：不降级，修到通过才放行
 ```
 
 项目级配置（仓库内 `.firment/config.toml`）会叠加合并；模型也会被引导

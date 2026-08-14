@@ -124,7 +124,7 @@ impl SubagentFactory for SubagentRunner {
             self.web_search_api_key.clone(),
         );
         nested.set_session_dir(Some(store.dir.join("work")));
-        nested.set_elf_glob(self.config.tools.elf.clone());
+        nested.set_elf_config(self.config.tools.elf.clone());
         // Propagate the parent turn's cancellation into the nested agent so
         // interrupting the parent also stops the subagent (and the processes
         // it spawned, via its own tool layer).

@@ -323,8 +323,72 @@ fn format_analyze(elf: &Path, report: &ElfReport) -> String {
     out
 }
 
-/// Diff two reports and return a human-readable delta summary.
+/// Structural diff between two reports, used both for the human-readable
+/// summary and for gate-threshold judgement.
+#[derive(Debug, Default)]
+struct ElfDiff {
+    /// Flash delta in bytes (+ growth / - shrink). 0 when unchanged.
+    flash_delta: i64,
+    /// RAM delta in bytes.
+    ram_delta: i64,
+    /// Function-size deltas (name, bytes, signed).
+    size_deltas: Vec<(String, i64)>,
+    /// Stack-depth deltas: (name, old, new).
+    stack_deltas: Vec<(String, u32, u32)>,
+}
+
+impl ElfDiff {
+    fn has_changes(&self) -> bool {
+        self.flash_delta != 0
+            || self.ram_delta != 0
+            || !self.size_deltas.is_empty()
+            || !self.stack_deltas.is_empty()
+    }
+}
+
+fn diff_reports(old: &ElfReport, new: &ElfReport) -> ElfDiff {
+    let old_map = by_name(&old.functions);
+    let new_map = by_name(&new.functions);
+
+    let mut size_deltas: Vec<(String, i64)> = Vec::new();
+    for (name, f) in &new_map {
+        match old_map.get(name) {
+            Some(old_f) => {
+                let d = f.size as i64 - old_f.size as i64;
+                if d != 0 {
+                    size_deltas.push((name.to_string(), d));
+                }
+            }
+            None => size_deltas.push((name.to_string(), f.size as i64)),
+        }
+    }
+    for (name, f) in &old_map {
+        if !new_map.contains_key(name) {
+            size_deltas.push((name.to_string(), -(f.size as i64)));
+        }
+    }
+
+    let mut stack_deltas: Vec<(String, u32, u32)> = Vec::new();
+    for (name, f) in &new_map {
+        if let Some(stack) = f.stack
+            && let Some(old_f) = old_map.get(name).and_then(|o| o.stack)
+            && stack != old_f
+        {
+            stack_deltas.push((name.to_string(), old_f, stack));
+        }
+    }
+
+    ElfDiff {
+        flash_delta: new.mem.flash() as i64 - old.mem.flash() as i64,
+        ram_delta: new.mem.ram() as i64 - old.mem.ram() as i64,
+        size_deltas,
+        stack_deltas,
+    }
+}
+
+/// Human-readable diff summary.
 fn format_diff(elf: &Path, old: &ElfReport, new: &ElfReport) -> String {
+    let diff = diff_reports(old, new);
     let mut out = format!("ELF diff: {} (previous build)\n", elf.display());
     out.push_str(&format!(
         "Flash: {} -> {} ({} {})\nRAM: {} -> {} ({} {})\n",
@@ -338,29 +402,9 @@ fn format_diff(elf: &Path, old: &ElfReport, new: &ElfReport) -> String {
         updown(old.mem.ram(), new.mem.ram()),
     ));
 
-    let old_map = by_name(&old.functions);
-    let new_map = by_name(&new.functions);
-
-    let mut size_deltas: Vec<(&str, i64)> = Vec::new();
-    for (name, f) in &new_map {
-        match old_map.get(name) {
-            Some(old_f) => {
-                let d = f.size as i64 - old_f.size as i64;
-                if d != 0 {
-                    size_deltas.push((name, d));
-                }
-            }
-            None => size_deltas.push((name, f.size as i64)),
-        }
-    }
-    for (name, f) in &old_map {
-        if !new_map.contains_key(name) {
-            size_deltas.push((name, -(f.size as i64)));
-        }
-    }
-    size_deltas.sort_by_key(|(_, d)| std::cmp::Reverse(d.abs()));
-
-    if !size_deltas.is_empty() {
+    if !diff.size_deltas.is_empty() {
+        let mut size_deltas = diff.size_deltas.clone();
+        size_deltas.sort_by_key(|(_, d)| std::cmp::Reverse(d.abs()));
         out.push_str("Function size changes (by |delta|):");
         for (name, d) in size_deltas.into_iter().take(8) {
             out.push_str(&format!(
@@ -372,18 +416,9 @@ fn format_diff(elf: &Path, old: &ElfReport, new: &ElfReport) -> String {
         }
     }
 
-    let mut stack_deltas: Vec<(String, u32, u32)> = Vec::new();
-    for (name, f) in &new_map {
-        if let Some(stack) = f.stack
-            && let Some(old_f) = old_map.get(name).and_then(|o| o.stack)
-            && stack != old_f
-        {
-            stack_deltas.push(((*name).to_string(), old_f, stack));
-        }
-    }
-    if !stack_deltas.is_empty() {
+    if !diff.stack_deltas.is_empty() {
         out.push_str("\nStack depth changes:");
-        for (name, old, new) in stack_deltas.into_iter().take(8) {
+        for (name, old, new) in diff.stack_deltas.into_iter().take(8) {
             out.push_str(&format!(
                 "\n  {name}: {old} -> {new} bytes ({}{})",
                 if new > old { "+" } else { "-" },
@@ -424,6 +459,44 @@ fn baseline_path(ctx: &ToolContext, elf: &Path) -> Result<Option<PathBuf>, ToolE
     Ok(Some(dir.join("elf-baseline").join(format!("{key}.elf"))))
 }
 
+/// Gate verdict against thresholds: `Some(true)` when the diff exceeds a
+/// threshold (blocking), `Some(false)` when benign, `None` when unchanged or
+/// when no baseline was available.
+fn gate_blocks(
+    diff: Option<&ElfDiff>,
+    stack_threshold: u32,
+    flash_threshold_kib: u64,
+) -> Option<bool> {
+    let diff = diff?;
+    if !diff.has_changes() {
+        return None;
+    }
+    let flash_bytes = flash_threshold_kib.saturating_mul(1024) as i64;
+    let stack_grew = diff
+        .stack_deltas
+        .iter()
+        .any(|(_, old, new)| *new > *old && (*new - *old) as u64 > stack_threshold as u64);
+    let flash_grew = diff.flash_delta > flash_bytes;
+    Some(stack_grew || flash_grew)
+}
+
+/// `[GATE:BLOCK]` / `[GATE:OK]` / `[GATE:CLEAN]` marker for the agent's
+/// binary-analysis gate; empty when no thresholds were requested.
+fn gate_marker(
+    diff: Option<&ElfDiff>,
+    stack_threshold: Option<u32>,
+    flash_threshold_kib: Option<u64>,
+) -> String {
+    let (Some(stack_t), Some(flash_t)) = (stack_threshold, flash_threshold_kib) else {
+        return String::new();
+    };
+    match gate_blocks(diff, stack_t, flash_t) {
+        Some(true) => "[GATE:BLOCK]".to_string(),
+        Some(false) => "[GATE:OK]".to_string(),
+        None => "[GATE:CLEAN]".to_string(),
+    }
+}
+
 #[async_trait]
 impl Tool for ElfAnalyze {
     fn name(&self) -> &'static str {
@@ -439,7 +512,9 @@ impl Tool for ElfAnalyze {
             "type": "object",
             "properties": {
                 "file": {"type": "string", "description": "Path to the firmware ELF (inside the workspace), e.g. build/fw.elf"},
-                "baseline": {"type": "string", "description": "Optional explicit previous ELF to diff against; when omitted, the last analyzed build of this exact path is used"}
+                "baseline": {"type": "string", "description": "Optional explicit previous ELF to diff against; when omitted, the last analyzed build of this exact path is used"},
+                "stack_threshold": {"type": "integer", "description": "Internal (harness gate): per-function stack-depth increase in bytes; when set with flash_threshold_kib, the output starts with a [GATE:...] marker (BLOCK when a threshold is exceeded, OK when changes are benign, CLEAN when unchanged)"},
+                "flash_threshold_kib": {"type": "integer", "description": "Internal (harness gate): flash growth in KiB that blocks"}
             },
             "required": ["file"]
         })
@@ -471,12 +546,24 @@ impl Tool for ElfAnalyze {
         }
 
         // Explicit baseline argument wins; otherwise use the cached baseline.
+        // Threshold args are used by the harness's binary-analysis gate;
+        // when present, the output starts with a machine-readable marker.
+        let stack_threshold = args
+            .get("stack_threshold")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
+        let flash_threshold_kib = args.get("flash_threshold_kib").and_then(|v| v.as_u64());
         let baseline_arg = args.get("baseline").and_then(|b| b.as_str());
         if let Some(baseline) = baseline_arg {
             let old_path =
                 resolve_within(&ctx.cwd, baseline, &ctx.allowed_roots).map_err(ToolError::new)?;
             let old = analyze(&old_path)?;
-            let mut out = format_diff(&old_path, &old, &current);
+            let diff = diff_reports(&old, &current);
+            let mut out = gate_marker(Some(&diff), stack_threshold, flash_threshold_kib);
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&format_diff(&old_path, &old, &current));
             out.push('\n');
             out.push_str(&format_analyze(&elf, &current));
             return Ok(ToolOutput { text: out });
@@ -484,12 +571,24 @@ impl Tool for ElfAnalyze {
 
         // Cache baseline for the next run.
         let mut baseline_text = String::new();
-        if let Some(cache) = baseline_path(ctx, &elf)? {
+        let cached_diff = if let Some(cache) = baseline_path(ctx, &elf)? {
             if cache.exists() {
                 let old = analyze(&cache)?;
                 baseline_text.push_str(&format_diff(&cache, &old, &current));
                 baseline_text.push('\n');
+                Some(diff_reports(&old, &current))
+            } else {
+                None
             }
+        } else {
+            None
+        };
+        baseline_text = format!(
+            "{}{}",
+            gate_marker(cached_diff.as_ref(), stack_threshold, flash_threshold_kib),
+            baseline_text
+        );
+        if let Some(cache) = baseline_path(ctx, &elf)? {
             if let Some(parent) = cache.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
@@ -711,5 +810,65 @@ mod tests {
             .block_on(ElfAnalyze.run(json!({"file": "nope.elf"}), &c))
             .unwrap_err();
         assert!(err.message.contains("[NotFound]"), "got: {err}");
+    }
+
+    fn diff(flash_delta: i64, stack_deltas: Vec<(String, u32, u32)>) -> ElfDiff {
+        ElfDiff {
+            flash_delta,
+            stack_deltas,
+            ..ElfDiff::default()
+        }
+    }
+
+    #[test]
+    fn gate_blocks_on_stack_or_flash_threshold() {
+        assert_eq!(gate_blocks(Some(&diff(0, vec![])), 32, 1), None);
+        assert_eq!(
+            gate_blocks(Some(&diff(100, vec![])), 32, 1),
+            Some(false),
+            "sub-threshold flash growth is benign"
+        );
+        assert_eq!(
+            gate_blocks(Some(&diff(2048, vec![])), 32, 1),
+            Some(true),
+            "flash growth over 1 KiB blocks"
+        );
+        assert_eq!(
+            gate_blocks(Some(&diff(0, vec![("foo".into(), 16, 48)])), 32, 1),
+            Some(false),
+            "stack growth equal to the threshold is benign, not blocking"
+        );
+        assert_eq!(
+            gate_blocks(Some(&diff(0, vec![("foo".into(), 16, 64)])), 32, 1),
+            Some(true),
+            "stack growth over 32 B blocks"
+        );
+        assert_eq!(
+            gate_blocks(Some(&diff(0, vec![("foo".into(), 64, 16)])), 32, 1),
+            Some(false),
+            "stack shrink never blocks"
+        );
+        assert_eq!(gate_blocks(None, 32, 1), None);
+    }
+
+    #[test]
+    fn gate_marker_reflects_verdict() {
+        assert_eq!(
+            gate_marker(Some(&diff(100, vec![])), Some(32), Some(1)),
+            "[GATE:OK]"
+        );
+        assert_eq!(
+            gate_marker(Some(&diff(2048, vec![])), Some(32), Some(1)),
+            "[GATE:BLOCK]"
+        );
+        assert_eq!(
+            gate_marker(Some(&diff(0, vec![])), Some(32), Some(1)),
+            "[GATE:CLEAN]"
+        );
+        assert_eq!(
+            gate_marker(Some(&diff(100, vec![])), None, None),
+            "",
+            "no thresholds, no marker"
+        );
     }
 }

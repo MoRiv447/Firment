@@ -1,6 +1,6 @@
-use async_trait::async_trait;
+﻿use async_trait::async_trait;
 use firment_core::{
-    Agent, AgentError, AgentEvent, AutoApprove, ChatMessage, ChatRequest, EventSink,
+    Agent, AgentError, AgentEvent, AutoApprove, ChatMessage, ChatRequest, ElfConfig, EventSink,
     PlanModePermission, Provider, ProviderError, ProviderEvent, ProviderStream, Session,
     SessionMode, SessionStore, StopReason, Tool, ToolContext, ToolError, ToolOutput, ToolRegistry,
 };
@@ -1225,6 +1225,61 @@ impl Tool for FakeElfTool {
     }
 }
 
+/// elf_analyze whose output is driven by a queue of raw tool texts
+/// (including `[GATE:...]` markers), defaulting to `[GATE:CLEAN]`.
+struct QueueElfTool {
+    outputs: Arc<Mutex<VecDeque<String>>>,
+}
+
+#[async_trait]
+impl Tool for QueueElfTool {
+    fn name(&self) -> &'static str {
+        "elf_analyze"
+    }
+
+    fn description(&self) -> &'static str {
+        "fake elf analyze"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({"type": "object", "properties": {"file": {"type": "string"}}, "required": ["file"]})
+    }
+
+    async fn run(&self, args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+        if args.get("stack_threshold").is_none() {
+            // Baseline seeding call (no threshold args): never consumes the
+            // gate queue.
+            return Ok(ToolOutput {
+                text: "baseline".to_string(),
+            });
+        }
+        let text = self
+            .outputs
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_else(|| "[GATE:CLEAN]\nunchanged".to_string());
+        Ok(ToolOutput { text })
+    }
+}
+
+/// Asker answering from a queue; defaults to "fix".
+struct FakeAsker {
+    answers: Arc<Mutex<VecDeque<String>>>,
+}
+
+#[async_trait]
+impl firment_core::Asker for FakeAsker {
+    async fn ask(&self, _question: &str, _options: &[String]) -> Result<String, String> {
+        Ok(self
+            .answers
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_else(|| "fix".to_string()))
+    }
+}
+
 #[tokio::test]
 async fn elf_gate_injects_diff_before_accepting_completion() {
     let provider = FakeProvider {
@@ -1264,7 +1319,10 @@ async fn elf_gate_injects_diff_before_accepting_completion() {
         Arc::new(CollectSink(Arc::new(Mutex::new(Vec::new())))),
         10,
     );
-    agent.set_elf_glob(Some("build/*.elf".to_string()));
+    agent.set_elf_config(Some(ElfConfig {
+        glob: "build/*.elf".to_string(),
+        ..ElfConfig::default()
+    }));
 
     let text = agent.run_turn("write then finish").await.unwrap();
     assert_eq!(text, "done");
@@ -1324,6 +1382,338 @@ async fn elf_gate_skips_when_not_configured() {
             ChatMessage::Tool { name, .. } if name == "elf_analyze"
         )),
         "elf gate must not run without [tools] elf"
+    );
+}
+
+fn elf_gate_agent(
+    provider: FakeProvider,
+    elf_tool: QueueElfTool,
+    elf: ElfConfig,
+    asker: Option<FakeAsker>,
+    max_iterations: usize,
+) -> (Agent, tempfile::TempDir) {
+    let dir = tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("build")).unwrap();
+    std::fs::write(dir.path().join("build").join("fw.elf"), b"elf").unwrap();
+    let store = SessionStore::new(dir.path().join("sessions"));
+    let session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(vec![Arc::new(JournalingWriteTool), Arc::new(elf_tool)]),
+        session,
+        store,
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(Arc::new(Mutex::new(Vec::new())))),
+        max_iterations,
+    );
+    agent.set_elf_config(Some(elf));
+    if let Some(asker) = asker {
+        let asker: Arc<dyn firment_core::Asker> = Arc::new(asker);
+        agent.set_asker(Some(asker));
+    }
+    (agent, dir)
+}
+
+#[tokio::test]
+async fn elf_gate_swallows_below_threshold_diff() {
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_write".to_string(),
+                    name: "write_file".to_string(),
+                    arguments: json!({"path": "a.txt", "content": "x"}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            vec![
+                ProviderEvent::Text("done".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+        ]))),
+        model: "fake".to_string(),
+    };
+    let elf_tool = QueueElfTool {
+        outputs: Arc::new(Mutex::new(VecDeque::from([
+            "[GATE:OK]\nstack +8B (under 32B threshold)".to_string(),
+        ]))),
+    };
+    let (mut agent, dir) = elf_gate_agent(
+        provider,
+        elf_tool,
+        ElfConfig {
+            glob: "build/*.elf".to_string(),
+            report_benign: false,
+            ..ElfConfig::default()
+        },
+        None,
+        10,
+    );
+
+    let text = agent.run_turn("write then finish").await.unwrap();
+    assert_eq!(text, "done");
+    assert!(
+        dir.path().join("a.txt").exists(),
+        "mutation must be committed"
+    );
+    assert!(
+        !agent.session().messages.iter().any(|m| matches!(
+            m,
+            ChatMessage::Tool { name, .. } if name == "elf_analyze"
+        )),
+        "benign below-threshold diff must be swallowed, not surfaced"
+    );
+}
+
+#[tokio::test]
+async fn elf_gate_blocked_allows_completion_after_user_approval() {
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_write".to_string(),
+                    name: "write_file".to_string(),
+                    arguments: json!({"path": "a.txt", "content": "x"}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            vec![
+                ProviderEvent::Text("done".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+        ]))),
+        model: "fake".to_string(),
+    };
+    let elf_tool = QueueElfTool {
+        outputs: Arc::new(Mutex::new(VecDeque::from([
+            "[GATE:BLOCK]\nstack +96B (over 32B threshold)".to_string(),
+        ]))),
+    };
+    let (mut agent, dir) = elf_gate_agent(
+        provider,
+        elf_tool,
+        ElfConfig {
+            glob: "build/*.elf".to_string(),
+            ..ElfConfig::default()
+        },
+        Some(FakeAsker {
+            answers: Arc::new(Mutex::new(VecDeque::from(["allow".to_string()]))),
+        }),
+        10,
+    );
+
+    let text = agent.run_turn("write then finish").await.unwrap();
+    assert_eq!(text, "done");
+    assert!(dir.path().join("a.txt").exists());
+    assert!(
+        agent
+            .session()
+            .messages
+            .iter()
+            .any(|m| matches!(m, ChatMessage::Tool { name, .. } if name == "elf_analyze")),
+        "blocking diff must be surfaced to the model"
+    );
+}
+
+#[tokio::test]
+async fn elf_gate_blocked_keeps_fixing_until_gate_clears() {
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_write".to_string(),
+                    name: "write_file".to_string(),
+                    arguments: json!({"path": "a.txt", "content": "x"}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            vec![
+                ProviderEvent::Text("done".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+            vec![
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_write".to_string(),
+                    name: "write_file".to_string(),
+                    arguments: json!({"path": "b.txt", "content": "y"}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            vec![
+                ProviderEvent::Text("done".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+        ]))),
+        model: "fake".to_string(),
+    };
+    let elf_tool = QueueElfTool {
+        outputs: Arc::new(Mutex::new(VecDeque::from([
+            "[GATE:BLOCK]\nstack +96B (over 32B threshold)".to_string(),
+            "[GATE:CLEAN]\nunchanged".to_string(),
+        ]))),
+    };
+    let (mut agent, dir) = elf_gate_agent(
+        provider,
+        elf_tool,
+        ElfConfig {
+            glob: "build/*.elf".to_string(),
+            ..ElfConfig::default()
+        },
+        Some(FakeAsker {
+            answers: Arc::new(Mutex::new(VecDeque::from(["fix".to_string()]))),
+        }),
+        10,
+    );
+
+    let text = agent.run_turn("write then finish").await.unwrap();
+    assert_eq!(text, "done");
+    assert!(dir.path().join("a.txt").exists());
+    assert!(
+        dir.path().join("b.txt").exists(),
+        "model must keep editing after 'fix' until the gate clears"
+    );
+}
+
+#[tokio::test]
+async fn elf_gate_blocked_detail_shows_diff_then_allow() {
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_write".to_string(),
+                    name: "write_file".to_string(),
+                    arguments: json!({"path": "a.txt", "content": "x"}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            vec![
+                ProviderEvent::Text("done".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+        ]))),
+        model: "fake".to_string(),
+    };
+    let elf_tool = QueueElfTool {
+        outputs: Arc::new(Mutex::new(VecDeque::from([
+            "[GATE:BLOCK]\nstack +96B (over 32B threshold)".to_string(),
+        ]))),
+    };
+    let (mut agent, dir) = elf_gate_agent(
+        provider,
+        elf_tool,
+        ElfConfig {
+            glob: "build/*.elf".to_string(),
+            ..ElfConfig::default()
+        },
+        Some(FakeAsker {
+            answers: Arc::new(Mutex::new(VecDeque::from([
+                "detail".to_string(),
+                "allow".to_string(),
+            ]))),
+        }),
+        10,
+    );
+
+    let text = agent.run_turn("write then finish").await.unwrap();
+    assert_eq!(text, "done");
+    assert!(dir.path().join("a.txt").exists());
+}
+
+#[tokio::test]
+async fn elf_gate_strict_headless_blocks_until_fixed() {
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_write".to_string(),
+                    name: "write_file".to_string(),
+                    arguments: json!({"path": "a.txt", "content": "x"}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            vec![
+                ProviderEvent::Text("done".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+            vec![
+                ProviderEvent::Text("done".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+            vec![
+                ProviderEvent::Text("done".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+        ]))),
+        model: "fake".to_string(),
+    };
+    let elf_tool = QueueElfTool {
+        outputs: Arc::new(Mutex::new(VecDeque::from([
+            "[GATE:BLOCK]\nstack +96B (over 32B threshold)".to_string(),
+        ]))),
+    };
+    let (mut agent, _dir) = elf_gate_agent(
+        provider,
+        elf_tool,
+        ElfConfig {
+            glob: "build/*.elf".to_string(),
+            strict: true,
+            ..ElfConfig::default()
+        },
+        None,
+        2,
+    );
+
+    let err = agent.run_turn("write then finish").await.unwrap_err();
+    assert!(
+        matches!(err, AgentError::MaxIterations(_)),
+        "strict headless must not complete while blocked, got: {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn elf_gate_headless_non_strict_degrades_to_soft_report() {
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_write".to_string(),
+                    name: "write_file".to_string(),
+                    arguments: json!({"path": "a.txt", "content": "x"}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            vec![
+                ProviderEvent::Text("done".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+            vec![
+                ProviderEvent::Text("done".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+        ]))),
+        model: "fake".to_string(),
+    };
+    let elf_tool = QueueElfTool {
+        outputs: Arc::new(Mutex::new(VecDeque::from([
+            "[GATE:BLOCK]\nstack +96B (over 32B threshold)".to_string(),
+        ]))),
+    };
+    let (mut agent, dir) = elf_gate_agent(
+        provider,
+        elf_tool,
+        ElfConfig {
+            glob: "build/*.elf".to_string(),
+            ..ElfConfig::default()
+        },
+        None,
+        5,
+    );
+
+    let text = agent.run_turn("write then finish").await.unwrap();
+    assert_eq!(text, "done");
+    assert!(
+        dir.path().join("a.txt").exists(),
+        "non-strict headless degrades to a soft report and completes"
     );
 }
 

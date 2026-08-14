@@ -18,8 +18,8 @@ pub use agent::{Agent, AgentError, AgentEvent, EventSink};
 pub use ask::{Asker, QuestionRequest};
 pub use cancel::Cancellable;
 pub use config::{
-    AuthMap, CompactionStrategy, Config, ConfigError, ProviderConfig, auth_path, config_dir,
-    config_path, load_auth, save_auth,
+    AuthMap, CompactionStrategy, Config, ConfigError, ElfConfig, ProviderConfig, auth_path,
+    config_dir, config_path, load_auth, save_auth,
 };
 pub use context::{default_system_prompt, system_prompt_for};
 pub use journal::{EditJournal, Ledger, LedgerChange, UndoSummary};

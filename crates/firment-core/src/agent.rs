@@ -1,5 +1,5 @@
 use crate::cancel::Cancellable;
-use crate::config::CompactionStrategy;
+use crate::config::{CompactionStrategy, ElfConfig};
 use crate::journal::{EditJournal, Ledger};
 use crate::provider::{Provider, ProviderError, ProviderEvent};
 use crate::session::{SessionStore, SessionSummary};
@@ -91,6 +91,49 @@ const TOOL_WAVE_TIMEOUT: Duration = Duration::from_secs(600);
 /// window to wind down before the wave futures are dropped.
 const TOOL_CANCEL_GRACE: Duration = Duration::from_secs(5);
 
+/// Verdict of the binary-analysis gate for the latest edit batch.
+pub enum ElfGateOutcome {
+    /// No diff worth surfacing: below thresholds (and benign reports are
+    /// off), or nothing changed. Completion proceeds normally.
+    Silent,
+    /// A below-threshold diff worth reviewing (`report_benign`); the model
+    /// sees it as a soft review round.
+    Report(String),
+    /// The diff exceeds configured thresholds; completion is not accepted
+    /// until the user approves it (or, headless + strict, until fixed).
+    Blocked(String),
+}
+
+/// Classify a raw `elf_analyze` tool output (which carries a machine-readable
+/// `[GATE:...]` marker when threshold args were passed) into a gate verdict.
+fn classify_gate(text: &str, cfg: &ElfConfig) -> ElfGateOutcome {
+    if let Some(rest) = text.strip_prefix("[GATE:BLOCK]") {
+        return ElfGateOutcome::Blocked(rest.trim_start().to_string());
+    }
+    if let Some(rest) = text.strip_prefix("[GATE:OK]") {
+        if cfg.report_benign {
+            return ElfGateOutcome::Report(rest.trim_start().to_string());
+        }
+        return ElfGateOutcome::Silent;
+    }
+    if text.starts_with("[GATE:CLEAN]") {
+        return ElfGateOutcome::Silent;
+    }
+    ElfGateOutcome::Report(text.to_string())
+}
+
+/// How a blocking elf-gate diff is resolved.
+enum ElfGateDecision {
+    /// The user explicitly approved the change; completion proceeds.
+    Allow,
+    /// Keep fixing: continue the loop (interactive "fix", or headless
+    /// strict). Completion stays blocked until the gate clears.
+    Fix,
+    /// Headless non-strict: degrade to a soft report — the model sees the
+    /// injected diff and decides; completion is allowed.
+    SoftReview,
+}
+
 pub struct Agent {
     provider: Option<Box<dyn Provider>>,
     registry: Arc<ToolRegistry>,
@@ -135,9 +178,10 @@ pub struct Agent {
     web_search_api_key: Option<String>,
     /// Per-session bookkeeping directory (todo list etc.).
     session_dir: Option<PathBuf>,
-    /// Glob pattern for the firmware ELF artifact; enables the automatic
-    /// binary-analysis gate (`elf_analyze`) before a finished turn is accepted.
-    elf_glob: Option<String>,
+    /// ELF binary-analysis gate policy: glob + thresholds. When set, the
+    /// harness seeds a baseline and auto-runs `elf_analyze` before a finished
+    /// turn is accepted; diffs above the thresholds block completion.
+    elf_config: Option<ElfConfig>,
     /// True once the auto elf gate has run for the current edit batch; reset
     /// whenever a new mutation lands. Independent of `mutations_since_verify`
     /// so the gate still runs after the model verifies via the verify tool.
@@ -145,6 +189,10 @@ pub struct Agent {
     /// True when a mutation landed since the last elf analysis; gates the
     /// binary-analysis diff without depending on verify-bookkeeping.
     elf_gate_dirty: bool,
+    /// True while the elf gate has blocked completion (threshold exceeded,
+    /// not yet approved by the user). Until a re-run of the gate clears it,
+    /// finishing the turn is not accepted.
+    elf_gate_required: bool,
     /// Hash of the last read result per path, for unchanged-read dedup.
     read_hashes: HashMap<PathBuf, String>,
     /// Recently read paths (most recent last), for post-compact re-injection.
@@ -199,9 +247,10 @@ impl Agent {
             tool_seq: 0,
             web_search_api_key: None,
             session_dir: None,
-            elf_glob: None,
+            elf_config: None,
             elf_gate_done: false,
             elf_gate_dirty: false,
+            elf_gate_required: false,
             read_hashes: HashMap::new(),
             recent_read_paths: VecDeque::new(),
             stream_timeout: STREAM_TIMEOUT,
@@ -378,22 +427,23 @@ impl Agent {
         self.session_dir = dir;
     }
 
-    /// Set the `[tools] elf` glob pattern; when set, the harness seeds an ELF
-    /// baseline and auto-runs `elf_analyze` before a finished turn is accepted.
-    pub fn set_elf_glob(&mut self, glob: Option<String>) {
-        self.elf_glob = glob;
+    /// Set the `[tools] elf` binary-analysis gate policy; when set, the
+    /// harness seeds an ELF baseline and auto-runs `elf_analyze` before a
+    /// finished turn is accepted, blocking when thresholds are exceeded.
+    pub fn set_elf_config(&mut self, config: Option<ElfConfig>) {
+        self.elf_config = config;
     }
 
     /// At turn start, refresh the ELF baseline so edits are diffed against the
     /// state the turn began with. Silent except on tool errors.
     async fn seed_elf_baseline(&mut self, ctx: &ToolContext) {
-        let Some(glob) = self.elf_glob.clone() else {
+        let Some(cfg) = self.elf_config.clone() else {
             return;
         };
         let Some(tool) = self.registry.get("elf_analyze") else {
             return;
         };
-        let Some(elf) = newest_elf_match(&self.session.cwd, &glob) else {
+        let Some(elf) = newest_elf_match(&self.session.cwd, &cfg.glob) else {
             return;
         };
         if let Err(e) = tool
@@ -410,21 +460,90 @@ impl Agent {
     }
 
     /// Binary-analysis gate: run `elf_analyze` once per edit batch against the
-    /// newest ELF matching `elf_glob`. Returns the report (with diff vs the
-    /// recorded baseline) when the model should be asked to review it, and
-    /// `None` when there is nothing new to surface. Never blocks completion.
-    async fn run_elf_gate(&mut self, ctx: &ToolContext) -> Option<String> {
-        let glob = self.elf_glob.clone()?;
+    /// newest ELF matching the configured glob, with the configured
+    /// thresholds. `Silent` means the diff is below thresholds; `Blocked`
+    /// means a threshold is exceeded and completion must not be accepted
+    /// without an explicit user approval (or, headless + strict, without the
+    /// gate clearing).
+    async fn run_elf_gate(&mut self, ctx: &ToolContext) -> Option<ElfGateOutcome> {
+        let cfg = self.elf_config.clone()?;
         let tool = self.registry.get("elf_analyze")?;
         if self.elf_gate_done {
             return None;
         }
-        let elf = newest_elf_match(&self.session.cwd, &glob)?;
+        let elf = newest_elf_match(&self.session.cwd, &cfg.glob)?;
         self.elf_gate_done = true;
-        let args = json!({ "file": elf.to_string_lossy() });
+        let args = json!({
+            "file": elf.to_string_lossy(),
+            "stack_threshold": cfg.stack_threshold,
+            "flash_threshold_kib": cfg.flash_threshold_kib,
+        });
         match tool.run(args, ctx).await {
-            Ok(out) => Some(out.text),
-            Err(e) => Some(e.message),
+            Ok(out) => Some(classify_gate(&out.text, &cfg)),
+            Err(e) => Some(ElfGateOutcome::Report(e.message)),
+        }
+    }
+
+    /// Inject a gate report as a real tool round (assistant tool_use -> tool
+    /// result) replacing the plain assistant message, so the transcript stays
+    /// a valid provider message sequence.
+    async fn inject_elf_report(&mut self, content: &str, text: &str) {
+        self.session.messages.pop();
+        let gate_call = ToolCall {
+            id: "elf_gate".to_string(),
+            name: "elf_analyze".to_string(),
+            arguments: json!({}),
+        };
+        self.session.push(ChatMessage::Assistant {
+            content: content.to_string(),
+            tool_calls: vec![gate_call.clone()],
+        });
+        self.session.push(ChatMessage::Tool {
+            tool_call_id: gate_call.id,
+            name: "elf_analyze".to_string(),
+            content: text.to_string(),
+        });
+    }
+
+    /// Resolve a blocking elf-gate diff. Interactive front-ends (TUI, IDE)
+    /// get an allow / fix / detail choice; headless runs degrade to `Fix`
+    /// (strict: blocked until fixed; non-strict: soft report semantics, the
+    /// model reviews the injected diff and decides).
+    async fn ask_elf_gate(&mut self, text: &str) -> ElfGateDecision {
+        let strict = self.elf_config.as_ref().is_some_and(|c| c.strict);
+        let Some(asker) = &self.asker else {
+            if strict {
+                self.sink
+                    .event(AgentEvent::Info(
+                        "elf gate (strict): thresholds exceeded — completion is blocked until \
+                         the gate clears"
+                            .to_string(),
+                    ))
+                    .await;
+                return ElfGateDecision::Fix;
+            }
+            return ElfGateDecision::SoftReview;
+        };
+        let mut detail_shown = false;
+        loop {
+            let answer = asker
+                .ask(
+                    "ELF gate: the firmware diff exceeds the configured thresholds (stack \
+                     depth or flash size). Approve this change or keep fixing?",
+                    &["allow".to_string(), "fix".to_string(), "detail".to_string()],
+                )
+                .await;
+            match answer.as_deref() {
+                Ok("allow") => return ElfGateDecision::Allow,
+                Ok("fix") | Err(_) => return ElfGateDecision::Fix,
+                Ok("detail") if !detail_shown => {
+                    detail_shown = true;
+                    self.sink
+                        .event(AgentEvent::Info(format!("ELF gate diff:\n{text}")))
+                        .await;
+                }
+                _ => return ElfGateDecision::Fix,
+            }
         }
     }
 
@@ -558,7 +677,8 @@ impl Agent {
         self.read_hashes.clear();
         self.recent_read_paths.clear();
         self.elf_gate_done = false;
-        self.set_elf_glob(None);
+        self.set_elf_config(None);
+        self.elf_gate_required = false;
     }
 
     pub fn save_session(&self) -> Result<(), crate::session::SessionError> {
@@ -865,33 +985,81 @@ impl Agent {
                 }
 
                 if self.elf_gate_dirty
-                    && let Some(text) = self.run_elf_gate(&ctx).await
+                    && let Some(outcome) = self.run_elf_gate(&ctx).await
                 {
-                    // Fresh binary diff: surface it to the model so it can
-                    // decide whether to accept the state or keep fixing. The
-                    // report is injected as a real tool round (assistant
-                    // tool_use -> tool result) so the transcript stays a valid
-                    // provider message sequence.
                     self.elf_gate_dirty = false;
-                    self.session.messages.pop();
-                    let gate_call = ToolCall {
-                        id: "elf_gate".to_string(),
-                        name: "elf_analyze".to_string(),
-                        arguments: json!({}),
-                    };
-                    self.session.push(ChatMessage::Assistant {
-                        content: content.clone(),
-                        tool_calls: vec![gate_call.clone()],
-                    });
-                    self.session.push(ChatMessage::Tool {
-                        tool_call_id: gate_call.id,
-                        name: "elf_analyze".to_string(),
-                        content: text,
-                    });
+                    match outcome {
+                        ElfGateOutcome::Silent => {
+                            self.elf_gate_required = false;
+                        }
+                        ElfGateOutcome::Report(text) => {
+                            self.elf_gate_required = false;
+                            // Fresh binary diff: surface it to the model so it
+                            // can decide whether to accept the state or keep
+                            // fixing. The report is injected as a real tool
+                            // round (assistant tool_use -> tool result) so the
+                            // transcript stays a valid provider sequence.
+                            self.inject_elf_report(&content, &text).await;
+                            self.sink
+                                .event(AgentEvent::Info(
+                                    "binary analysis: the firmware changed vs its baseline — \
+                                     review the diff above and decide whether to accept or keep fixing"
+                                        .to_string(),
+                                ))
+                                .await;
+                            continue;
+                        }
+                        ElfGateOutcome::Blocked(text) => {
+                            self.inject_elf_report(&content, &text).await;
+                            match self.ask_elf_gate(&text).await {
+                                ElfGateDecision::Allow => {
+                                    self.elf_gate_required = false;
+                                    // Keep the transcript ending on an assistant
+                                    // message; the change is approved, so fall
+                                    // through to commit and finish the turn.
+                                    self.session.push(ChatMessage::Assistant {
+                                        content: content.clone(),
+                                        tool_calls: vec![],
+                                    });
+                                    self.sink
+                                        .event(AgentEvent::Info(
+                                            "elf gate: change approved by the user — completing"
+                                                .to_string(),
+                                        ))
+                                        .await;
+                                }
+                                ElfGateDecision::Fix => {
+                                    self.elf_gate_required = true;
+                                    self.sink
+                                        .event(AgentEvent::Info(
+                                            "elf gate: thresholds exceeded — completion is \
+                                             blocked until the gate clears; keep fixing"
+                                                .to_string(),
+                                        ))
+                                        .await;
+                                    continue;
+                                }
+                                ElfGateDecision::SoftReview => {
+                                    self.elf_gate_required = false;
+                                    self.sink
+                                        .event(AgentEvent::Info(
+                                            "elf gate: thresholds exceeded (non-strict) — \
+                                             review the diff above and decide"
+                                                .to_string(),
+                                        ))
+                                        .await;
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                }
+                // Hard gate: while a blocking diff is unresolved, the turn may
+                // not finish even if the model stops editing and answers.
+                if self.elf_gate_required {
                     self.sink
                         .event(AgentEvent::Info(
-                            "binary analysis: the firmware changed vs its baseline — review \
-                             the diff above and decide whether to accept or keep fixing"
+                            "elf gate: still blocked — fix the firmware before finishing"
                                 .to_string(),
                         ))
                         .await;

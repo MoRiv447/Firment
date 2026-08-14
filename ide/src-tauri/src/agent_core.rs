@@ -70,7 +70,7 @@ pub fn build_agent(shared: &Arc<Shared>, session: Session) -> anyhow::Result<Age
     agent.set_default_chip(merged.tools.default_chip.clone());
     agent.set_monitor_port(merged.tools.monitor_port.clone());
     agent.set_monitor_baud(merged.tools.monitor_baud);
-    agent.set_elf_glob(merged.tools.elf.clone());
+    agent.set_elf_config(merged.tools.elf.clone());
     agent.set_asker(Some(asker.clone() as Arc<dyn firment_core::Asker>));
     agent.set_web_search(
         merged.tools.web_search.clone(),

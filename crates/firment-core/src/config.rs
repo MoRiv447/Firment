@@ -35,6 +35,93 @@ pub struct Config {
     pub compaction_strategy: CompactionStrategy,
 }
 
+/// ELF binary-analysis gate policy. Written as a string (glob only) in
+/// config.toml for backward compatibility, or as a table for full control.
+#[derive(Debug, Clone, Serialize)]
+pub struct ElfConfig {
+    /// Glob pattern for the firmware ELF artifact (e.g. `build/fw.elf`).
+    pub glob: String,
+    /// Per-function stack-depth increase (bytes) that blocks completion
+    /// until the user explicitly approves it.
+    #[serde(default = "default_elf_stack_threshold")]
+    pub stack_threshold: u32,
+    /// Flash growth (KiB) that blocks completion until user approval.
+    #[serde(default = "default_elf_flash_threshold")]
+    pub flash_threshold_kib: u64,
+    /// Surface benign (below-threshold) diffs to the model as a review
+    /// round. Default `false`: below-threshold changes are swallowed so
+    /// the model is not trained to dismiss every diff as noise.
+    #[serde(default)]
+    pub report_benign: bool,
+    /// Headless (no interactive approver) behavior: `true` blocks
+    /// completion until the gate clears (CI); `false` downgrades an
+    /// otherwise-blocking diff to a soft report.
+    #[serde(default)]
+    pub strict: bool,
+}
+
+fn default_elf_stack_threshold() -> u32 {
+    32
+}
+
+fn default_elf_flash_threshold() -> u64 {
+    1
+}
+
+impl Default for ElfConfig {
+    fn default() -> Self {
+        Self {
+            glob: String::new(),
+            stack_threshold: default_elf_stack_threshold(),
+            flash_threshold_kib: default_elf_flash_threshold(),
+            report_benign: false,
+            strict: false,
+        }
+    }
+}
+
+/// Accept both `elf = "build/fw.elf"` (glob string) and
+/// `[tools.elf] glob = "..." stack_threshold = 64` (table) forms.
+impl<'de> Deserialize<'de> for ElfConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Glob(String),
+            Table {
+                glob: String,
+                #[serde(default = "default_elf_stack_threshold")]
+                stack_threshold: u32,
+                #[serde(default = "default_elf_flash_threshold")]
+                flash_threshold_kib: u64,
+                #[serde(default)]
+                report_benign: bool,
+                #[serde(default)]
+                strict: bool,
+            },
+        }
+        match Raw::deserialize(d)? {
+            Raw::Glob(glob) => Ok(ElfConfig {
+                glob,
+                ..ElfConfig::default()
+            }),
+            Raw::Table {
+                glob,
+                stack_threshold,
+                flash_threshold_kib,
+                report_benign,
+                strict,
+            } => Ok(ElfConfig {
+                glob,
+                stack_threshold,
+                flash_threshold_kib,
+                report_benign,
+                strict,
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolsConfig {
     /// Command run by the `verify` tool (platform shell), e.g. `cargo check`.
@@ -68,11 +155,17 @@ pub struct ToolsConfig {
     /// Recursion limit for the `task` subagent tool.
     #[serde(default = "default_max_subagent_depth")]
     pub max_subagent_depth: usize,
-    /// Glob pattern for the firmware ELF artifact (e.g. `build/fw.elf`).
-    /// When set, the harness captures an ELF baseline and automatically runs
-    /// `elf_analyze` against the newest match before each finished turn.
+    /// ELF binary-analysis gate: glob + thresholds. When set, the harness
+    /// captures an ELF baseline and automatically runs `elf_analyze` against
+    /// the newest match before each finished turn; changes above the
+    /// thresholds block completion until the user approves (or, headless +
+    /// `strict`, until fixed).
+    ///
+    /// TODO(relative scaling): thresholds are absolute (bytes/KiB). Scale them
+    /// relative to target RAM/Flash size (e.g. 1% of available flash) so small
+    /// MCUs are not drowned out and big ones are not overly strict.
     #[serde(default)]
-    pub elf: Option<String>,
+    pub elf: Option<ElfConfig>,
 }
 
 impl ToolsConfig {
@@ -220,8 +313,19 @@ impl Config {
         if project.tools.max_subagent_depth != default_max_subagent_depth() {
             config.tools.max_subagent_depth = project.tools.max_subagent_depth;
         }
-        if let Some(value) = project.tools.elf {
-            config.tools.elf = Some(value);
+        if let Some(elf) = &project.tools.elf {
+            match config.tools.elf.as_mut() {
+                Some(existing) => {
+                    existing.glob = elf.glob.clone();
+                    existing.stack_threshold = elf.stack_threshold;
+                    existing.flash_threshold_kib = elf.flash_threshold_kib;
+                    existing.report_benign = elf.report_benign;
+                    // strict is a tightening (blocking) flag, the opposite of
+                    // auto_approve, so a checkout may enable it (e.g. CI).
+                    existing.strict |= elf.strict;
+                }
+                None => config.tools.elf = Some(elf.clone()),
+            }
         }
         if project.compaction_strategy != CompactionStrategy::default() {
             config.compaction_strategy = project.compaction_strategy;
@@ -580,6 +684,13 @@ model = "deepseek-v4-flash"
 # web_search = "bing"                     # default: bing (no key, CN-reachable); duckduckgo / tavily / brave also work
 # web_search_api_key_env = "TAVILY_API_KEY"  # API key env for tavily / brave (or set web_search_api_key inline)
 # elf = "build/fw.elf"                       # glob of the firmware ELF: harness seeds a binary baseline and auto-runs elf_analyze before finishing each edited turn (needs -fstack-usage for stack depth)
+# Full gate policy (table form, all fields optional):
+# [tools.elf]
+# glob = "build/fw.elf"
+# stack_threshold = 32        # stack-depth increase (bytes) that blocks completion until user approval
+# flash_threshold_kib = 1     # flash growth (KiB) that blocks completion until user approval
+# report_benign = false       # surface below-threshold diffs as a review round (default false: swallow noise)
+# strict = false              # headless/CI: block completion until fixed instead of downgrading to a soft report
 # max_subagent_depth = 2                  # recursion limit for the task subagent tool
 "#
 }
@@ -638,19 +749,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_tools_elf() {
+    fn parses_tools_elf_string_backward_compatible() {
         let text = r#"
             [tools]
             elf = "build/*.elf"
         "#;
         let config: Config = toml::from_str(text).unwrap();
-        assert_eq!(config.tools.elf.as_deref(), Some("build/*.elf"));
+        let elf = config.tools.elf.expect("elf set");
+        assert_eq!(elf.glob, "build/*.elf");
+        assert_eq!(elf.stack_threshold, default_elf_stack_threshold());
+        assert_eq!(elf.flash_threshold_kib, default_elf_flash_threshold());
+        assert!(!elf.report_benign);
+        assert!(!elf.strict);
+    }
+
+    #[test]
+    fn parses_tools_elf_table_with_thresholds() {
+        let text = r#"
+            [tools.elf]
+            glob = "build/*.elf"
+            stack_threshold = 64
+            flash_threshold_kib = 2
+            report_benign = true
+            strict = true
+        "#;
+        let config: Config = toml::from_str(text).unwrap();
+        let elf = config.tools.elf.expect("elf set");
+        assert_eq!(elf.glob, "build/*.elf");
+        assert_eq!(elf.stack_threshold, 64);
+        assert_eq!(elf.flash_threshold_kib, 2);
+        assert!(elf.report_benign);
+        assert!(elf.strict);
     }
 
     #[test]
     fn tools_elf_defaults_to_none() {
         let config: Config = toml::from_str("").unwrap();
-        assert_eq!(config.tools.elf, None);
+        assert!(config.tools.elf.is_none());
     }
 
     #[test]

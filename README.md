@@ -67,7 +67,9 @@ agent kernel through the unified `Tool` trait and session format.
   after DMA RX)
 - **`elf_analyze`** — flash/RAM usage, function sizes, and real stack depth
   from `-fstack-usage` `.su` files; Firment auto-seeds a baseline and
-  re-analyzes after each edited turn
+  re-analyzes after each edited turn. Growth above the configured thresholds
+  blocks completion until you approve it (or, headless + `strict`, until the
+  model fixes it); below-threshold noise is swallowed by default
 - **`monitor`** — serial monitor with per-line timestamps and baud-rate
   autodetect; cancelling a turn releases the port immediately
 - **`build` / `flash` / `run`** — CMake/Make/Keil build commands, probe-rs
@@ -116,6 +118,14 @@ monitor_port = "COM3"                 # serial port for `firm monitor`
 monitor_baud = 115200
 web_search = "duckduckgo"       # duckduckgo (no key) / bing (no key, CN-reachable) / tavily / brave
 elf = "build/fw.elf"                  # auto-seed elf_analyze baselines
+
+# Full ELF gate policy (table form; string form above uses defaults):
+# [tools.elf]
+# glob = "build/fw.elf"
+# stack_threshold = 32        # stack-depth growth (B) that blocks completion
+# flash_threshold_kib = 1     # flash growth (KiB) that blocks completion
+# report_benign = false       # surface below-threshold diffs (false = swallow)
+# strict = false              # headless/CI: block until fixed, no soft downgrade
 ```
 
 Project-scoped config (`.firment/config.toml` in a repo) is merged on top;
