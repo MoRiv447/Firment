@@ -4,7 +4,7 @@
 [![Version](https://img.shields.io/badge/version-0.5.1-blue)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
-[![CI](https://img.shields.io/badge/CI-Rust%20%2B%20Web%20%2B%20IDE-green)](.github/workflows/ci.yml)
+[![CI](https://img.shields.io/badge/CI-Rust%20%2B%20Web%20%2B%20GUI-green)](.github/workflows/ci.yml)
 
 [English](README.md) | **简体中文**
 
@@ -26,10 +26,10 @@ Agent。名字取自 *firmament*（苍穹，每个嵌入式工程师头上的那
 | 端 | 路径 | 技术栈 |
 |---|---|---|
 | **CLI / TUI** | [`crates/`](crates/) | Rust (ratatui)——核心 Agent |
-| **IDE 客户端** | [`ide/`](ide/) | Tauri + React/Vite (TypeScript) |
+| **GUI 客户端** | [`gui/`](gui/) | Tauri + React/Vite (TypeScript) |
 | **Web** | [`web/`](web/) | Next.js + Tailwind（Vercel 部署）——在线体验：[firment-web.vercel.app](https://firment-web.vercel.app) |
 
-CLI 是事实标准；IDE 客户端共用同一个 Rust Agent 内核（统一的 `Tool`
+CLI 是事实标准；GUI 客户端共用同一个 Rust Agent 内核（统一的 `Tool`
 trait 和会话格式），Web 端是 TypeScript 重新实现，通过提交的工具规格
 快照（`web/src/lib/tools/specs.json`）保持同步。
 
@@ -202,10 +202,10 @@ crates/
   firment-tools/  文件/搜索/shell 工具、危险命令防护、periph_init/elf_analyze/monitor（第二层）
   firment-tui/    ratatui 终端界面（git 状态栏、模型/会话选择器）
   firment-cli/    clap 入口（bin: firm）+ install/update/补全
-ide/              Tauri IDE 客户端（React/Vite + src-tauri）
+gui/              Tauri GUI 客户端（React/Vite + src-tauri）
 web/              Next.js 前端（Vercel）
 docs/             vendor-index.toml + cheatsheets/*.toml（硬件知识库）
-.github/workflows/  CI：Rust（fmt/clippy/test）+ web-check + ide-check
+.github/workflows/  CI：Rust（fmt/clippy/test）+ web-check + gui-check
 ```
 
 ### 🧪 开发

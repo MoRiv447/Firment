@@ -4,7 +4,7 @@
 [![Version](https://img.shields.io/badge/version-0.5.1-blue)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
-[![CI](https://img.shields.io/badge/CI-Rust%20%2B%20Web%20%2B%20IDE-green)](.github/workflows/ci.yml)
+[![CI](https://img.shields.io/badge/CI-Rust%20%2B%20Web%20%2B%20GUI-green)](.github/workflows/ci.yml)
 
 **English** | [简体中文](README.zh-CN.md)
 
@@ -28,10 +28,10 @@ same conversation.
 | Surface | Path | Stack |
 |---|---|---|
 | **CLI / TUI** | [`crates/`](crates/) | Rust (ratatui) — the core agent |
-| **IDE client** | [`ide/`](ide/) | Tauri + React/Vite (TypeScript) |
+| **GUI client** | [`gui/`](gui/) | Tauri + React/Vite (TypeScript) |
 | **Web** | [`web/`](web/) | Next.js + Tailwind (deployed on Vercel) — try it at [firment-web.vercel.app](https://firment-web.vercel.app) |
 
-The CLI is the source of truth; the IDE client shares the same Rust agent
+The CLI is the source of truth; the GUI client shares the same Rust agent
 kernel through the unified `Tool` trait and session format, while the Web
 surface is a TypeScript reimplementation kept in sync via a committed tool-spec
 snapshot (`web/src/lib/tools/specs.json`).
@@ -219,10 +219,10 @@ crates/
   firment-tools/  File/search/shell tools, dangerous command guard, periph_init/elf_analyze/monitor (Layer 2)
   firment-tui/    ratatui terminal UI (git status bar, model/session pickers)
   firment-cli/    clap entry point (bin: firm) + install/update/completions
-ide/              Tauri IDE client (React/Vite + src-tauri)
+gui/              Tauri GUI client (React/Vite + src-tauri)
 web/              Next.js marketing/docs frontend (Vercel)
 docs/             vendor-index.toml + cheatsheets/*.toml (hardware KB)
-.github/workflows/  CI: Rust (fmt/clippy/test) + web-check + ide-check
+.github/workflows/  CI: Rust (fmt/clippy/test) + web-check + gui-check
 ```
 
 ### 🧪 Development
