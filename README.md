@@ -1,14 +1,14 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.5.0-blue)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.5.1-blue)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![CI](https://img.shields.io/badge/CI-Rust%20%2B%20Web%20%2B%20IDE-green)](.github/workflows/ci.yml)
 
 **English** | [简体中文](README.zh-CN.md)
 
-> ⚠️ **Status: v0.5.0.** Layer 1 (general coding agent) is
+> ⚠️ **Status: v0.5.1.** Layer 1 (general coding agent) is
 > production-usable and CI-green; Layer 2 (embedded toolchain loop) is
 > partially shipped. APIs and the TUI keep evolving.
 
@@ -27,8 +27,10 @@ same conversation.
 | **IDE client** | [`ide/`](ide/) | Tauri + React/Vite (TypeScript) |
 | **Web** | [`web/`](web/) | Next.js + Tailwind (deployed on Vercel) — try it at [firment-web.vercel.app](https://firment-web.vercel.app) |
 
-The CLI is the source of truth; the IDE and Web surfaces talk to the same
-agent kernel through the unified `Tool` trait and session format.
+The CLI is the source of truth; the IDE client shares the same Rust agent
+kernel through the unified `Tool` trait and session format, while the Web
+surface is a TypeScript reimplementation kept in sync via a committed tool-spec
+snapshot (`web/src/lib/tools/specs.json`).
 
 ### ✨ Features — Layer 1 (general coding agent)
 
@@ -73,7 +75,7 @@ agent kernel through the unified `Tool` trait and session format.
 - **`monitor`** — serial monitor with per-line timestamps and baud-rate
   autodetect; cancelling a turn releases the port immediately
 - **`build` / `flash` / `run`** — CMake/Make/Keil build commands, probe-rs
-  flashing (chip auto-detection), all wired into the agent loop
+  flashing (chip from `[tools] default_chip`), all wired into the agent loop
 
 ### 🚀 Quick Start
 

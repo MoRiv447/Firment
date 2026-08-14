@@ -1,14 +1,14 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.5.0-blue)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.5.1-blue)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![CI](https://img.shields.io/badge/CI-Rust%20%2B%20Web%20%2B%20IDE-green)](.github/workflows/ci.yml)
 
 [English](README.md) | **简体中文**
 
-> ⚠️ **状态：v0.5.0。** 第一层（通用编码 Agent）已可日常使用、
+> ⚠️ **状态：v0.5.1。** 第一层（通用编码 Agent）已可日常使用、
 > CI 全绿；第二层（嵌入式工具链闭环）已部分落地。接口与 TUI 仍在演进。
 
 **Firmware + Agent = Firment**——一个面向固件与嵌入式开发的通用编码
@@ -25,8 +25,9 @@ Agent。名字取自 *firmament*（苍穹，每个嵌入式工程师头上的那
 | **IDE 客户端** | [`ide/`](ide/) | Tauri + React/Vite (TypeScript) |
 | **Web** | [`web/`](web/) | Next.js + Tailwind（Vercel 部署）——在线体验：[firment-web.vercel.app](https://firment-web.vercel.app) |
 
-CLI 是事实标准；IDE 与 Web 端通过统一的 `Tool` trait 和会话格式接入
-同一 Agent 内核。
+CLI 是事实标准；IDE 客户端共用同一个 Rust Agent 内核（统一的 `Tool`
+trait 和会话格式），Web 端是 TypeScript 重新实现，通过提交的工具规格
+快照（`web/src/lib/tools/specs.json`）保持同步。
 
 ### ✨ 第一层特性（通用编码 Agent）
 
@@ -62,7 +63,7 @@ CLI 是事实标准；IDE 与 Web 端通过统一的 `Tool` trait 和会话格�
 - **`monitor`** —— 串口监控，逐行时间戳 + 波特率自动检测；取消回合立即
   释放串口
 - **`build` / `flash` / `run`** —— CMake/Make/Keil 构建命令、probe-rs
-  烧录（芯片自动识别），全部接入 Agent 循环
+  烧录（芯片来自 `[tools] default_chip`），全部接入 Agent 循环
 
 ### 🚀 快速开始
 

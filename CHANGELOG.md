@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.5.1 (2026-08-14) — ELF gate completion + correctness fixes
+
+### ELF binary-analysis gate (Layer 2)
+
+- **RAM threshold**: `[tools.elf] ram_threshold_kib` now blocks completion on
+  RAM growth too, not just flash and stack — RAM is usually the tighter
+  resource on MCUs.
+- **New-function stack**: a function newly added to the build counts its whole
+  stack depth as growth, so a new deep-frame function can no longer slip past
+  the stack threshold.
+- **Clone-suffix normalization**: `foo` → `foo.isra.0` / `.constprop.1` /
+  `.part.2` across builds is matched as the same function, so -O2 clone renames
+  don't misreport stack growth.
+- **Fail-closed verdict**: a missing `[GATE:...]` marker now blocks instead of
+  silently downgrading to a soft review.
+
+### Correctness fixes
+
+- Rolling back a failed edit batch no longer inserts a standalone assistant
+  message (which produced `assistant -> assistant -> tool` and 400'd the next
+  provider request); the note is folded into the first tool result.
+- `read_file` no longer emits a phantom empty line-numbered row after a
+  trailing newline.
+- Context summarization is bounded by the stream timeout so a stalled summary
+  cannot hang the turn.
+- `ToolContext` permission default is now deny-all (fail closed) instead of
+  auto-approve; the stream-timeout docs now describe it as an inactivity
+  timeout, not a hard wall-clock cap.
+
+### Docs
+
+- Web surface documented as a TypeScript reimplementation (kept in sync via the
+  tool-spec snapshot) and flash chip documented as coming from `default_chip` —
+  both wording fixes to match reality.
+
 ## v0.5.0 (2026-08-13) — unified versioning + IDE turn-hang fixes
 
 - **Versioning**: CLI/TUI, IDE and Web now share one version (0.5.0); the

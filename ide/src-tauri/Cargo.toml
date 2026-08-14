@@ -1,6 +1,6 @@
 [package]
 name = "firment-ide"
-version = "0.5.0"
+version = "0.5.1"
 description = "Firment IDE - firmware agent desktop client"
 authors = ["Firment"]
 edition = "2021"
