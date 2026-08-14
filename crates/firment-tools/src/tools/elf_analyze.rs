@@ -583,11 +583,10 @@ impl Tool for ElfAnalyze {
         } else {
             None
         };
-        baseline_text = format!(
-            "{}{}",
-            gate_marker(cached_diff.as_ref(), stack_threshold, flash_threshold_kib),
-            baseline_text
-        );
+        let marker = gate_marker(cached_diff.as_ref(), stack_threshold, flash_threshold_kib);
+        if !marker.is_empty() {
+            baseline_text.insert_str(0, &format!("{marker}\n"));
+        }
         if let Some(cache) = baseline_path(ctx, &elf)? {
             if let Some(parent) = cache.parent() {
                 let _ = std::fs::create_dir_all(parent);

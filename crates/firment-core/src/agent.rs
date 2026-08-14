@@ -486,11 +486,14 @@ impl Agent {
 
     /// Inject a gate report as a real tool round (assistant tool_use -> tool
     /// result) replacing the plain assistant message, so the transcript stays
-    /// a valid provider message sequence.
+    /// a valid provider message sequence. The call id is unique per
+    /// injection: the gate can re-inject after a fix cycle, and providers
+    /// expect tool call ids not to repeat within a conversation.
     async fn inject_elf_report(&mut self, content: &str, text: &str) {
         self.session.messages.pop();
+        self.tool_seq += 1;
         let gate_call = ToolCall {
-            id: "elf_gate".to_string(),
+            id: format!("elf_gate_{}", self.tool_seq),
             name: "elf_analyze".to_string(),
             arguments: json!({}),
         };
@@ -923,8 +926,10 @@ impl Agent {
                     && self.verify_command.is_some()
                     && self.registry.get("verify").is_some()
                 {
+                    self.tool_seq += 1;
+                    let seq = self.tool_seq;
                     let gate_call = ToolCall {
-                        id: "verify_gate".to_string(),
+                        id: format!("verify_gate_{seq}"),
                         name: "verify".to_string(),
                         arguments: json!({}),
                     };
@@ -932,8 +937,6 @@ impl Agent {
                         content: content.clone(),
                         tool_calls: vec![gate_call.clone()],
                     });
-                    self.tool_seq += 1;
-                    let seq = self.tool_seq;
                     self.sink
                         .event(AgentEvent::ToolStart {
                             name: "verify".to_string(),
