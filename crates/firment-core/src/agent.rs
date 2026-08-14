@@ -73,10 +73,18 @@ pub enum AgentError {
     NoOutput,
 }
 
-/// Hard upper bound on a single provider stream call. If the network/model
-/// stalls (dead socket, model never finishes thinking, dropped connection
-/// mid-stream) the stream will never return on its own; without this cap
-/// the entire turn hangs and the IDE/TUI never sees TurnEnd.
+/// Inactivity timeout for a single provider stream call: the stream is
+/// considered stalled when no event (text chunk or tool call) arrives for
+/// this long. This catches dead sockets, a model that never finishes
+/// thinking, and connections dropped mid-stream — the stream would never
+/// return on its own, so without this the turn hangs and the IDE/TUI never
+/// sees TurnEnd.
+///
+/// This is a "no-events" timeout, not an absolute wall-clock cap: a stream
+/// that keeps delivering tokens (however slowly) keeps resetting it. That is
+/// deliberate — slow-but-progressing output is legitimate for real LLM
+/// providers, while a genuinely wedged stream emits nothing and is bounded
+/// here.
 const STREAM_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Hard upper bound on a single tool wave. Every tool carries its own

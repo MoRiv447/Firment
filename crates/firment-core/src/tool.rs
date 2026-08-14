@@ -56,12 +56,13 @@ pub struct ToolContext {
 
 impl ToolContext {
     /// Convenience constructor with safe defaults; tests and direct tool runs
-    /// override fields afterwards. Permission defaults to auto-approve so the
-    /// caller decides what to expose.
+    /// override fields afterwards. Permission defaults to deny-all (fail
+    /// closed) so a caller that forgets to set a permission checker cannot
+    /// accidentally auto-approve mutating tools.
     pub fn with_cwd(cwd: PathBuf) -> Self {
         Self {
             cwd,
-            permission: Arc::new(crate::AutoApprove::everything()),
+            permission: Arc::new(crate::AutoApprove::nothing()),
             allow_dangerous: false,
             journal: Arc::new(Mutex::new(EditJournal::new(
                 std::env::temp_dir().join("firment-journal"),
