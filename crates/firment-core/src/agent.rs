@@ -635,7 +635,7 @@ impl Agent {
             })
             .flat_map(|t| t.split_whitespace())
             .filter(|w| w.starts_with("spill") || w.ends_with(".txt"))
-            .map(|w| w.rsplit('/').next().unwrap_or(w).to_string())
+            .map(|w| w.rsplit(['/', '\\']).next().unwrap_or(w).to_string())
             .collect();
         let _ = fs::create_dir_all(&dir);
         if let Ok(read) = fs::read_dir(&dir) {
