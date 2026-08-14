@@ -443,8 +443,24 @@ fn delta(old: u64, new: u64) -> u64 {
     new.abs_diff(old)
 }
 
+/// Strip GCC/Clang clone suffixes (`foo.isra.0`, `foo.constprop.1`,
+/// `foo.part.2`) so a function whose optimization clone index changed between
+/// builds is still matched as the same function in a diff, rather than being
+/// misread as a newly added function (which would count its whole stack depth
+/// as growth).
+fn normalize_clone(name: &str) -> &str {
+    for suffix in [".isra.", ".constprop.", ".part."] {
+        if let Some(idx) = name.find(suffix) {
+            return &name[..idx];
+        }
+    }
+    name
+}
+
 fn by_name(list: &[FunctionInfo]) -> BTreeMap<&str, &FunctionInfo> {
-    list.iter().map(|f| (f.name.as_str(), f)).collect()
+    list.iter()
+        .map(|f| (normalize_clone(f.name.as_str()), f))
+        .collect()
 }
 
 fn updown(old: u64, new: u64) -> &'static str {
@@ -852,6 +868,50 @@ mod tests {
             ram_delta,
             ..ElfDiff::default()
         }
+    }
+
+    #[test]
+    fn normalize_clone_strips_optimization_suffixes() {
+        assert_eq!(normalize_clone("foo.isra.0"), "foo");
+        assert_eq!(normalize_clone("foo.constprop.1"), "foo");
+        assert_eq!(normalize_clone("foo.part.2"), "foo");
+        assert_eq!(normalize_clone("foo"), "foo");
+        assert_eq!(normalize_clone("foo.bar"), "foo.bar");
+    }
+
+    #[test]
+    fn diff_treats_clone_suffix_change_as_same_function() {
+        let old = ElfReport {
+            functions: vec![FunctionInfo {
+                name: "foo".to_string(),
+                size: 16,
+                address: 0,
+                stack: Some(48),
+                stack_dynamic: false,
+            }],
+            ..ElfReport::default()
+        };
+        let new = ElfReport {
+            functions: vec![FunctionInfo {
+                name: "foo.isra.0".to_string(),
+                size: 16,
+                address: 0,
+                stack: Some(48),
+                stack_dynamic: false,
+            }],
+            ..ElfReport::default()
+        };
+        let diff = diff_reports(&old, &new);
+        assert!(
+            diff.stack_deltas.is_empty(),
+            "clone suffix change must not count as a new function's stack growth: {:?}",
+            diff.stack_deltas
+        );
+        assert!(
+            diff.size_deltas.is_empty(),
+            "same function size must not diff: {:?}",
+            diff.size_deltas
+        );
     }
 
     #[test]
