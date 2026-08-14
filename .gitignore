@@ -58,3 +58,6 @@ Desktop.ini
 # 迁移期残留（旧目录构建产物，确认后删除）
 /firment-ide/src-tauri/target
 /firment-ide/src-tauri/target-*
+
+# 宣传文章（不纳入版本库）
+/articles
