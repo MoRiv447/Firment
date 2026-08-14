@@ -70,9 +70,9 @@ impl Tool for ReadFile {
         };
         let start = offset.min(effective_total);
         let end = if limit > 0 {
-            start.saturating_add(limit).min(lines.len())
+            start.saturating_add(limit).min(effective_total)
         } else {
-            lines.len()
+            effective_total
         };
         let truncated = end < effective_total;
         let slice = &lines[start..end];
@@ -190,6 +190,13 @@ mod tests {
         assert!(out.text.contains("1 | one"), "got: {}", out.text);
         assert!(out.text.contains("3 | three"), "got: {}", out.text);
         assert!(!out.text.contains("[truncated]"), "got: {}", out.text);
+        // Regression: a trailing newline must not produce a phantom empty
+        // line-numbered row (the `4 | ` line).
+        assert!(
+            !out.text.contains("4 | "),
+            "trailing empty line should not be emitted: {}",
+            out.text
+        );
     }
 
     #[tokio::test]

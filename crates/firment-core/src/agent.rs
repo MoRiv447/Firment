@@ -1273,7 +1273,14 @@ impl Agent {
         };
         let mut stream = provider.stream(request).await.ok()?;
         let mut text = String::new();
-        while let Some(event) = stream.next().await {
+        // The main provider stream is bounded by `stream_timeout` in run_turn,
+        // but this auxiliary summarization request is not; bound it here so a
+        // blackholed summary cannot hang the whole turn.
+        while let Some(event) = tokio::time::timeout(self.stream_timeout, stream.next())
+            .await
+            .ok()
+            .flatten()
+        {
             if let Ok(ProviderEvent::Text(part)) = event {
                 text.push_str(&part);
             }
@@ -1537,19 +1544,22 @@ async fn execute_tool_calls(
         let any_mutation_failed = ready.iter().enumerate().any(|(k, &i)| {
             is_mutation_tool(&tool_calls[i].name) && matches!(&results[k], Err(e) if !e.denied)
         });
-        if any_mutation_failed {
+        // On a real mutation failure the whole wave is rolled back wholesale.
+        // The rollback must be surfaced to the model, but NOT as a standalone
+        // assistant message: sandwiching an assistant message between the
+        // turn's tool_calls message and its tool results yields an invalid
+        // provider sequence (assistant -> assistant -> tool), which both
+        // OpenAI and Anthropic reject with HTTP 400. Instead the note is
+        // prefixed onto the first tool result below, keeping the transcript a
+        // valid assistant(tool_calls) -> tool(...) -> tool(...) sequence.
+        let mut rollback_note = if any_mutation_failed {
             let summary = rollback_journal(journal);
-            // Surface the rollback in the transcript: the failing wave was
-            // reverted wholesale (including earlier successful mutations in
-            // the same batch), so the model must not believe its edits are
-            // still in place when it plans the next wave.
             let note = format!("edit batch failed; rolled back: {summary}");
             agent.sink.event(AgentEvent::Info(note.clone())).await;
-            agent.session.push(ChatMessage::Assistant {
-                content: note,
-                tool_calls: Vec::new(),
-            });
-        }
+            Some(note)
+        } else {
+            None
+        };
 
         for (k, &i) in ready.iter().enumerate() {
             let call = &tool_calls[i];
@@ -1566,6 +1576,9 @@ async fn execute_tool_calls(
                 }
             }
             let mut content = text.clone();
+            if let Some(note) = rollback_note.take() {
+                content = format!("{note}\n\n{content}");
+            }
             let read_path = if ok && call.name == "read_file" && !content.is_empty() {
                 resolved_tool_path(ctx, call)
             } else {
@@ -2080,6 +2093,116 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, AgentEvent::TurnEnd { .. })),
             "expected TurnEnd after the wave timeout, got: {events:?}"
+        );
+    }
+
+    /// Regression: a failed mutation in a wave must NOT push a standalone
+    /// assistant message — that would yield `assistant -> assistant -> tool`
+    /// and make the next provider request a 400. The rollback note must be
+    /// surfaced inside a tool result instead.
+    #[tokio::test]
+    async fn mutation_failure_keeps_provider_sequence_valid() {
+        struct OkWrite;
+        #[async_trait]
+        impl Tool for OkWrite {
+            fn name(&self) -> &'static str {
+                "write_file"
+            }
+            fn description(&self) -> &'static str {
+                "ok write"
+            }
+            fn input_schema(&self) -> Value {
+                json!({"type": "object", "properties": {}})
+            }
+            async fn run(&self, _args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+                Ok(ToolOutput {
+                    text: "ok".to_string(),
+                })
+            }
+        }
+        struct FailEdit;
+        #[async_trait]
+        impl Tool for FailEdit {
+            fn name(&self) -> &'static str {
+                "edit_file"
+            }
+            fn description(&self) -> &'static str {
+                "failing edit"
+            }
+            fn input_schema(&self) -> Value {
+                json!({"type": "object", "properties": {}})
+            }
+            async fn run(&self, _args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+                Err(ToolError::new("[ConcurrentChange] changed during edit"))
+            }
+        }
+
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(OkWrite));
+        registry.register(Arc::new(FailEdit));
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+        let session = Session::new(dir.path().to_path_buf(), "mock", "mock");
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut agent = Agent::new(
+            None,
+            Arc::new(registry),
+            session,
+            store,
+            Arc::new(AutoApprove::everything()),
+            Arc::new(CollectingSink(events.clone())),
+            4,
+        );
+        let journal = Arc::new(Mutex::new(EditJournal::new(dir.path().join("undo"))));
+        let ctx = ToolContext::with_cwd(dir.path().to_path_buf());
+
+        let calls = vec![
+            ToolCall {
+                id: "a".to_string(),
+                name: "write_file".to_string(),
+                arguments: json!({"path": "x.txt"}),
+            },
+            ToolCall {
+                id: "b".to_string(),
+                name: "edit_file".to_string(),
+                arguments: json!({"path": "y.txt"}),
+            },
+        ];
+        // Simulate what run_turn does before executing the wave.
+        agent.session.push(ChatMessage::Assistant {
+            content: "let me edit".to_string(),
+            tool_calls: calls.clone(),
+        });
+        let stats = execute_tool_calls(&mut agent, &calls, &ctx, &journal).await;
+        assert_eq!(
+            stats.mutations, 1,
+            "one mutation succeeded before the rollback"
+        );
+
+        // The transcript must remain a valid provider sequence: no assistant
+        // message may be immediately followed by another assistant message.
+        for w in agent.session.messages.windows(2) {
+            assert!(
+                !(matches!(w[0], ChatMessage::Assistant { .. })
+                    && matches!(w[1], ChatMessage::Assistant { .. })),
+                "consecutive assistant messages break the provider sequence: {:?}",
+                agent.session.messages
+            );
+        }
+        // The rollback note must be surfaced inside a tool result, not lost.
+        let tool_contents: Vec<String> = agent
+            .session
+            .messages
+            .iter()
+            .filter_map(|m| match m {
+                ChatMessage::Tool { content, .. } => Some(content.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            tool_contents.iter().any(|c| c.contains("rolled back")),
+            "rollback note should be present in a tool result, got: {tool_contents:?}"
         );
     }
 }
