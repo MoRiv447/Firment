@@ -9,7 +9,7 @@
 **English** | [简体中文](README.zh-CN.md)
 
 <p align="center">
-  <img src="docs/screenshots/tui.png" alt="Firment TUI: ask_user dialog + tool call stack + status bar with git branch, thinking level and Esc×2 interrupt hint" width="900">
+  <img src="docs/screenshots/cli.png" alt="Firment TUI: ask_user dialog + tool call stack + status bar with git branch, thinking level and Esc×2 interrupt hint" width="900">
 </p>
 
 > ⚠️ **Status: v0.5.1.** Layer 1 (general coding agent) is

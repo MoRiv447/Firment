@@ -9,7 +9,7 @@
 [English](README.md) | **简体中文**
 
 <p align="center">
-  <img src="docs/screenshots/tui.png" alt="Firment TUI：ask_user 弹窗 + 工具调用栈 + 底部状态栏（git 分支 / 思考级别 / Esc×2 中断提示）" width="900">
+  <img src="docs/screenshots/cli.png" alt="Firment TUI：ask_user 弹窗 + 工具调用栈 + 底部状态栏（git 分支 / 思考级别 / Esc×2 中断提示）" width="900">
 </p>
 
 > ⚠️ **状态：v0.5.1。** 第一层（通用编码 Agent）已可日常使用、
