@@ -8,6 +8,10 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
+<p align="center">
+  <img src="docs/screenshots/tui.png" alt="Firment TUI: ask_user dialog + tool call stack + status bar with git branch, thinking level and Esc×2 interrupt hint" width="900">
+</p>
+
 > ⚠️ **Status: v0.5.1.** Layer 1 (general coding agent) is
 > production-usable and CI-green; Layer 2 (embedded toolchain loop) is
 > partially shipped. APIs and the TUI keep evolving.
@@ -76,6 +80,13 @@ snapshot (`web/src/lib/tools/specs.json`).
   autodetect; cancelling a turn releases the port immediately
 - **`build` / `flash` / `run`** — CMake/Make/Keil build commands, probe-rs
   flashing (chip from `[tools] default_chip`), all wired into the agent loop
+
+### 🪟 Three surfaces, one kernel
+
+| Surface | Screenshot |
+|---|---|
+| **IDE** — Tauri + React; tool cards stream live with success/failure, status pill tracks `idle Ns` / `tool Nm Ns`; the agent kernel lives in the same Rust binary as the CLI | <img src="docs/screenshots/ide.png" alt="Firment IDE: tool cards (list_dir ✓, read_file ✕, todo ✓) with the running periph_init… tool 16s counter" width="900"> |
+| **Web** — Next.js on Vercel (`firment-web.vercel.app`); the same agent kernel reachable from any browser, with the same `Tool` trait and tool-spec snapshot | <img src="docs/screenshots/web.png" alt="Firment Web: ask 'Search for GPIO configuration patterns' — agent invokes grep/glob/list_dir/read_file and answers that the workspace is Next.js, not firmware" width="900"> |
 
 ### 🚀 Quick Start
 

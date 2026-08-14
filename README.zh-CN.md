@@ -8,6 +8,10 @@
 
 [English](README.md) | **简体中文**
 
+<p align="center">
+  <img src="docs/screenshots/tui.png" alt="Firment TUI：ask_user 弹窗 + 工具调用栈 + 底部状态栏（git 分支 / 思考级别 / Esc×2 中断提示）" width="900">
+</p>
+
 > ⚠️ **状态：v0.5.1。** 第一层（通用编码 Agent）已可日常使用、
 > CI 全绿；第二层（嵌入式工具链闭环）已部分落地。接口与 TUI 仍在演进。
 
@@ -64,6 +68,13 @@ trait 和会话格式），Web 端是 TypeScript 重新实现，通过提交的�
   释放串口
 - **`build` / `flash` / `run`** —— CMake/Make/Keil 构建命令、probe-rs
   烧录（芯片来自 `[tools] default_chip`），全部接入 Agent 循环
+
+### 🪟 三端入口，同一个内核
+
+| 端 | 截图 |
+|---|---|
+| **IDE** —— Tauri + React；工具卡片实时流式（成功/失败红绿），状态徽章显示 `idle Ns` / `tool Nm Ns`；Agent 内核和 CLI 共用同一份 Rust 字节码 | <img src="docs/screenshots/ide.png" alt="Firment IDE：工具卡片（list_dir ✓、read_file ✕、todo ✓）与 running periph_init… tool 16s 状态条" width="900"> |
+| **Web** —— Next.js，部署在 Vercel（`firment-web.vercel.app`）；同一套 Agent 内核 + `Tool` trait + tool-spec 快照，浏览器即可用 | <img src="docs/screenshots/web.png" alt="Firment Web：问「Search for GPIO configuration patterns」—— Agent 调起 grep/glob/list_dir/read_file 后诚实告知当前是 Next.js 工程没有固件代码" width="900"> |
 
 ### 🚀 快速开始
 
