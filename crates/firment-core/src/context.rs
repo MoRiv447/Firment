@@ -168,20 +168,22 @@ pub fn default_system_prompt(cwd: &Path) -> String {
         prompt.push_str(&instructions);
     }
     prompt.push_str(
-        "\n         - Build/flash/serial settings can live in `.firment.toml` (or firment.toml) \
-         at the project root under [tools]: build_command / default_chip / verify_command / \
-         monitor_port / monitor_baud. Global defaults (default_chip, monitor_baud, ...) come \
-         from the user config, so build / flash / monitor work out of the box; only read or \
-         create a project config if a tool reports something missing. Use /config to inspect \
-         global configuration.\n",
+        "\n         - Build/flash/serial settings are already configured globally (default_chip, \
+         monitor_baud, build_command, ...); do NOT proactively read or create a project \
+         `.firment.toml` / `firment.toml`. Only touch a project config when a tool error \
+         explicitly mentions a missing setting. Use /config to inspect global configuration.\n",
     );
     let kb_dir = crate::kb::seed_kb_dir();
     prompt.push_str(&format!(
         "\n\n# Hardware knowledge base\n\
-         A built-in hardware knowledge base ships with Firment. Before answering questions \
-         about chips, peripherals, registers, HAL, or hardware configuration, read the index \
-         first with read_file ({}), pick the matching cheatsheet (e.g. \
-         cheatsheets/stm32f1-uart.toml), read it with read_file, and cite the source file.",
+         A built-in hardware knowledge base ships with Firment. When a task involves MCU \
+         chip/peripheral configuration (UART/USART/LPUART, DMA, TIM, ADC, GPIO, clock tree, \
+         HAL), your FIRST step is read_file ({}), then read the family-matching cheatsheet \
+         (e.g. cheatsheets/stm32g4-uart.toml) and follow it — do not invent register, pin or \
+         clock settings from memory, and do not jump to web_search. Use web_search/web_fetch \
+         only when the KB does not cover what you need (e.g. a USB device stack or a \
+         third-party library). Note: 'ST-Link VCP' / virtual COM ports are UART bridges on \
+         the debug probe — the MCU uses its ordinary UART pins, not USB CDC.",
         kb_dir.join("vendor-index.toml").display()
     ));
     if let Some(hint) = load_vendor_index_hint(cwd) {
