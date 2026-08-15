@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.5.4 (2026-08-15) — auto-reset after flash + GUI header badge
+
+- **flash** resets the target after flashing by default (`reset` param, default
+  true), so the firmware starts running without pressing the board's reset
+  button. Implemented as `probe-rs reset --chip <chip>` after a successful
+  `probe-rs download`; pass `reset: false` to leave the target halted.
+- System prompt's embedded-workflow step 4 now tells the agent the flash tool
+  resets the target by default.
+
+### GUI
+
+- The header session badge shows the model name only (the provider/model
+  "agnes/agnes-2.5-flash" label was truncated in its small white box).
+
 ## v0.5.3 (2026-08-15) — edit reliability + build auto-detection + prompt hardening
 
 ### Correctness

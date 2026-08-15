@@ -24,26 +24,31 @@ pub fn flash_command(chip: &str, file: &str, probe: Option<&str>) -> String {
     cmd
 }
 
-/// Executes `probe-rs download` directly with an argument array (no shell).
+/// Build the probe-rs reset command line (exposed for tests). Arguments are
+/// shell-quoted so hostile values cannot break out of the command line.
+pub fn reset_command(chip: &str, probe: Option<&str>) -> String {
+    let mut cmd = format!("probe-rs reset --chip {}", shell_quote(chip));
+    if let Some(probe) = probe {
+        cmd.push_str(&format!(" --probe {}", shell_quote(probe)));
+    }
+    cmd
+}
+
+/// Executes a `probe-rs` subcommand directly with an explicit argument array
+/// (no shell).
 ///
 /// Running through `cmd /C <string>` is NOT used here: cmd.exe keeps the
 /// quotes inside quoted arguments when the whole command is passed as one
 /// string (e.g. `--chip "STM32G431RB"` arrives at probe-rs as `"STM32G431RB"`
 /// including the quotes), which makes chip lookup fail with "chip not found".
 /// Spawning with explicit args avoids quoting entirely and is equally safe.
-async fn run_probe_rs_download(
-    chip: &str,
-    file: &Path,
-    probe: Option<&str>,
+async fn run_probe_rs(
+    args: Vec<String>,
     cwd: &Path,
     timeout_ms: u64,
 ) -> Result<(String, Option<i32>), String> {
     let mut cmd = Command::new("probe-rs");
-    cmd.arg("download").arg("--chip").arg(chip);
-    if let Some(probe) = probe {
-        cmd.arg("--probe").arg(probe);
-    }
-    cmd.arg(file)
+    cmd.args(&args)
         .current_dir(cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -75,7 +80,7 @@ async fn run_probe_rs_download(
         _ = tokio::time::sleep(Duration::from_millis(timeout_ms)) => {
             let _ = child.kill().await;
             return Err(format!(
-                "[Timeout] probe-rs download timed out after {timeout_ms} ms and was killed"
+                "[Timeout] probe-rs timed out after {timeout_ms} ms and was killed"
             ));
         }
     };
@@ -94,7 +99,7 @@ impl Tool for Flash {
     }
 
     fn description(&self) -> &'static str {
-        "Flash a firmware ELF to the target via probe-rs (ST-Link / J-Link / CMSIS-DAP / DFU). Requires `probe-rs` on PATH and a chip id (e.g. stm32f407vetx)."
+        "Flash a firmware ELF to the target via probe-rs (ST-Link / J-Link / CMSIS-DAP / DFU). Requires `probe-rs` on PATH and a chip id (e.g. stm32f407vetx). Resets the target (restarts the firmware) after flashing by default."
     }
 
     fn input_schema(&self) -> Value {
@@ -104,6 +109,7 @@ impl Tool for Flash {
                 "file": {"type": "string", "description": "Path to the firmware ELF (must be inside the workspace)"},
                 "chip": {"type": "string", "description": "probe-rs chip id, e.g. stm32f407vetx"},
                 "probe": {"type": "string", "description": "Optional probe serial/id when multiple probes are attached"},
+                "reset": {"type": "boolean", "default": true, "description": "Reset the target so the flashed firmware starts running (default true)"},
                 "timeout_ms": {"type": "integer", "minimum": 1, "default": 180000}
             },
             "required": ["file"]
@@ -147,6 +153,10 @@ impl Tool for Flash {
             .get("timeout_ms")
             .and_then(|t| t.as_u64())
             .unwrap_or(180_000);
+        let reset = args
+            .get("reset")
+            .and_then(|r| r.as_bool())
+            .unwrap_or(true);
 
         let probe_rs_ok = std::process::Command::new("probe-rs")
             .arg("--version")
@@ -161,12 +171,46 @@ impl Tool for Flash {
         }
 
         let command = flash_command(&chip, &resolved.to_string_lossy(), probe.as_deref());
-        let result =
-            run_probe_rs_download(&chip, &resolved, probe.as_deref(), &ctx.cwd, timeout_ms).await;
+
+        let mut dl_args = vec!["download".to_string(), "--chip".to_string(), chip.clone()];
+        if let Some(probe) = probe.as_ref() {
+            dl_args.push("--probe".to_string());
+            dl_args.push(probe.clone());
+        }
+        dl_args.push(resolved.to_string_lossy().to_string());
+
+        let result = run_probe_rs(dl_args, &ctx.cwd, timeout_ms).await;
         match result {
-            Ok((text, Some(0))) => Ok(ToolOutput {
+            Ok((text, Some(0))) if !reset => Ok(ToolOutput {
                 text: format!("flash passed (exit 0)\n{text}"),
             }),
+            Ok((text, Some(0))) => {
+                let reset_cmd = reset_command(&chip, probe.as_deref());
+                let mut reset_args = vec!["reset".to_string(), "--chip".to_string(), chip];
+                if let Some(probe) = probe {
+                    reset_args.push("--probe".to_string());
+                    reset_args.push(probe);
+                }
+                match run_probe_rs(reset_args, &ctx.cwd, timeout_ms).await {
+                    Ok((rtext, Some(0))) => Ok(ToolOutput {
+                        text: format!(
+                            "flash passed and target reset (exit 0)\n{text}\nreset: {rtext}"
+                        ),
+                    }),
+                    Ok((rtext, Some(code))) => Err(ToolError::new(format!(
+                        "[Io] reset after flash failed (exit {code})\ncommand: {reset_cmd}\n{rtext}"
+                    ))),
+                    Ok((rtext, None)) => Err(ToolError::new(format!(
+                        "[Timeout] reset after flash timed out\n{rtext}"
+                    ))),
+                    Err(e) if e.contains("spawn failed") => Err(ToolError::new(format!(
+                        "[NotFound] probe-rs is not installed or not on PATH: install it with \
+                         `cargo install probe-rs-tools` or download from the probe-rs GitHub \
+                         Releases ({e})"
+                    ))),
+                    Err(e) => Err(ToolError::new(format!("[Io] {e}"))),
+                }
+            }
             Ok((text, Some(code))) => Err(ToolError::new(format!(
                 "[Io] flash failed (exit {code})\ncommand: {command}\n{text}"
             ))),
@@ -232,6 +276,19 @@ mod tests {
             cmd.contains(&shell_quote("p`p")),
             "probe must stay a single token: {cmd}"
         );
+    }
+
+    #[test]
+    fn reset_command_builds_probe_rs_line() {
+        let cmd = reset_command("stm32f407vetx", Some("PROBE123"));
+        assert!(cmd.contains("probe-rs reset --chip"));
+        assert!(cmd.contains("stm32f407vetx"));
+        assert!(cmd.contains("PROBE123"));
+        assert!(cmd.contains(&shell_quote("stm32f407vetx")));
+        assert!(cmd.contains(&shell_quote("PROBE123")));
+        let plain = reset_command("stm32f407vetx", None);
+        assert!(plain.contains("probe-rs reset --chip"));
+        assert!(!plain.contains("--probe"));
     }
 
     #[tokio::test]

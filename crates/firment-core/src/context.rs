@@ -68,7 +68,8 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          the code, then rebuild.\n\
          4. Flash: call the flash tool — the chip id comes from project config or the global \
          default_chip; if missing, infer it from the startup file (e.g. \
-         startup_stm32g431xx.s) or list `probe-rs chip list`.\n\
+         startup_stm32g431xx.s) or list `probe-rs chip list`. The tool resets the \
+         target afterwards by default, so the flashed firmware starts running on its own.\n\
          5. Verify: open the serial monitor (pick the port from the enumeration when not \
          configured) and check the output matches the expected behavior; then run elf_analyze \
          on the ELF for flash/RAM/stack regression checks.\n\
