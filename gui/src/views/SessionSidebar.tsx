@@ -22,7 +22,7 @@ export function SessionSidebar({
   onDelete: (id: string) => void;
 }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: 8, gap: 10 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: 4, gap: 6 }}>
       <Space.Compact style={{ width: '100%' }}>
         <Tooltip title="New agent session (uses cwd below)">
           <Button

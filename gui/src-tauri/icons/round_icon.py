@@ -40,12 +40,15 @@ def rounded_alpha_mask(size: int, radius: float) -> Image.Image:
 
 
 def apply_rounded_alpha(img: Image.Image) -> Image.Image:
-    a = img.split()[-1]
-    rounded = rounded_alpha_mask(img.size[0], RADIUS)
-    inside = a.copy()
-    inside.paste(0, mask=Image.eval(rounded, lambda v: 255 - v))
-    final_alpha = Image.composite(inside, a, rounded)
-    img.putalpha(final_alpha)
+    """Replace the alpha channel with a rounded-square mask.
+
+    The source icon.png is opaque (white background, black logo), so the
+    original alpha is 255 everywhere — we just want corners to go
+    transparent. Replacing the alpha wholesale with the rounded mask is
+    simpler and correct in this case.
+    """
+    mask = rounded_alpha_mask(img.size[0], RADIUS)
+    img.putalpha(mask)
     return img
 
 
