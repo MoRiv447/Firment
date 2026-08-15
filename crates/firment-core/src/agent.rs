@@ -1351,13 +1351,18 @@ fn is_mutation_tool(name: &str) -> bool {
 
 /// Errors that mean "this call itself was rejected before touching the file":
 /// the model mis-specified the anchor ([InvalidInput], e.g. `old_text`
-/// matched 0 or several times, a no-change edit) or the file is missing
-/// ([NotFound]). They must not roll the whole batch back — a previously
-/// succeeded mutation in the same wave is still valid and the model can retry
-/// with corrected arguments. State failures ([ConcurrentChange], [Io]) still
-/// roll back because the workspace may hold edits based on stale content.
+/// matched 0 or several times, a no-change edit), the file is missing
+/// ([NotFound]), or the call was hard-rejected before touching anything
+/// ([Permission] — the path sandbox, not a user denial, which already carries
+/// `denied=true` and is excluded above). They must not roll the whole batch
+/// back — a previously succeeded mutation in the same wave is still valid and
+/// the model can retry with corrected arguments. State failures
+/// ([ConcurrentChange], [Io]) still roll back because the workspace may hold
+/// edits based on stale content.
 fn is_benign_mutation_error(message: &str) -> bool {
-    message.starts_with("[InvalidInput]") || message.starts_with("[NotFound]")
+    message.starts_with("[InvalidInput]")
+        || message.starts_with("[NotFound]")
+        || message.starts_with("[Permission]")
 }
 
 fn is_broad_tool(name: &str) -> bool {
@@ -2342,6 +2347,112 @@ mod tests {
                 .iter()
                 .any(|c| c.contains("old_text matched 0 times")),
             "the [InvalidInput] error must be visible, got: {tool_contents:?}"
+        );
+    }
+
+    /// A mutation hard-rejected by the path sandbox ([Permission], with
+    /// denied=false — this is not a user denial) must not roll the batch back
+    /// either: the call never touched the file. This is the wave that kept
+    /// reverting main.c in real sessions: the model edited a workspace file
+    /// and tried to write a build script outside the workspace in the same
+    /// wave, and the sandbox rejection rolled back the good edit.
+    #[tokio::test]
+    async fn permission_mutation_failure_does_not_roll_back_the_batch() {
+        struct OkEdit;
+        #[async_trait]
+        impl Tool for OkEdit {
+            fn name(&self) -> &'static str {
+                "edit_file"
+            }
+            fn description(&self) -> &'static str {
+                "ok edit"
+            }
+            fn input_schema(&self) -> Value {
+                json!({"type": "object", "properties": {}})
+            }
+            async fn run(&self, _args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+                Ok(ToolOutput {
+                    text: "Edited main.c".to_string(),
+                })
+            }
+        }
+        struct SandboxBlockedWrite;
+        #[async_trait]
+        impl Tool for SandboxBlockedWrite {
+            fn name(&self) -> &'static str {
+                "write_file"
+            }
+            fn description(&self) -> &'static str {
+                "blocked write"
+            }
+            fn input_schema(&self) -> Value {
+                json!({"type": "object", "properties": {}})
+            }
+            async fn run(&self, _args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+                // Path-sandbox rejection: [Permission] tag but denied=false.
+                Err(ToolError::new(
+                    "[Permission] path is outside the workspace: C:\\build_fw.ps1",
+                ))
+            }
+        }
+
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(OkEdit));
+        registry.register(Arc::new(SandboxBlockedWrite));
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+        let session = Session::new(dir.path().to_path_buf(), "mock", "mock");
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut agent = Agent::new(
+            None,
+            Arc::new(registry),
+            session,
+            store,
+            Arc::new(AutoApprove::everything()),
+            Arc::new(CollectingSink(events.clone())),
+            4,
+        );
+        let journal = Arc::new(Mutex::new(EditJournal::new(dir.path().join("undo"))));
+        let ctx = ToolContext::with_cwd(dir.path().to_path_buf());
+
+        let calls = vec![
+            ToolCall {
+                id: "a".to_string(),
+                name: "edit_file".to_string(),
+                arguments: json!({"path": "main.c"}),
+            },
+            ToolCall {
+                id: "b".to_string(),
+                name: "write_file".to_string(),
+                arguments: json!({"path": "C:\\build_fw.ps1"}),
+            },
+        ];
+        agent.session.push(ChatMessage::Assistant {
+            content: "edit and write".to_string(),
+            tool_calls: calls.clone(),
+        });
+        let stats = execute_tool_calls(&mut agent, &calls, &ctx, &journal).await;
+        assert_eq!(stats.mutations, 1, "the good edit must still count");
+        let tool_contents: Vec<String> = agent
+            .session
+            .messages
+            .iter()
+            .filter_map(|m| match m {
+                ChatMessage::Tool { content, .. } => Some(content.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !tool_contents.iter().any(|c| c.contains("rolled back")),
+            "a sandbox [Permission] rejection must not roll back the batch, got: {tool_contents:?}"
+        );
+        // The blocked write's own error is still surfaced.
+        assert!(
+            tool_contents
+                .iter()
+                .any(|c| c.contains("outside the workspace")),
+            "the [Permission] error must be visible, got: {tool_contents:?}"
         );
     }
 }
