@@ -103,6 +103,14 @@ def main() -> None:
     DST_ICO.write_bytes(build_multi_frame_ico(ico_frames))
     print(f"wrote {DST_ICO}  ({DST_ICO.stat().st_size} B)  sizes={[im.size for im in ico_frames]}")
 
+    # The tauri bundle icon list also includes 32x32.png / 128x128.png /
+    # 128x128@2x.png — these are embedded in the exe resources / shortcuts,
+    # so they must be rounded too or the shortcut icon stays square.
+    for name, size in [("32x32.png", 32), ("128x128.png", 128), ("128x128@2x.png", 256)]:
+        out = apply_rounded_alpha(img.resize((size, size), Image.LANCZOS))
+        out.save(ICON_DIR / name, format="PNG", optimize=True)
+        print(f"wrote {ICON_DIR / name}  ({(ICON_DIR / name).stat().st_size} B)")
+
 
 if __name__ == "__main__":
     main()

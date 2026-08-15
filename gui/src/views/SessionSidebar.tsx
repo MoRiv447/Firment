@@ -1,6 +1,7 @@
 import { Button, Input, List, Popconfirm, Space, Tag, Tooltip, Typography } from 'antd';
 import { DeleteOutlined, SafetyCertificateOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import type { SessionSummaryDto } from '../types';
+import pkg from '../../package.json';
 
 const { Text } = Typography;
 
@@ -129,6 +130,20 @@ export function SessionSidebar({
           </List.Item>
         )}
       />
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginTop: 'auto',
+          paddingTop: 6,
+          borderTop: '2px solid #000000',
+          color: '#9aa3b2',
+        }}
+      >
+        <Text style={{ fontSize: 10, letterSpacing: 1.2 }}>FIRMENT GUI</Text>
+        <Text style={{ fontSize: 10, fontFamily: 'Consolas, monospace' }}>v{pkg.version}</Text>
+      </div>
     </div>
   );
 }
