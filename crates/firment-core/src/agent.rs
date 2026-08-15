@@ -1142,15 +1142,46 @@ impl Agent {
             }
         }
 
-        let summary = rollback_journal(&journal);
+        // Max iterations reached. Whether to keep or roll back the turn's
+        // edits depends on WHY we got here:
+        // - If a verify gate is configured and never passed
+        //   (`mutations_since_verify > 0`), the workspace holds code that
+        //   failed its checks — roll back rather than leave broken code.
+        // - Otherwise every edit succeeded and the workspace is consistent;
+        //   the task simply did not converge within the budget. Keep the
+        //   edits (committed as an undo entry) so the user can /continue or
+        //   /undo instead of silently losing useful work.
+        let unverified = self.verify_command.is_some() && mutations_since_verify > 0;
+        let outcome = if unverified {
+            let summary = rollback_journal(&journal);
+            format!("rolled back this turn's edits (verify never passed): {summary}")
+        } else {
+            match lock_journal(&journal).commit() {
+                Ok(changes) if !changes.is_empty() => {
+                    if let Err(e) =
+                        Ledger::new(self.store.ledger_path(&self.session.id)).append(&changes)
+                    {
+                        format!(
+                            "kept edits to {} file(s), but failed to append the change ledger: {e}",
+                            changes.len()
+                        )
+                    } else {
+                        format!(
+                            "kept edits to {} file(s); use /continue to keep working or /undo to revert",
+                            changes.len()
+                        )
+                    }
+                }
+                Ok(_) => "no file changes were recorded this turn".to_string(),
+                Err(e) => format!("failed to finalize the edit journal: {e}"),
+            }
+        };
         self.sink
             .event(AgentEvent::Info(format!(
-                "reached max iterations; rolled back this turn's edits: {summary}"
+                "reached max iterations ({max}); {outcome}",
+                max = self.max_iterations
             )))
             .await;
-        // Persist the rollback so a crash right after this error does not
-        // leave disk state containing tool results whose file edits were
-        // already undone (transcript/disk would otherwise disagree).
         let _ = self.store.save(&self.session);
         Err(AgentError::MaxIterations(self.max_iterations))
     }

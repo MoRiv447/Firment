@@ -1,4 +1,4 @@
-﻿use async_trait::async_trait;
+use async_trait::async_trait;
 use firment_core::{
     Agent, AgentError, AgentEvent, AutoApprove, ChatMessage, ChatRequest, ElfConfig, EventSink,
     PlanModePermission, Provider, ProviderError, ProviderEvent, ProviderStream, Session,
@@ -1917,7 +1917,7 @@ async fn mutation_batch_rolls_back_when_a_later_edit_fails() {
 }
 
 #[tokio::test]
-async fn max_iterations_rolls_back_writes() {
+async fn max_iterations_keeps_writes() {
     let call = vec![
         ProviderEvent::ToolCall(firment_core::ToolCall {
             id: "call_1".to_string(),
@@ -1945,7 +1945,10 @@ async fn max_iterations_rolls_back_writes() {
 
     let err = agent.run_turn("loop write").await.unwrap_err();
     assert!(matches!(err, AgentError::MaxIterations(2)));
-    assert!(!dir.path().join("b.txt").exists());
+    // The workspace is consistent and the edits are useful work: max
+    // iterations must KEEP the writes (committed as an undo entry), not
+    // silently roll them back.
+    assert!(dir.path().join("b.txt").exists());
 }
 
 #[tokio::test]
