@@ -1349,6 +1349,17 @@ fn is_mutation_tool(name: &str) -> bool {
     matches!(name, "write_file" | "edit_file")
 }
 
+/// Errors that mean "this call itself was rejected before touching the file":
+/// the model mis-specified the anchor ([InvalidInput], e.g. `old_text`
+/// matched 0 or several times, a no-change edit) or the file is missing
+/// ([NotFound]). They must not roll the whole batch back — a previously
+/// succeeded mutation in the same wave is still valid and the model can retry
+/// with corrected arguments. State failures ([ConcurrentChange], [Io]) still
+/// roll back because the workspace may hold edits based on stale content.
+fn is_benign_mutation_error(message: &str) -> bool {
+    message.starts_with("[InvalidInput]") || message.starts_with("[NotFound]")
+}
+
 fn is_broad_tool(name: &str) -> bool {
     matches!(name, "shell" | "verify" | "grep" | "glob" | "list_dir")
 }
@@ -1555,9 +1566,19 @@ async fn execute_tool_calls(
         }
 
         // A denied mutation call (user said no) executes nothing and must not
-        // roll the batch back. Only real execution failures do.
+        // roll the batch back. Only real execution failures do — and only
+        // *state* failures at that: [InvalidInput] (e.g. an anchor that does
+        // not match, a no-change edit) and [NotFound] mean the call itself was
+        // rejected before touching the file, so the rest of the wave (and any
+        // earlier successful edits this turn) stays valid and the model can
+        // retry with corrected arguments. Rolling back on those would silently
+        // undo good work on every model mis-specification.
         let any_mutation_failed = ready.iter().enumerate().any(|(k, &i)| {
-            is_mutation_tool(&tool_calls[i].name) && matches!(&results[k], Err(e) if !e.denied)
+            is_mutation_tool(&tool_calls[i].name)
+                && matches!(
+                    &results[k],
+                    Err(e) if !e.denied && !is_benign_mutation_error(&e.message)
+                )
         });
         // On a real mutation failure the whole wave is rolled back wholesale.
         // The rollback must be surfaced to the model, but NOT as a standalone
@@ -2218,6 +2239,109 @@ mod tests {
         assert!(
             tool_contents.iter().any(|c| c.contains("rolled back")),
             "rollback note should be present in a tool result, got: {tool_contents:?}"
+        );
+    }
+
+    /// A mutation that fails with [InvalidInput] (anchor mismatch, no-change
+    /// edit) did not touch the file: the rest of the wave must NOT be rolled
+    /// back, and the successful mutation must still be counted/committed.
+    #[tokio::test]
+    async fn invalid_input_mutation_failure_does_not_roll_back_the_batch() {
+        struct OkWrite;
+        #[async_trait]
+        impl Tool for OkWrite {
+            fn name(&self) -> &'static str {
+                "write_file"
+            }
+            fn description(&self) -> &'static str {
+                "ok write"
+            }
+            fn input_schema(&self) -> Value {
+                json!({"type": "object", "properties": {}})
+            }
+            async fn run(&self, _args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+                Ok(ToolOutput {
+                    text: "ok".to_string(),
+                })
+            }
+        }
+        struct BadAnchorEdit;
+        #[async_trait]
+        impl Tool for BadAnchorEdit {
+            fn name(&self) -> &'static str {
+                "edit_file"
+            }
+            fn description(&self) -> &'static str {
+                "failing edit"
+            }
+            fn input_schema(&self) -> Value {
+                json!({"type": "object", "properties": {}})
+            }
+            async fn run(&self, _args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+                Err(ToolError::new(
+                    "[InvalidInput] old_text matched 0 times in main.c; expected exactly 1",
+                ))
+            }
+        }
+
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(OkWrite));
+        registry.register(Arc::new(BadAnchorEdit));
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+        let session = Session::new(dir.path().to_path_buf(), "mock", "mock");
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut agent = Agent::new(
+            None,
+            Arc::new(registry),
+            session,
+            store,
+            Arc::new(AutoApprove::everything()),
+            Arc::new(CollectingSink(events.clone())),
+            4,
+        );
+        let journal = Arc::new(Mutex::new(EditJournal::new(dir.path().join("undo"))));
+        let ctx = ToolContext::with_cwd(dir.path().to_path_buf());
+
+        let calls = vec![
+            ToolCall {
+                id: "a".to_string(),
+                name: "write_file".to_string(),
+                arguments: json!({"path": "x.txt"}),
+            },
+            ToolCall {
+                id: "b".to_string(),
+                name: "edit_file".to_string(),
+                arguments: json!({"path": "y.txt"}),
+            },
+        ];
+        agent.session.push(ChatMessage::Assistant {
+            content: "let me edit".to_string(),
+            tool_calls: calls.clone(),
+        });
+        let stats = execute_tool_calls(&mut agent, &calls, &ctx, &journal).await;
+        // The successful write is still counted; nothing was rolled back.
+        assert_eq!(stats.mutations, 1);
+        let tool_contents: Vec<String> = agent
+            .session
+            .messages
+            .iter()
+            .filter_map(|m| match m {
+                ChatMessage::Tool { content, .. } => Some(content.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !tool_contents.iter().any(|c| c.contains("rolled back")),
+            "an [InvalidInput] failure must not roll back the batch, got: {tool_contents:?}"
+        );
+        // The failing edit's own error is still surfaced.
+        assert!(
+            tool_contents
+                .iter()
+                .any(|c| c.contains("old_text matched 0 times")),
+            "the [InvalidInput] error must be visible, got: {tool_contents:?}"
         );
     }
 }

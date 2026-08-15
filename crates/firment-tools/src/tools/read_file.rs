@@ -79,7 +79,13 @@ impl Tool for ReadFile {
         let body = if hashlines {
             slice
                 .iter()
-                .map(|line| format!("[{}] {}", crate::tools::util::line_hash_prefix(line), line))
+                .map(|line| {
+                    // CubeMX/Keil files are CRLF; strip the CR so displayed
+                    // lines and hashline anchors match what edit_file compares
+                    // against (LF-normalized).
+                    let line = line.trim_end_matches('\r');
+                    format!("[{}] {}", crate::tools::util::line_hash_prefix(line), line)
+                })
                 .collect::<Vec<_>>()
                 .join("\n")
         } else {
@@ -88,7 +94,10 @@ impl Tool for ReadFile {
             slice
                 .iter()
                 .enumerate()
-                .map(|(i, line)| format!("{:>6} | {}", start + i + 1, line))
+                .map(|(i, line)| {
+                    let line = line.trim_end_matches('\r');
+                    format!("{:>6} | {}", start + i + 1, line)
+                })
                 .collect::<Vec<_>>()
                 .join("\n")
         };
@@ -195,6 +204,35 @@ mod tests {
         assert!(
             !out.text.contains("4 | "),
             "trailing empty line should not be emitted: {}",
+            out.text
+        );
+    }
+
+    #[tokio::test]
+    async fn crlf_lines_are_stripped_in_output() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), "one\r\ntwo\r\n").unwrap();
+        let out = ReadFile
+            .run(json!({"path": "a.txt"}), &ctx(dir.path()))
+            .await
+            .unwrap();
+        assert!(out.text.contains("1 | one"), "got: {}", out.text);
+        assert!(
+            !out.text.contains('\r'),
+            "line-numbered output must not carry CR: {:?}",
+            out.text
+        );
+        let out = ReadFile
+            .run(
+                json!({"path": "a.txt", "hashlines": true}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(out.text.contains("] one"), "got: {}", out.text);
+        assert!(
+            !out.text.contains('\r'),
+            "hashlines output must not carry CR: {:?}",
             out.text
         );
     }

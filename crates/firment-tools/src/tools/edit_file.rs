@@ -130,19 +130,35 @@ fn compute_edit(resolved: &Path, original: &str, args: &Value) -> Result<String,
     let hashline = args.get("hashline").and_then(|h| h.as_str());
     let end_hashline = args.get("end_hashline").and_then(|h| h.as_str());
 
+    // CubeMX/Keil-generated files use CRLF line endings while models almost
+    // always write LF anchors; normalize to LF for matching, then restore the
+    // file's own line endings in the written result (so a CRLF file does not
+    // end up with mixed endings or an LF-only diff).
+    let crlf = original.contains("\r\n");
+    let original_norm = original.replace("\r\n", "\n");
+    let new_norm = new_text.replace("\r\n", "\n");
+    let restore = |text: String| {
+        if crlf {
+            text.replace('\n', "\r\n")
+        } else {
+            text
+        }
+    };
+
     if let Some(hashline) = hashline {
-        return edit_by_hashline(original, hashline, end_hashline, new_text);
+        return edit_by_hashline(&original_norm, hashline, end_hashline, &new_norm).map(restore);
     }
 
     if let Some(old) = old_text {
-        let occurrences = original.match_indices(old).count();
+        let old_norm = old.replace("\r\n", "\n");
+        let occurrences = original_norm.match_indices(&old_norm).count();
         if occurrences != 1 {
             return Err(ToolError::new(format!(
                 "[InvalidInput] old_text matched {occurrences} times in {}; expected exactly 1",
                 resolved.display()
             )));
         }
-        Ok(original.replacen(old, new_text, 1))
+        Ok(restore(original_norm.replacen(&old_norm, &new_norm, 1)))
     } else {
         let start = start_line.ok_or_else(|| {
             ToolError::new("[InvalidInput] provide either 'old_text' or 'start_line'")
@@ -151,8 +167,8 @@ fn compute_edit(resolved: &Path, original: &str, args: &Value) -> Result<String,
         if start == 0 || end < start {
             return Err(ToolError::new("[InvalidInput] invalid line range"));
         }
-        let mut lines: Vec<&str> = original.split('\n').collect();
-        let trailing_newline = original.ends_with('\n');
+        let mut lines: Vec<&str> = original_norm.split('\n').collect();
+        let trailing_newline = original_norm.ends_with('\n');
         if trailing_newline {
             lines.pop();
         }
@@ -164,13 +180,13 @@ fn compute_edit(resolved: &Path, original: &str, args: &Value) -> Result<String,
         }
         let mut out: Vec<&str> = Vec::new();
         out.extend_from_slice(&lines[..start - 1]);
-        out.extend(new_text.split('\n'));
+        out.extend(new_norm.split('\n'));
         out.extend_from_slice(&lines[end..]);
         let mut joined = out.join("\n");
         if trailing_newline {
             joined.push('\n');
         }
-        Ok(joined)
+        Ok(restore(joined))
     }
 }
 
@@ -269,6 +285,68 @@ mod tests {
             .unwrap();
         assert!(preview.contains("-hello"), "got: {preview}");
         assert!(preview.contains("+hi"), "got: {preview}");
+    }
+
+    #[tokio::test]
+    async fn crlf_file_matches_lf_anchor_and_keeps_crlf() {
+        // CubeMX/Keil files are CRLF; the model writes LF anchors. The anchor
+        // must match and the written file must keep CRLF endings (no mixed
+        // endings, no LF-only diff).
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("main.c");
+        std::fs::write(
+            &path,
+            "/* USER CODE BEGIN PV */\r\nint x;\r\n/* USER CODE END PV */\r\n",
+        )
+        .unwrap();
+        let out = EditFile
+            .run(
+                json!({
+                    "path": "main.c",
+                    "old_text": "/* USER CODE BEGIN PV */",
+                    "new_text": "/* USER CODE BEGIN PV */\nint counter = 0;"
+                }),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(out.text.contains("Edited"), "got: {}", out.text);
+        let content = std::fs::read(&path).unwrap();
+        assert!(
+            String::from_utf8_lossy(&content).contains("int counter = 0;"),
+            "replacement must land"
+        );
+        let crlf = content.windows(2).filter(|w| w == b"\r\n").count();
+        let lf = content.windows(1).filter(|w| w == b"\n").count();
+        assert_eq!(
+            crlf,
+            lf,
+            "every LF must be part of CRLF (no mixed endings): {:?}",
+            String::from_utf8_lossy(&content)
+        );
+    }
+
+    #[tokio::test]
+    async fn lf_file_keeps_lf_line_endings() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        std::fs::write(&path, "aaa\nbbb\n").unwrap();
+        let out = EditFile
+            .run(
+                json!({"path": "a.txt", "old_text": "aaa", "new_text": "AAA\nAAA2"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(out.text.contains("Edited"), "got: {}", out.text);
+        let content = std::fs::read(&path).unwrap();
+        let crlf = content.windows(2).filter(|w| w == b"\r\n").count();
+        assert_eq!(
+            crlf,
+            0,
+            "LF file must stay LF: {:?}",
+            String::from_utf8_lossy(&content)
+        );
     }
 
     #[tokio::test]
