@@ -1,6 +1,36 @@
 # Changelog
 
-## v0.5.2 (unreleased) — embedded-workflow guidance + out-of-the-box flash/serial
+## v0.5.3 (2026-08-15) — edit reliability + build auto-detection + prompt hardening
+
+### Correctness
+
+- Sandbox `[Permission]` rejections no longer roll back the edit batch:
+  writing outside the workspace used to revert the wave's good edits (the
+  "main.c keeps getting reverted" loop).
+- Max iterations now KEEPS consistent edits (committed as an undo entry)
+  instead of rolling back; only unverified mutations (verify gate configured
+  but never passed) are rolled back.
+- Fixed the max-iterations hint: `/continue` does not exist — keep typing to
+  continue, `/undo` to revert.
+
+### Tools
+
+- `build` auto-detects the project's build system when `build_command` is
+  unset: platformio.ini / Makefile / CMakeLists.txt / *.uvprojx (up to 2
+  levels of subdirectories, cd-ing into the manifest's directory), reporting
+  `[auto-detected]`. Standard projects need zero configuration.
+
+### Prompt / KB
+
+- Prompt hardened into general principles: KB-first for MCU peripherals,
+  build via the build tool, `[Permission]` outside-workspace is a hard sandbox
+  limit, prefer local files over web_fetch, prefer the built-in tools over
+  python scripts (with fallbacks — no absolute bans), no proactive
+  `.firment.toml` reads.
+- ST-Link VCP fact moved out of the prompt into the stm32g4-uart cheatsheet's
+  `common_mistake` list (KB `SEED_VERSION` bumped to 4).
+
+## v0.5.2 (2026-08-15) — embedded-workflow guidance + out-of-the-box flash/serial
 
 ### Agent guidance
 
