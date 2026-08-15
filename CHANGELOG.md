@@ -32,6 +32,23 @@
 - **flash**: a missing chip id now points the agent at `default_chip`, the
   project config, `probe-rs chip list`, or the startup file instead of failing
   silently.
+- **edit_file / read_file CRLF handling**: CubeMX/Keil files are CRLF while
+  models write LF anchors, so `old_text` matched 0 times and edits failed on
+  every Windows-generated file. Anchors are now matched LF-normalized and the
+  file's own line endings are restored on write; `read_file` strips CR from
+  displayed lines and hashline anchors so both stay consistent.
+- **Batch rollback narrowed**: only state failures ([ConcurrentChange] / [Io])
+  roll the batch back; an [InvalidInput] / [NotFound] call (which never touched
+  the file) no longer undoes earlier successful edits in the same turn.
+- **edit_file [NotFound]** now tells the model the file does not exist and to
+  create it with write_file first, instead of failing cryptically.
+- **spill file GC**: referenced spill files are no longer mis-garbage-collected
+  on Windows (path-separator bug), so session reloads keep their spill pointers.
+
+### 重构
+
+- **GUI rename**: `ide/` → `gui/`, product renamed "Firment IDE" → "Firment GUI"
+  (installer/bundle names, config, docs).
 
 ### Configuration
 
