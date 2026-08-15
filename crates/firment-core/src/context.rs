@@ -79,22 +79,22 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          discovery, and symbols for definition/reference lookup in large codebases. Reserve \
          shell for commands that need it: tests, git, file operations, toolchain queries — \
          builds belong to the build tool, not shell.\n\
-         - Tool priority for embedded work: the dedicated firmware tools (build, flash, monitor, \
-         elf_analyze, periph_init) are MANDATORY for their jobs. Call the build tool to build — \
-         it auto-detects platformio.ini / Makefile / CMakeLists.txt / *.uvprojx, so never run \
-         pio/cmake/make/uv4 via shell. Deleting files is destructive: only delete when the task \
-         explicitly requires it, and never delete something you will need again — if you removed \
-         a library or driver, do not re-fetch it from the network; use what the project's build \
-         system provides. Prefer local files over the network: web_fetch only when the needed \
-         file is confirmed absent locally.\n\
+         - Tool priority for embedded work: always prefer the dedicated firmware tools (build, \
+         flash, monitor, elf_analyze, periph_init) — they know the project config. Build with \
+         the build tool (it auto-detects platformio.ini / Makefile / CMakeLists.txt / \
+         *.uvprojx); fall back to shell only when the build tool cannot handle the project. \
+         Deleting files is destructive: only delete when the task explicitly requires it, and \
+         never delete something you will need again — if you removed a library or driver, do \
+         not re-fetch it from the network; use what the project's build system provides. Prefer \
+         local files over the network: web_fetch only when the needed file is confirmed absent \
+         locally.\n\
          - [Permission] \"path is outside the workspace\" is a HARD sandbox limit: do not retry, \
          do not try adjacent paths, and do not attempt to read or write anything under \
          ~/.platformio, C:\\Users, /usr, /tmp etc. — those are unreachable from the agent; only \
          files inside the working directory are accessible.\n\
-         - Do not create or run python scripts to manipulate files (delete/copy/scan/check) — \
-         write_file, edit_file, grep, glob and list_dir cover those needs directly; shell is for \
-         builds, git and commands the tools cannot do. read_file is for files, not directories \
-         (use list_dir for directories).\n\
+         - Prefer write_file / edit_file / grep / glob / list_dir for file operations; write \
+         python scripts only when those tools cannot express the operation (e.g. complex batch \
+         transforms). read_file is for files, not directories (use list_dir for directories).\n\
          - read_file prefixes every line with a line number (\"  123 | content\") so you can \
          report locations as path:line and target edit_file precisely; large files are capped \
          at 1000 lines per call — page forward with offset=<n> (the [truncated] hint tells you \
@@ -198,8 +198,7 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          (e.g. cheatsheets/stm32g4-uart.toml) and follow it — do not invent register, pin or \
          clock settings from memory, and do not jump to web_search. Use web_search/web_fetch \
          only when the KB does not cover what you need (e.g. a USB device stack or a \
-         third-party library). Note: 'ST-Link VCP' / virtual COM ports are UART bridges on \
-         the debug probe — the MCU uses its ordinary UART pins, not USB CDC.",
+         third-party library).",
         kb_dir.join("vendor-index.toml").display()
     ));
     if let Some(hint) = load_vendor_index_hint(cwd) {

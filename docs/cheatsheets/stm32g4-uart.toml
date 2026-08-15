@@ -27,4 +27,5 @@ common_mistake = [
   "Computing BRR from a hardcoded 72 MHz PCLK — G4 APB clocks are programmable; read the actual clock (SystemCoreClock / APB prescalers)",
   "Forgetting to configure the DMAMUX request: HAL_UART_Transmit_DMA works only after the request routing is set up",
   "Enabling DMA but not __HAL_RCC_DMA1_CLK_ENABLE() (and the DMAMUX clock on parts where it is gated)",
+  "Treating the board's ST-Link VCP (virtual COM port, e.g. COM3 on NUCLEO-G431RB) as a USB CDC device stack — it is a UART bridge on the debug probe: the MCU reaches it through its ordinary UART pins (LPUART1 on PA2/PA3 for G431 NUCLEO), so no USB CDC/USB device code is needed",
 ]

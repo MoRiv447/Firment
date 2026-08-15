@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 
 /// Bump when the bundled seed knowledge base changes (forces re-materialization).
-pub const SEED_VERSION: &str = "3";
+pub const SEED_VERSION: &str = "4";
 
 const SEED_FILES: &[(&str, &str)] = &[
     (
