@@ -403,6 +403,11 @@ export default function App() {
             <Button
               size="small"
               onClick={() => setView('chat')}
+              title={
+                session
+                  ? `${session.provider} / ${session.model}`
+                  : 'No session'
+              }
               style={{
                 borderRadius: 0,
                 border: '2px solid #000000',
@@ -410,6 +415,10 @@ export default function App() {
                 color: '#000000',
                 fontWeight: 700,
                 boxShadow: '2px 2px 0 #000000',
+                maxWidth: 180,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
               }}
             >
               {session?.provider ?? '—'} / {session?.model ?? '—'}

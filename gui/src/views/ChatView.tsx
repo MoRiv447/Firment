@@ -156,8 +156,20 @@ export function ChatView({
           </>
         )}
         {!session && (
-          <div style={{ display: 'flex', justifyContent: 'center', marginTop: 80 }}>
-            <Spin tip="Loading session…" />
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flex: 1,
+              minHeight: 240,
+              gap: 10,
+              color: '#9aa3b2',
+            }}
+          >
+            <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: 0.5 }}>Firment</div>
+            <div style={{ fontSize: 13 }}>Open or create a session from the sidebar to begin.</div>
           </div>
         )}
       </div>
