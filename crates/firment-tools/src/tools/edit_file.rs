@@ -64,7 +64,10 @@ impl Tool for EditFile {
             if resolved.exists() {
                 ToolError::new(format!("[Io] {e}"))
             } else {
-                ToolError::new(format!("[NotFound] {e}"))
+                ToolError::new(format!(
+                    "[NotFound] {e} — the file does not exist yet; create it with write_file \
+                     first, or fix the path"
+                ))
             }
         })?;
         let original_bytes = fs::read(&resolved)
