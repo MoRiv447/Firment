@@ -153,10 +153,7 @@ impl Tool for Flash {
             .get("timeout_ms")
             .and_then(|t| t.as_u64())
             .unwrap_or(180_000);
-        let reset = args
-            .get("reset")
-            .and_then(|r| r.as_bool())
-            .unwrap_or(true);
+        let reset = args.get("reset").and_then(|r| r.as_bool()).unwrap_or(true);
 
         let probe_rs_ok = std::process::Command::new("probe-rs")
             .arg("--version")

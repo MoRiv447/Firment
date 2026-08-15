@@ -132,7 +132,7 @@
   },
   {
     "name": "flash",
-    "description": "Flash a firmware ELF to the target via probe-rs (ST-Link / J-Link / CMSIS-DAP / DFU). Requires `probe-rs` on PATH and a chip id (e.g. stm32f407vetx).",
+    "description": "Flash a firmware ELF to the target via probe-rs (ST-Link / J-Link / CMSIS-DAP / DFU). Requires `probe-rs` on PATH and a chip id (e.g. stm32f407vetx). Resets the target (restarts the firmware) after flashing by default.",
     "input_schema": {
       "properties": {
         "chip": {
@@ -146,6 +146,11 @@
         "probe": {
           "description": "Optional probe serial/id when multiple probes are attached",
           "type": "string"
+        },
+        "reset": {
+          "default": true,
+          "description": "Reset the target so the flashed firmware starts running (default true)",
+          "type": "boolean"
         },
         "timeout_ms": {
           "default": 180000,
