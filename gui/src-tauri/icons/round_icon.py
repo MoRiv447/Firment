@@ -84,6 +84,44 @@ def build_multi_frame_ico(frames: list[Image.Image]) -> bytes:
     return out.getvalue()
 
 
+def build_bmp_ico(frames: list[Image.Image]) -> bytes:
+    """Assemble a multi-frame ICO where each frame is a 32-bit BMP DIB
+    (BGRA bottom-up with alpha channel). This is the classic ICO encoding
+    that winres / MSVC embed without complaint (PNG-in-ICO was silently
+    skipped — the exe ended up with RT_ICON=0)."""
+    out = io.BytesIO()
+    out.write(struct.pack("<HHH", 0, 1, len(frames)))
+
+    blobs: list[tuple[int, int, bytes]] = []
+    for im in frames:
+        w, h = im.size
+        rgba = im.convert("RGBA")
+        # BMP pixels are bottom-up BGRA.
+        rgba = rgba.transpose(Image.FLIP_TOP_BOTTOM)
+        raw = rgba.tobytes()
+        px = bytearray()
+        for i in range(0, len(raw), 4):
+            r, g, b, a = raw[i], raw[i + 1], raw[i + 2], raw[i + 3]
+            px += bytes((b, g, r, a))
+        # BITMAPINFOHEADER: height = 2*h reserves room for the AND mask
+        # (omitted for 32-bit; Windows reads the alpha channel instead).
+        bih = struct.pack("<IiiHHIIiiII", 40, w, h * 2, 1, 32, 0, len(px), 0, 0, 0, 0)
+        blobs.append((w, h, bih + bytes(px)))
+
+    data_offset = 6 + 16 * len(blobs)
+    entries: list[tuple[int, int, int, int]] = []
+    for w, h, blob in blobs:
+        ew = 0 if w >= 256 else w
+        eh = 0 if h >= 256 else h
+        entries.append((ew, eh, len(blob), data_offset))
+        data_offset += len(blob)
+    for ew, eh, size, off in entries:
+        out.write(struct.pack("<BBBBHHII", ew, eh, 0, 0, 1, 32, size, off))
+    for _, _, blob in blobs:
+        out.write(blob)
+    return out.getvalue()
+
+
 def main() -> None:
     if not SRC.exists():
         sys.exit(f"missing: {SRC}")
@@ -100,7 +138,11 @@ def main() -> None:
     # Use the high-res rounded img as the 256 frame
     ico_frames[-1] = img.resize((256, 256), Image.LANCZOS).copy()
 
-    DST_ICO.write_bytes(build_multi_frame_ico(ico_frames))
+    # Classic BMP-encoded multi-frame ICO (winres-embeddable, alpha kept).
+    # The earlier PNG-in-ICO was silently dropped by the resource compiler:
+    # the built exe had RT_ICON=0 and Windows fell back to a square
+    # white placeholder — exactly the symptom the user saw.
+    DST_ICO.write_bytes(build_bmp_ico(ico_frames))
     print(f"wrote {DST_ICO}  ({DST_ICO.stat().st_size} B)  sizes={[im.size for im in ico_frames]}")
 
     # The tauri bundle icon list also includes 32x32.png / 128x128.png /
