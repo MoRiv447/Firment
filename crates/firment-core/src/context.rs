@@ -82,9 +82,11 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          - Tool priority for embedded work: the dedicated firmware tools (build, flash, monitor, \
          elf_analyze, periph_init) are MANDATORY for their jobs. Call the build tool to build — \
          it auto-detects platformio.ini / Makefile / CMakeLists.txt / *.uvprojx, so never run \
-         pio/cmake/make/uv4 via shell. Do not delete vendor library directories (Drivers/, \
-         CMSIS/, HAL/) when converting projects: PlatformIO's board_build.stm32cube.custom_path \
-         points at them, so leave them in place instead of deleting and re-fetching.\n\
+         pio/cmake/make/uv4 via shell. Deleting files is destructive: only delete when the task \
+         explicitly requires it, and never delete something you will need again — if you removed \
+         a library or driver, do not re-fetch it from the network; use what the project's build \
+         system provides. Prefer local files over the network: web_fetch only when the needed \
+         file is confirmed absent locally.\n\
          - read_file prefixes every line with a line number (\"  123 | content\") so you can \
          report locations as path:line and target edit_file precisely; large files are capped \
          at 1000 lines per call — page forward with offset=<n> (the [truncated] hint tells you \
