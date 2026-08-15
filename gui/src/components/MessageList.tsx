@@ -38,7 +38,23 @@ export function MessageList({ messages }: { messages: ChatMessage[] }) {
                   fontWeight: 500,
                 }}
               >
-                <ReactMarkdown>{m.content}</ReactMarkdown>
+                <ReactMarkdown
+                  components={{
+                    // ReactMarkdown's <p> carries a default 1em margin that
+                    // adds a visible gap under short user messages inside the
+                    // padded bubble; zero it so the bubble hugs its content.
+                    p: ({ children }) => <div style={{ margin: 0 }}>{children}</div>,
+                    ul: ({ children }) => (
+                      <ul style={{ margin: 0, paddingLeft: 20 }}>{children}</ul>
+                    ),
+                    ol: ({ children }) => (
+                      <ol style={{ margin: 0, paddingLeft: 20 }}>{children}</ol>
+                    ),
+                    pre: ({ children }) => <pre style={{ margin: '6px 0 0' }}>{children}</pre>,
+                  }}
+                >
+                  {m.content}
+                </ReactMarkdown>
               </div>
             </div>
           );
