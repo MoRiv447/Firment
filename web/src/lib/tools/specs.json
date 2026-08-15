@@ -25,7 +25,7 @@
   },
   {
     "name": "build",
-    "description": "Run the project's configured build command (config [tools] build_command, e.g. \"cmake --build build\" or Keil/IAR CLI). A non-zero exit means the build failed.",
+    "description": "Run the project's build: the configured [tools] build_command, or auto-detected from platformio.ini / Makefile / CMakeLists.txt / Keil *.uvprojx in the workspace (up to 2 levels of subdirectories). A non-zero exit means the build failed.",
     "input_schema": {
       "properties": {
         "timeout_ms": {

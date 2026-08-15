@@ -169,9 +169,12 @@ pub fn default_system_prompt(cwd: &Path) -> String {
     }
     prompt.push_str(
         "\n         - Build/flash/serial settings are already configured globally (default_chip, \
-         monitor_baud, build_command, ...); do NOT proactively read or create a project \
-         `.firment.toml` / `firment.toml`. Only touch a project config when a tool error \
-         explicitly mentions a missing setting. Use /config to inspect global configuration.\n",
+         monitor_baud, ...); do NOT proactively read `.firment.toml`. The build tool \
+         auto-detects the project's build system (platformio.ini / Makefile / CMakeLists.txt / \
+         *.uvprojx, up to 2 levels deep), so standard projects need no project config. Only \
+         when the build tool reports that no build system was detected should you create a \
+         project `.firment.toml` with build_command for this project. Use /config to inspect \
+         global configuration.\n",
     );
     let kb_dir = crate::kb::seed_kb_dir();
     prompt.push_str(&format!(
