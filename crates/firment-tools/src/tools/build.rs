@@ -125,7 +125,7 @@ impl Tool for Build {
     }
 
     fn description(&self) -> &'static str {
-        "Run the project's build: the configured [tools] build_command, or auto-detected from platformio.ini / Makefile / CMakeLists.txt / Keil *.uvprojx in the workspace (up to 2 levels of subdirectories). A non-zero exit means the build failed."
+        "Build the project — use THIS tool for building, never run pio/cmake/make/uv4 via the shell tool. Uses [tools] build_command if configured, otherwise auto-detects the build system in the workspace (and up to 2 levels of subdirectories): platformio.ini -> pio run, Makefile -> make, CMakeLists.txt -> cmake --build, *.uvprojx -> uv4, cd-ing into the manifest's directory automatically. A non-zero exit means the build failed."
     }
 
     fn input_schema(&self) -> Value {

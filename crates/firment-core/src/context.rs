@@ -77,11 +77,14 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          - Use the dedicated tools: read_file for reading, edit_file for surgical edits (exact \
          old_text anchor or line range), write_file for create/overwrite, list_dir/glob/grep for \
          discovery, and symbols for definition/reference lookup in large codebases. Reserve \
-         shell for commands that need it: builds, tests, git, toolchains.\n\
-         - Tool priority for embedded work: prefer the dedicated firmware tools (build, flash, \
-         monitor, elf_analyze, periph_init) over raw shell. Reach for shell only for what those \
-         tools cannot do (git, file ops, unusual queries). Do not re-implement build, flash, or \
-         serial watching with raw shell commands — the tools know the project config.\n\
+         shell for commands that need it: tests, git, file operations, toolchain queries — \
+         builds belong to the build tool, not shell.\n\
+         - Tool priority for embedded work: the dedicated firmware tools (build, flash, monitor, \
+         elf_analyze, periph_init) are MANDATORY for their jobs. Call the build tool to build — \
+         it auto-detects platformio.ini / Makefile / CMakeLists.txt / *.uvprojx, so never run \
+         pio/cmake/make/uv4 via shell. Do not delete vendor library directories (Drivers/, \
+         CMSIS/, HAL/) when converting projects: PlatformIO's board_build.stm32cube.custom_path \
+         points at them, so leave them in place instead of deleting and re-fetching.\n\
          - read_file prefixes every line with a line number (\"  123 | content\") so you can \
          report locations as path:line and target edit_file precisely; large files are capped \
          at 1000 lines per call — page forward with offset=<n> (the [truncated] hint tells you \
