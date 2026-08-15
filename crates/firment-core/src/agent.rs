@@ -1149,7 +1149,7 @@ impl Agent {
         //   failed its checks — roll back rather than leave broken code.
         // - Otherwise every edit succeeded and the workspace is consistent;
         //   the task simply did not converge within the budget. Keep the
-        //   edits (committed as an undo entry) so the user can /continue or
+        //   edits (committed as an undo entry) so the user can keep typing or
         //   /undo instead of silently losing useful work.
         let unverified = self.verify_command.is_some() && mutations_since_verify > 0;
         let outcome = if unverified {
@@ -1167,7 +1167,7 @@ impl Agent {
                         )
                     } else {
                         format!(
-                            "kept edits to {} file(s); use /continue to keep working or /undo to revert",
+                            "kept edits to {} file(s); keep typing to continue the task, or /undo to revert this turn",
                             changes.len()
                         )
                     }
