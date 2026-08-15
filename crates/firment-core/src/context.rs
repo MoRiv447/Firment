@@ -87,6 +87,14 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          a library or driver, do not re-fetch it from the network; use what the project's build \
          system provides. Prefer local files over the network: web_fetch only when the needed \
          file is confirmed absent locally.\n\
+         - [Permission] \"path is outside the workspace\" is a HARD sandbox limit: do not retry, \
+         do not try adjacent paths, and do not attempt to read or write anything under \
+         ~/.platformio, C:\\Users, /usr, /tmp etc. — those are unreachable from the agent; only \
+         files inside the working directory are accessible.\n\
+         - Do not create or run python scripts to manipulate files (delete/copy/scan/check) — \
+         write_file, edit_file, grep, glob and list_dir cover those needs directly; shell is for \
+         builds, git and commands the tools cannot do. read_file is for files, not directories \
+         (use list_dir for directories).\n\
          - read_file prefixes every line with a line number (\"  123 | content\") so you can \
          report locations as path:line and target edit_file precisely; large files are capped \
          at 1000 lines per call — page forward with offset=<n> (the [truncated] hint tells you \
