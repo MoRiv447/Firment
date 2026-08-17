@@ -1523,7 +1523,9 @@ impl App {
             return false;
         };
         let answer = match key.code {
-            KeyCode::Char(d) if d.is_ascii_digit() && d != '0' => {
+            KeyCode::Char(d)
+                if d.is_ascii_digit() && d != '0' && self.question_input.is_empty() =>
+            {
                 let idx = (d as usize) - ('1' as usize);
                 question.options.get(idx).cloned()
             }
@@ -3347,7 +3349,7 @@ impl App {
                     Span::styled(typed, Style::default().fg(Color::White)),
                 ]));
                 lines.push(Line::from(Span::styled(
-                    "1-9 pick an option · type + Enter free answer · Esc dismiss",
+                    "1-9 pick an option (before typing) · type + Enter free answer · Esc dismiss",
                     Style::default().fg(Color::DarkGray),
                 )));
                 frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
@@ -3920,6 +3922,32 @@ mod tests {
 
         app.on_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
         assert_eq!(rx.try_recv(), Ok(Some("stm32g0".to_string())));
+        assert!(app.question.is_none());
+    }
+
+    #[test]
+    fn question_modal_digits_inside_typed_answer_do_not_pick_options() {
+        let mut app = test_app();
+        let (tx, mut rx) = oneshot::channel();
+        app.on_question(QuestionRequest {
+            question: "which board?".to_string(),
+            options: vec!["f103".to_string(), "f407".to_string(), "g431".to_string()],
+            reply: tx,
+        });
+        for ch in ['n', 'u', 'c', 'l', 'e', 'o', ' ', 'g', '4', '3', '1'] {
+            app.on_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        assert!(
+            app.question.is_some(),
+            "typing an answer with a digit in it must not pick an option"
+        );
+        assert_eq!(app.question_input.iter().collect::<String>(), "nucleo g431");
+        assert!(
+            rx.try_recv().is_err(),
+            "typing a digit into the answer must not answer yet"
+        );
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(rx.try_recv(), Ok(Some("nucleo g431".to_string())));
         assert!(app.question.is_none());
     }
 
