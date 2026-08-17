@@ -885,6 +885,11 @@ struct App {
     /// Lazily-refreshed git state for the status bar (None outside a repo).
     git: Option<GitInfo>,
     permission: Option<PermissionRequest>,
+    /// Permission requests that arrived while one was already on screen
+    /// (concurrent tools/subagents in a wave). They are shown one at a time:
+    /// the user decides the current request before the next appears, instead
+    /// of the older one being denied implicitly.
+    permission_queue: VecDeque<PermissionRequest>,
     /// Pending `ask_user` question shown as a modal; the agent is blocked until
     /// the user answers or dismisses it.
     question: Option<QuestionRequest>,
@@ -1260,6 +1265,7 @@ impl App {
             ai_thinking: false,
             active_tools: Vec::new(),
             permission: None,
+            permission_queue: VecDeque::new(),
             question: None,
             question_input: Vec::new(),
             interrupting: false,
@@ -1450,9 +1456,7 @@ impl App {
                 self.busy = false;
                 self.ai_thinking = false;
                 // A session swap invalidates any pending prompts/pickers.
-                if let Some(previous) = self.permission.take() {
-                    let _ = previous.reply.send(false);
-                }
+                self.deny_all_permissions();
                 if let Some(previous) = self.question.take() {
                     let _ = previous.reply.send(None);
                 }
@@ -1486,13 +1490,19 @@ impl App {
     }
 
     fn on_permission(&mut self, request: PermissionRequest) {
-        // A second request may arrive while one is still pending (concurrent
-        // tools/subagents). The older call can no longer be answered, so deny
-        // it explicitly instead of dropping the oneshot and leaving the
-        // awaiting tool hanging.
-        if let Some(previous) = self.permission.take() {
-            let _ = previous.reply.send(false);
+        // Requests from a tool wave can arrive while one is already on
+        // screen. Queue them instead of replacing (and implicitly denying)
+        // the pending one: the user decides the current request first, and
+        // the next one pops up only after an answer is given.
+        if self.permission.is_some() {
+            self.permission_queue.push_back(request);
+            return;
         }
+        self.show_permission(request);
+    }
+
+    /// Display a permission request (or the next queued one) on screen.
+    fn show_permission(&mut self, request: PermissionRequest) {
         self.items.push(Item::Permission {
             tool: request.tool.clone(),
             reason: request.reason.clone(),
@@ -1501,6 +1511,25 @@ impl App {
         self.follow = true;
         self.scroll = 0;
         self.permission = Some(request);
+    }
+
+    /// Pop the next queued permission request, if any, and show it.
+    fn pop_permission(&mut self) {
+        if self.permission.is_none()
+            && let Some(request) = self.permission_queue.pop_front()
+        {
+            self.show_permission(request);
+        }
+    }
+
+    /// Deny every pending and queued permission request (session swap, /new).
+    fn deny_all_permissions(&mut self) {
+        if let Some(previous) = self.permission.take() {
+            let _ = previous.reply.send(false);
+        }
+        while let Some(queued) = self.permission_queue.pop_front() {
+            let _ = queued.reply.send(false);
+        }
     }
 
     fn on_question(&mut self, request: QuestionRequest) {
@@ -1956,6 +1985,7 @@ impl App {
             if allowed { "✓ Allowed" } else { "✗ Denied" },
             prompt.tool
         )));
+        self.pop_permission();
         false
     }
 
@@ -2662,7 +2692,7 @@ impl App {
                 self.ai_thinking = false;
                 self.interrupting = false;
                 self.interrupt_armed_at = None;
-                self.permission = None;
+                self.deny_all_permissions();
                 self.follow = true;
                 self.scroll = 0;
                 self.pending_new_session = true;
@@ -3898,6 +3928,59 @@ mod tests {
         });
         app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert_eq!(rx.try_recv(), Ok(false));
+        assert!(
+            !app.items
+                .iter()
+                .any(|item| matches!(item, Item::Permission { .. }))
+        );
+    }
+
+    #[test]
+    fn concurrent_permissions_are_queued_not_denied() {
+        let mut app = test_app();
+        let (tx1, mut rx1) = oneshot::channel();
+        let (tx2, mut rx2) = oneshot::channel();
+        app.on_permission(PermissionRequest {
+            tool: "write_file".to_string(),
+            reason: "first".to_string(),
+            reply: tx1,
+        });
+        // A second request arrives while the first is still on screen.
+        app.on_permission(PermissionRequest {
+            tool: "shell".to_string(),
+            reason: "second".to_string(),
+            reply: tx2,
+        });
+        assert_eq!(
+            rx1.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty),
+            "first request must not be denied by the second"
+        );
+        assert_eq!(app.permission_queue.len(), 1);
+        // The second request must not be visible yet.
+        assert!(
+            !app.items
+                .iter()
+                .any(|item| matches!(item, Item::Permission { tool, .. } if tool == "shell")),
+            "queued permission must not be shown before the first is answered"
+        );
+
+        // Answer the first: allow it.
+        app.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        assert_eq!(rx1.try_recv(), Ok(true));
+        // The queued request now pops up, awaiting the user.
+        assert_eq!(
+            rx2.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty),
+            "queued request must wait for its own answer"
+        );
+        assert!(app.permission_queue.is_empty());
+        assert!(matches!(
+            app.items.last(),
+            Some(Item::Permission { tool, .. }) if tool == "shell"
+        ));
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(rx2.try_recv(), Ok(false));
         assert!(
             !app.items
                 .iter()
