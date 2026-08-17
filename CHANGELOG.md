@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.5.5 (2026-08-17) — anthropic protocol fixes + TUI interaction fixes
+
+### Anthropic providers (deepseek02 etc.)
+
+- **Parallel tool results are merged into one user message.** The Anthropic
+  protocol requires every `tool_use` block of an assistant message to be
+  answered by `tool_result` blocks inside the single immediately-following
+  message; separate results per call made DeepSeek's anthropic-compatible
+  endpoint reject the request with 400 (tool_use ids found without
+  tool_result blocks immediately after). OpenAI/agnes was unaffected.
+
+### TUI
+
+- **ask_user:** digit keys (1-9) only pick an option while the answer input
+  is still empty; typing a free-form answer like "nucleo g431" no longer
+  accidentally selects option 4 mid-word. Type + Enter submits.
+- **Permissions:** concurrent requests (parallel tool waves) are queued and
+  shown one at a time instead of the new one denying the pending one — the
+  user decides each request in turn. Session swap and `/new` deny the whole
+  queue.
+
 ## v0.5.4 (2026-08-15) — auto-reset after flash + GUI header badge
 
 - **flash** resets the target after flashing by default (`reset` param, default

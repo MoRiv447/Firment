@@ -1,7 +1,7 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.5.4-blue)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.5.5-blue)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![CI](https://img.shields.io/badge/CI-Rust%20%2B%20Web%20%2B%20GUI-green)](.github/workflows/ci.yml)
@@ -12,7 +12,7 @@
   <img src="docs/screenshots/cli.png" alt="Firment TUI: ask_user dialog + tool call stack + status bar with git branch, thinking level and Esc×2 interrupt hint" width="900">
 </p>
 
-> ⚠️ **Status: v0.5.4.** Layer 1 (general coding agent) is
+> ⚠️ **Status: v0.5.5.** Layer 1 (general coding agent) is
 > production-usable and CI-green; Layer 2 (embedded toolchain loop) is
 > partially shipped. APIs and the TUI keep evolving.
 
