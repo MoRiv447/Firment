@@ -72,10 +72,45 @@ impl AnthropicProvider {
                     content,
                     ..
                 } => {
-                    out.push(json!({
-                        "role": "user",
-                        "content": [{"type": "tool_result", "tool_use_id": tool_call_id, "content": content}]
-                    }));
+                    let block = json!({
+                        "type": "tool_result",
+                        "tool_use_id": tool_call_id,
+                        "content": content,
+                    });
+                    // Anthropic requires every tool_use block of an assistant
+                    // message to be answered by tool_result blocks inside the
+                    // single message that immediately follows it. A wave of
+                    // parallel tool calls pushes one result per
+                    // ChatMessage::Tool, so consecutive results must be merged
+                    // into ONE user message — otherwise the API rejects the
+                    // request (400: "tool_use ids ... without tool_result").
+                    let last_is_tool_results = matches!(
+                        out.last(),
+                        Some(Value::Object(last))
+                            if last.get("role").and_then(|r| r.as_str()) == Some("user")
+                                && last.get("content").and_then(|c| c.as_array()).is_some_and(
+                                    |blocks| {
+                                        !blocks.is_empty()
+                                            && blocks.iter().all(|b| {
+                                                b.get("type").and_then(|t| t.as_str())
+                                                    == Some("tool_result")
+                                            })
+                                    }
+                                )
+                    );
+                    if last_is_tool_results {
+                        if let Some(Value::Object(last)) = out.last_mut()
+                            && let Some(blocks) =
+                                last.get_mut("content").and_then(|c| c.as_array_mut())
+                        {
+                            blocks.push(block);
+                        }
+                    } else {
+                        out.push(json!({
+                            "role": "user",
+                            "content": [block]
+                        }));
+                    }
                 }
             }
         }
@@ -284,4 +319,83 @@ enum Block {
         name: String,
         arguments: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ChatMessage;
+
+    #[test]
+    fn parallel_tool_results_merge_into_one_user_message() {
+        let p = AnthropicProvider::new("http://localhost", "k", "m", None, None);
+        let messages = vec![
+            ChatMessage::User {
+                content: "go".to_string(),
+            },
+            ChatMessage::Assistant {
+                content: String::new(),
+                tool_calls: vec![
+                    ToolCall {
+                        id: "call_00".to_string(),
+                        name: "list_dir".to_string(),
+                        arguments: json!({}),
+                    },
+                    ToolCall {
+                        id: "call_01".to_string(),
+                        name: "ask_user".to_string(),
+                        arguments: json!({}),
+                    },
+                ],
+            },
+            ChatMessage::Tool {
+                tool_call_id: "call_00".to_string(),
+                name: "list_dir".to_string(),
+                content: String::new(),
+            },
+            ChatMessage::Tool {
+                tool_call_id: "call_01".to_string(),
+                name: "ask_user".to_string(),
+                content: "answer".to_string(),
+            },
+        ];
+        let (_, out) = p.convert(&messages);
+        assert_eq!(
+            out.len(),
+            3,
+            "expected user/assistant/merged-user, got: {out:?}"
+        );
+        let merged = &out[2];
+        assert_eq!(merged["role"], "user");
+        let blocks = merged["content"].as_array().expect("content array");
+        assert_eq!(blocks.len(), 2);
+        assert!(
+            blocks.iter().all(|b| b["type"] == "tool_result"),
+            "all blocks must be tool_result: {blocks:?}"
+        );
+        assert_eq!(blocks[0]["tool_use_id"], "call_00");
+        assert_eq!(blocks[1]["tool_use_id"], "call_01");
+    }
+
+    #[test]
+    fn tool_result_after_user_text_stays_its_own_message() {
+        let p = AnthropicProvider::new("http://localhost", "k", "m", None, None);
+        let messages = vec![
+            ChatMessage::User {
+                content: "hi".to_string(),
+            },
+            ChatMessage::Tool {
+                tool_call_id: "call_00".to_string(),
+                name: "list_dir".to_string(),
+                content: "[]".to_string(),
+            },
+        ];
+        let (_, out) = p.convert(&messages);
+        assert_eq!(
+            out.len(),
+            2,
+            "user text and tool result stay separate: {out:?}"
+        );
+        assert_eq!(out[1]["content"][0]["type"], "tool_result");
+    }
 }
