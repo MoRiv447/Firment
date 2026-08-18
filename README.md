@@ -14,7 +14,9 @@
 
 > ⚠️ **Status: v0.5.9.** Layer 1 (general coding agent) is
 > production-usable and CI-green; Layer 2 (embedded toolchain loop) is
-> partially shipped. APIs and the TUI keep evolving.
+> shipped — build/flash/run, serial monitor, ELF analysis and on-target
+> debugging via probe-rs all work — with deeper debugger features
+> (backtrace, SWO trace) on the roadmap.
 
 **Firmware + Agent = Firment** — a general-purpose coding agent for firmware
 and embedded development, named after *firmament* (the sky above every
@@ -47,7 +49,7 @@ snapshot (`web/src/lib/tools/specs.json`).
   `edit_file` (anchor / line-range / hashline edits, unified diff echo),
   `list_dir`, `glob`, `grep`, `shell`, `web_search` (DuckDuckGo / Tavily /
   Brave), `web_fetch`, `task` (read-only research subagent), `todo`,
-  `ask_user`, `periph_init`, `elf_analyze`, `monitor`
+  `ask_user`, `periph_init`, `elf_analyze`, `monitor`, `debug`
 - **Read-only plan mode**: `--plan` / `/plan` exposes only read tools and
   requires a decision-complete plan
 - **Parallel tool calls**: independent calls run concurrently; same-file
@@ -80,6 +82,18 @@ snapshot (`web/src/lib/tools/specs.json`).
   autodetect; cancelling a turn releases the port immediately
 - **`build` / `flash` / `run`** — CMake/Make/Keil build commands, probe-rs
   flashing (chip from `[tools] default_chip`), all wired into the agent loop
+- **`debug`** — full on-target debugging over the probe via probe-rs
+  (no OpenOCD/GDB dependency), so the agent can debug its own firmware:
+  - `analyze` — one-shot fault diagnosis: halts the target, reads PC/LR/SP
+    and the Cortex-M fault registers (CFSR/HFSR/MMFAR/BFAR), decodes PC/LR
+    against the firmware ELF (`func+0x12`) and explains each set fault flag
+    (IACCVIOL / IBUSERR / UNDEFINSTR / FORCED / VECTTBL / STKOF, ...)
+  - `halt` / `regs` — pause the target and read the full register table; the
+    target stays paused between calls until flashed, reset or `debug continue`
+  - `mem` / `write` — read/write memory with `0x...` or `symbol:name`
+    addresses (resolved from the ELF symbol table); `write` requires approval
+  - `break` / `step` / `continue` — set a breakpoint and report registers when
+    it hits, single-step, resume
 
 ### 🪟 Three surfaces, one kernel
 
@@ -162,6 +176,11 @@ firm /sessions  interactive session picker
 firm install    add to PATH + completions
 firm update     self-update
 firm config     open the configuration file
+firm build      run the configured build command
+firm flash      flash a firmware ELF via probe-rs
+firm run        flash and run the target, streaming RTT logs
+firm monitor    serial monitor with optional ELF symbol decoding
+firm tools      print the tool registry specs as JSON (single source of truth)
 ```
 
 ### 🎮 TUI
@@ -216,7 +235,7 @@ asked for confirmation.
 ```text
 crates/
   firment-core/   Provider abstraction, agent loop, sessions, config, permissions, Tool trait, system prompt, KB seeder
-  firment-tools/  File/search/shell tools, dangerous command guard, periph_init/elf_analyze/monitor (Layer 2)
+  firment-tools/  File/search/shell tools, dangerous command guard, periph_init/elf_analyze/monitor/debug (Layer 2)
   firment-tui/    ratatui terminal UI (git status bar, model/session pickers)
   firment-cli/    clap entry point (bin: firm) + install/update/completions
 gui/              Tauri GUI client (React/Vite + src-tauri)
@@ -238,8 +257,8 @@ cd ide && npm ci && npx tsc --noEmit && npm run build
 
 ### 🗺️ Roadmap
 
-- **Debugger integration (probe-rs)**: breakpoints, registers, memory, and
-  variables inside the agent loop — the missing piece of the hardware loop
+- **Debugger depth**: stack unwinding / backtrace, variable & expression
+  evaluation, SWO/trace streaming into the agent loop
 - TUI command palette (fuzzy finder) and streaming-token animation
 - Tree-sitter structural edits and completions
 - Plugins / MCP on the unified tool registry

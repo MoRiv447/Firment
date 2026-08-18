@@ -13,7 +13,9 @@
 </p>
 
 > ⚠️ **状态：v0.5.9。** 第一层（通用编码 Agent）已可日常使用、
-> CI 全绿；第二层（嵌入式工具链闭环）已部分落地。接口与 TUI 仍在演进。
+> CI 全绿；第二层（嵌入式工具链闭环）已落地——构建/烧录/运行、串口监控、
+> ELF 分析、probe-rs 片内调试均可用——调试器纵深（栈回溯、SWO trace）
+> 在路线图中。接口与 TUI 仍在演进。
 
 **Firmware + Agent = Firment**——一个面向固件与嵌入式开发的通用编码
 Agent。名字取自 *firmament*（苍穹，每个嵌入式工程师头上的那片天），故意
@@ -43,7 +45,7 @@ trait 和会话格式），Web 端是 TypeScript 重新实现，通过提交的�
   （锚点/行区间/hashline 编辑，回显统一 diff）、`list_dir`、`glob`、
   `grep`、`shell`、`web_search`（DuckDuckGo / Tavily / Brave）、`web_fetch`、
   `task`（只读研究子代理）、`todo`、`ask_user`、`periph_init`、
-  `elf_analyze`、`monitor`
+  `elf_analyze`、`monitor`、`debug`
 - **只读计划模式**：`--plan` / `/plan` 只暴露只读工具，要求给出可执行的完整计划
 - **并行工具调用**：独立调用并发执行；同文件读写与粗粒度工具自动串行
 - **工程级系统提示词**：沟通、工程原则、工具策略、验证、安全等分节，
@@ -68,6 +70,18 @@ trait 和会话格式），Web 端是 TypeScript 重新实现，通过提交的�
   释放串口
 - **`build` / `flash` / `run`** —— CMake/Make/Keil 构建命令、probe-rs
   烧录（芯片来自 `[tools] default_chip`），全部接入 Agent 循环
+- **`debug`** —— 通过探针做完整的片内调试（基于 probe-rs，不依赖
+  OpenOCD/GDB），Agent 可以自主调试自己写的固件：
+  - `analyze` —— 一键故障诊断：暂停目标，读取 PC/LR/SP 与 Cortex-M 故障
+    寄存器（CFSR/HFSR/MMFAR/BFAR），对照固件 ELF 解码 PC/LR（`func+0x12`），
+    并逐项解释置位的故障标志（IACCVIOL / IBUSERR / UNDEFINSTR / FORCED /
+    VECTTBL / STKOF ...）
+  - `halt` / `regs` —— 暂停目标并读取完整寄存器表；两次调用之间目标保持
+    暂停，直到烧录、复位或 `debug continue`
+  - `mem` / `write` —— 内存读写，地址支持 `0x...` 或 `symbol:name`
+    （从 ELF 符号表解析）；`write` 需要批准
+  - `break` / `step` / `continue` —— 设置断点并在命中时上报寄存器、
+    单步、恢复运行
 
 ### 🪟 三端入口，同一个内核
 
@@ -149,6 +163,11 @@ firm /sessions 交互式会话选择器
 firm install   加入 PATH + 补全
 firm update    自更新
 firm config    打开配置文件
+firm build     运行配置的构建命令
+firm flash     通过 probe-rs 烧录固件 ELF
+firm run       烧录并运行目标，流式输出 RTT 日志
+firm monitor   串口监控，可选 ELF 符号解码
+firm tools     打印工具注册表 specs（JSON，唯一事实源）
 ```
 
 ### 🎮 TUI
@@ -199,7 +218,7 @@ firm config    打开配置文件
 ```text
 crates/
   firment-core/   Provider 抽象、Agent 循环、会话、配置、权限、Tool trait、系统提示词、KB 种子
-  firment-tools/  文件/搜索/shell 工具、危险命令防护、periph_init/elf_analyze/monitor（第二层）
+  firment-tools/  文件/搜索/shell 工具、危险命令防护、periph_init/elf_analyze/monitor/debug（第二层）
   firment-tui/    ratatui 终端界面（git 状态栏、模型/会话选择器）
   firment-cli/    clap 入口（bin: firm）+ install/update/补全
 gui/              Tauri GUI 客户端（React/Vite + src-tauri）
@@ -221,8 +240,8 @@ cd ide && npm ci && npx tsc --noEmit && npm run build
 
 ### 🗺️ 路线图
 
-- **调试器集成（probe-rs）**：断点、寄存器、内存、变量全部进 Agent 循环——
-  硬件闭环的最后一块拼图
+- **调试器纵深**：栈回溯 / 反汇编、变量与表达式求值、SWO/trace 流式
+  接入 Agent 循环
 - TUI 命令面板（模糊查找）与流式 token 动画
 - tree-sitter 结构化编辑与补全
 - 基于统一工具注册表的插件 / MCP
