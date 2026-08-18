@@ -201,9 +201,13 @@ fn cfsr_analysis(cfsr: u64, hfsr: u64, mmfar: u64, bfar: u64) -> Vec<String> {
 /// command then disconnects (skipping the interactive console), keeping the
 /// target halted on exit (disconnect with suspend_debuggee=true).
 ///
-/// The DAP REPL command set (probe-rs 0.32) is: `reg` (registers), `c`
-/// (continue), `step`, `break *0x...` (address needs the `*` prefix), `reset`,
-/// `quit`. There is no `halt`/`regs`/`continue`/`mem`/`q`.
+/// The DAP REPL command set (probe-rs 0.32), verified on a live ST-Link target:
+/// - `break` with no argument HALTS the target (attach resumes the target, so
+///   every read-only session must halt it first: `-c break -c "info reg"`).
+/// - `info reg` prints the register table; `reg` alone is NOT a command.
+/// - `c` continues, `step` single-steps, `reset` resets (and halts).
+/// - `break *0x...` sets a breakpoint (the `*` prefix is required).
+/// - `quit` disconnects. There is no `halt`/`regs`/`continue`/`mem`/`q`.
 fn debug_args(chip: &str, probe: Option<&str>, commands: &[&str]) -> Vec<String> {
     let mut args = vec!["debug".to_string(), "--chip".to_string(), chip.to_string()];
     if let Some(probe) = probe {
@@ -494,17 +498,20 @@ impl Tool for Debug {
         let cwd = ctx.cwd.clone();
         match action {
             "halt" => {
-                // Attaching halts the target automatically; the session
-                // itself (with quit) is the whole action.
-                let (text, code) =
-                    run_probe_rs_retry(debug_args(&chip, probe.as_deref(), &[]), &cwd, timeout_ms)
-                        .await
-                        .map_err(probe_err)?;
+                // Attach resumes the target, so halt it explicitly with the
+                // no-argument `break` REPL command.
+                let (text, code) = run_probe_rs_retry(
+                    debug_args(&chip, probe.as_deref(), &["break"]),
+                    &cwd,
+                    timeout_ms,
+                )
+                .await
+                .map_err(probe_err)?;
                 finish(code, "target halted", &text)
             }
             "regs" => {
                 let (text, code) = run_probe_rs_retry(
-                    debug_args(&chip, probe.as_deref(), &["reg"]),
+                    debug_args(&chip, probe.as_deref(), &["break", "info reg"]),
                     &cwd,
                     timeout_ms,
                 )
@@ -548,7 +555,7 @@ impl Tool for Debug {
             }
             "analyze" => {
                 let (regs_text, regs_code) = run_probe_rs_retry(
-                    debug_args(&chip, probe.as_deref(), &["reg"]),
+                    debug_args(&chip, probe.as_deref(), &["break", "info reg"]),
                     &cwd,
                     timeout_ms,
                 )
@@ -605,7 +612,7 @@ impl Tool for Debug {
             "break" => {
                 let addr = break_addr.unwrap();
                 let break_cmd = format!("break *{addr:#x}");
-                let cmds: [&str; 3] = [break_cmd.as_str(), "c", "reg"];
+                let cmds: [&str; 3] = [break_cmd.as_str(), "c", "info reg"];
                 let (text, code) = run_probe_rs_retry(
                     debug_args(&chip, probe.as_deref(), &cmds),
                     &cwd,
@@ -621,7 +628,7 @@ impl Tool for Debug {
             }
             "step" => {
                 let (text, code) = run_probe_rs_retry(
-                    debug_args(&chip, probe.as_deref(), &["step", "reg"]),
+                    debug_args(&chip, probe.as_deref(), &["break", "step", "info reg"]),
                     &cwd,
                     timeout_ms,
                 )
@@ -827,7 +834,9 @@ XPSR/PSR: 0x01000000
 
     #[test]
     fn debug_and_read_args_are_ordered() {
-        let args = debug_args("stm32g431rb", Some("P1"), &["reg"]);
+        // A session must halt the target first (attach resumes it), then read
+        // the register table via `info reg` (there is no bare `reg` command).
+        let args = debug_args("stm32g431rb", Some("P1"), &["break", "info reg"]);
         assert_eq!(
             args,
             vec![
@@ -837,12 +846,14 @@ XPSR/PSR: 0x01000000
                 "--probe",
                 "P1",
                 "-c",
-                "reg",
+                "break",
+                "-c",
+                "info reg",
                 "-c",
                 "quit",
             ]
         );
-        let break_args = debug_args("stm32g431rb", None, &["break *0x08001234", "c", "reg"]);
+        let break_args = debug_args("stm32g431rb", None, &["break *0x08001234", "c", "info reg"]);
         assert_eq!(
             break_args,
             vec![
@@ -854,7 +865,7 @@ XPSR/PSR: 0x01000000
                 "-c",
                 "c",
                 "-c",
-                "reg",
+                "info reg",
                 "-c",
                 "quit",
             ]
