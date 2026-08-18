@@ -50,6 +50,20 @@ pub(crate) fn serialize_tool_arguments(arguments: &serde_json::Value) -> String 
     serde_json::to_string(arguments).unwrap_or_default()
 }
 
+/// Final defense: guarantee a tool-call `arguments` value is a JSON
+/// **object** before it is sent to an API, regardless of where it came
+/// from (fresh stream, or a persisted session saved by an older build
+/// whose arguments were degraded to strings).
+pub(crate) fn normalize_tool_arguments(arguments: &serde_json::Value) -> serde_json::Value {
+    if arguments.is_object() {
+        return arguments.clone();
+    }
+    match arguments {
+        Value::String(s) => collect_tool_arguments(s),
+        other => collect_tool_arguments(&other.to_string()),
+    }
+}
+
 /// Coerce a model's raw `arguments` string into a JSON **object**.
 ///
 /// OpenAI-compatible APIs reject assistant `tool_calls` whose `arguments`
@@ -146,5 +160,21 @@ mod tests {
         assert_eq!(collect_tool_arguments("\"quoted text\""), json!({}));
         assert_eq!(collect_tool_arguments("[1, 2, 3]"), json!({}));
         assert_eq!(collect_tool_arguments("{broken json"), json!({}));
+    }
+
+    #[test]
+    fn normalize_repairs_persisted_string_arguments() {
+        // Old sessions saved by a previous build may hold string-shaped
+        // arguments; the send path must repair them, never forward them.
+        assert_eq!(
+            normalize_tool_arguments(&json!("{\"path\": \"main.c\"}")),
+            json!({"path": "main.c"})
+        );
+        assert_eq!(normalize_tool_arguments(&json!("just go ahead")), json!({}));
+        assert_eq!(
+            normalize_tool_arguments(&json!({"path": "main.c"})),
+            json!({"path": "main.c"})
+        );
+        assert_eq!(normalize_tool_arguments(&json!([1, 2])), json!({}));
     }
 }

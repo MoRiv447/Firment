@@ -74,18 +74,21 @@ impl OpenAIProvider {
                 } => {
                     let mut v = json!({"role": "assistant", "content": content});
                     if !tool_calls.is_empty() {
-                        v["tool_calls"] =
-                            json!(tool_calls
-                            .iter()
-                            .map(|tc| json!({
-                                "id": tc.id,
-                                "type": "function",
-                                "function": {
-                                    "name": tc.name,
-                                    "arguments": super::serialize_tool_arguments(&tc.arguments),
-                                }
-                            }))
-                            .collect::<Vec<_>>());
+                        v["tool_calls"] = json!(
+                            tool_calls
+                                .iter()
+                                .map(|tc| json!({
+                                    "id": tc.id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": tc.name,
+                                        "arguments": super::serialize_tool_arguments(
+                                            &super::normalize_tool_arguments(&tc.arguments),
+                                        ),
+                                    }
+                                }))
+                                .collect::<Vec<_>>()
+                        );
                     }
                     v
                 }

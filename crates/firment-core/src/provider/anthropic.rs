@@ -62,7 +62,7 @@ impl AnthropicProvider {
                             "type": "tool_use",
                             "id": tc.id,
                             "name": tc.name,
-                            "input": tc.arguments,
+                            "input": super::normalize_tool_arguments(&tc.arguments),
                         }));
                     }
                     out.push(json!({"role": "assistant", "content": blocks}));
