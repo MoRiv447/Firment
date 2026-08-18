@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.5.7 (2026-08-18) — on-target debugging: the agent can debug its own firmware
+
+- **New `debug` tool** — full inspect/control of the target over the debug probe
+  (probe-rs, no OpenOCD/GDB dependency), letting the agent debug firmware
+  autonomously:
+  - `analyze` — one-shot fault diagnosis: halts the target, reads PC/LR/SP and
+    the Cortex-M fault registers (CFSR/HFSR/MMFAR/BFAR), decodes PC/LR against
+    the firmware ELF (`func+0x12`) and explains each set fault flag
+    (IACCVIOL / IBUSERR / UNDEFINSTR / FORCED / VECTTBL / STKOF, ...).
+  - `halt` / `regs` — pause the target and read all core registers; the target
+    stays paused between calls until flashed, reset or `debug continue`.
+  - `mem` / `write` — read/write memory with `0x...` or `symbol:name`
+    addresses (resolved from the ELF symbol table, no guessing addresses);
+    `write` requires user approval.
+  - `break` / `step` / `continue` — set a breakpoint and report registers when
+    it hits, single-step, resume.
+- **Agent workflow:** the system prompt now includes a debug step — when the
+  target misbehaves/hangs/prints nothing, the agent runs `debug analyze`, reads
+  the source at the decoded PC, verifies runtime state via `mem symbol:...`,
+  and iterates fix → flash → monitor until the fault is gone.
+- Shared probe-rs runner extracted from the flash tool (timeout + install-hint
+  handling reused); `regs` parsing is tolerant of probe-rs output layout
+  changes (falls back to the raw output).
+
 ## v0.5.6 (2026-08-18) — knowledge base expansion: ESP32-C6/C3 + STM32 depth
 
 - **Knowledge base: 15 new cheatsheets** (28 total), seed v4 → v5
