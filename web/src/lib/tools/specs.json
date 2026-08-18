@@ -1,4 +1,4 @@
-[
+﻿[
   {
     "name": "ask_user",
     "description": "Ask the human user (the person running this session) a question and return their answer. Use only for decisions or information only the user has (which board/chip variant, hardware wiring, whether to install a toolchain, preference between approaches). Prefer 2-5 short options; the user can also type a free-form answer. Never ask something you can find out yourself with read_file / web_search / web_fetch, and never use this to ask another AI for information — spawn a `task` subagent for that.",
@@ -39,7 +39,7 @@
   },
   {
     "name": "debug",
-    "description": "Inspect and control the target over the debug probe via probe-rs (ST-Link / J-Link / CMSIS-DAP). Actions: halt (pause the target, stays paused after the call), regs (read all core registers), mem (read memory: width b8/b16/b32/b64, address 0x... or symbol:name resolved from the ELF), write (write memory — changes target state), analyze (one-shot fault diagnosis: halts, reads PC/LR/SP plus the Cortex-M fault registers CFSR/HFSR/MMFAR/BFAR, decodes PC/LR against the ELF and explains the fault cause), break (set a breakpoint, run, report registers when it hits), step (single step from the current PC), continue (resume execution). Use after flash/monitor when the target misbehaves, hangs, or produces no serial output.",
+    "description": "Inspect and control the target over the debug probe via probe-rs (ST-Link / J-Link / CMSIS-DAP). Actions: halt (pause the target, stays paused after the call), regs (read all core registers), mem (read memory: width b8/b16/b32/b64, address 0x... or symbol:name resolved from the ELF), write (write memory — changes target state), analyze (one-shot fault diagnosis: halts, reads PC/LR/SP plus the Cortex-M fault registers CFSR/HFSR/MMFAR/BFAR, decodes PC/LR against the ELF and explains the fault cause), break (set a breakpoint, run, report registers when it hits), step (single step from the current PC), continue (resume execution), backtrace (halt and unwind the call stack — needs an elf with DWARF debug info, i.e. built with -g), trace (stream SWO/ITM trace packets for duration_ms — probe-rs configures CoreSight itself, but the firmware must write ITM ports for data to appear). Use after flash/monitor when the target misbehaves, hangs, or produces no serial output.",
     "input_schema": {
       "properties": {
         "action": {
@@ -52,7 +52,9 @@
             "analyze",
             "break",
             "step",
-            "continue"
+            "continue",
+            "backtrace",
+            "trace"
           ],
           "type": "string"
         },
@@ -60,12 +62,33 @@
           "description": "For mem/write/break: '0x<hex>' or 'symbol:<name>' (resolved from the elf)",
           "type": "string"
         },
+        "baud": {
+          "default": 2000000,
+          "description": "For trace: SWO output baud rate (default 2 Mbps)",
+          "maximum": 25000000,
+          "minimum": 1000,
+          "type": "integer"
+        },
         "chip": {
           "description": "probe-rs chip id, e.g. stm32g431rb (defaults to [tools] default_chip)",
           "type": "string"
         },
+        "clk_hz": {
+          "default": 170000000,
+          "description": "For trace: the clock feeding the TPIU/SWO module in Hz (default 170 MHz, e.g. STM32G4 HCLK); wrong clk makes the decoded stream garbage",
+          "maximum": 500000000,
+          "minimum": 1000,
+          "type": "integer"
+        },
+        "duration_ms": {
+          "default": 3000,
+          "description": "For trace: how long to capture SWO/ITM data (default 3000)",
+          "maximum": 60000,
+          "minimum": 1,
+          "type": "integer"
+        },
         "elf": {
-          "description": "Optional path to the firmware ELF (inside the workspace); needed for symbol:name addresses and for decoding PC/LR in analyze",
+          "description": "Path to the firmware ELF (inside the workspace); REQUIRED for backtrace (needs DWARF debug info) and needed for symbol:name addresses / analyze PC decoding",
           "type": "string"
         },
         "probe": {

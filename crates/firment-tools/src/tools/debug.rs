@@ -244,6 +244,75 @@ fn read_args(chip: &str, probe: Option<&str>, width: &str, addr: u64, words: usi
     args
 }
 
+/// `probe-rs debug <elf> -c ...` — the REPL variant with an ELF, which loads
+/// DWARF debug info so `bt` (backtrace) can resolve function names and
+/// source locations. Without the ELF the REPL has no debug info and `bt`
+/// prints nothing.
+fn debug_elf_args(chip: &str, probe: Option<&str>, elf: &str, commands: &[&str]) -> Vec<String> {
+    let mut args = vec![
+        "debug".to_string(),
+        elf.to_string(),
+        "--chip".to_string(),
+        chip.to_string(),
+    ];
+    if let Some(probe) = probe {
+        args.push("--probe".to_string());
+        args.push(probe.to_string());
+    }
+    for cmd in commands {
+        args.push("-c".to_string());
+        args.push(cmd.to_string());
+    }
+    args.push("-c".to_string());
+    args.push("quit".to_string());
+    args
+}
+
+/// `probe-rs itm swo <duration_ms> <clk_hz> <baud> --chip ...` — streams ITM
+/// packets out the TRACESWO pin for `<duration_ms>` milliseconds. probe-rs
+/// configures the target's CoreSight TPIU/ITM itself (no firmware changes
+/// needed to enable tracing), but the firmware must actually write ITM ports
+/// (e.g. ITM_SendChar) for data to appear.
+fn itm_swo_args(
+    chip: &str,
+    probe: Option<&str>,
+    duration_ms: u64,
+    clk_hz: u64,
+    baud: u64,
+) -> Vec<String> {
+    let mut args = vec![
+        "itm".to_string(),
+        "swo".to_string(),
+        duration_ms.to_string(),
+        clk_hz.to_string(),
+        baud.to_string(),
+        "--chip".to_string(),
+        chip.to_string(),
+        "--non-interactive".to_string(),
+    ];
+    if let Some(probe) = probe {
+        args.push("--probe".to_string());
+        args.push(probe.to_string());
+    }
+    args
+}
+
+/// The `bt` REPL command needs DWARF debug info in the ELF; PlatformIO
+/// defaults and plain `arm-none-eabi-gcc -O2` builds often have none, in
+/// which case probe-rs prints nothing at all. Detect that and point the
+/// agent at a debug build instead of leaving it with a silent empty result.
+fn backtrace_hint(text: &str) -> String {
+    if text.contains("Frame ") {
+        text.to_string()
+    } else {
+        format!(
+            "{text}\n(no stack frames resolved — the firmware ELF has no DWARF \
+             debug info; rebuild with debug symbols, e.g. add `build_flags = -g -Og` \
+             to platformio.ini, then pass the rebuilt ELF)"
+        )
+    }
+}
+
 fn write_args(chip: &str, probe: Option<&str>, width: &str, addr: u64, value: u64) -> Vec<String> {
     let mut args = vec![
         "write".to_string(),
@@ -346,22 +415,28 @@ impl Tool for Debug {
          analyze (one-shot fault diagnosis: halts, reads PC/LR/SP plus the Cortex-M fault \
          registers CFSR/HFSR/MMFAR/BFAR, decodes PC/LR against the ELF and explains the fault \
          cause), break (set a breakpoint, run, report registers when it hits), step (single \
-         step from the current PC), continue (resume execution). Use after flash/monitor when \
-         the target misbehaves, hangs, or produces no serial output."
+         step from the current PC), continue (resume execution), backtrace (halt and unwind \
+         the call stack — needs an elf with DWARF debug info, i.e. built with -g), trace \
+         (stream SWO/ITM trace packets for duration_ms — probe-rs configures CoreSight itself, \
+         but the firmware must write ITM ports for data to appear). Use after flash/monitor \
+         when the target misbehaves, hangs, or produces no serial output."
     }
 
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["halt", "regs", "mem", "write", "analyze", "break", "step", "continue"], "description": "What to do on the target"},
+                "action": {"type": "string", "enum": ["halt", "regs", "mem", "write", "analyze", "break", "step", "continue", "backtrace", "trace"], "description": "What to do on the target"},
                 "chip": {"type": "string", "description": "probe-rs chip id, e.g. stm32g431rb (defaults to [tools] default_chip)"},
                 "probe": {"type": "string", "description": "Optional probe serial/id when multiple probes are attached"},
-                "elf": {"type": "string", "description": "Optional path to the firmware ELF (inside the workspace); needed for symbol:name addresses and for decoding PC/LR in analyze"},
+                "elf": {"type": "string", "description": "Path to the firmware ELF (inside the workspace); REQUIRED for backtrace (needs DWARF debug info) and needed for symbol:name addresses / analyze PC decoding"},
                 "address": {"type": "string", "description": "For mem/write/break: '0x<hex>' or 'symbol:<name>' (resolved from the elf)"},
                 "width": {"type": "string", "enum": ["b8", "b16", "b32", "b64"], "description": "Access width for mem/write (default b32)"},
                 "words": {"type": "integer", "minimum": 1, "maximum": 1024, "description": "Number of words to read for mem (default 1)"},
                 "value": {"type": "integer", "minimum": 0, "description": "Value to write for write (up to 64-bit)"},
+                "duration_ms": {"type": "integer", "minimum": 1, "maximum": 60000, "default": 3000, "description": "For trace: how long to capture SWO/ITM data (default 3000)"},
+                "clk_hz": {"type": "integer", "minimum": 1000, "maximum": 500000000, "default": 170000000, "description": "For trace: the clock feeding the TPIU/SWO module in Hz (default 170 MHz, e.g. STM32G4 HCLK); wrong clk makes the decoded stream garbage"},
+                "baud": {"type": "integer", "minimum": 1000, "maximum": 25000000, "default": 2000000, "description": "For trace: SWO output baud rate (default 2 Mbps)"},
                 "timeout_ms": {"type": "integer", "minimum": 1, "default": 30000}
             },
             "required": ["action"]
@@ -469,12 +544,42 @@ impl Tool for Debug {
         }
         if !matches!(
             action,
-            "halt" | "regs" | "mem" | "write" | "analyze" | "break" | "step" | "continue"
+            "halt"
+                | "regs"
+                | "mem"
+                | "write"
+                | "analyze"
+                | "break"
+                | "step"
+                | "continue"
+                | "backtrace"
+                | "trace"
         ) {
             return Err(ToolError::new(format!(
                 "[InvalidInput] unknown action '{action}'"
             )));
         }
+        if action == "backtrace" && elf.is_none() {
+            return Err(ToolError::new(
+                "[InvalidInput] backtrace needs an elf parameter (the firmware ELF with DWARF \
+                 debug info, i.e. built with -g)",
+            ));
+        }
+        let trace_duration = args
+            .get("duration_ms")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(3_000)
+            .clamp(1, 60_000);
+        let trace_clk = args
+            .get("clk_hz")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(170_000_000)
+            .clamp(1_000, 500_000_000);
+        let trace_baud = args
+            .get("baud")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(2_000_000)
+            .clamp(1_000, 25_000_000);
         // Cortex-M symbols may carry the Thumb bit (bit 0) in their address;
         // breakpoints are halfword-aligned, so mask the LSB instead of
         // rejecting the address (a Thumb symbol's LSB is never an address bit).
@@ -646,6 +751,73 @@ impl Tool for Debug {
                 .await
                 .map_err(probe_err)?;
                 finish(code, "resumed execution", &text)
+            }
+            "backtrace" => {
+                let elf_path = elf.unwrap();
+                let (text, code) = run_probe_rs_retry(
+                    debug_elf_args(
+                        &chip,
+                        probe.as_deref(),
+                        &elf_path.display().to_string(),
+                        &["break", "bt"],
+                    ),
+                    &cwd,
+                    timeout_ms,
+                )
+                .await
+                .map_err(probe_err)?;
+                match code {
+                    Some(0) => Ok(ToolOutput {
+                        text: format!("debug backtrace (exit 0)\n{}", backtrace_hint(&text)),
+                    }),
+                    Some(c) => Err(ToolError::new(format!(
+                        "[Io] probe-rs failed (exit {c})\n{text}"
+                    ))),
+                    None => Err(ToolError::new(format!(
+                        "[Timeout] probe-rs was killed\n{text}"
+                    ))),
+                }
+            }
+            "trace" => {
+                // The duration is intrinsic to the SWO capture; the outer
+                // timeout only guards against a hung probe.
+                let outer = timeout_ms.max(trace_duration + 5_000);
+                let (text, code) = run_probe_rs_retry(
+                    itm_swo_args(
+                        &chip,
+                        probe.as_deref(),
+                        trace_duration,
+                        trace_clk,
+                        trace_baud,
+                    ),
+                    &cwd,
+                    outer,
+                )
+                .await
+                .map_err(probe_err)?;
+                match code {
+                    Some(0) => {
+                        let summary = if text.trim().is_empty() {
+                            "no ITM packets captured (firmware must write ITM ports, e.g. \
+                             ITM_SendChar, for data to appear)\n"
+                        } else {
+                            ""
+                        };
+                        Ok(ToolOutput {
+                            text: format!(
+                                "debug trace captured {trace_duration} ms of SWO/ITM \
+                                 (clk {trace_clk} Hz, baud {trace_baud}) (exit 0)\n{summary}{text}"
+                            ),
+                        })
+                    }
+                    Some(c) => Err(ToolError::new(format!(
+                        "[Io] probe-rs trace failed (exit {c}) — the probe may not support SWO \
+                         reception, or the chip/clk/baud combination is wrong\n{text}"
+                    ))),
+                    None => Err(ToolError::new(format!(
+                        "[Timeout] probe-rs trace was killed\n{text}"
+                    ))),
+                }
             }
             _ => Err(ToolError::new(format!(
                 "[InvalidInput] unknown action '{action}'"
@@ -970,5 +1142,53 @@ XPSR/PSR: 0x01000000
             .await
             .unwrap_err();
         assert!(err.message.contains("does not fit"), "got: {}", err.message);
+    }
+
+    #[tokio::test]
+    async fn backtrace_requires_elf() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = Debug
+            .run(json!({"action": "backtrace"}), &ctx(dir.path()))
+            .await
+            .unwrap_err();
+        assert!(
+            err.message.contains("backtrace needs an elf"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn debug_elf_args_orders_elf_before_chip_flags() {
+        let args = debug_elf_args("stm32g431rb", None, "C:/fw/fw.elf", &["break", "bt"]);
+        assert_eq!(&args[0..2], &["debug", "C:/fw/fw.elf"]);
+        assert!(args.contains(&"--chip".to_string()));
+        assert!(args.contains(&"stm32g431rb".to_string()));
+        assert!(args.windows(2).any(|w| w == ["-c", "bt"]), "got: {args:?}");
+        assert!(
+            args.windows(2).any(|w| w == ["-c", "quit"]),
+            "got: {args:?}"
+        );
+    }
+
+    #[test]
+    fn itm_swo_args_carry_duration_clock_and_baud() {
+        let args = itm_swo_args("stm32g431rb", Some("SER123"), 2500, 170_000_000, 2_000_000);
+        assert_eq!(&args[0..2], &["itm", "swo"]);
+        assert!(args.contains(&"2500".to_string()), "got: {args:?}");
+        assert!(args.contains(&"170000000".to_string()), "got: {args:?}");
+        assert!(args.contains(&"2000000".to_string()), "got: {args:?}");
+        assert!(args.contains(&"--non-interactive".to_string()));
+        assert!(args.contains(&"--probe".to_string()));
+        assert!(args.contains(&"SER123".to_string()));
+    }
+
+    #[test]
+    fn backtrace_hint_detects_missing_dwarf() {
+        assert!(backtrace_hint("    Frame 1: main @ 0x8001234").contains("Frame 1"));
+        let empty = backtrace_hint("");
+        assert!(empty.contains("no DWARF debug info"), "got: {empty}");
+        let noisy = backtrace_hint("probe-rs: some warning\n");
+        assert!(noisy.contains("no DWARF debug info"), "got: {noisy}");
     }
 }

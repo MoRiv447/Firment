@@ -94,6 +94,10 @@ snapshot (`web/src/lib/tools/specs.json`).
     addresses (resolved from the ELF symbol table); `write` requires approval
   - `break` / `step` / `continue` — set a breakpoint and report registers when
     it hits, single-step, resume
+  - `backtrace` — halt and unwind the call stack against the firmware ELF
+    (DWARF-based; the firmware must be built with `-g`)
+  - `trace` — stream SWO/ITM trace packets (`probe-rs itm swo`); probe-rs
+    configures CoreSight itself, the firmware just writes ITM ports
 
 ### 🪟 Three surfaces, one kernel
 
@@ -257,8 +261,8 @@ cd ide && npm ci && npx tsc --noEmit && npm run build
 
 ### 🗺️ Roadmap
 
-- **Debugger depth**: stack unwinding / backtrace, variable & expression
-  evaluation, SWO/trace streaming into the agent loop
+- **Debugger depth**: variable & expression evaluation, SWO/trace streaming
+  into the agent loop (backtrace and SWO capture already ship in `debug`)
 - TUI command palette (fuzzy finder) and streaming-token animation
 - Tree-sitter structural edits and completions
 - Plugins / MCP on the unified tool registry
