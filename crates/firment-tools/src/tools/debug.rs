@@ -120,30 +120,31 @@ const CFSR_BITS: &[(u32, &str, &str)] = &[
         "floating-point lazy state preservation error (M4F)",
     ),
     (1 << 14, "BUSFAULTVALID", "BFAR holds a valid fault address"),
-    (1 << 15, "UNDEFINSTR", "executed an undefined instruction"),
+    // UFSR occupies CFSR bits [31:16]: UNDEFINSTR=16, INVSTATE=17,
+    // INVPC=18, NOCP=19, STKOF=20 (M33 only), UNALIGNED=24, DIVBYZERO=25.
+    (1 << 16, "UNDEFINSTR", "executed an undefined instruction"),
     (
-        1 << 16,
+        1 << 17,
         "INVSTATE",
         "invalid execution state (e.g. EXC_RETURN misuse)",
     ),
     (
-        1 << 17,
+        1 << 18,
         "INVPC",
         "invalid PC load (EXC_RETURN to invalid state)",
     ),
     (
-        1 << 18,
+        1 << 19,
         "NOCP",
         "coprocessor disabled (e.g. FPU without CP10/CP11 enable)",
     ),
-    (1 << 19, "STKOF", "stack overflow (M33)"),
+    (1 << 20, "STKOF", "stack overflow (M33)"),
     (
-        1 << 20,
+        1 << 24,
         "UNALIGNED",
         "unaligned access with UNALIGN_TRP set",
     ),
-    (1 << 21, "DIVBYZERO", "divide by zero with DIV_0_TRP set"),
-    (1 << 24, "BFARVALID", "BFAR holds a valid fault address"),
+    (1 << 25, "DIVBYZERO", "divide by zero with DIV_0_TRP set"),
 ];
 
 const HFSR_BITS: &[(u32, &str, &str)] = &[
@@ -187,7 +188,7 @@ fn cfsr_analysis(cfsr: u64, hfsr: u64, mmfar: u64, bfar: u64) -> Vec<String> {
     } else {
         lines.push("MMFAR = 0x00000000 (not valid)".to_string());
     }
-    if cfsr & (1 << 24) != 0 {
+    if cfsr & (1 << 14) != 0 {
         lines.push(format!(
             "BFAR = 0x{bfar:08x} (valid — faulting bus address)"
         ));
@@ -802,8 +803,8 @@ XPSR/PSR: 0x01000000
 
     #[test]
     fn cfsr_analysis_flags_and_valid_addresses() {
-        // UNDEFINSTR (bit 15) + FORCED + valid BFAR.
-        let lines = cfsr_analysis((1 << 15) | (1 << 24), 0x4000_0000, 0, 0x0800_AAAA);
+        // UNDEFINSTR (bit 16) + FORCED + valid BFAR.
+        let lines = cfsr_analysis((1 << 16) | (1 << 14), 0x4000_0000, 0, 0x0800_AAAA);
         let joined = lines.join("\n");
         assert!(joined.contains("[UNDEFINSTR]"), "got: {joined}");
         assert!(joined.contains("[FORCED]"), "got: {joined}");
@@ -889,7 +890,7 @@ XPSR/PSR: 0x01000000
     #[test]
     fn analysis_report_decodes_pc_and_faults() {
         let regs_text = "pc (r15) = 0x08005678\nlr (r14) = 0x08001234\nsp (r13) = 0x20001abc\nxpsr = 0x01000000\n";
-        let cfsr = vec![1 << 15, 0x4000_0000, 0, 0, 0]; // CFSR, HFSR, DFSR, MMFAR, BFAR
+        let cfsr = vec![1 << 16, 0x4000_0000, 0, 0, 0]; // CFSR, HFSR, DFSR, MMFAR, BFAR
         let stack = vec![0xdead_beef, 0x0800_1234, 0, 0, 0, 0, 0, 0];
         let report = analysis_report("stm32g431rb", regs_text, &cfsr, &stack, 0x2000_1abc, None);
         assert!(report.contains("chip stm32g431rb"), "got: {report}");
