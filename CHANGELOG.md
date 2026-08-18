@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.5.6 (2026-08-18) — knowledge base expansion: ESP32-C6/C3 + STM32 depth
+
+- **Knowledge base: 15 new cheatsheets** (28 total), seed v4 → v5
+  (re-materializes automatically on first run after update).
+  - New chip families: **ESP32-C6** (RISC-V, WiFi 6 + BLE 5 + 802.15.4) and
+    **ESP32-C3** (RISC-V, WiFi 4 + BLE 5) — GPIO/platform + UART, with
+    family entries in `vendor-index.toml` (official TRM/datasheet links) and
+    quickrefs; `periph_init`'s family detection now resolves `esp32c6`/
+    `esp32c3` (also `esp32c3fn4` etc.) before the generic `esp32` fallback.
+  - STM32G4 depth: **pinout** (G431RB LQFP64 has no Port E, NUCLEO LED=PA5 /
+    button=PC13 / VCP=LPUART1), **tim** (timer clock = PCLK×2, TIM2 is the
+    only 32-bit timer), **gpio** (pins come up in analog mode after reset),
+    **adc** (2× 12-bit ADC, calibration required), **flash** (single bank,
+    no read-while-write, 2 KB pages, double-word programming), **iwdg**
+    (LSI-based, window mode, RCC_CSR reset-cause flags).
+  - STM32F4 depth: **gpio** (GPIOA-H, FT pins, SWD/HSE traps), **tim**
+    (32-bit TIM2/5, timer clock computation, advanced-timer MOE).
+  - ESP32 classic depth: **uart** (console pins + GPIO-matrix routing),
+    **adc** (ADC2 unusable under WiFi, attenuation + eFuse calibration),
+    **spi** (HSPI/VSPI defaults, SPI0/1 are the flash bus).
+- `periph_init` now injects the matching family cheatsheet for ESP32-C6/C3
+  and STM32F4/G4 tim/gpio/adc/flash/iwdg; generic fallbacks still apply
+  where no family file exists.
+
 ## v0.5.5 (2026-08-17) — anthropic protocol fixes + TUI interaction fixes
 
 ### Anthropic providers (deepseek02 etc.)
