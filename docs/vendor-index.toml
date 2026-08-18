@@ -32,6 +32,22 @@ confidence = "verified"
 notes = "DMA1 master port sits on AHB1 (APB1/APB2 peripherals reachable via bridge), DMA2 sits on AHB2 (includes USB OTG HS / ETH / DCMI). USB/ETH/DCMI data must use a DMA2 stream."
 
 [[stm32.f4.quickref]]
+topic = "GPIO / EXTI"
+cheatsheet = "cheatsheets/stm32f4-gpio.toml"
+doc_section = "RM0090 GPIO"
+confidence = "verified"
+common_mistake = ["F407 has GPIOA-H; most pins 5 V tolerant but check FT per pin; PA13/14 = SWD, PH0/1 = HSE; pins come up as floating input."]
+
+[[stm32.f4.quickref]]
+topic = "TIM / PWM"
+cheatsheet = "cheatsheets/stm32f4-tim.toml"
+doc_section = "RM0090 TIM"
+hal_functions = ["HAL_TIM_PWM_Start", "__HAL_TIM_SET_COMPARE", "HAL_TIMEx_PWMN_Start"]
+key_registers = ["TIMx_PSC", "TIMx_ARR", "TIMx_CCR1"]
+confidence = "verified"
+common_mistake = ["TIM2/5 are 32-bit; timer clock = PCLK×2 when the APB prescaler ≠ 1 (TIM2-5 @84 MHz, TIM1/8 @168 MHz on F407); advanced timers need MOE for complementary outputs."]
+
+[[stm32.f4.quickref]]
 topic = "Clock tree"
 cheatsheet = "cheatsheets/stm32-clock.toml"
 doc_section = "RM0090 Section 6.2"
@@ -54,6 +70,73 @@ doc_section = "ESP32 TRM Section 5 (GPIO and IOMUX)"
 key_registers = ["GPIO_OUT", "GPIO_IN", "GPIO_ENABLE", "GPIO_<n>_CFG"]
 confidence = "verified"
 common_mistake = ["GPIO 34-39 are input-only: no output or internal pull-up/pull-down; strapping pins (GPIO 0/2/4/5/12/15) sampled at reset determine boot mode and voltage selection — hard-driving them can brick the board or block flashing."]
+
+[[esp32.quickref]]
+topic = "UART"
+cheatsheet = "cheatsheets/esp32-uart.toml"
+doc_section = "ESP32 TRM UART"
+confidence = "verified"
+common_mistake = ["UART0 console defaults to GPIO1(TX)/GPIO3(RX) — remapping it silences the boot console; any GPIO can carry UART signals via the matrix."]
+
+[[esp32.quickref]]
+topic = "ADC"
+cheatsheet = "cheatsheets/esp32-adc.toml"
+doc_section = "ESP32 TRM ADC"
+confidence = "verified"
+common_mistake = ["ADC2 (GPIO0/2/4/12-15/25-27) is unusable while WiFi is active; ADC1 (GPIO32-39, input-only) is the safe choice; use esp_adc_cal for real voltages."]
+
+[[esp32.quickref]]
+topic = "SPI"
+cheatsheet = "cheatsheets/esp32-spi.toml"
+doc_section = "ESP32 TRM SPI"
+confidence = "verified"
+common_mistake = ["HSPI defaults: SCLK14/MISO12/MOSI13/CS15, VSPI: SCLK18/MISO19/MOSI23/CS5; SPI0/1 are the flash bus — user code must use SPI2/SPI3."]
+
+# ───────────────────────── ESP32-C6 ─────────────────────────
+[esp32.c6]
+family = "ESP32-C6 (RISC-V, WiFi 6 + BLE 5 + 802.15.4)"
+reference_manual = { name = "ESP32-C6 Technical Reference Manual", url = "https://www.espressif.com/sites/default/files/documentation/esp32-c6_technical_reference_manual_en.pdf", pages = 1150 }
+datasheet = { name = "ESP32-C6 Series Datasheet", url = "https://www.espressif.com/sites/default/files/documentation/esp32-c6_datasheet_en.pdf", pages = 125 }
+hal_repo = "https://github.com/espressif/esp-idf"
+sdk_version = "ESP-IDF v5.4+"
+last_reviewed = "2026-08-18"
+
+[[esp32.c6.quickref]]
+topic = "GPIO / platform"
+cheatsheet = "cheatsheets/esp32c6-gpio.toml"
+doc_section = "ESP32-C6 TRM GPIO / datasheet Section 2"
+confidence = "verified"
+common_mistake = ["Strapping pins are GPIO4/5/8/9/15 (NOT 2/8/9 — that is C3); GPIO24-30 are the SPI flash bus; USB-Serial/JTAG owns GPIO12/13; UART0 console = GPIO16/17; NOT 5 V tolerant."]
+
+[[esp32.c6.quickref]]
+topic = "UART / LP_UART"
+cheatsheet = "cheatsheets/esp32c6-uart.toml"
+doc_section = "ESP32-C6 TRM UART / LP_UART"
+confidence = "verified"
+common_mistake = ["USB-Serial/JTAG console replaces UART0 output (pick one); LP_UART needs the LP driver and works only from the ULP side; any GPIO can carry UART0/1."]
+
+# ───────────────────────── ESP32-C3 ─────────────────────────
+[esp32.c3]
+family = "ESP32-C3 (RISC-V, WiFi 4 + BLE 5)"
+reference_manual = { name = "ESP32-C3 Technical Reference Manual", url = "https://www.espressif.com/sites/default/files/documentation/esp32-c3_technical_reference_manual_en.pdf", pages = 800 }
+datasheet = { name = "ESP32-C3 Series Datasheet", url = "https://www.espressif.com/sites/default/files/documentation/esp32-c3_datasheet_en.pdf", pages = 80 }
+hal_repo = "https://github.com/espressif/esp-idf"
+sdk_version = "ESP-IDF v5.x"
+last_reviewed = "2026-08-18"
+
+[[esp32.c3.quickref]]
+topic = "GPIO / platform"
+cheatsheet = "cheatsheets/esp32c3-gpio.toml"
+doc_section = "ESP32-C3 TRM GPIO / datasheet"
+confidence = "verified"
+common_mistake = ["22 GPIOs (0-21), none input-only; strapping = GPIO2/8/9; USB-JTAG owns GPIO18/19; UART0 console = GPIO20(RX)/21(TX); GPIO12-17 are the SPI flash bus; NOT 5 V tolerant."]
+
+[[esp32.c3.quickref]]
+topic = "UART"
+cheatsheet = "cheatsheets/esp32c3-uart.toml"
+doc_section = "ESP32-C3 TRM UART"
+confidence = "verified"
+common_mistake = ["USB-Serial/JTAG console replaces UART0 output (pick one); only UART0/1 exist (no UART2); any GPIO can carry UART0/1."]
 
 # ───────────────────────── STM32 F1 ─────────────────────────
 [stm32.f1]
@@ -153,6 +236,55 @@ hal_functions = ["HAL_UART_Transmit_DMA", "HAL_UART_Receive_DMA", "HAL_DMA_Init"
 key_registers = ["DMAMUX1_REQ0..REQx", "DMA_SxCR", "USART_BRR"]
 confidence = "verified"
 notes = "G4 has NO fixed DMA channel mapping — requests route through DMAMUX1; compute BRR from the actual PCLK1/PCLK2"
+
+[[stm32.g4.quickref]]
+topic = "Pinout / package"
+cheatsheet = "cheatsheets/stm32g4-pinout.toml"
+doc_section = "DS12589 pinout / UM2505 (NUCLEO-G431RB)"
+confidence = "verified"
+common_mistake = ["G431RB (LQFP64) has NO Port E — any PE* pin compiles but drives nothing (phantom-pin trap); NUCLEO: LED=PA5, button=PC13, ST-Link VCP=LPUART1 PA2/PA3; 5V tolerance is per-pin (FT vs TT_a)."]
+
+[[stm32.g4.quickref]]
+topic = "TIM / PWM"
+cheatsheet = "cheatsheets/stm32g4-tim.toml"
+doc_section = "RM0440 TIM sections"
+hal_functions = ["HAL_TIM_PWM_Start", "__HAL_TIM_SET_COMPARE", "HAL_TIMEx_PWMN_Start"]
+key_registers = ["TIMx_PSC", "TIMx_ARR", "TIMx_CCR1"]
+confidence = "verified"
+common_mistake = ["Timer clock = PCLK×2 when the APB prescaler ≠ 1 (up to 170 MHz); TIM2 is the only 32-bit timer; channel pins come from the datasheet AF table (e.g. TIM3_CH2 = PA4/PA7/PB5/PC7 AF2) — never from memory."]
+
+[[stm32.g4.quickref]]
+topic = "GPIO / EXTI"
+cheatsheet = "cheatsheets/stm32g4-gpio.toml"
+doc_section = "RM0440 GPIO"
+confidence = "verified"
+common_mistake = ["G4 pins come up in ANALOG mode after reset (not floating input like F1/F4); 16 EXTI lines shared across ports — one pin per line."]
+
+[[stm32.g4.quickref]]
+topic = "ADC"
+cheatsheet = "cheatsheets/stm32g4-adc.toml"
+doc_section = "DS12589 ADC / RM0440 ADC"
+hal_functions = ["HAL_ADCEx_Calibration_Start", "HAL_ADC_Start_DMA", "HAL_ADCEx_OversamplingConfig"]
+confidence = "verified"
+common_mistake = ["G431 has 2× 12-bit ADCs (4 Msps, up to 16-bit via hardware oversampling); calibration is REQUIRED; sampling time must fit the source impedance."]
+
+[[stm32.g4.quickref]]
+topic = "FLASH / persistence"
+cheatsheet = "cheatsheets/stm32g4-flash.toml"
+doc_section = "RM0440 Flash"
+hal_functions = ["HAL_FLASH_Program", "HAL_FLASHEx_Erase"]
+key_registers = ["FLASH_CR", "FLASH_SR"]
+confidence = "verified"
+common_mistake = ["G431: single bank, NO read-while-write; 2 KB pages, 8-byte double-word programming; erase/program only in voltage range 1; unlock before use."]
+
+[[stm32.g4.quickref]]
+topic = "IWDG / reset cause"
+cheatsheet = "cheatsheets/stm32g4-iwdg.toml"
+doc_section = "RM0440 IWDG / RCC_CSR"
+hal_functions = ["HAL_IWDG_Init", "HAL_IWDG_Refresh"]
+key_registers = ["IWDG_PR", "IWDG_RLR", "IWDG_WINR", "RCC_CSR"]
+confidence = "verified"
+common_mistake = ["IWDG runs on LSI (~32 kHz), not SYSCLK; window mode resets on early refresh too; read RCC_CSR at startup to distinguish wake-from-standby vs watchdog trip."]
 
 [[stm32.g4.quickref]]
 topic = "Math accelerator"

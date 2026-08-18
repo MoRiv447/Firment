@@ -1,0 +1,26 @@
+# esp32-uart.toml — ESP32 (classic) UART original cheatsheet (engineering experience + ESP32 datasheet / ESP-IDF docs)
+[meta]
+family = "ESP32 (ESP32-D0WD/D0WDQ6)"
+topic = "UART"
+confidence = "verified"
+last_reviewed = "2026-08-18"
+source = "Engineering experience cross-checked with the ESP32 datasheet and ESP-IDF UART docs"
+
+[overview]
+uarts = "UART0/UART1/UART2 (all routable to ANY GPIO via the GPIO matrix)"
+defaults = "UART0 default console: GPIO1 (TX) / GPIO3 (RX); UART1 default: GPIO10 (TX) / GPIO9 (RX); UART2 default: GPIO17 (TX) / GPIO16 (RX)"
+baud = "Up to 5 Mbps; console/IDF monitor defaults to 115200"
+console = "UART0 is the bootloader console — its pins carry ROM boot logs and flashing traffic; moving UART0 elsewhere silences the console"
+
+[hal_flow]
+init = "uart_driver_install + uart_param_config (baud, data bits, parity, stop) + uart_set_pin; use UART_NUM_0/1/2"
+read = "uart_read_bytes / uart_get_buffered_data_len; event task with UART_EVENT_RX_DATA for async receive"
+download = "Classic ESP32 enters download mode with GPIO0 held LOW during reset — the flash tool drives it; do not hard-drive GPIO0 at boot in your own circuits"
+
+common_mistake = [
+  "Assuming UART pins are fixed — the matrix allows any pin; read the wiring",
+  "Using GPIO1/3 for something else and wondering why the console is dead",
+  "Putting UART1/2 on pins that conflict with flash (GPIO6-11 on ESP32 classic are flash/PSRAM related in many modules) — check the module datasheet",
+  "Configuring baud 115200 but the other side is 9600/230400 — verify both ends",
+  "Forgetting uart_set_pin after reconfiguration — stale pin mapping",
+]

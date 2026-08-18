@@ -1,0 +1,26 @@
+# esp32c6-uart.toml — ESP32-C6 UART original cheatsheet (engineering experience + ESP32-C6 datasheet v1.5 / ESP-IDF docs)
+[meta]
+family = "ESP32-C6"
+topic = "UART / LP_UART / USB console"
+confidence = "verified"
+last_reviewed = "2026-08-18"
+source = "Engineering experience cross-checked with the ESP32-C6 datasheet v1.5 and ESP-IDF UART documentation"
+
+[overview]
+uarts = "UART0 + UART1 (both routable to ANY GPIO via the GPIO matrix — no fixed pins besides the defaults) + LP_UART (low-power, ULP-core accessible)"
+default_pins = "UART0 default console: GPIO16 (TX) / GPIO17 (RX); defaults can be remapped in software"
+baud = "Up to 5 Mbps (check for C6 revisions); console/IDF monitor defaults to 115200"
+usb_console = "Built-in USB-Serial/JTAG controller (GPIO12/13) can serve as the console instead of UART0 — it is a console REPLACEMENT (USB CDC), not an extra UART port"
+
+[hal_flow]
+init = "uart_driver_install(uart_num, rx_buf, tx_buf, ...) + uart_param_config + uart_set_pin; UART_NUM_0 is the console, UART_NUM_1 is free"
+read = "uart_read_bytes; event-driven receive uses UART_EVENT_RX_DATA / UART_EVENT_RX_FIFO_THRESH on uart_event task"
+lp_uart = "LP_UART works in deep sleep (ULP LP-core can drive it) — different driver (lp_uart_driver_install), NOT uart_driver_install"
+
+common_mistake = [
+  "Assuming UART pins are fixed — on C6 any GPIO can carry UART0/UART1, so read the actual wiring instead of defaulting to 16/17",
+  "Using USB-Serial/JTAG and UART0 for logs at the same time — the USB console replaces UART0 output; pick one",
+  "Calling uart_driver_install on the LP_UART — LP_UART needs the LP driver and only works from the LP/ULP side",
+  "Initializing UART0 on GPIO12/13 — those are USB-JTAG pins; UART on them disables USB flashing",
+  "Forgetting uart_set_pin after uart_param_config — the default pins only apply until the first reconfiguration",
+]

@@ -1,0 +1,27 @@
+# stm32f4-gpio.toml — STM32F4 GPIO/EXTI original cheatsheet (engineering experience + RM0090)
+[meta]
+family = "STM32F4xx (F407)"
+topic = "GPIO / EXTI"
+confidence = "verified"
+last_reviewed = "2026-08-18"
+source = "Engineering experience cross-checked with RM0090"
+
+[overview]
+ports = "F407: GPIOA-GPIOH (8 ports); most GPIOs are 5 V tolerant (FT) — check the datasheet pin column, a few are TT (e.g. PA4/PA5 on F407 are TT)"
+reset_state = "After reset pins are in FLOATING INPUT mode (unlike G4/G0 which come up analog) — configure MODER/PUPDR explicitly for LEDs and buttons"
+modes = "Input / Output / Alternate / Analog per pin (MODER); AF0-AF15 via GPIOx_AFRL/AFRH; open-drain via OTYPER; speed via OSPEEDR"
+exti = "16 EXTI lines shared across ports (one pin per line); each line has its own IRQ (EXTI0..EXTI15_10); NVIC enable required"
+
+[hal_flow]
+init = "HAL_GPIO_Init with GPIO_InitStruct (Pin, Mode, Pull, Speed, Alternate) — AF pins: GPIO_MODE_AF_PP + Alternate = GPIO_AFx_..."
+toggle = "HAL_GPIO_TogglePin / WritePin / ReadPin; HAL_GPIO_EXTI_IRQHandler in the EXTI ISR + HAL_GPIO_EXTI_Callback"
+clock = "GPIOA..GPIOH clocks: __HAL_RCC_GPIOx_CLK_ENABLE() (AHB1) — the classic forgotten-enable bug"
+
+common_mistake = [
+  "Forgetting __HAL_RCC_GPIOx_CLK_ENABLE() — GPIO writes silently do nothing",
+  "Assuming all F4 pins are 5 V tolerant — check FT per pin in the datasheet",
+  "Occupying PA13/PA14 (SWD) or PH0/PH1 (HSE) for LEDs — breaks debugging/clock",
+  "Two pins on the same EXTI line number — only one input per line can be active",
+  "Missing NVIC enable for EXTI — pin configured, interrupt never fires",
+  "Not setting OSPEEDR for fast signals (SPI/FSMC) — outputs too slow at low speed",
+]

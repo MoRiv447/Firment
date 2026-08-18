@@ -1,0 +1,27 @@
+# esp32-spi.toml — ESP32 (classic) SPI original cheatsheet (engineering experience + ESP32 datasheet / ESP-IDF docs)
+[meta]
+family = "ESP32 (ESP32-D0WD/D0WDQ6)"
+topic = "SPI"
+confidence = "verified"
+last_reviewed = "2026-08-18"
+source = "Engineering experience cross-checked with the ESP32 datasheet and ESP-IDF SPI docs"
+
+[overview]
+buses = "SPI0/SPI1 = flash/PSRAM bus (never for user peripherals); SPI2 (HSPI) and SPI3 (VSPI) are the user SPI peripherals (max 80 MHz master)"
+defaults = "HSPI defaults: SCLK=GPIO14, MISO=GPIO12, MOSI=GPIO13, CS=GPIO15; VSPI defaults: SCLK=GPIO18, MISO=GPIO19, MOSI=GPIO23, CS=GPIO5 (all remappable via the GPIO matrix)"
+pins = "MISO is REQUIRED for any read (even status/ID reads); loopback wiring (MOSI→MISO) is a valid smoke test"
+dma = "SPI DMA (spi_bus_add_device with DMA channel 1/2) for large transfers; polling mode for short ones"
+quad = "1/2/4-line modes exist (SPI2/SPI3 support quad for external RAM/display but keep 4-line to SD-like devices)"
+
+[hal_flow]
+init = "spi_bus_initialize(SPI2_HOST, &buscfg, dma_chan) + spi_bus_add_device + spi_transfer_begin"
+tran = "spi_transaction_t {cmd, addr, tx_buffer, rx_buffer, length} — full-duplex: fill both buffers; half-duplex with dummy bytes for reads"
+cpol = "Set clock polarity/phase to match the slave (mode 0-3); wrong CPOL/CPHA is the #1 'SPI not working' cause"
+
+common_mistake = [
+  "Touching SPI0/SPI1 — that is the flash bus; user code must use SPI2_HOST/SPI3_HOST",
+  "Omitting MISO — every slave read (ID/status/data) fails silently with zeroes",
+  "Wrong CPOL/CPHA or clock speed for the slave — symptoms look like bad wiring",
+  "Forgetting CS control in multi-slave setups — CS can be software or hardware, but it must be asserted per transaction",
+  "Long wiring at 80 MHz without pull-ups/termination — drop to 20-40 MHz for breadboard work",
+]

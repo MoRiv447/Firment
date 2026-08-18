@@ -1,0 +1,26 @@
+# esp32-adc.toml — ESP32 (classic) ADC original cheatsheet (engineering experience + ESP32 datasheet / ESP-IDF docs)
+[meta]
+family = "ESP32 (ESP32-D0WD/D0WDQ6)"
+topic = "ADC"
+confidence = "verified"
+last_reviewed = "2026-08-18"
+source = "Engineering experience cross-checked with the ESP32 datasheet and ESP-IDF ADC docs"
+
+[overview]
+adc1 = "ADC1: 8 channels on GPIO32-39 (0-3.3 V, 12-bit SAR) — the safe general-purpose ADC"
+adc2 = "ADC2: 10 channels (GPIO0/2/4/12-15/25-27) BUT WiFi uses ADC2 — readings return garbage/errors while WiFi is active; avoid ADC2 unless WiFi is off"
+atten = "Attenuation sets the full-scale range: ADC_ATTEN_DB_0 → ~1.1 V max; ADC_ATTEN_DB_2_5 → ~1.5 V; ADC_ATTEN_DB_6 → ~2.2 V; ADC_ATTEN_DB_11 → ~3.3 V (use this for full range)"
+calibration = "Use esp_adc_cal (eFuse two-point calibration) for real voltages — raw counts are non-linear; HAL_ADC_conversion... in ESP-IDF: esp_adc_cal_raw_to_voltage"
+
+[hal_flow]
+init = "adc1_config_width(ADC_WIDTH_BIT_12) + adc1_config_channel_atten(channel, ADC_ATTEN_DB_11); read via adc1_get_raw(channel)"
+cal = "esp_adc_cal_get_characteristics(VREF, ADC_ATTEN_DB_11, width, &chars) then esp_adc_cal_raw_to_voltage(raw, &chars)"
+dma = "High-speed sampling: ADC continuous mode (adc_continuous_*) or the I2S ADC mode on ADC1 — not plain adc1_get_raw"
+
+common_mistake = [
+  "Reading ADC2 while WiFi is on — invalid/garbage results; WiFi owns ADC2",
+  "Forgetting attenuation — with ATTEN_DB_0 the input saturates above ~1.1 V and everything reads max",
+  "Converting raw counts to volts with a linear formula without eFuse calibration — ESP32 ADC is non-linear; use esp_adc_cal",
+  "Using GPIO34-39 as outputs (classic ESP32 ADC1 pins are input-only!) — these pins cannot drive outputs",
+  "Sampling faster than the ADC's effective rate without DMA/continuous mode — busy-poll loops miss samples",
+]

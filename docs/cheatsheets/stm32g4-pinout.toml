@@ -1,0 +1,28 @@
+# stm32g4-pinout.toml — STM32G4 pinout/package facts (engineering experience + STM32G431 datasheet DS12589 / UM2505)
+[meta]
+family = "STM32G4xx (G431/G474)"
+topic = "Pinout / package / board facts"
+confidence = "verified"
+last_reviewed = "2026-08-18"
+source = "Engineering experience cross-checked with DS12589 (STM32G431) and UM2505 (NUCLEO-G431RB)"
+
+[overview]
+g431rb = "LQFP64 (10x10 mm), 52 GPIOs, 170 MHz Cortex-M4F, 128 KB flash, 32 KB SRAM"
+ports = "G431RB exposes ONLY GPIOA (PA0-15), GPIOB (PB0-15), GPIOC (PC0-15), GPIOD (PD0-PD2) — THERE IS NO PORT E on the LQFP64 package. PE0-PE15 and every 'PE5'-style pin are physically absent; code that touches GPIOE compiles (the CMSIS header defines it) but drives nothing."
+no_port_e = "CRITICAL: on G431RB (LQFP64) any PE* pin reference is a hallucination. Port E only exists on LQFP100 (G431Vx). Verify the part's package before writing pin code."
+pins = "PC14/PC15 double as OSC32_IN/OSC32_OUT (32.768 kHz crystal); PA13/PA14 = SWDIO/SWCLK (keep free unless debug is disabled)"
+5v_tolerant = "Some pins are 5 V tolerant (FT), others are 3.3 V only (TT_a) — always check the datasheet pin column, never assume (e.g. PA4/PA5/PA6/PA7 are TT_a, PC4 is FT)"
+
+[board_facts]
+nucleo_led = "NUCLEO-G431RB user LED LD4 = PA5 (active high); onboard 3.3V regulator; 1 user button B1 = PC13 (EXTI-capable)"
+nucleo_vcp = "ST-Link virtual COM port reaches the MCU via LPUART1 on PA2 (TX) / PA3 (RX) — NOT a USB CDC device; no USB device stack needed for console output"
+nucleo_uart2 = "USART2 is also available (PA2/PA3 share; on this board LPUART1 owns the VCP wiring)"
+stlink = "ST-LINK on-board: SWD via PA13/PA14; the debug probe also provides VCP, mass storage and USB re-enumeration"
+
+common_mistake = [
+  "Writing PE* pins on a G431RB (LQFP64) — Port E does not exist on this package; the code compiles but no signal comes out (case02 phantom-pin trap)",
+  "Assuming every pin is 5 V tolerant — G431 mixes TT_a (3.3 V only) and FT pins; check the datasheet column",
+  "Occupying PA13/PA14 for GPIO/LEDs — kills SWD flashing until a full chip erase via bootloader",
+  "Wiring PC14/PC15 as GPIO while a 32 kHz crystal is soldered — they are the LSE pins",
+  "Treating the ST-Link VCP as an MCU-side USB-CDC — the MCU side is plain LPUART1 on PA2/PA3",
+]

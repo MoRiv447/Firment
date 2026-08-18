@@ -1,0 +1,29 @@
+# stm32g4-iwdg.toml — STM32G4 IWDG + reset-cause original cheatsheet (engineering experience + RM0440)
+[meta]
+family = "STM32G4xx (G431/G474)"
+topic = "IWDG / reset cause"
+confidence = "verified"
+last_reviewed = "2026-08-18"
+source = "Engineering experience cross-checked with RM0440"
+
+[overview]
+clock = "IWDG runs on LSI (≈32 kHz) — independent of the main clock; keepalive timing must use LSI frequency, not SYSCLK"
+regs = "IWDG_PR prescaler (÷4/8/16/32/64/128/256), IWDG_RLR 12-bit reload (max 4095); window mode via IWDG_WINR"
+refresh = "HAL_IWDG_Refresh() before the counter underflows; in window mode refresh is only allowed INSIDE the window — too early also resets"
+lock = "PR/RLR/WINR are write-protected after write (IWDG_KR key) — write them before enabling, and don't expect to change the timeout at runtime without a system reset"
+
+[hal_flow]
+init = "IWDG_HandleTypeDef hiwdg + HAL_IWDG_Init (Prescaler, Reload, Window, Activation); then refresh in the main loop or a timer callback"
+window = "Window mode: HAL_IWDG_Init with Window=1 forces a tiny refresh window (good for verifying the watchdog actually fires early in testing)"
+
+[reset_cause]
+rcc_csr = "RCC_CSR holds the reset cause flags — read them at startup to know WHY the chip woke/reset: IWDGRSTF, LPWRRSTF (standby/stop exit), WUTRSTF (window watchdog), BORRSTF (brownout), PINRSTF (NRST), SFTRSTF (software), PORRSTF (power-on)"
+wake = "Wake-from-standby leaves LPWRRSTF set — check it before re-initializing volatile state so the firmware can skip re-initializing RAM-persisted data"
+
+common_mistake = [
+  "Computing the IWDG timeout from SYSCLK (e.g. 170 MHz) — LSI is ≈32 kHz, so a 4095 reload is only ~4-8 s depending on prescaler",
+  "Refreshing too early in window mode — outside the window triggers a reset too",
+  "Expecting to change IWDG_PRESCALER/RELOAD at runtime — write-protected until the next reset",
+  "Not checking RCC_CSR — debugging 'chip randomly restarts' without the reset-cause flags is guesswork (LPWRRSTF = wake, IWDGRSTF = watchdog trip)",
+  "Initializing IWDG but never refreshing it in the actual main loop — first timeout fires immediately",
+]

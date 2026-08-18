@@ -1,0 +1,29 @@
+# stm32g4-flash.toml — STM32G4 FLASH original cheatsheet (engineering experience + RM0440 / STM32G4 Flash training deck)
+[meta]
+family = "STM32G4xx (G431/G474)"
+topic = "FLASH / persistence"
+confidence = "verified"
+last_reviewed = "2026-08-18"
+source = "Engineering experience cross-checked with RM0440 and the STM32G4 flash presentation"
+
+[overview]
+g431 = "G431 (category 2): 128 KB main flash, SINGLE bank only (0x0800 0000 start), 64 pages × 2 KB, 8-byte double-word programming, ECC (8 bits per double word)"
+g474 = "G47x/G48x (category 3): 512 KB, dual bank option (DBANK bit), pages 2 KB (dual) or 4 KB (single), read-while-write only in dual-bank mode"
+rw = "G431 has NO read-while-write — code fetches stall during erase/program of the running flash (no second bank to run from)"
+program = "Write unit = 8-byte double word (HAL_FLASH_Program(FLASH_TYPEPROGRAM_DOUBLEWORD)); must be erased first (PROGERR otherwise); erase unit = 2 KB page (HAL_FLASHEx_Erase)"
+timing = "Page/bank/mass erase ≈ 22 ms; double-word program ≈ 82 µs; erase/program require voltage range 1 (PWR_CR1 VOS=01) — on the default range they fail"
+
+[hal_flow]
+persist = "For 'save settings across power cycles': erase the target page, then write double-words via HAL_FLASH_Program; verify by reading back; keep an app-level signature/version field"
+unlock = "HAL_FLASH_Unlock() before any program/erase; HAL_FLASH_Lock() after (both needed, one-shot keys)"
+sector = "Never program the page the running code lives in on G431 (no RWW) — it will fault; use a dedicated data page at the end of flash and jump/reboot around updates"
+otp = "1 KB OTP (bank 1 only) for factory-ish data; option bytes for protection (WRP per page, RDP levels, PCROP)"
+
+common_mistake = [
+  "Programming 32-bit words on G4 — the programming unit is a double word (8 bytes); HAL_FLASH_Program with 32-bit type fails or corrupts",
+  "Writing without erasing first — PROGERR; and erase returns 0xFF only after a full page erase",
+  "Assuming dual-bank/RWW on G431 — single bank, no RWW; updating the running app region stalls execution",
+  "Forgetting voltage range 1 (VOS=01) — program/erase operations are only possible in scaling range 1",
+  "Treating flash like SRAM (byte writes) — page erase granularity is 2 KB on G431",
+  "Missing HAL_FLASH_Unlock — the flash controller is locked after reset",
+]

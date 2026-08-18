@@ -1,0 +1,26 @@
+# esp32c3-uart.toml — ESP32-C3 UART original cheatsheet (engineering experience + ESP32-C3 datasheet / ESP-IDF docs)
+[meta]
+family = "ESP32-C3"
+topic = "UART / USB console"
+confidence = "verified"
+last_reviewed = "2026-08-18"
+source = "Engineering experience cross-checked with the ESP32-C3 datasheet and ESP-IDF UART documentation"
+
+[overview]
+uarts = "UART0 + UART1 (both routable to ANY GPIO via the GPIO matrix — no fixed pins besides the defaults)"
+default_pins = "UART0 default console: GPIO20 (RX) / GPIO21 (TX); remappable in software"
+baud = "Up to 5 Mbps; console/IDF monitor defaults to 115200"
+usb_console = "Built-in USB-Serial/JTAG controller (GPIO18/19) can replace UART0 as the console — it is a console REPLACEMENT (USB CDC), not an extra UART port"
+
+[hal_flow]
+init = "uart_driver_install(uart_num, rx_buf, tx_buf, ...) + uart_param_config + uart_set_pin; UART_NUM_0 is the console, UART_NUM_1 is free"
+read = "uart_read_bytes; event-driven receive uses UART_EVENT_RX_DATA / UART_EVENT_RX_FIFO_THRESH on the uart event task"
+remap = "UART0 can be moved to any pins, but its console role (bootloader logs, flashing) stays tied to whatever the ROM uses at reset"
+
+common_mistake = [
+  "Assuming UART pins are fixed — on C3 any GPIO can carry UART0/UART1, read the actual wiring",
+  "Using USB-Serial/JTAG and UART0 for logs at the same time — the USB console replaces UART0 output; pick one",
+  "Putting UART on GPIO18/19 — those are USB-JTAG pins; UART on them disables USB flashing",
+  "Forgetting uart_set_pin after uart_param_config — the default pins only apply until the first reconfiguration",
+  "Expecting a second hardware UART beyond UART0/1 — there is no UART2 on C3",
+]

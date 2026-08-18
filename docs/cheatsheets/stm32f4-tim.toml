@@ -1,0 +1,29 @@
+# stm32f4-tim.toml — STM32F4 TIM/PWM original cheatsheet (engineering experience + RM0090)
+[meta]
+family = "STM32F4xx (F407)"
+topic = "TIM / PWM"
+confidence = "verified"
+last_reviewed = "2026-08-18"
+source = "Engineering experience cross-checked with RM0090"
+
+[overview]
+timers = "TIM1/TIM8 advanced (APB2, complementary outputs, dead time, brake); TIM2/TIM5 32-bit general-purpose (APB1); TIM3/TIM4 16-bit (APB1); TIM9-14 16-bit (TIM9-11 APB2, TIM12-14 APB1); TIM6/7 basic"
+clock = "Timer kernel clock = PCLK×2 when the APB prescaler ≠ 1: on F407 at 168 MHz SYSCLK, APB1=42 MHz → TIM2-5/12-14 run at 84 MHz; APB2=84 MHz → TIM1/8/9-11 at 168 MHz — compute PWM from the TIMER clock, not the APB clock"
+formula = "PWM frequency = timer_clock / ((PSC+1) × (ARR+1)); duty = compare / (ARR+1)"
+note32 = "TIM2/TIM5 are 32-bit (PSC/ARR up to 2^32-1) — great for long timeouts/encoders; the rest are 16-bit (max 65535)"
+
+[af_mapping]
+note = "Channel pins come from the datasheet AF table (AF1 for TIM1/2/3/4/5 mostly): e.g. F407 TIM2_CH1 = PA0 (AF1), TIM3_CH2 = PB5 (AF2) or PC7 (AF2), TIM4_CH1 = PB6 (AF2), TIM1_CH1 = PA8 (AF1) — verify per part/package"
+
+[hal_flow]
+init = "HAL_TIM_PWM_Init + __HAL_TIM_SET_COMPARE + HAL_TIM_PWM_Start(htim, TIM_CHANNEL_x)"
+advanced = "TIM1/8 complementary: HAL_TIMEx_PWMN_Start() + __HAL_TIM_MOE_ENABLE(); brake input/dead-time via HAL_TIMEx_ConfigBreakDeadTime"
+dma = "DMA burst for multi-channel PWM via HAL_TIM_DMABurst_MultiBurstStart — or use a single DMA request on update for the ARR/CCR"
+
+common_mistake = [
+  "Computing TIM2-5/12-14 at PCLK1=42 MHz — it is 84 MHz (×2 when the APB prescaler ≠ 1)",
+  "Assuming every timer is 16-bit — TIM2/5 are 32-bit on F4",
+  "PWM on TIM1/8 without MOE — complementary channels stay silent",
+  "Inventing AF pin mappings from memory — read the datasheet AF table (e.g. TIM3_CH2 is PB5 or PC7, never a phantom pin)",
+  "PSC/ARR overflow on 16-bit timers for slow PWM (e.g. 1 Hz needs PSC≥170000 on a 16-bit timer — impossible; use a 32-bit timer or raise PSC limits differently)",
+]

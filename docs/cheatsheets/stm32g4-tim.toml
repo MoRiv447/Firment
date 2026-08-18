@@ -1,0 +1,32 @@
+# stm32g4-tim.toml — STM32G4 TIM/PWM original cheatsheet (engineering experience + RM0440 / DS12589)
+[meta]
+family = "STM32G4xx (G431/G474)"
+topic = "TIM / PWM"
+confidence = "verified"
+last_reviewed = "2026-08-18"
+source = "Engineering experience cross-checked with RM0440 and DS12589"
+
+[overview]
+timers = "G431: TIM1/TIM8 advanced (APB2, up to 8 PWM channels, complementary outputs, dead time, emergency stop), TIM2 32-bit + TIM3/TIM4 16-bit general-purpose (APB1), TIM15 (2ch + 1 complementary) / TIM16 / TIM17 (APB2), LPTIM1, 2 watchdogs"
+clock = "Timer kernel clock = PCLK×2 whenever the APB prescaler ≠ 1; on G4 the timer clock can reach 170 MHz (PCLK1/PCLK2 up to 85 MHz with x2 timers) — never compute PWM from the raw 85 MHz PCLK1"
+formula = "PWM frequency = timer_clock / ((PSC+1) × (ARR+1)); duty = compare / (ARR+1). 16-bit PSC/ARR max 65535 (TIM2 on G4 is 32-bit)"
+encoders = "TIM2/TIM3/TIM4 support quadrature encoder input and pulse counting (TI1/TI2); TIM1/TIM8 are motor-control oriented"
+
+[af_mapping]
+note = "ALWAYS read the AF table in the datasheet for the exact part — channel pin mappings differ per package. Verified examples on G431: TIM3_CH2 = PA4, PA7, PB5 or PC7 (AF2); TIM1_CH1 = PA8 (AF1) or PE9 (AF1, LQFP100 only); TIM2_CH1 = PA0 (AF1) or PA5 (AF1)"
+pitfall = "case01 lesson: 'TIM3_CH2 on PE5' is a hallucination — there is no PE5 on G431RB (LQFP64). Pick the channel pin from the datasheet AF table for the ACTUAL package, never from memory"
+af_number = "AF values are per-pin numbers (AF0-AF15 in GPIOx_AFRL/AFRH); TIM pins are usually AF1/AF2 but the mapping varies — verify each pin individually"
+
+[hal_flow]
+init = "PWM: HAL_TIM_PWM_Init, set pulse via __HAL_TIM_SET_COMPARE, then HAL_TIM_PWM_Start(htim, TIM_CHANNEL_x)"
+advanced = "TIM1/TIM8 complementary channels: HAL_TIMEx_PWMN_Start() and main output enable __HAL_TIM_MOE_ENABLE() — without MOE the complementary outputs stay silent"
+interrupt = "Update interrupt: HAL_TIM_Base_Start_IT / __HAL_TIM_ENABLE_IT(TIM, TIM_IT_UPDATE); clear flag in HAL_TIM_PeriodElapsedCallback"
+
+common_mistake = [
+  "Computing the timer clock from PCLK1/PCLK2 directly (e.g. 85 MHz) — it is ×2 when the APB prescaler ≠ 1 (170 MHz)",
+  "Inventing channel pin mappings from memory (PE5/TIM3_CH2) instead of reading the datasheet AF table — phantom pins compile fine and produce nothing",
+  "Starting PWM on advanced timers without enabling MOE / using HAL_TIM_PWM_Start on complementary outputs",
+  "Assuming TIM2 is 16-bit on G4 — TIM2 is the 32-bit timer here",
+  "Setting PSC/ARR beyond 65535 on TIM3/4/15/16/17 — only TIM2 is 32-bit",
+  "Forgetting to enable the timer clock (__HAL_RCC_TIMx_CLK_ENABLE) before HAL_TIM_PWM_Init — HAL asserts or silently stays dead",
+]

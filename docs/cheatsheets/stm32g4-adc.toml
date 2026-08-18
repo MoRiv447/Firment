@@ -1,0 +1,30 @@
+# stm32g4-adc.toml — STM32G4 ADC original cheatsheet (engineering experience + DS12589 / RM0440)
+[meta]
+family = "STM32G4xx (G431/G474)"
+topic = "ADC"
+confidence = "verified"
+last_reviewed = "2026-08-18"
+source = "Engineering experience cross-checked with DS12589 and RM0440"
+
+[overview]
+count = "G431: 2× 12-bit SAR ADCs (ADC1/ADC2, up to 4 Msps at full resolution, up to 6.66 Msps at 6-bit); G47x/G48x parts add more ADCs — check the part"
+channels = "Up to 23 channels on G431R (LQFP64); channels include external pins, VBAT/3, VREFINT, temperature sensor, op-amp and comparator outputs"
+resolution = "12-bit native, up to 16-bit with hardware oversampling (no CPU involvement)"
+range = "0 to 3.6 V conversion range; reference is VREF+ (internal VREFBUF can output 2.048/2.5/2.9 V)"
+calibration = "REQUIRED: run HAL_ADCEx_Calibration_Start(&hadc) after init — without it readings are offset-biased"
+
+[hal_flow]
+init = "HAL_ADC_Init + HAL_ADCEx_Calibration_Start; configure channel with HAL_ADC_ConfigChannel (Rank/SamplingTime/Offset)"
+poll = "HAL_ADC_Start + HAL_ADC_PollForConversion + HAL_ADC_GetValue (blocking); HAL_ADC_Start_IT with HAL_ADC_ConvCpltCallback (interrupt)"
+dma = "HAL_ADC_Start_DMA with a buffer — continuous multi-channel scans land in the buffer; conversion complete per buffer via HAL_ADC_ConvCpltCallback"
+oversample = "Hardware oversampling (OSR up to 256) via HAL_ADCEx_OversamplingConfig — effective 16-bit without software averaging"
+sampling = "Sampling time vs source impedance: pick a longer sampling time for high-impedance sources (e.g. a 10k potentiometer) or the reading droops — DS12589 Table 61 gives RAIN limits per sampling cycle"
+
+common_mistake = [
+  "Forgetting HAL_ADCEx_Calibration_Start — the classic offset error",
+  "Assuming 16-bit native resolution — it is 12-bit; 16-bit only via oversampling",
+  "Using a too-short sampling time with a high-impedance source — readings are consistently low/noisy",
+  "Reading VBAT as-is — it comes through a /3 divider; convert accordingly",
+  "Starting conversion without configuring the channel rank — HAL_ADC_Start on a default channel config that was never set",
+  "On F1/F4 ports: assuming ADC1 has 16+ channels — G431 ADC pins are spread across ports A/B/C/D with internal sources mixed in; check the datasheet channel table",
+]

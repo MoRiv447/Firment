@@ -1,0 +1,28 @@
+# stm32g4-gpio.toml — STM32G4 GPIO/EXTI original cheatsheet (engineering experience + RM0440)
+[meta]
+family = "STM32G4xx (G431/G474)"
+topic = "GPIO / EXTI"
+confidence = "verified"
+last_reviewed = "2026-08-18"
+source = "Engineering experience cross-checked with RM0440"
+
+[overview]
+reset_state = "After reset ALL GPIO pins are in ANALOG input mode (G4-specific, low-power default) — code from F1/F4 that just sets MODER/AFR works, but anything relying on floating-input reset state must configure the pin explicitly"
+modes = "Input / Output / Alternate Function / Analog per pin (MODER); AF0-AF15 via AFRH/AFRL"
+speed = "Output speed via OSPEEDR (G4 supports high-speed modes; set low for LEDs, high for fast interfaces)"
+pulls = "PUPDR per pin (none/pull-up/pull-down); EXTI-capable: any GPIO can trigger EXTI lines 0-15 (16 lines shared across ports, one pin per line at a time)"
+5v = "Mixed tolerance: some pins are 5 V tolerant (FT), others are 3.3 V only (TT_a) — check the datasheet pin column per pin, never assume"
+
+[hal_flow]
+init = "HAL_GPIO_Init with GPIO_InitStruct (Pin, Mode, Pull, Speed, Alternate) — for AF pins set GPIO_MODE_AF_PP + GPIO_InitStruct.Alternate = GPIO_AFx_TIM3 etc."
+toggle = "HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5); write: HAL_GPIO_WritePin; read: HAL_GPIO_ReadPin"
+exti = "EXTI: GPIO_MODE_IT_RISING/FALLING/RISING_FALLING + enable the EXTIx_IRQn in NVIC, handle in EXTI0_IRQHandler ... EXTI15_10_IRQHandler, clear with HAL_GPIO_EXTI_IRQHandler"
+
+common_mistake = [
+  "Assuming the F1/F4 default (floating input after reset) — G4 pins come up in analog mode, so an uninitialized pin reads weird values and LEDs stay off",
+  "Picking PE* pins on a G431RB (LQFP64) — no Port E on that package (see stm32g4-pinout.toml)",
+  "Treating every pin as 5 V tolerant — check FT/TT_a per pin",
+  "Configuring two pins on the same EXTI line number (e.g. PA0 and PB0 both EXTI0) — only one input per line can be selected; the other must use a different line",
+  "Forgetting NVIC enable for EXTI — the pin is set up but the interrupt never fires",
+  "Setting output speed to max on every pin — unnecessary EMI/power; use low speed for slow signals",
+]

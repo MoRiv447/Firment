@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 
 /// Bump when the bundled seed knowledge base changes (forces re-materialization).
-pub const SEED_VERSION: &str = "4";
+pub const SEED_VERSION: &str = "5";
 
 const SEED_FILES: &[(&str, &str)] = &[
     (
@@ -13,6 +13,34 @@ const SEED_FILES: &[(&str, &str)] = &[
     (
         "cheatsheets/esp32-gpio.toml",
         include_str!("../../../docs/cheatsheets/esp32-gpio.toml"),
+    ),
+    (
+        "cheatsheets/esp32-uart.toml",
+        include_str!("../../../docs/cheatsheets/esp32-uart.toml"),
+    ),
+    (
+        "cheatsheets/esp32-adc.toml",
+        include_str!("../../../docs/cheatsheets/esp32-adc.toml"),
+    ),
+    (
+        "cheatsheets/esp32-spi.toml",
+        include_str!("../../../docs/cheatsheets/esp32-spi.toml"),
+    ),
+    (
+        "cheatsheets/esp32c3-gpio.toml",
+        include_str!("../../../docs/cheatsheets/esp32c3-gpio.toml"),
+    ),
+    (
+        "cheatsheets/esp32c3-uart.toml",
+        include_str!("../../../docs/cheatsheets/esp32c3-uart.toml"),
+    ),
+    (
+        "cheatsheets/esp32c6-gpio.toml",
+        include_str!("../../../docs/cheatsheets/esp32c6-gpio.toml"),
+    ),
+    (
+        "cheatsheets/esp32c6-uart.toml",
+        include_str!("../../../docs/cheatsheets/esp32c6-uart.toml"),
     ),
     (
         "cheatsheets/esp32s3-gpio.toml",
@@ -43,6 +71,14 @@ const SEED_FILES: &[(&str, &str)] = &[
         include_str!("../../../docs/cheatsheets/stm32f1-uart.toml"),
     ),
     (
+        "cheatsheets/stm32f4-gpio.toml",
+        include_str!("../../../docs/cheatsheets/stm32f4-gpio.toml"),
+    ),
+    (
+        "cheatsheets/stm32f4-tim.toml",
+        include_str!("../../../docs/cheatsheets/stm32f4-tim.toml"),
+    ),
+    (
         "cheatsheets/stm32g0-gpio.toml",
         include_str!("../../../docs/cheatsheets/stm32g0-gpio.toml"),
     ),
@@ -53,6 +89,30 @@ const SEED_FILES: &[(&str, &str)] = &[
     (
         "cheatsheets/stm32g4-uart.toml",
         include_str!("../../../docs/cheatsheets/stm32g4-uart.toml"),
+    ),
+    (
+        "cheatsheets/stm32g4-pinout.toml",
+        include_str!("../../../docs/cheatsheets/stm32g4-pinout.toml"),
+    ),
+    (
+        "cheatsheets/stm32g4-tim.toml",
+        include_str!("../../../docs/cheatsheets/stm32g4-tim.toml"),
+    ),
+    (
+        "cheatsheets/stm32g4-gpio.toml",
+        include_str!("../../../docs/cheatsheets/stm32g4-gpio.toml"),
+    ),
+    (
+        "cheatsheets/stm32g4-adc.toml",
+        include_str!("../../../docs/cheatsheets/stm32g4-adc.toml"),
+    ),
+    (
+        "cheatsheets/stm32g4-flash.toml",
+        include_str!("../../../docs/cheatsheets/stm32g4-flash.toml"),
+    ),
+    (
+        "cheatsheets/stm32g4-iwdg.toml",
+        include_str!("../../../docs/cheatsheets/stm32g4-iwdg.toml"),
     ),
     (
         "cheatsheets/stm32h7-uart.toml",
@@ -119,9 +179,19 @@ mod tests {
         assert!(stm32.get("g0").is_some());
         let esp32 = value.get("esp32").expect("esp32 table");
         assert!(esp32.get("s3").is_some());
+        assert!(esp32.get("c6").is_some());
+        assert!(esp32.get("c3").is_some());
         assert!(
             dir.path().join("cheatsheets/stm32f1-uart.toml").is_file(),
             "cheatsheet missing"
+        );
+        assert!(
+            dir.path().join("cheatsheets/stm32g4-pinout.toml").is_file(),
+            "g4 pinout cheatsheet missing"
+        );
+        assert!(
+            dir.path().join("cheatsheets/esp32c6-gpio.toml").is_file(),
+            "esp32c6 cheatsheet missing"
         );
         ensure_seed_kb_in(dir.path()).unwrap(); // idempotent
     }

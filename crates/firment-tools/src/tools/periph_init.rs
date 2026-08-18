@@ -155,6 +155,10 @@ fn family_for(part: &str) -> Option<&'static str> {
         Some("stm32h7")
     } else if p.starts_with("esp32s3") {
         Some("esp32s3")
+    } else if p.starts_with("esp32c6") {
+        Some("esp32c6")
+    } else if p.starts_with("esp32c3") {
+        Some("esp32c3")
     } else if p.starts_with("esp32") {
         Some("esp32")
     } else {
@@ -484,6 +488,9 @@ mod tests {
         assert_eq!(family_for("stm32g431rbt6"), Some("stm32g4"));
         assert_eq!(family_for("stm32h723vgt6"), Some("stm32h7"));
         assert_eq!(family_for("esp32s3"), Some("esp32s3"));
+        assert_eq!(family_for("esp32c6"), Some("esp32c6"));
+        assert_eq!(family_for("esp32c3"), Some("esp32c3"));
+        assert_eq!(family_for("esp32c3fn4"), Some("esp32c3"));
         assert_eq!(family_for("esp32"), Some("esp32"));
         assert_eq!(family_for("nrf52840"), None);
     }
@@ -516,6 +523,36 @@ mod tests {
         assert!(
             out.text.contains("stm32h7-uart.toml") || out.text.contains("D-Cache"),
             "H7 cheatsheet (D-Cache) must be injected, got: {}",
+            out.text
+        );
+    }
+
+    #[tokio::test]
+    async fn esp32c6_and_esp32c3_cheatsheets_are_injected() {
+        let dir = tempdir().unwrap();
+        let out = PeriphInit
+            .run(
+                json!({"part": "esp32c6", "peripheral": "gpio"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(
+            out.text.contains("esp32c6-gpio.toml"),
+            "C6 cheatsheet must be injected, got: {}",
+            out.text
+        );
+
+        let out = PeriphInit
+            .run(
+                json!({"part": "esp32c3", "peripheral": "uart"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(
+            out.text.contains("esp32c3-uart.toml"),
+            "C3 cheatsheet must be injected, got: {}",
             out.text
         );
     }

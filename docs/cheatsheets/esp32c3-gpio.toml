@@ -1,0 +1,33 @@
+# esp32c3-gpio.toml — ESP32-C3 GPIO/platform original cheatsheet (engineering experience + ESP32-C3 datasheet / ESP-IDF docs)
+[meta]
+family = "ESP32-C3"
+topic = "GPIO / platform"
+confidence = "verified"
+last_reviewed = "2026-08-18"
+source = "Engineering experience cross-checked with the ESP32-C3 datasheet and ESP-IDF GPIO documentation"
+
+[overview]
+core = "RISC-V single-core 160 MHz; WiFi 4 (802.11 b/g/n) + Bluetooth 5 LE; QFN32 (5x5 mm)"
+gpios = "22 GPIOs: GPIO0-GPIO21; NO input-only pins — every pad can be an output"
+input_only = "none"
+drive = "Default drive strength 20 mA"
+voltage = "3.3 V I/O; NOT 5 V tolerant"
+matrix = "GPIO matrix routes most peripherals to any pin; ADC, USB-JTAG, and the SPI flash bus stay fixed on their IO MUX pins"
+
+[key_pins]
+strapping = "GPIO2, GPIO8, GPIO9 (boot mode + ROM-print selectors; sampled at reset then free as GPIO)"
+download = "Download boot: GPIO2 HIGH + GPIO8 HIGH + GPIO9 LOW at reset; normal SPI flash boot: GPIO2 HIGH + GPIO9 HIGH; keep them un-driven during reset unless flashing"
+usb = "Built-in USB-Serial/JTAG controller on GPIO18 (D-) / GPIO19 (D+); using 18/19 as plain GPIO disables USB-JTAG"
+console = "UART0 default console: GPIO20 (RX) / GPIO21 (TX)"
+jtag = "GPIO4 (MTMS) / GPIO5 (MTDI) / GPIO6 (MTCK) / GPIO7 (MTDO) are the JTAG pins (shared with FSPI on flash-bus variants)"
+adc = "ADC1: GPIO0-4 = CH0-4; ADC2: GPIO5 = CH0 (6 SAR channels total, 12-bit)"
+rtc = "GPIO0-5 are RTC GPIOs (usable in deep sleep)"
+flash = "GPIO12-17 are the SPI0/1 flash/PSRAM bus — not recommended for other uses"
+
+common_mistake = [
+  "Hard-driving strapping pins (GPIO2/8/9) at reset — blocks normal boot or forces download mode",
+  "Expecting 5 V tolerance — C3 I/O is 3.3 V only",
+  "Treating GPIO12-17 as free pins — they are the SPI flash bus",
+  "Reusing GPIO18/19 and breaking USB flashing — USB-JTAG owns them by default",
+  "Claiming the C6-style strapping set — C3 strapping is exactly GPIO2/8/9",
+]
