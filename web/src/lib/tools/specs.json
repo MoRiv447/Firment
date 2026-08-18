@@ -38,6 +38,74 @@
     }
   },
   {
+    "name": "debug",
+    "description": "Inspect and control the target over the debug probe via probe-rs (ST-Link / J-Link / CMSIS-DAP). Actions: halt (pause the target, stays paused after the call), regs (read all core registers), mem (read memory: width b8/b16/b32/b64, address 0x... or symbol:name resolved from the ELF), write (write memory — changes target state), analyze (one-shot fault diagnosis: halts, reads PC/LR/SP plus the Cortex-M fault registers CFSR/HFSR/MMFAR/BFAR, decodes PC/LR against the ELF and explains the fault cause), break (set a breakpoint, run, report registers when it hits), step (single step from the current PC), continue (resume execution). Use after flash/monitor when the target misbehaves, hangs, or produces no serial output.",
+    "input_schema": {
+      "properties": {
+        "action": {
+          "description": "What to do on the target",
+          "enum": [
+            "halt",
+            "regs",
+            "mem",
+            "write",
+            "analyze",
+            "break",
+            "step",
+            "continue"
+          ],
+          "type": "string"
+        },
+        "address": {
+          "description": "For mem/write/break: '0x<hex>' or 'symbol:<name>' (resolved from the elf)",
+          "type": "string"
+        },
+        "chip": {
+          "description": "probe-rs chip id, e.g. stm32g431rb (defaults to [tools] default_chip)",
+          "type": "string"
+        },
+        "elf": {
+          "description": "Optional path to the firmware ELF (inside the workspace); needed for symbol:name addresses and for decoding PC/LR in analyze",
+          "type": "string"
+        },
+        "probe": {
+          "description": "Optional probe serial/id when multiple probes are attached",
+          "type": "string"
+        },
+        "timeout_ms": {
+          "default": 30000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "value": {
+          "description": "Value to write for write (up to 64-bit)",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "width": {
+          "description": "Access width for mem/write (default b32)",
+          "enum": [
+            "b8",
+            "b16",
+            "b32",
+            "b64"
+          ],
+          "type": "string"
+        },
+        "words": {
+          "description": "Number of words to read for mem (default 1)",
+          "maximum": 1024,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "name": "edit_file",
     "description": "Edit a file by exact old_text anchor (must match exactly once) or by 1-based line range.",
     "input_schema": {

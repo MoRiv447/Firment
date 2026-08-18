@@ -43,15 +43,22 @@ fn parse_width(s: &str) -> Result<String, String> {
     }
 }
 
-/// Parse probe-rs `regs` output into a register-name -> value map. The exact
+/// Strip ANSI escape sequences (SGR colors, cursor moves) that some console
+/// tools emit even when piped; they contain digits that would corrupt parsing.
+fn strip_ansi(text: &str) -> String {
+    let re = Regex::new(r"\x1b\[[0-9;?]*[ -/]*[@-~]").unwrap();
+    re.replace_all(text, "").into_owned()
+}
+
+/// Parse probe-rs `reg` output into a register-name -> value map. The exact
 /// layout differs across probe-rs versions ("pc (r15) = 0x...", "sp: 0x...",
-/// "xpsr 0x01000000", ...), so this is deliberately loose: any line containing
-/// a register name and a hex value counts, later wins.
+/// "R15/PC: 0x...", "xpsr 0x01000000", ...), so this is deliberately loose:
+/// any line containing a register name and a hex value counts, later wins.
 fn parse_regs(text: &str) -> HashMap<String, u64> {
     let re = Regex::new(r"(?i)\b(pc|sp|lr|r\d+|xpsr|msp|psp)\b[^0-9x]{0,40}?(?:0x)?([0-9a-f]{8})")
         .unwrap();
     let mut out: HashMap<String, u64> = HashMap::new();
-    for cap in re.captures_iter(text) {
+    for cap in re.captures_iter(&strip_ansi(text)) {
         let name = cap.get(1).unwrap().as_str().to_lowercase();
         let Ok(value) = u64::from_str_radix(cap.get(2).unwrap().as_str(), 16) else {
             continue;
@@ -189,9 +196,13 @@ fn cfsr_analysis(cfsr: u64, hfsr: u64, mmfar: u64, bfar: u64) -> Vec<String> {
     lines
 }
 
-/// Probe-rs CLI argument arrays. `debug -c "<cmd>" -c "q"` runs the console
-/// command then quits (skipping the interactive console), keeping the target
-/// halted on exit (disconnect with suspend_debuggee=true).
+/// Probe-rs CLI argument arrays. `debug -c "<cmd>" -c "quit"` runs the console
+/// command then disconnects (skipping the interactive console), keeping the
+/// target halted on exit (disconnect with suspend_debuggee=true).
+///
+/// The DAP REPL command set (probe-rs 0.32) is: `reg` (registers), `c`
+/// (continue), `step`, `break *0x...` (address needs the `*` prefix), `reset`,
+/// `quit`. There is no `halt`/`regs`/`continue`/`mem`/`q`.
 fn debug_args(chip: &str, probe: Option<&str>, commands: &[&str]) -> Vec<String> {
     let mut args = vec!["debug".to_string(), "--chip".to_string(), chip.to_string()];
     if let Some(probe) = probe {
@@ -203,7 +214,7 @@ fn debug_args(chip: &str, probe: Option<&str>, commands: &[&str]) -> Vec<String>
         args.push(cmd.to_string());
     }
     args.push("-c".to_string());
-    args.push("q".to_string());
+    args.push("quit".to_string());
     args
 }
 
@@ -450,11 +461,6 @@ impl Tool for Debug {
                 )));
             }
         }
-        if action == "break" && !address.unwrap().is_multiple_of(2) {
-            return Err(ToolError::new(
-                "[InvalidInput] break address must be halfword-aligned (Thumb)",
-            ));
-        }
         if !matches!(
             action,
             "halt" | "regs" | "mem" | "write" | "analyze" | "break" | "step" | "continue"
@@ -463,6 +469,14 @@ impl Tool for Debug {
                 "[InvalidInput] unknown action '{action}'"
             )));
         }
+        // Cortex-M symbols may carry the Thumb bit (bit 0) in their address;
+        // breakpoints are halfword-aligned, so mask the LSB instead of
+        // rejecting the address (a Thumb symbol's LSB is never an address bit).
+        let break_addr = if action == "break" {
+            Some(address.unwrap() & !1)
+        } else {
+            None
+        };
 
         let probe_rs_ok = std::process::Command::new("probe-rs")
             .arg("--version")
@@ -479,18 +493,17 @@ impl Tool for Debug {
         let cwd = ctx.cwd.clone();
         match action {
             "halt" => {
-                let (text, code) = run_probe_rs(
-                    debug_args(&chip, probe.as_deref(), &["halt"]),
-                    &cwd,
-                    timeout_ms,
-                )
-                .await
-                .map_err(probe_err)?;
+                // Attaching halts the target automatically; the session
+                // itself (with quit) is the whole action.
+                let (text, code) =
+                    run_probe_rs(debug_args(&chip, probe.as_deref(), &[]), &cwd, timeout_ms)
+                        .await
+                        .map_err(probe_err)?;
                 finish(code, "target halted", &text)
             }
             "regs" => {
                 let (text, code) = run_probe_rs(
-                    debug_args(&chip, probe.as_deref(), &["halt", "regs"]),
+                    debug_args(&chip, probe.as_deref(), &["reg"]),
                     &cwd,
                     timeout_ms,
                 )
@@ -534,7 +547,7 @@ impl Tool for Debug {
             }
             "analyze" => {
                 let (regs_text, regs_code) = run_probe_rs(
-                    debug_args(&chip, probe.as_deref(), &["halt", "regs"]),
+                    debug_args(&chip, probe.as_deref(), &["reg"]),
                     &cwd,
                     timeout_ms,
                 )
@@ -589,9 +602,9 @@ impl Tool for Debug {
                 })
             }
             "break" => {
-                let addr = address.unwrap();
-                let break_cmd = format!("break {addr:#x}");
-                let cmds: [&str; 3] = [break_cmd.as_str(), "continue", "regs"];
+                let addr = break_addr.unwrap();
+                let break_cmd = format!("break *{addr:#x}");
+                let cmds: [&str; 3] = [break_cmd.as_str(), "c", "reg"];
                 let (text, code) =
                     run_probe_rs(debug_args(&chip, probe.as_deref(), &cmds), &cwd, timeout_ms)
                         .await
@@ -604,7 +617,7 @@ impl Tool for Debug {
             }
             "step" => {
                 let (text, code) = run_probe_rs(
-                    debug_args(&chip, probe.as_deref(), &["halt", "step", "regs"]),
+                    debug_args(&chip, probe.as_deref(), &["step", "reg"]),
                     &cwd,
                     timeout_ms,
                 )
@@ -614,7 +627,7 @@ impl Tool for Debug {
             }
             "continue" => {
                 let (text, code) = run_probe_rs(
-                    debug_args(&chip, probe.as_deref(), &["continue"]),
+                    debug_args(&chip, probe.as_deref(), &["c"]),
                     &cwd,
                     timeout_ms,
                 )
@@ -675,6 +688,15 @@ mod tests {
     }
 
     #[test]
+    fn break_address_masks_thumb_lsb() {
+        // A Thumb symbol value may carry bit 0; the breakpoint is placed at
+        // the halfword-aligned address, not rejected.
+        assert_eq!(0x0800_1234 & !1, 0x0800_1234);
+        assert_eq!(0x0800_1235 & !1, 0x0800_1234);
+        assert_eq!(0x0800_1234 & !1, 0x0800_1234);
+    }
+
+    #[test]
     fn parse_width_accepts_valid_forms() {
         assert_eq!(parse_width("b8").unwrap(), "b8");
         assert_eq!(parse_width("b64").unwrap(), "b64");
@@ -703,6 +725,34 @@ xpsr = 0x01000000
         assert_eq!(reg_value(&alt, &["sp", "r13"]), Some(0x2000_0000));
 
         assert!(parse_regs("no registers here").is_empty());
+    }
+
+    #[test]
+    fn parse_regs_handles_probe_rs_032_reg_table_format() {
+        // probe-rs 0.32 `reg` prints a width-80 table:
+        // "R0: 0x00000001  R1: 0x00000002  ...  R15/PC: 0x08005678  XPSR/PSR: 0x01000000"
+        let text = "\
+R0: 0x00000001  R1: 0x00000002  R2: 0x00000003  R3: 0x00000004
+R4: 0x00000005  R5: 0x00000006  R6: 0x00000007  R7: 0x00000008
+R8: 0x00000009  R9: 0x0000000a  R10: 0x0000000b  R11: 0x0000000c
+R12: 0x0000000d  R13/SP: 0x20001abc  R14/RA: 0x08001234  R15/PC: 0x08005678
+XPSR/PSR: 0x01000000
+";
+        let regs = parse_regs(text);
+        assert_eq!(reg_value(&regs, &["pc", "r15"]), Some(0x0800_5678));
+        assert_eq!(reg_value(&regs, &["lr", "r14"]), Some(0x0800_1234));
+        assert_eq!(reg_value(&regs, &["sp", "r13"]), Some(0x2000_1abc));
+        assert_eq!(reg_value(&regs, &["xpsr"]), Some(0x0100_0000));
+        assert_eq!(reg_value(&regs, &["r0"]), Some(1));
+    }
+
+    #[test]
+    fn parse_regs_survives_ansi_escapes() {
+        // Some probe-rs console output is ANSI-coloured even when piped.
+        let text = "\x1b[1m\x1b[32mR15/PC:\x1b[0m \x1b[33m0x08005678\x1b[0m\n\x1b[32mR13/SP:\x1b[0m \x1b[33m0x20001abc\x1b[0m\n";
+        let regs = parse_regs(text);
+        assert_eq!(reg_value(&regs, &["pc", "r15"]), Some(0x0800_5678));
+        assert_eq!(reg_value(&regs, &["sp", "r13"]), Some(0x2000_1abc));
     }
 
     #[test]
@@ -749,7 +799,7 @@ xpsr = 0x01000000
 
     #[test]
     fn debug_and_read_args_are_ordered() {
-        let args = debug_args("stm32g431rb", Some("P1"), &["halt", "regs"]);
+        let args = debug_args("stm32g431rb", Some("P1"), &["reg"]);
         assert_eq!(
             args,
             vec![
@@ -759,11 +809,26 @@ xpsr = 0x01000000
                 "--probe",
                 "P1",
                 "-c",
-                "halt",
+                "reg",
                 "-c",
-                "regs",
+                "quit",
+            ]
+        );
+        let break_args = debug_args("stm32g431rb", None, &["break *0x08001234", "c", "reg"]);
+        assert_eq!(
+            break_args,
+            vec![
+                "debug",
+                "--chip",
+                "stm32g431rb",
                 "-c",
-                "q",
+                "break *0x08001234",
+                "-c",
+                "c",
+                "-c",
+                "reg",
+                "-c",
+                "quit",
             ]
         );
         let args = read_args("stm32f407vetx", None, "b32", 0xE000_ED28, 5);
