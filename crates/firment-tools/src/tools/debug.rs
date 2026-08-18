@@ -405,6 +405,65 @@ impl Tool for Debug {
             .and_then(|t| t.as_u64())
             .unwrap_or(30_000);
 
+        // Local-only validation happens before any probe-rs contact, so
+        // parameter mistakes are reported consistently even without probe-rs
+        // installed (and before the [NotFound] hint).
+        let address: Option<u64> = match action {
+            "mem" | "write" | "break" => {
+                let s = args
+                    .get("address")
+                    .and_then(|a| a.as_str())
+                    .ok_or_else(|| {
+                        ToolError::new(format!(
+                            "[InvalidInput] {action} needs an address (0x... or symbol:name)"
+                        ))
+                    })?;
+                Some(parse_address(s, elf.as_deref()).map_err(ToolError::new)?)
+            }
+            _ => None,
+        };
+        let width = args
+            .get("width")
+            .and_then(|w| w.as_str())
+            .map(parse_width)
+            .transpose()
+            .map_err(ToolError::new)?
+            .unwrap_or_else(|| "b32".to_string());
+        let words = args.get("words").and_then(|w| w.as_u64()).unwrap_or(1);
+        if words == 0 || words > 1024 {
+            return Err(ToolError::new("[InvalidInput] words must be 1..=1024"));
+        }
+        if action == "write" {
+            let value = args
+                .get("value")
+                .and_then(|v| v.as_u64())
+                .ok_or_else(|| ToolError::new("[InvalidInput] write needs a value"))?;
+            let max = match width.as_str() {
+                "b8" => 0xff,
+                "b16" => 0xffff,
+                "b64" => u64::MAX,
+                _ => 0xffff_ffff,
+            };
+            if value > max {
+                return Err(ToolError::new(format!(
+                    "[InvalidInput] value {value:#x} does not fit in {width}"
+                )));
+            }
+        }
+        if action == "break" && !address.unwrap().is_multiple_of(2) {
+            return Err(ToolError::new(
+                "[InvalidInput] break address must be halfword-aligned (Thumb)",
+            ));
+        }
+        if !matches!(
+            action,
+            "halt" | "regs" | "mem" | "write" | "analyze" | "break" | "step" | "continue"
+        ) {
+            return Err(ToolError::new(format!(
+                "[InvalidInput] unknown action '{action}'"
+            )));
+        }
+
         let probe_rs_ok = std::process::Command::new("probe-rs")
             .arg("--version")
             .output()
@@ -440,24 +499,7 @@ impl Tool for Debug {
                 finish(code, "registers", &text)
             }
             "mem" => {
-                let addr_s = args
-                    .get("address")
-                    .and_then(|a| a.as_str())
-                    .ok_or_else(|| {
-                        ToolError::new("[InvalidInput] mem needs an address (0x... or symbol:name)")
-                    })?;
-                let addr = parse_address(addr_s, elf.as_deref()).map_err(ToolError::new)?;
-                let width = args
-                    .get("width")
-                    .and_then(|w| w.as_str())
-                    .map(parse_width)
-                    .transpose()
-                    .map_err(ToolError::new)?
-                    .unwrap_or_else(|| "b32".to_string());
-                let words = args.get("words").and_then(|w| w.as_u64()).unwrap_or(1);
-                if words == 0 || words > 1024 {
-                    return Err(ToolError::new("[InvalidInput] words must be 1..=1024"));
-                }
+                let addr = address.unwrap();
                 let (text, code) = run_probe_rs(
                     read_args(&chip, probe.as_deref(), &width, addr, words as usize),
                     &cwd,
@@ -472,37 +514,11 @@ impl Tool for Debug {
                 )
             }
             "write" => {
-                let addr_s = args
-                    .get("address")
-                    .and_then(|a| a.as_str())
-                    .ok_or_else(|| {
-                        ToolError::new(
-                            "[InvalidInput] write needs an address (0x... or symbol:name)",
-                        )
-                    })?;
-                let addr = parse_address(addr_s, elf.as_deref()).map_err(ToolError::new)?;
+                let addr = address.unwrap();
                 let value = args
                     .get("value")
                     .and_then(|v| v.as_u64())
                     .ok_or_else(|| ToolError::new("[InvalidInput] write needs a value"))?;
-                let width = args
-                    .get("width")
-                    .and_then(|w| w.as_str())
-                    .map(parse_width)
-                    .transpose()
-                    .map_err(ToolError::new)?
-                    .unwrap_or_else(|| "b32".to_string());
-                let max = match width.as_str() {
-                    "b8" => 0xff,
-                    "b16" => 0xffff,
-                    "b64" => u64::MAX,
-                    _ => 0xffff_ffff,
-                };
-                if value > max {
-                    return Err(ToolError::new(format!(
-                        "[InvalidInput] value {value:#x} does not fit in {width}"
-                    )));
-                }
                 let (text, code) = run_probe_rs(
                     write_args(&chip, probe.as_deref(), &width, addr, value),
                     &cwd,
@@ -573,20 +589,7 @@ impl Tool for Debug {
                 })
             }
             "break" => {
-                let addr_s = args
-                    .get("address")
-                    .and_then(|a| a.as_str())
-                    .ok_or_else(|| {
-                        ToolError::new(
-                            "[InvalidInput] break needs an address (0x... or symbol:name)",
-                        )
-                    })?;
-                let addr = parse_address(addr_s, elf.as_deref()).map_err(ToolError::new)?;
-                if addr % 2 != 0 {
-                    return Err(ToolError::new(
-                        "[InvalidInput] break address must be halfword-aligned (Thumb)",
-                    ));
-                }
+                let addr = address.unwrap();
                 let break_cmd = format!("break {addr:#x}");
                 let cmds: [&str; 3] = [break_cmd.as_str(), "continue", "regs"];
                 let (text, code) =
