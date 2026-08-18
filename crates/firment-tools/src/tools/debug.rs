@@ -5,6 +5,7 @@ use regex::Regex;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 pub struct Debug;
 
@@ -496,13 +497,13 @@ impl Tool for Debug {
                 // Attaching halts the target automatically; the session
                 // itself (with quit) is the whole action.
                 let (text, code) =
-                    run_probe_rs(debug_args(&chip, probe.as_deref(), &[]), &cwd, timeout_ms)
+                    run_probe_rs_retry(debug_args(&chip, probe.as_deref(), &[]), &cwd, timeout_ms)
                         .await
                         .map_err(probe_err)?;
                 finish(code, "target halted", &text)
             }
             "regs" => {
-                let (text, code) = run_probe_rs(
+                let (text, code) = run_probe_rs_retry(
                     debug_args(&chip, probe.as_deref(), &["reg"]),
                     &cwd,
                     timeout_ms,
@@ -513,7 +514,7 @@ impl Tool for Debug {
             }
             "mem" => {
                 let addr = address.unwrap();
-                let (text, code) = run_probe_rs(
+                let (text, code) = run_probe_rs_retry(
                     read_args(&chip, probe.as_deref(), &width, addr, words as usize),
                     &cwd,
                     timeout_ms,
@@ -532,7 +533,7 @@ impl Tool for Debug {
                     .get("value")
                     .and_then(|v| v.as_u64())
                     .ok_or_else(|| ToolError::new("[InvalidInput] write needs a value"))?;
-                let (text, code) = run_probe_rs(
+                let (text, code) = run_probe_rs_retry(
                     write_args(&chip, probe.as_deref(), &width, addr, value),
                     &cwd,
                     timeout_ms,
@@ -546,7 +547,7 @@ impl Tool for Debug {
                 )
             }
             "analyze" => {
-                let (regs_text, regs_code) = run_probe_rs(
+                let (regs_text, regs_code) = run_probe_rs_retry(
                     debug_args(&chip, probe.as_deref(), &["reg"]),
                     &cwd,
                     timeout_ms,
@@ -559,7 +560,7 @@ impl Tool for Debug {
                         regs_code
                     )));
                 }
-                let (fault_text, fault_code) = run_probe_rs(
+                let (fault_text, fault_code) = run_probe_rs_retry(
                     read_args(&chip, probe.as_deref(), "b32", 0xE000_ED28, 5),
                     &cwd,
                     timeout_ms,
@@ -576,7 +577,7 @@ impl Tool for Debug {
                     .copied()
                     .or_else(|| parse_regs(&regs_text).get("r13").copied());
                 let (stack_words, stack_addr) = if let Some(sp) = sp {
-                    match run_probe_rs(
+                    match run_probe_rs_retry(
                         read_args(&chip, probe.as_deref(), "b32", sp, 8),
                         &cwd,
                         timeout_ms,
@@ -605,10 +606,13 @@ impl Tool for Debug {
                 let addr = break_addr.unwrap();
                 let break_cmd = format!("break *{addr:#x}");
                 let cmds: [&str; 3] = [break_cmd.as_str(), "c", "reg"];
-                let (text, code) =
-                    run_probe_rs(debug_args(&chip, probe.as_deref(), &cmds), &cwd, timeout_ms)
-                        .await
-                        .map_err(probe_err)?;
+                let (text, code) = run_probe_rs_retry(
+                    debug_args(&chip, probe.as_deref(), &cmds),
+                    &cwd,
+                    timeout_ms,
+                )
+                .await
+                .map_err(probe_err)?;
                 finish(
                     code,
                     &format!("breakpoint at {addr:#010x} (reported registers after hit)"),
@@ -616,7 +620,7 @@ impl Tool for Debug {
                 )
             }
             "step" => {
-                let (text, code) = run_probe_rs(
+                let (text, code) = run_probe_rs_retry(
                     debug_args(&chip, probe.as_deref(), &["step", "reg"]),
                     &cwd,
                     timeout_ms,
@@ -626,7 +630,7 @@ impl Tool for Debug {
                 finish(code, "single step (registers after step)", &text)
             }
             "continue" => {
-                let (text, code) = run_probe_rs(
+                let (text, code) = run_probe_rs_retry(
                     debug_args(&chip, probe.as_deref(), &["c"]),
                     &cwd,
                     timeout_ms,
@@ -666,6 +670,30 @@ fn finish(code: Option<i32>, what: &str, text: &str) -> Result<ToolOutput, ToolE
         None => Err(ToolError::new(format!(
             "[Timeout] probe-rs was killed\n{text}"
         ))),
+    }
+}
+
+/// Run a probe-rs session, retrying once after a short pause on a non-zero
+/// exit. Rapid consecutive debug calls can hit the probe while it is still
+/// releasing the previous session ("probe busy / failed to open"), and a
+/// single retry resolves most of these without masking genuine errors.
+/// Timeouts (code `None`) are NOT retried — a hung session (e.g. a breakpoint
+/// that never hits) would just burn the timeout twice.
+async fn run_probe_rs_retry(
+    args: Vec<String>,
+    cwd: &Path,
+    timeout_ms: u64,
+) -> Result<(String, Option<i32>), String> {
+    let (text, code) = run_probe_rs(args.clone(), cwd, timeout_ms).await?;
+    match code {
+        Some(0) => Ok((text, Some(0))),
+        Some(_) => {
+            tokio::time::sleep(Duration::from_millis(2000)).await;
+            let (text2, code2) = run_probe_rs(args, cwd, timeout_ms).await?;
+            let note = "\n(probe-rs exited non-zero; retried once after 2 s)";
+            Ok((format!("{text}{note}\n{text2}"), code2))
+        }
+        None => Ok((text, None)),
     }
 }
 
