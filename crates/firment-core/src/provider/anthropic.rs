@@ -45,9 +45,12 @@ impl AnthropicProvider {
                     system.push_str(content);
                 }
                 ChatMessage::User { content } => {
-                    out.push(
-                        json!({"role": "user", "content": [{"type": "text", "text": content}]}),
-                    );
+                    let text = if content.trim().is_empty() {
+                        "…".to_string()
+                    } else {
+                        content.clone()
+                    };
+                    out.push(json!({"role": "user", "content": [{"type": "text", "text": text}]}));
                 }
                 ChatMessage::Assistant {
                     content,
@@ -65,6 +68,12 @@ impl AnthropicProvider {
                             "input": super::normalize_tool_arguments(&tc.arguments),
                         }));
                     }
+                    // Anthropic rejects an assistant message whose content
+                    // block list is empty (messages.203) — a stalled or
+                    // cancelled turn can have neither text nor tool calls.
+                    if blocks.is_empty() {
+                        blocks.push(json!({"type": "text", "text": "…"}));
+                    }
                     out.push(json!({"role": "assistant", "content": blocks}));
                 }
                 ChatMessage::Tool {
@@ -72,10 +81,15 @@ impl AnthropicProvider {
                     content,
                     ..
                 } => {
+                    let result = if content.trim().is_empty() {
+                        "(no output)".to_string()
+                    } else {
+                        content.clone()
+                    };
                     let block = json!({
                         "type": "tool_result",
                         "tool_use_id": tool_call_id,
-                        "content": content,
+                        "content": result,
                     });
                     // Anthropic requires every tool_use block of an assistant
                     // message to be answered by tool_result blocks inside the
@@ -325,6 +339,39 @@ enum Block {
 mod tests {
     use super::*;
     use crate::ChatMessage;
+
+    #[test]
+    fn convert_guarantees_non_empty_content_blocks() {
+        let p = AnthropicProvider::new("http://localhost", "k", "m", None, None);
+        let messages = vec![
+            ChatMessage::User {
+                content: String::new(),
+            },
+            // Stalled turn: assistant with neither text nor tool calls.
+            ChatMessage::Assistant {
+                content: String::new(),
+                tool_calls: vec![],
+            },
+            ChatMessage::Tool {
+                tool_call_id: "call_00".to_string(),
+                name: "list_dir".to_string(),
+                content: String::new(),
+            },
+        ];
+        let (_, out) = p.convert(&messages);
+        assert!(
+            out.iter().all(|m| {
+                m["content"]
+                    .as_array()
+                    .map(|blocks| !blocks.is_empty())
+                    .unwrap_or(false)
+            }),
+            "no message may have an empty content block list: {out:?}"
+        );
+        assert_eq!(out[0]["content"][0]["text"], "…");
+        assert_eq!(out[1]["content"][0]["text"], "…");
+        assert_eq!(out[2]["content"][0]["content"], "(no output)");
+    }
 
     #[test]
     fn parallel_tool_results_merge_into_one_user_message() {

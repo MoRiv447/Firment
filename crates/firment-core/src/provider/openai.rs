@@ -63,16 +63,35 @@ impl OpenAIProvider {
     }
 
     fn messages(&self, messages: &[ChatMessage]) -> Vec<Value> {
+        // Some OpenAI-compatible gateways reject empty-string content
+        // (e.g. agnes' Anthropic-compat layer surfaces messages.203).
+        // A stalled/cancelled turn can leave an assistant message with
+        // neither text nor tool calls; tool results may be empty — give
+        // every role a non-empty content.
+        fn non_empty(s: &str, fallback: &str) -> String {
+            if s.trim().is_empty() {
+                fallback.to_string()
+            } else {
+                s.to_string()
+            }
+        }
         messages
             .iter()
             .map(|m| match m {
-                ChatMessage::System { content } => json!({"role": "system", "content": content}),
-                ChatMessage::User { content } => json!({"role": "user", "content": content}),
+                ChatMessage::System { content } => {
+                    json!({"role": "system", "content": non_empty(content, "…")})
+                }
+                ChatMessage::User { content } => {
+                    json!({"role": "user", "content": non_empty(content, "…")})
+                }
                 ChatMessage::Assistant {
                     content,
                     tool_calls,
                 } => {
-                    let mut v = json!({"role": "assistant", "content": content});
+                    let mut v = json!({
+                        "role": "assistant",
+                        "content": non_empty(content, "…")
+                    });
                     if !tool_calls.is_empty() {
                         v["tool_calls"] = json!(
                             tool_calls
@@ -96,7 +115,11 @@ impl OpenAIProvider {
                     tool_call_id,
                     content,
                     ..
-                } => json!({"role": "tool", "tool_call_id": tool_call_id, "content": content}),
+                } => json!({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": non_empty(content, "(no output)")
+                }),
             })
             .collect()
     }
