@@ -1,6 +1,32 @@
 # Changelog
 
+## v0.5.9 (2026-08-18) — debug tool REPL commands corrected on live hardware
+
+- **REPL command set corrected after live ST-Link testing.** v0.5.8 shipped
+  with two wrong assumptions that still produced `PC/LR not parsed` and
+  dead sessions on a real target:
+  - `reg` is a subcommand of `info`, not a standalone command — register
+    reads now use `info reg`.
+  - Attaching **resumes** the target, so every read-only session must halt it
+    first with the no-argument `break` command:
+    - `halt` → `-c break`
+    - `regs` / `analyze` → `-c break -c "info reg"`
+    - `break` → `-c "break *0x..." -c c -c "info reg"`
+    - `step` → `-c break -c step -c "info reg"`
+    - `continue` → `-c c`
+  - Verified on an STM32G431RB with an ST-Link V3: register table parses
+    (`R15/PC`, `R13/SP`, `R14/LR`, `XPSR/PSR`), breakpoints hit and report
+    registers, CFSR + stack reads work, and three consecutive sessions exit
+    cleanly (no probe-busy races).
+- **Retry once on transient probe-rs failures** — a probe that is briefly
+  busy (`[Io] probe-rs failed`) is retried after 2s instead of failing the
+  tool call; timeouts are never retried.
+
 ## v0.5.8 (2026-08-18) — debug tool fixes: correct probe-rs 0.32 REPL commands
+
+> **Erratum:** this release's command names were still wrong on real
+> hardware — `reg` must be `info reg`, and the target must be halted
+> explicitly (`-c break`) after attach. Fixed in v0.5.9.
 
 - **`debug` tool now drives the real probe-rs 0.32 DAP REPL command set.** The
   first version used GDB-style command names that do not exist in probe-rs
