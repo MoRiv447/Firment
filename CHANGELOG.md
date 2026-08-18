@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.5.10 (2026-08-18) — debugger depth: backtrace + SWO trace
+
+- **`debug backtrace` — halt and unwind the call stack.** Runs the probe-rs
+  REPL `bt` command against the firmware ELF (DWARF-based, frame by frame
+  with function names and source locations). Requires an ELF built with
+  `-g`; when the firmware has no DWARF info probe-rs prints nothing, so the
+  tool detects that and tells the agent to rebuild with `-g` / `-Og`.
+- **`debug trace` — stream SWO/ITM trace packets.** Wraps `probe-rs itm swo`
+  with a built-in capture window (`duration_ms`, default 3 s), the TPIU
+  clock (`clk_hz`, default 170 MHz) and SWO baud (`baud`, default 2 Mbps).
+  probe-rs configures the target's CoreSight TPIU/ITM itself, so no
+  firmware changes are needed to enable tracing — the firmware just has to
+  write ITM ports (e.g. `ITM_SendChar`) for data to appear. Two probe-rs
+  0.32 quirks are handled: the capture duration is only checked while
+  packets arrive (an idle SWO stream blocks forever), so a timeout is
+  treated as a completed empty capture instead of an error; and SWO-failed
+  probes are not retried.
+- **CFSR flag decoding corrected (ARMv7-M).** Every UFSR bit in the flag
+  table was shifted by one — `0x00010000` was reported as `[INVSTATE]`
+  instead of `[UNDEFINSTR]`, and the BFAR-valid check tested bit 24 instead
+  of bit 14 (`BUSFAULTVALID`). Caught while diagnosing a real fault on a
+  test rig.
+- **Provider: no more 400s from deepseek02.** Three layered fixes for the
+  `api.deepseek.com/anthropic` endpoint: tool-call arguments are never
+  emitted as a non-object (models streaming fenced/text/trailing-comma
+  JSON were previously passed through as strings), arguments persisted as
+  strings in old sessions are normalized on the way out, and every message
+  is guaranteed non-empty content (the `messages.203: all messages must
+  have non-empty content` rejection).
+- **TUI: no more frozen UI on huge repos / trapped approval queues.** Git
+  status refreshes on its own task instead of blocking the event loop
+  (Esc/Ctrl+Q stayed dead on network drives), and global shortcuts
+  (Ctrl+Q/Ctrl+C/Ctrl+Shift+C/Ctrl+V) stay live while a permission or
+  question modal is up.
+- **Cancel interrupts flash/debug sessions** — `run_probe_rs` aborts the
+  probe-rs child on turn cancellation (flash/debug runs up to 180 s are now
+  interruptible like `monitor`), and killed children are reaped with
+  `wait()` to avoid zombies on Unix.
+
 ## v0.5.9 (2026-08-18) — debug tool REPL commands corrected on live hardware
 
 - **REPL command set corrected after live ST-Link testing.** v0.5.8 shipped
