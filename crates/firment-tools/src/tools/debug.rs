@@ -268,33 +268,24 @@ fn debug_elf_args(chip: &str, probe: Option<&str>, elf: &str, commands: &[&str])
     args
 }
 
-/// `probe-rs itm swo <duration_ms> <clk_hz> <baud> --chip ...` — streams ITM
-/// packets out the TRACESWO pin for `<duration_ms>` milliseconds. probe-rs
+/// `probe-rs itm swo <duration_ms> <clk_hz> <baud>` — streams ITM packets
+/// out the TRACESWO pin for `<duration_ms>` milliseconds. probe-rs
 /// configures the target's CoreSight TPIU/ITM itself (no firmware changes
 /// needed to enable tracing), but the firmware must actually write ITM ports
 /// (e.g. ITM_SendChar) for data to appear.
-fn itm_swo_args(
-    chip: &str,
-    probe: Option<&str>,
-    duration_ms: u64,
-    clk_hz: u64,
-    baud: u64,
-) -> Vec<String> {
-    let mut args = vec![
+///
+/// NOTE: `probe-rs itm swo` (0.32) takes NO `--chip`/`--probe`/`--non-interactive`
+/// options (they are rejected with "unexpected argument"). The chip and probe
+/// are passed via the `PROBE_RS_CHIP` / `PROBE_RS_PROBE` environment
+/// variables instead, which the subcommand does honour.
+fn itm_swo_args(duration_ms: u64, clk_hz: u64, baud: u64) -> Vec<String> {
+    vec![
         "itm".to_string(),
         "swo".to_string(),
         duration_ms.to_string(),
         clk_hz.to_string(),
         baud.to_string(),
-        "--chip".to_string(),
-        chip.to_string(),
-        "--non-interactive".to_string(),
-    ];
-    if let Some(probe) = probe {
-        args.push("--probe".to_string());
-        args.push(probe.to_string());
-    }
-    args
+    ]
 }
 
 /// The `bt` REPL command needs DWARF debug info in the ELF; PlatformIO
@@ -415,7 +406,8 @@ impl Tool for Debug {
          analyze (one-shot fault diagnosis: halts, reads PC/LR/SP plus the Cortex-M fault \
          registers CFSR/HFSR/MMFAR/BFAR, decodes PC/LR against the ELF and explains the fault \
          cause), break (set a breakpoint, run, report registers when it hits), step (single \
-         step from the current PC), continue (resume execution), backtrace (halt and unwind \
+         step from the current PC), continue (resume execution; note the target is re-halted \
+         when the debug session disconnects), backtrace (halt and unwind \
          the call stack — needs an elf with DWARF debug info, i.e. built with -g), trace \
          (stream SWO/ITM trace packets for duration_ms — probe-rs configures CoreSight itself, \
          but the firmware must write ITM ports for data to appear). Use after flash/monitor \
@@ -612,6 +604,7 @@ impl Tool for Debug {
                     &cwd,
                     timeout_ms,
                     cancel.clone(),
+                    &[],
                 )
                 .await
                 .map_err(probe_err)?;
@@ -623,6 +616,7 @@ impl Tool for Debug {
                     &cwd,
                     timeout_ms,
                     cancel.clone(),
+                    &[],
                 )
                 .await
                 .map_err(probe_err)?;
@@ -635,6 +629,7 @@ impl Tool for Debug {
                     &cwd,
                     timeout_ms,
                     cancel.clone(),
+                    &[],
                 )
                 .await
                 .map_err(probe_err)?;
@@ -655,6 +650,7 @@ impl Tool for Debug {
                     &cwd,
                     timeout_ms,
                     cancel.clone(),
+                    &[],
                 )
                 .await
                 .map_err(probe_err)?;
@@ -670,6 +666,7 @@ impl Tool for Debug {
                     &cwd,
                     timeout_ms,
                     cancel.clone(),
+                    &[],
                 )
                 .await
                 .map_err(probe_err)?;
@@ -684,6 +681,7 @@ impl Tool for Debug {
                     &cwd,
                     timeout_ms,
                     cancel.clone(),
+                    &[],
                 )
                 .await
                 .map_err(probe_err)?;
@@ -702,6 +700,7 @@ impl Tool for Debug {
                         &cwd,
                         timeout_ms,
                         cancel.clone(),
+                        &[],
                     )
                     .await
                     {
@@ -726,12 +725,18 @@ impl Tool for Debug {
             "break" => {
                 let addr = break_addr.unwrap();
                 let break_cmd = format!("break *{addr:#x}");
-                let cmds: [&str; 3] = [break_cmd.as_str(), "c", "info reg"];
+                // Halt first: `c` (continue) is rejected by probe-rs while the
+                // target is running ("The target is running. Only the 'break',
+                // 'help' or 'quit' commands are allowed"), and an attach
+                // session resumes the target. `break` with no argument halts;
+                // then set the breakpoint, run until it hits, and read regs.
+                let cmds: [&str; 4] = ["break", break_cmd.as_str(), "c", "info reg"];
                 let (text, code) = run_probe_rs_retry(
                     debug_args(&chip, probe.as_deref(), &cmds),
                     &cwd,
                     timeout_ms,
                     cancel.clone(),
+                    &[],
                 )
                 .await
                 .map_err(probe_err)?;
@@ -747,6 +752,7 @@ impl Tool for Debug {
                     &cwd,
                     timeout_ms,
                     cancel.clone(),
+                    &[],
                 )
                 .await
                 .map_err(probe_err)?;
@@ -758,10 +764,18 @@ impl Tool for Debug {
                     &cwd,
                     timeout_ms,
                     cancel.clone(),
+                    &[],
                 )
                 .await
                 .map_err(probe_err)?;
-                finish(code, "resumed execution", &text)
+                // probe-rs `quit` disconnects by suspending the target, so a
+                // resumed target is halted again as soon as this session ends;
+                // say so instead of claiming it keeps running.
+                finish(
+                    code,
+                    "resumed execution (the target is re-halted when this debug session disconnects)",
+                    &text,
+                )
             }
             "backtrace" => {
                 let elf_path = elf.unwrap();
@@ -775,6 +789,7 @@ impl Tool for Debug {
                     &cwd,
                     timeout_ms,
                     cancel.clone(),
+                    &[],
                 )
                 .await
                 .map_err(probe_err)?;
@@ -799,18 +814,21 @@ impl Tool for Debug {
                 // own — the outer timeout ending the session is therefore the
                 // NORMAL completion path, not an error. No retry either: a
                 // probe that cannot receive SWO will just fail again.
+                //
+                // `itm swo` has no --chip/--probe options; pass them via the
+                // PROBE_RS_CHIP / PROBE_RS_PROBE env vars (honoured by the
+                // subcommand, verified against probe-rs 0.32).
                 let outer = timeout_ms.max(trace_duration + 5_000);
+                let mut envs = vec![("PROBE_RS_CHIP".to_string(), chip.clone())];
+                if let Some(probe) = probe.as_deref() {
+                    envs.push(("PROBE_RS_PROBE".to_string(), probe.to_string()));
+                }
                 let result = run_probe_rs(
-                    itm_swo_args(
-                        &chip,
-                        probe.as_deref(),
-                        trace_duration,
-                        trace_clk,
-                        trace_baud,
-                    ),
+                    itm_swo_args(trace_duration, trace_clk, trace_baud),
                     &cwd,
                     outer,
                     Some(ctx.cancel.clone()),
+                    &envs,
                 )
                 .await;
                 let (text, code) = match result {
@@ -899,13 +917,14 @@ async fn run_probe_rs_retry(
     cwd: &Path,
     timeout_ms: u64,
     cancel: Option<firment_core::Cancellable>,
+    envs: &[(String, String)],
 ) -> Result<(String, Option<i32>), String> {
-    let (text, code) = run_probe_rs(args.clone(), cwd, timeout_ms, cancel.clone()).await?;
+    let (text, code) = run_probe_rs(args.clone(), cwd, timeout_ms, cancel.clone(), envs).await?;
     match code {
         Some(0) => Ok((text, Some(0))),
         Some(_) => {
             tokio::time::sleep(Duration::from_millis(2000)).await;
-            let (text2, code2) = run_probe_rs(args, cwd, timeout_ms, cancel).await?;
+            let (text2, code2) = run_probe_rs(args, cwd, timeout_ms, cancel, envs).await?;
             let note = "\n(probe-rs exited non-zero; retried once after 2 s)";
             Ok((format!("{text}{note}\n{text2}"), code2))
         }
@@ -1209,14 +1228,14 @@ XPSR/PSR: 0x01000000
 
     #[test]
     fn itm_swo_args_carry_duration_clock_and_baud() {
-        let args = itm_swo_args("stm32g431rb", Some("SER123"), 2500, 170_000_000, 2_000_000);
+        // `itm swo` takes no --chip/--probe/--non-interactive (probe-rs 0.32
+        // rejects them); the chip/probe travel via PROBE_RS_CHIP/PROBE_RS_PROBE.
+        let args = itm_swo_args(2500, 170_000_000, 2_000_000);
         assert_eq!(&args[0..2], &["itm", "swo"]);
         assert!(args.contains(&"2500".to_string()), "got: {args:?}");
         assert!(args.contains(&"170000000".to_string()), "got: {args:?}");
         assert!(args.contains(&"2000000".to_string()), "got: {args:?}");
-        assert!(args.contains(&"--non-interactive".to_string()));
-        assert!(args.contains(&"--probe".to_string()));
-        assert!(args.contains(&"SER123".to_string()));
+        assert_eq!(args.len(), 5, "no option flags may be passed: {args:?}");
     }
 
     #[test]

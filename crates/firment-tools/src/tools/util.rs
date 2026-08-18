@@ -338,12 +338,16 @@ pub(crate) async fn run_probe_rs(
     cwd: &Path,
     timeout_ms: u64,
     cancel: Option<Cancellable>,
+    envs: &[(String, String)],
 ) -> Result<(String, Option<i32>), String> {
     let mut cmd = Command::new("probe-rs");
     cmd.args(&args)
         .current_dir(cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    for (key, value) in envs {
+        cmd.env(key, value);
+    }
     #[cfg(windows)]
     {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;

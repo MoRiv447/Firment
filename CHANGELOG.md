@@ -39,53 +39,7 @@
   interruptible like `monitor`), and killed children are reaped with
   `wait()` to avoid zombies on Unix.
 
-## v0.5.9 (2026-08-18) — debug tool REPL commands corrected on live hardware
-
-- **REPL command set corrected after live ST-Link testing.** v0.5.8 shipped
-  with two wrong assumptions that still produced `PC/LR not parsed` and
-  dead sessions on a real target:
-  - `reg` is a subcommand of `info`, not a standalone command — register
-    reads now use `info reg`.
-  - Attaching **resumes** the target, so every read-only session must halt it
-    first with the no-argument `break` command:
-    - `halt` → `-c break`
-    - `regs` / `analyze` → `-c break -c "info reg"`
-    - `break` → `-c "break *0x..." -c c -c "info reg"`
-    - `step` → `-c break -c step -c "info reg"`
-    - `continue` → `-c c`
-  - Verified on an STM32G431RB with an ST-Link V3: register table parses
-    (`R15/PC`, `R13/SP`, `R14/LR`, `XPSR/PSR`), breakpoints hit and report
-    registers, CFSR + stack reads work, and three consecutive sessions exit
-    cleanly (no probe-busy races).
-- **Retry once on transient probe-rs failures** — a probe that is briefly
-  busy (`[Io] probe-rs failed`) is retried after 2s instead of failing the
-  tool call; timeouts are never retried.
-
-## v0.5.8 (2026-08-18) — debug tool fixes: correct probe-rs 0.32 REPL commands
-
-> **Erratum:** this release's command names were still wrong on real
-> hardware — `reg` must be `info reg`, and the target must be halted
-> explicitly (`-c break`) after attach. Fixed in v0.5.9.
-
-- **`debug` tool now drives the real probe-rs 0.32 DAP REPL command set.** The
-  first version used GDB-style command names that do not exist in probe-rs
-  0.32 (`regs`/`halt`/`continue`/`mem`/`q`), which silently produced no
-  registers (`PC/LR not parsed`), never resumed the target after `break`, and
-  ended every session with `probe-rs failed (exit 1)`:
-  - `regs` → `reg` (register table), `continue` → `c`, `q` → `quit`;
-    halt happens automatically on attach, so `halt` is now a plain session.
-  - `break` addresses need the `*` prefix (`break *0x...`), matching the
-    probe-rs REPL syntax.
-- **Thumb breakpoint alignment** — a `symbol:name` break address may carry the
-  Thumb bit (bit 0); it is now masked (`addr & !1`) instead of rejected.
-- **Robust register parsing** — ANSI escape sequences are stripped before
-  matching, and the probe-rs 0.32 table layout (`R15/PC: 0x08005678`,
-  `XPSR/PSR: 0x01000000`) is parsed correctly.
-- **Web tool spec snapshot** — `web/src/lib/tools/specs.json` re-synced with
-  the `firm tools` output (the debug tool schema had drifted since v0.5.7,
-  which failed the CI snapshot check).
-
-## v0.5.7 (2026-08-18) — on-target debugging: the agent can debug its own firmware
+## v0.5.9 (2026-08-18) — on-target debugging: the agent can debug its own firmware
 
 - **New `debug` tool** — full inspect/control of the target over the debug probe
   (probe-rs, no OpenOCD/GDB dependency), letting the agent debug firmware
