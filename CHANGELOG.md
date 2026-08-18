@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.5.8 (2026-08-18) — debug tool fixes: correct probe-rs 0.32 REPL commands
+
+- **`debug` tool now drives the real probe-rs 0.32 DAP REPL command set.** The
+  first version used GDB-style command names that do not exist in probe-rs
+  0.32 (`regs`/`halt`/`continue`/`mem`/`q`), which silently produced no
+  registers (`PC/LR not parsed`), never resumed the target after `break`, and
+  ended every session with `probe-rs failed (exit 1)`:
+  - `regs` → `reg` (register table), `continue` → `c`, `q` → `quit`;
+    halt happens automatically on attach, so `halt` is now a plain session.
+  - `break` addresses need the `*` prefix (`break *0x...`), matching the
+    probe-rs REPL syntax.
+- **Thumb breakpoint alignment** — a `symbol:name` break address may carry the
+  Thumb bit (bit 0); it is now masked (`addr & !1`) instead of rejected.
+- **Robust register parsing** — ANSI escape sequences are stripped before
+  matching, and the probe-rs 0.32 table layout (`R15/PC: 0x08005678`,
+  `XPSR/PSR: 0x01000000`) is parsed correctly.
+- **Web tool spec snapshot** — `web/src/lib/tools/specs.json` re-synced with
+  the `firm tools` output (the debug tool schema had drifted since v0.5.7,
+  which failed the CI snapshot check).
+
 ## v0.5.7 (2026-08-18) — on-target debugging: the agent can debug its own firmware
 
 - **New `debug` tool** — full inspect/control of the target over the debug probe
