@@ -324,6 +324,65 @@ async fn kill_tree_and_report(
     Ok((format!("command: {command}\n{reason}"), None))
 }
 
+/// Run a `probe-rs` subcommand directly with an explicit argument array (no
+/// shell), capturing combined stdout+stderr. Enforces a timeout; a process
+/// killed by the timeout or by turn cancellation reports exit code `None`.
+///
+/// Running through `cmd /C <string>` is NOT used here: cmd.exe keeps the
+/// quotes inside quoted arguments when the whole command is passed as one
+/// string (e.g. `--chip "STM32G431RB"` arrives at probe-rs as `"STM32G431RB"`
+/// including the quotes), which makes chip lookup fail with "chip not found".
+/// Spawning with explicit args avoids quoting entirely and is equally safe.
+pub(crate) async fn run_probe_rs(
+    args: Vec<String>,
+    cwd: &Path,
+    timeout_ms: u64,
+) -> Result<(String, Option<i32>), String> {
+    let mut cmd = Command::new("probe-rs");
+    cmd.args(&args)
+        .current_dir(cwd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let mut child = cmd.spawn().map_err(|e| format!("spawn failed: {e}"))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "stdout handle unavailable".to_string())?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "stderr handle unavailable".to_string())?;
+    let mut out_buf: Vec<u8> = Vec::new();
+    let mut err_buf: Vec<u8> = Vec::new();
+    let read_streams = async {
+        let _ = AsyncReadExt::read_to_end(&mut stdout, &mut out_buf).await;
+        let _ = AsyncReadExt::read_to_end(&mut stderr, &mut err_buf).await;
+    };
+    let mut read_streams = Box::pin(read_streams);
+
+    let status = tokio::select! {
+        status = child.wait() => status,
+        _ = tokio::time::sleep(Duration::from_millis(timeout_ms)) => {
+            let _ = child.kill().await;
+            return Err(format!(
+                "[Timeout] probe-rs timed out after {timeout_ms} ms and was killed"
+            ));
+        }
+    };
+    let _ = (&mut read_streams).await;
+    let code = status.map_err(|e| format!("wait failed: {e}"))?.code();
+
+    let stdout = String::from_utf8_lossy(&out_buf).to_string();
+    let stderr = String::from_utf8_lossy(&err_buf).to_string();
+    Ok((format!("{stdout}{stderr}"), code))
+}
+
 /// Terminate a process and everything underneath it. Background jobs spawned by
 /// the command inherit our pipe handles; killing only the direct child would
 /// leave those handles open and the capture would never reach EOF.

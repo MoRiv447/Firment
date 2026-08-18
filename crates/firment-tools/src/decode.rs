@@ -1,6 +1,21 @@
 use object::{Object, ObjectSymbol};
 use std::path::Path;
 
+/// Resolve a symbol name (function or global variable) to its link address in
+/// an ELF. Returns None when the file is missing/unparseable or the symbol
+/// does not exist. Used by the debug tool so callers can read/write a named
+/// variable (`symbol:name`) instead of guessing addresses.
+pub fn symbol_address(elf: &Path, name: &str) -> Option<u64> {
+    let data = std::fs::read(elf).ok()?;
+    let file = object::File::parse(&*data).ok()?;
+    for sym in file.symbols() {
+        if sym.name().ok().is_some_and(|n| n == name) {
+            return Some(sym.address());
+        }
+    }
+    None
+}
+
 /// Resolve a code address to `function+0xOFFSET` using the ELF symbol table.
 /// Returns None when the file is missing/unparseable or no symbol covers it.
 pub fn decode_address(elf: &Path, address: u64) -> Option<String> {
@@ -70,5 +85,10 @@ mod tests {
     fn decode_line_passthrough_without_elf() {
         let line = "panic at 0x08001234";
         assert_eq!(decode_line(line, None), line);
+    }
+
+    #[test]
+    fn symbol_address_missing_elf_returns_none() {
+        assert!(symbol_address(Path::new("C:/definitely/missing.elf"), "main").is_none());
     }
 }

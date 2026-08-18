@@ -1,5 +1,6 @@
 mod ask_user;
 mod build;
+mod debug;
 mod edit_file;
 mod elf_analyze;
 mod flash;
@@ -34,6 +35,7 @@ pub fn all() -> Vec<Arc<dyn Tool>> {
         Arc::new(periph_init::PeriphInit),
         Arc::new(write_file::WriteFile),
         Arc::new(flash::Flash),
+        Arc::new(debug::Debug),
         Arc::new(edit_file::EditFile),
         Arc::new(elf_analyze::ElfAnalyze),
         Arc::new(list_dir::ListDir),
