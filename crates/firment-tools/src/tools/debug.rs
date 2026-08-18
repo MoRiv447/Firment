@@ -602,6 +602,7 @@ impl Tool for Debug {
         }
 
         let cwd = ctx.cwd.clone();
+        let cancel = Some(ctx.cancel.clone());
         match action {
             "halt" => {
                 // Attach resumes the target, so halt it explicitly with the
@@ -610,6 +611,7 @@ impl Tool for Debug {
                     debug_args(&chip, probe.as_deref(), &["break"]),
                     &cwd,
                     timeout_ms,
+                    cancel.clone(),
                 )
                 .await
                 .map_err(probe_err)?;
@@ -620,6 +622,7 @@ impl Tool for Debug {
                     debug_args(&chip, probe.as_deref(), &["break", "info reg"]),
                     &cwd,
                     timeout_ms,
+                    cancel.clone(),
                 )
                 .await
                 .map_err(probe_err)?;
@@ -631,6 +634,7 @@ impl Tool for Debug {
                     read_args(&chip, probe.as_deref(), &width, addr, words as usize),
                     &cwd,
                     timeout_ms,
+                    cancel.clone(),
                 )
                 .await
                 .map_err(probe_err)?;
@@ -650,6 +654,7 @@ impl Tool for Debug {
                     write_args(&chip, probe.as_deref(), &width, addr, value),
                     &cwd,
                     timeout_ms,
+                    cancel.clone(),
                 )
                 .await
                 .map_err(probe_err)?;
@@ -664,6 +669,7 @@ impl Tool for Debug {
                     debug_args(&chip, probe.as_deref(), &["break", "info reg"]),
                     &cwd,
                     timeout_ms,
+                    cancel.clone(),
                 )
                 .await
                 .map_err(probe_err)?;
@@ -677,6 +683,7 @@ impl Tool for Debug {
                     read_args(&chip, probe.as_deref(), "b32", 0xE000_ED28, 5),
                     &cwd,
                     timeout_ms,
+                    cancel.clone(),
                 )
                 .await
                 .map_err(probe_err)?;
@@ -694,6 +701,7 @@ impl Tool for Debug {
                         read_args(&chip, probe.as_deref(), "b32", sp, 8),
                         &cwd,
                         timeout_ms,
+                        cancel.clone(),
                     )
                     .await
                     {
@@ -723,6 +731,7 @@ impl Tool for Debug {
                     debug_args(&chip, probe.as_deref(), &cmds),
                     &cwd,
                     timeout_ms,
+                    cancel.clone(),
                 )
                 .await
                 .map_err(probe_err)?;
@@ -737,6 +746,7 @@ impl Tool for Debug {
                     debug_args(&chip, probe.as_deref(), &["break", "step", "info reg"]),
                     &cwd,
                     timeout_ms,
+                    cancel.clone(),
                 )
                 .await
                 .map_err(probe_err)?;
@@ -747,6 +757,7 @@ impl Tool for Debug {
                     debug_args(&chip, probe.as_deref(), &["c"]),
                     &cwd,
                     timeout_ms,
+                    cancel.clone(),
                 )
                 .await
                 .map_err(probe_err)?;
@@ -763,6 +774,7 @@ impl Tool for Debug {
                     ),
                     &cwd,
                     timeout_ms,
+                    cancel.clone(),
                 )
                 .await
                 .map_err(probe_err)?;
@@ -798,6 +810,7 @@ impl Tool for Debug {
                     ),
                     &cwd,
                     outer,
+                    Some(ctx.cancel.clone()),
                 )
                 .await;
                 let (text, code) = match result {
@@ -885,13 +898,14 @@ async fn run_probe_rs_retry(
     args: Vec<String>,
     cwd: &Path,
     timeout_ms: u64,
+    cancel: Option<firment_core::Cancellable>,
 ) -> Result<(String, Option<i32>), String> {
-    let (text, code) = run_probe_rs(args.clone(), cwd, timeout_ms).await?;
+    let (text, code) = run_probe_rs(args.clone(), cwd, timeout_ms, cancel.clone()).await?;
     match code {
         Some(0) => Ok((text, Some(0))),
         Some(_) => {
             tokio::time::sleep(Duration::from_millis(2000)).await;
-            let (text2, code2) = run_probe_rs(args, cwd, timeout_ms).await?;
+            let (text2, code2) = run_probe_rs(args, cwd, timeout_ms, cancel).await?;
             let note = "\n(probe-rs exited non-zero; retried once after 2 s)";
             Ok((format!("{text}{note}\n{text2}"), code2))
         }

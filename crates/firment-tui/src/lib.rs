@@ -1739,6 +1739,12 @@ impl App {
     }
 
     fn on_key(&mut self, key: KeyEvent) -> bool {
+        // Global shortcuts (Ctrl+Q quit, Ctrl+C / Ctrl+Shift+C copy, Ctrl+V
+        // paste) stay live even while a permission/question/picker modal is
+        // up — a long approval queue must never trap the user in the TUI.
+        if let Some(handled) = self.global_shortcut(key) {
+            return handled;
+        }
         if self.permission.is_some() {
             return self.on_permission_key(key);
         }
@@ -1752,25 +1758,6 @@ impl App {
             return self.on_session_picker_key(key);
         }
         match key.code {
-            KeyCode::Char('c')
-                if key.modifiers.contains(KeyModifiers::CONTROL)
-                    && key.modifiers.contains(KeyModifiers::SHIFT) =>
-            {
-                self.copy_last_output();
-                false
-            }
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.copy_primary_selection();
-                false
-            }
-            KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.paste_clipboard();
-                false
-            }
-            KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.quit = true;
-                true
-            }
             KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.open_model_picker();
                 false
@@ -1880,6 +1867,33 @@ impl App {
                 false
             }
             _ => false,
+        }
+    }
+
+    /// Quit / copy / paste shortcuts that must work regardless of what modal
+    /// is on screen. Returns `Some(handled)` when the key was consumed.
+    fn global_shortcut(&mut self, key: KeyEvent) -> Option<bool> {
+        match key.code {
+            KeyCode::Char('c')
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && key.modifiers.contains(KeyModifiers::SHIFT) =>
+            {
+                self.copy_last_output();
+                Some(false)
+            }
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.copy_primary_selection();
+                Some(false)
+            }
+            KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.paste_clipboard();
+                Some(false)
+            }
+            KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.quit = true;
+                Some(true)
+            }
+            _ => None,
         }
     }
 
@@ -3606,14 +3620,32 @@ async fn run_loop(
 ) -> anyhow::Result<()> {
     // A 25ms tick lands paste-burst buffers on time without slowing animations.
     let mut ticker = tokio::time::interval(Duration::from_millis(25));
-    // Refresh the git status bar every few seconds (cheap; skipped outside repos).
+    // Refresh the git status bar every few seconds. The refresh runs on its
+    // own task: `git status` can block for seconds on huge repos or network
+    // drives, and awaiting it inline in this select would freeze key/event
+    // handling for the whole UI (no Esc interrupt, no Ctrl+Q).
     let mut git_ticker = tokio::time::interval(Duration::from_secs(4));
+    let (git_tx, mut git_rx) = mpsc::channel::<GitInfo>(1);
+    let mut git_in_flight = false;
     let mut dirty = true;
     loop {
         let mut spinner_tick = false;
         tokio::select! {
             _ = git_ticker.tick() => {
-                app.git = git_info(&app.cwd).await;
+                if !git_in_flight {
+                    git_in_flight = true;
+                    let tx = git_tx.clone();
+                    let cwd = app.cwd.clone();
+                    tokio::spawn(async move {
+                        if let Some(info) = git_info(&cwd).await {
+                            let _ = tx.send(info).await;
+                        }
+                    });
+                }
+            }
+            Some(info) = git_rx.recv() => {
+                git_in_flight = false;
+                app.git = Some(info);
                 dirty = true;
             }
             event = event_rx.recv() => {

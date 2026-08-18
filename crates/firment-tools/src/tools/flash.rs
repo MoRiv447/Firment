@@ -113,7 +113,7 @@ impl Tool for Flash {
         }
         dl_args.push(resolved.to_string_lossy().to_string());
 
-        let result = run_probe_rs(dl_args, &ctx.cwd, timeout_ms).await;
+        let result = run_probe_rs(dl_args, &ctx.cwd, timeout_ms, Some(ctx.cancel.clone())).await;
         match result {
             Ok((text, Some(0))) if !reset => Ok(ToolOutput {
                 text: format!("flash passed (exit 0)\n{text}"),
@@ -125,7 +125,8 @@ impl Tool for Flash {
                     reset_args.push("--probe".to_string());
                     reset_args.push(probe);
                 }
-                match run_probe_rs(reset_args, &ctx.cwd, timeout_ms).await {
+                match run_probe_rs(reset_args, &ctx.cwd, timeout_ms, Some(ctx.cancel.clone())).await
+                {
                     Ok((rtext, Some(0))) => Ok(ToolOutput {
                         text: format!(
                             "flash passed and target reset (exit 0)\n{text}\nreset: {rtext}"

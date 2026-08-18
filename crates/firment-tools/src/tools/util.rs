@@ -337,6 +337,7 @@ pub(crate) async fn run_probe_rs(
     args: Vec<String>,
     cwd: &Path,
     timeout_ms: u64,
+    cancel: Option<Cancellable>,
 ) -> Result<(String, Option<i32>), String> {
     let mut cmd = Command::new("probe-rs");
     cmd.args(&args)
@@ -369,10 +370,26 @@ pub(crate) async fn run_probe_rs(
     let status = tokio::select! {
         status = child.wait() => status,
         _ = tokio::time::sleep(Duration::from_millis(timeout_ms)) => {
+            // Kill then wait: without wait() the dead child lingers as a
+            // zombie on Unix until this process exits.
             let _ = child.kill().await;
+            let _ = child.wait().await;
             return Err(format!(
                 "[Timeout] probe-rs timed out after {timeout_ms} ms and was killed"
             ));
+        }
+        _ = async {
+            if let Some(c) = cancel.as_ref() {
+                Box::pin(c.cancelled()).await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err(
+                "[Cancelled] probe-rs was interrupted by turn cancellation".to_string(),
+            );
         }
     };
     let _ = (&mut read_streams).await;
