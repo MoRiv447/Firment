@@ -768,7 +768,10 @@ impl Tool for Debug {
                 .map_err(probe_err)?;
                 match code {
                     Some(0) => Ok(ToolOutput {
-                        text: format!("debug backtrace (exit 0)\n{}", backtrace_hint(&text)),
+                        text: truncate(
+                            &format!("debug backtrace (exit 0)\n{}", backtrace_hint(&text)),
+                            32_000,
+                        ),
                     }),
                     Some(c) => Err(ToolError::new(format!(
                         "[Io] probe-rs failed (exit {c})\n{text}"
@@ -779,10 +782,13 @@ impl Tool for Debug {
                 }
             }
             "trace" => {
-                // The duration is intrinsic to the SWO capture; the outer
-                // timeout only guards against a hung probe.
+                // probe-rs 0.32 checks the capture duration inside the packet
+                // loop, so with no ITM traffic the command never exits on its
+                // own — the outer timeout ending the session is therefore the
+                // NORMAL completion path, not an error. No retry either: a
+                // probe that cannot receive SWO will just fail again.
                 let outer = timeout_ms.max(trace_duration + 5_000);
-                let (text, code) = run_probe_rs_retry(
+                let result = run_probe_rs(
                     itm_swo_args(
                         &chip,
                         probe.as_deref(),
@@ -793,8 +799,14 @@ impl Tool for Debug {
                     &cwd,
                     outer,
                 )
-                .await
-                .map_err(probe_err)?;
+                .await;
+                let (text, code) = match result {
+                    Ok(v) => v,
+                    // Timeout on an idle SWO stream = the capture window
+                    // ended; treat it as a normal (empty) capture.
+                    Err(e) if e.contains("[Timeout]") => (String::new(), None),
+                    Err(e) => return Err(probe_err(e)),
+                };
                 match code {
                     Some(0) => {
                         let summary = if text.trim().is_empty() {
@@ -804,18 +816,28 @@ impl Tool for Debug {
                             ""
                         };
                         Ok(ToolOutput {
-                            text: format!(
-                                "debug trace captured {trace_duration} ms of SWO/ITM \
-                                 (clk {trace_clk} Hz, baud {trace_baud}) (exit 0)\n{summary}{text}"
+                            text: truncate(
+                                &format!(
+                                    "debug trace captured {trace_duration} ms of SWO/ITM \
+                                     (clk {trace_clk} Hz, baud {trace_baud}) (exit 0)\n{summary}{text}"
+                                ),
+                                32_000,
                             ),
                         })
                     }
+                    None => Ok(ToolOutput {
+                        text: truncate(
+                            &format!(
+                                "debug trace: capture window closed after {outer} ms on an idle \
+                                 SWO stream (no ITM packets — firmware must write ITM ports, \
+                                 e.g. ITM_SendChar, for data to appear)\n{text}"
+                            ),
+                            32_000,
+                        ),
+                    }),
                     Some(c) => Err(ToolError::new(format!(
                         "[Io] probe-rs trace failed (exit {c}) — the probe may not support SWO \
                          reception, or the chip/clk/baud combination is wrong\n{text}"
-                    ))),
-                    None => Err(ToolError::new(format!(
-                        "[Timeout] probe-rs trace was killed\n{text}"
                     ))),
                 }
             }

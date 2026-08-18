@@ -1,4 +1,4 @@
-﻿[
+[
   {
     "name": "ask_user",
     "description": "Ask the human user (the person running this session) a question and return their answer. Use only for decisions or information only the user has (which board/chip variant, hardware wiring, whether to install a toolchain, preference between approaches). Prefer 2-5 short options; the user can also type a free-form answer. Never ask something you can find out yourself with read_file / web_search / web_fetch, and never use this to ask another AI for information — spawn a `task` subagent for that.",
