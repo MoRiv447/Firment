@@ -1,4 +1,4 @@
-use firment_core::Cancellable;
+use firment_core::{Cancellable, ToolError};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -404,6 +404,35 @@ pub(crate) async fn run_probe_rs(
     Ok((format!("{stdout}{stderr}"), code))
 }
 
+/// Map a raw probe-rs invocation error into a tagged tool error.
+///
+/// - Missing binary -> `[NotFound]` with an install hint.
+/// - A stuck ST-Link session on Windows (`reset not supported by WinUSB`, or
+///   the probe refusing to open at all) -> `[Io]` with replug guidance.
+///   probe-rs leaves the ST-Link USB session busy when a previous process did
+///   not close it cleanly; on WinUSB drivers `libusb_reset_device` is not
+///   supported so the recovery path fails too (probe-rs issue #2207).
+/// - Anything else -> generic `[Io]`.
+pub(crate) fn probe_rs_err(e: String) -> ToolError {
+    if e.contains("spawn failed") {
+        ToolError::new(
+            "[NotFound] probe-rs is not installed or not on PATH: install it with \
+             `cargo install probe-rs-tools` or download from the probe-rs GitHub Releases",
+        )
+    } else if e.contains("reset not supported by WinUSB")
+        || e.contains("Failed to open the debug probe")
+    {
+        ToolError::new(format!(
+            "[Io] cannot open the ST-Link probe: its USB session is still busy (left over from a \
+             previous probe-rs/ST tool that did not close it cleanly; known probe-rs issue #2207 \
+             on Windows/WinUSB). Unplug and replug the ST-Link, close any program holding the \
+             probe (STM32CubeProgrammer / CubeIDE / Keil / OpenOCD), then retry.\n{e}"
+        ))
+    } else {
+        ToolError::new(format!("[Io] {e}"))
+    }
+}
+
 /// Terminate a process and everything underneath it. Background jobs spawned by
 /// the command inherit our pipe handles; killing only the direct child would
 /// leave those handles open and the capture would never reach EOF.
@@ -476,6 +505,30 @@ fn ps_descendants(pid: u32) -> Vec<u32> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn probe_rs_err_classifies_missing_binary_stuck_probe_and_generic() {
+        let missing = probe_rs_err("spawn failed: no such file".to_string());
+        assert!(missing.message.contains("[NotFound]"), "got: {missing}");
+        assert!(missing.message.contains("probe-rs"), "got: {missing}");
+
+        let stuck = probe_rs_err(
+            "Failed to open the debug probe.\nreset not supported by WinUSB".to_string(),
+        );
+        assert!(stuck.message.contains("[Io]"), "got: {stuck}");
+        assert!(stuck.message.contains("Unplug and replug"), "got: {stuck}");
+
+        // The WinUSB marker alone is enough to trigger the guidance.
+        let winusb_only = probe_rs_err("reset not supported by WinUSB".to_string());
+        assert!(
+            winusb_only.message.contains("Unplug and replug"),
+            "got: {winusb_only}"
+        );
+
+        let generic = probe_rs_err("some other failure".to_string());
+        assert!(generic.message.contains("[Io]"), "got: {generic}");
+        assert!(!generic.message.contains("Unplug"), "got: {generic}");
+    }
 
     #[test]
     fn resolve_within_enforces_workspace_boundary() {

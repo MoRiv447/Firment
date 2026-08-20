@@ -879,16 +879,10 @@ impl Tool for Debug {
     }
 }
 
-/// Map probe-rs spawn failures to the standard install-hint error.
+/// Map probe-rs invocation errors (missing binary, stuck ST-Link session on
+/// Windows/WinUSB, generic) to tagged tool errors with actionable guidance.
 fn probe_err(e: String) -> ToolError {
-    if e.contains("spawn failed") {
-        ToolError::new(format!(
-            "[NotFound] probe-rs is not installed or not on PATH: install it with \
-             `cargo install probe-rs-tools` or download from the probe-rs GitHub Releases ({e})"
-        ))
-    } else {
-        ToolError::new(format!("[Io] {e}"))
-    }
+    super::util::probe_rs_err(e)
 }
 
 /// Wrap a probe-rs exit code into the tool result text.

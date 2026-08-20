@@ -1,4 +1,4 @@
-use super::util::{resolve_within, run_probe_rs, shell_quote, token_arg};
+use super::util::{probe_rs_err, resolve_within, run_probe_rs, shell_quote, token_arg};
 use async_trait::async_trait;
 use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
@@ -146,23 +146,14 @@ impl Tool for Flash {
                     Ok((rtext, None)) => Err(ToolError::new(format!(
                         "[Timeout] reset after flash timed out\n{rtext}"
                     ))),
-                    Err(e) if e.contains("spawn failed") => Err(ToolError::new(format!(
-                        "[NotFound] probe-rs is not installed or not on PATH: install it with \
-                         `cargo install probe-rs-tools` or download from the probe-rs GitHub \
-                         Releases ({e})"
-                    ))),
-                    Err(e) => Err(ToolError::new(format!("[Io] {e}"))),
+                    Err(e) => Err(probe_rs_err(e)),
                 }
             }
             Ok((text, Some(code))) => Err(ToolError::new(format!(
                 "[Io] flash failed (exit {code})\ncommand: {command}\n{text}"
             ))),
             Ok((text, None)) => Err(ToolError::new(format!("[Timeout] flash timed out\n{text}"))),
-            Err(e) if e.contains("spawn failed") => Err(ToolError::new(format!(
-                "[NotFound] probe-rs is not installed or not on PATH: install it with \
-                 `cargo install probe-rs-tools` or download from the probe-rs GitHub Releases ({e})"
-            ))),
-            Err(e) => Err(ToolError::new(format!("[Io] {e}"))),
+            Err(e) => Err(probe_rs_err(e)),
         }
     }
 }

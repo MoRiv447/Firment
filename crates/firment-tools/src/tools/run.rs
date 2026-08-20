@@ -1,4 +1,4 @@
-use super::util::{resolve_within, shell_quote, token_arg};
+use super::util::{probe_rs_err, resolve_within, shell_quote, token_arg};
 use async_trait::async_trait;
 use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
@@ -180,11 +180,7 @@ impl Tool for Run {
             Ok((text, None)) => Ok(ToolOutput {
                 text: format!("run timed out after {timeout_ms} ms; captured output:\n{text}"),
             }),
-            Err(e) if e.contains("spawn failed") => Err(ToolError::new(format!(
-                "[NotFound] probe-rs is not installed or not on PATH: install it with \
-                 `cargo install probe-rs-tools` or download from the probe-rs GitHub Releases ({e})"
-            ))),
-            Err(e) => Err(ToolError::new(format!("[Io] {e}"))),
+            Err(e) => Err(probe_rs_err(e)),
         }
     }
 }
