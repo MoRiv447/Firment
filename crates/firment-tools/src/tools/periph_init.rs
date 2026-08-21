@@ -153,6 +153,9 @@ fn family_for(part: &str) -> Option<&'static str> {
         Some("stm32g0")
     } else if p.starts_with("stm32h7") {
         Some("stm32h7")
+    } else if p.starts_with("esp32s31") {
+        // Must be tested BEFORE "esp32s3": "esp32s31".starts_with("esp32s3").
+        Some("esp32s31")
     } else if p.starts_with("esp32s3") {
         Some("esp32s3")
     } else if p.starts_with("esp32c6") {
@@ -487,6 +490,8 @@ mod tests {
         assert_eq!(family_for("stm32g070"), Some("stm32g0"));
         assert_eq!(family_for("stm32g431rbt6"), Some("stm32g4"));
         assert_eq!(family_for("stm32h723vgt6"), Some("stm32h7"));
+        assert_eq!(family_for("esp32s31"), Some("esp32s31"));
+        assert_eq!(family_for("esp32s31nrv16"), Some("esp32s31"));
         assert_eq!(family_for("esp32s3"), Some("esp32s3"));
         assert_eq!(family_for("esp32c6"), Some("esp32c6"));
         assert_eq!(family_for("esp32c3"), Some("esp32c3"));
@@ -523,6 +528,41 @@ mod tests {
         assert!(
             out.text.contains("stm32h7-uart.toml") || out.text.contains("D-Cache"),
             "H7 cheatsheet (D-Cache) must be injected, got: {}",
+            out.text
+        );
+    }
+
+    #[tokio::test]
+    async fn esp32s31_cheatsheets_are_injected() {
+        let dir = tempdir().unwrap();
+        let out = PeriphInit
+            .run(
+                json!({"part": "esp32s31nrv16", "peripheral": "gpio"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(
+            out.text.contains("esp32s31-gpio.toml"),
+            "S31 GPIO cheatsheet must be injected, got: {}",
+            out.text
+        );
+        assert!(
+            out.text.contains("GPIO29") || out.text.contains("strapping"),
+            "S31 platform facts must be present, got: {}",
+            out.text
+        );
+
+        let out = PeriphInit
+            .run(
+                json!({"part": "esp32s31", "peripheral": "uart"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(
+            out.text.contains("esp32s31-uart.toml"),
+            "S31 UART cheatsheet must be injected, got: {}",
             out.text
         );
     }

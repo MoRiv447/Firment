@@ -1,0 +1,27 @@
+# esp32s31-uart.toml — ESP32-S31 UART original cheatsheet (engineering notes cross-checked against the ESP32-S31 Series Datasheet v0.5 PRELIMINARY, 2026-07-13)
+[meta]
+family = "ESP32-S31"
+topic = "UART / LP_UART"
+confidence = "verified"
+last_reviewed = "2026-08-21"
+source = "ESP32-S31 Series Datasheet v0.5 PRELIMINARY (2026-07-13); TRM not yet reviewed"
+
+[overview]
+controllers = "4 UART controllers in the HP system (UART0-UART3) + 1 LP UART in the low-power domain"
+baud = "Programmable up to 5 MBaud"
+flow = "Software AND hardware flow control (RTS/CTS); RS485 mode, IrDA, AT_CMD detection, RX timeout"
+dma = "GDMA-capable (HP GDMA-AHB: 5 TX + 5 RX channels shared across peripherals; plus a separate GDMA-AXI and LP-side AHB DMA)"
+wake = "UART is a wake-up source from light sleep"
+
+[key_pins]
+console = "UART0 default console pins via IO MUX F0: TXD = GPIO58, RXD = GPIO59; any other pin can carry UART signals through the HP GPIO matrix"
+lp_uart = "LP_UART fixed on the LP IO MUX: TXD = GPIO6, RXD = GPIO7, RTSN = GPIO4, CTSN = GPIO5, DTRN = GPIO2, DSRN = GPIO3"
+usb_console = "The USB-Serial/JTAG controller (GPIO33/34) also exposes a CDC-ACM serial port — it can replace UART0 as the console entirely"
+
+common_mistake = [
+  "Looking for UART0 on GPIO43/44 (that is ESP32-S3) — S31 console is GPIO58/GPIO59",
+  "Assuming S31 has only 3 UARTs like S3 — there are FOUR (UART0-UART3) plus LP_UART",
+  "Enabling LP_UART hardware flow control together with LP_I2C — the datasheet states they cannot be used at the same time",
+  "Expecting RS485/IrDA/GDMA features on LP_UART — those are not applicable to the LP UART",
+  "Forgetting that USB-Serial/JTAG already prints the ROM bootloader log — wiring a USB-UART bridge to GPIO58/59 shows nothing until firmware reconfigures the console",
+]

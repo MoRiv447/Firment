@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- **Knowledge base: ESP32-S31** (seed v5 → v6, re-materializes automatically).
+  Two new cheatsheets built from the official ESP32-S31 Series Datasheet
+  v0.5 PRELIMINARY (2026-07-13) — Espressif's new dual-core RISC-V 320 MHz
+  flagship (Wi-Fi 6 + BT 5.4 LE/Classic + 802.15.4):
+  - `esp32s31-gpio` — 60 GPIOs with numbering holes (GPIO29/41 do not
+    exist), strapping on GPIO36/37/60/61 (boot mode = GPIO61:GPIO60; 0,0 is
+    invalid), console on GPIO58/59, USB-Serial/JTAG on GPIO33/34, pad JTAG
+    on GPIO54-57, flash bus GPIO26-28/30-32, ADC1=GPIO42-49 / ADC2=GPIO50-57,
+    DAC on GPIO4/5, no input-only pins (unlike S3)
+  - `esp32s31-uart` — FOUR UART controllers + LP_UART (S3 has three),
+    5 MBaud, LP_UART fixed pins GPIO2-7, hw-flow-control/LP_I2C conflict
+  - `periph_init` resolves `esp32s31*` parts (must be matched before the
+    `esp32s3` prefix) and injects the matching cheatsheet;
+    `vendor-index.toml` gains the `[esp32.s31]` family (datasheet link;
+    TRM still pending upstream at review time)
+
 ## v0.5.12 (2026-08-21) — one wiring point, in-process GUI hardware
 
 - **Shared agent assembly (`firment_tools::assembly::assemble_agent`).** The

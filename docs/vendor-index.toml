@@ -196,6 +196,31 @@ hal_functions = ["HAL_UART_Init", "HAL_LPUART_Init"]
 confidence = "verified"
 common_mistake = ["LPUART baud is limited when using LSE 32.768kHz; pick the right USART clock source (PCLK/HSI16/LSE) first"]
 
+# ───────────────────────── ESP32-S31 ─────────────────────────
+[esp32.s31]
+family = "ESP32-S31 (dual-core RISC-V 320 MHz, WiFi 6 + BT5.4 LE/Classic + 802.15.4)"
+reference_manual = { name = "ESP32-S31 documentation (TRM pending at review time — check the document list)", url = "https://documentation.espressif.com/en/documentList?eol=false", pages = 0 }
+datasheet = { name = "ESP32-S31 Series Datasheet v0.5 PRELIMINARY (2026-07-13)", url = "https://documentation.espressif.com/esp32-s31_datasheet_en.html", pages = 0 }
+hal_repo = "https://github.com/espressif/esp-idf"
+sdk_version = "ESP-IDF latest/master (esp32s31 target)"
+last_reviewed = "2026-08-21"
+
+[[esp32.s31.quickref]]
+topic = "GPIO / platform"
+cheatsheet = "cheatsheets/esp32s31-gpio.toml"
+doc_section = "ESP32-S31 datasheet Sections 2-4 (pin definitions, strapping, GPIO)"
+key_pins = ["GPIO36/37/60/61 strapping (boot mode = GPIO61:GPIO60)", "GPIO33/34 USB-Serial/JTAG", "GPIO58/59 default UART0 console", "GPIO26-28/30-32 flash bus"]
+confidence = "verified"
+common_mistake = ["60 GPIOs numbered with holes: GPIO29 and GPIO41 do not exist; NO input-only pins (unlike S3); strapping is NOT GPIO0/3/45/46 (that is S3)."]
+
+[[esp32.s31.quickref]]
+topic = "UART / LP_UART"
+cheatsheet = "cheatsheets/esp32s31-uart.toml"
+doc_section = "ESP32-S31 datasheet Section 4.2.2"
+hal_functions = ["uart_driver_install", "uart_write_bytes"]
+confidence = "verified"
+common_mistake = ["FOUR UART controllers (UART0-UART3) + LP_UART, not three like S3; console on GPIO58/59; LP_UART hw flow control conflicts with LP_I2C."]
+
 # ───────────────────────── ESP32-S3 ─────────────────────────
 [esp32.s3]
 family = "ESP32-S3"

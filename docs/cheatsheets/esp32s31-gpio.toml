@@ -1,0 +1,38 @@
+# esp32s31-gpio.toml — ESP32-S31 GPIO/platform original cheatsheet (engineering notes cross-checked against the ESP32-S31 Series Datasheet v0.5 PRELIMINARY, 2026-07-13)
+[meta]
+family = "ESP32-S31"
+topic = "GPIO / platform"
+confidence = "verified"
+last_reviewed = "2026-08-21"
+source = "ESP32-S31 Series Datasheet v0.5 PRELIMINARY (2026-07-13); TRM not yet reviewed"
+
+[overview]
+core = "Dual-core 32-bit RISC-V (RV32IMAFC) HP system up to 320 MHz + LP RISC-V core up to 40 MHz; WiFi 6 (802.11ax 20 MHz non-AP) + Bluetooth 5.4 LE AND Classic BR/EDR + 802.15.4 (Thread 1.4 / Zigbee 3.0); QFN80 8x8 mm"
+gpios = "60 programmable pads: GPIO0-GPIO28, GPIO30-GPIO40, GPIO42-GPIO61. GPIO29 and GPIO41 DO NOT EXIST. GPIO0-7 are LP GPIOs (HP or LP peripherals); the other 52 are HP-only"
+input_only = "NONE: every pad is I/O/T (unlike ESP32-S3 which had input-only pins)"
+drive = "Default drive strength 20 mA; GPIO33/GPIO34 default 40 mA; programmable ~5/10/20/40 mA (DRV 0-3)"
+voltage = "3.3 V I/O; NOT 5 V tolerant"
+
+[key_pins]
+strapping = "GPIO36, GPIO37, GPIO60, GPIO61 (sampled at reset, hold >= 3 ms, then free as GPIO). Defaults: GPIO36 floating, GPIO37 floating, GPIO60 weak pull-up, GPIO61 weak pull-up"
+download = "Boot mode is GPIO61:GPIO60 at reset: 1,1 = SPI boot (default); 0,1 = joint download boot via USB-Serial/JTAG / USB-OTG / UART / GPSPI; 0,0 = INVALID combination (unexpected behaviour)"
+usb_jtag = "Built-in USB-Serial/JTAG controller on GPIO33 (D-) / GPIO34 (D+), full-speed only, enabled by default with USB pull-up"
+usb_otg = "Separate USB 2.0 High-Speed OTG PHY (480 Mbit/s) on dedicated pads 44/45 (USB_DP/USB_DM) — not GPIO-matrix routable"
+console = "UART0 default console: GPIO58 (TXD) / GPIO59 (RXD) via IO MUX F0"
+jtag = "Pad JTAG pins are MTDO=GPIO54 / MTCK=GPIO55 / MTDI=GPIO56 / MTMS=GPIO57; the DEFAULT JTAG source is the USB Serial/JTAG controller instead — GPIO37 strapping (+ eFuses) selects between them"
+flash_bus = "Off-package flash bus: GPIO26 (SPICS), GPIO27 (SPIQ), GPIO28 (SPIWP), GPIO30 (SPIHD), GPIO31 (SPICLK), GPIO32 (SPID). In-package PSRAM (NRV16/NRV32) is not pinned out"
+lp_gpio = "GPIO0-7 are LP-domain GPIOs usable in deep sleep by the LP core; LP_UART fixed pins TXD=GPIO6/RXD=GPIO7; XTAL_32K crystal on GPIO0/GPIO1"
+adc = "ADC1 = GPIO42-GPIO49, ADC2 = GPIO50-GPIO57 (two 12-bit SAR ADCs, up to 8 pins each); ADC attenuation ranges not stated in datasheet v0.5"
+dac = "Two DAC channels on dedicated pads: GPIO4 (ch0), GPIO5 (ch1)"
+sdmmc = "SDMMC slot 1 = GPIO20-GPIO25, slot 2 = GPIO35-GPIO40 (1-bit/4-bit only, no 8-bit)"
+
+common_mistake = [
+  "Treating GPIO29 or GPIO41 as real pins — they do not exist on S31; pin numbering has two holes",
+  "Copying ESP32-S3 strapping knowledge — S3 straps on GPIO0/3/45/46, but S31 straps on GPIO36/37/60/61 and boot mode is GPIO61:GPIO60 (not GPIO0)",
+  "Driving both GPIO60 AND GPIO61 low at reset — the 0,0 combination is invalid and causes unexpected behaviour",
+  "Wiring buttons/pull-downs on GPIO36/GPIO37 without checking: GPIO37 has NO internal pull resistors, both float by default, and they select VDD_SPI voltage / JTAG source",
+  "Using GPIO26/27/28/30/31/32 as GPIO — that is the off-package flash bus",
+  "Reusing GPIO58/59 for sensors then losing the serial console, or GPIO33/34 then losing USB-JTAG flashing",
+  "Expecting input-only pins like S3's GPIO34-39 — S31 has none, every pad can output",
+  "Assuming JTAG is on the MTDO/MTCK/MTDI/MTMS pads by default — the USB Serial/JTAG controller is the default source",
+]
