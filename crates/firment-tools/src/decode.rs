@@ -1,6 +1,41 @@
 use object::{Object, ObjectSymbol};
 use std::path::Path;
 
+/// Target CPU family of an ELF, from the e_machine field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ElfArch {
+    /// ARM Cortex-M/A/R (EM_ARM). The only family with CoreSight fault
+    /// registers (CFSR/...) and SWO/ITM trace.
+    Arm,
+    RiscV,
+    Xtensa,
+    Other,
+}
+
+impl ElfArch {
+    pub fn name(self) -> &'static str {
+        match self {
+            ElfArch::Arm => "ARM",
+            ElfArch::RiscV => "RISC-V",
+            ElfArch::Xtensa => "Xtensa",
+            ElfArch::Other => "non-ARM",
+        }
+    }
+}
+
+/// Read the ELF header's e_machine. Returns None when the file is
+/// missing/unparseable.
+pub fn elf_arch(elf: &Path) -> Option<ElfArch> {
+    let data = std::fs::read(elf).ok()?;
+    let file = object::File::parse(&*data).ok()?;
+    Some(match file.architecture() {
+        object::Architecture::Arm => ElfArch::Arm,
+        object::Architecture::Riscv32 | object::Architecture::Riscv64 => ElfArch::RiscV,
+        object::Architecture::Xtensa => ElfArch::Xtensa,
+        _ => ElfArch::Other,
+    })
+}
+
 /// Resolve a symbol name (function or global variable) to its link address in
 /// an ELF. Returns None when the file is missing/unparseable or the symbol
 /// does not exist. Used by the debug tool so callers can read/write a named
@@ -90,5 +125,25 @@ mod tests {
     #[test]
     fn symbol_address_missing_elf_returns_none() {
         assert!(symbol_address(Path::new("C:/definitely/missing.elf"), "main").is_none());
+    }
+
+    fn write_minimal_elf(path: &Path, arch: object::Architecture) {
+        use object::write::Object;
+        use object::{BinaryFormat, Endianness};
+        let obj = Object::new(BinaryFormat::Elf, arch, Endianness::Little);
+        std::fs::write(path, obj.write().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn elf_arch_detects_target_family() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("fw.elf");
+        write_minimal_elf(&p, object::Architecture::Arm);
+        assert_eq!(elf_arch(&p), Some(ElfArch::Arm));
+        write_minimal_elf(&p, object::Architecture::Riscv32);
+        assert_eq!(elf_arch(&p), Some(ElfArch::RiscV));
+        write_minimal_elf(&p, object::Architecture::Xtensa);
+        assert_eq!(elf_arch(&p), Some(ElfArch::Xtensa));
+        assert_eq!(elf_arch(Path::new("C:/definitely/missing.elf")), None);
     }
 }

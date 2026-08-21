@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Honest non-ARM guards for the debug/HIL tools.** `debug analyze` decodes
+  Cortex-M fault registers (CFSR/HFSR/MMFAR/BFAR) and `trace` streams
+  SWO/ITM — both are ARM CoreSight features that simply do not exist on
+  Xtensa/RISC-V targets like the ESP32 family. Both now read the firmware
+  ELF's architecture (`decode::elf_arch`) up front and fail with the
+  alternative path (halt/regs/backtrace + console panic report, or a
+  `monitor` step) instead of analyzing garbage or capturing an empty stream.
+- **flash: ESP32 failure hint.** When flashing an `esp32*` chip fails,
+  the error now points at `espflash` / `idf.py flash` as the vendor-supported
+  fallback — probe-rs support for the family (especially Xtensa parts and
+  brand-new silicon) lags Espressif's own tooling.
 - **Knowledge base: ESP32-S31** (seed v5 → v6, re-materializes automatically).
   Two new cheatsheets built from the official ESP32-S31 Series Datasheet
   v0.5 PRELIMINARY (2026-07-13) — Espressif's new dual-core RISC-V 320 MHz

@@ -106,6 +106,22 @@ impl Tool for Flash {
 
         let command = flash_command(&chip, &resolved.to_string_lossy(), probe.as_deref());
 
+        // ESP32 targets are flashed through the ROM bootloader; probe-rs
+        // support for the family (especially Xtensa parts and brand-new
+        // silicon) lags espressif's own espflash/esptool. Point at the
+        // alternative when a flash attempt fails.
+        let esp_hint = |msg: String| -> String {
+            if chip.starts_with("esp32") {
+                format!(
+                    "{msg}\nnote: for ESP32 targets, `espflash flash {file} --chip {chip}` \
+                     (cargo install espflash) or `idf.py flash` is the vendor-supported path \
+                     if probe-rs keeps failing on this chip"
+                )
+            } else {
+                msg
+            }
+        };
+
         let mut dl_args = vec!["download".to_string(), "--chip".to_string(), chip.clone()];
         if let Some(probe) = probe.as_ref() {
             dl_args.push("--probe".to_string());
@@ -149,11 +165,13 @@ impl Tool for Flash {
                     Err(e) => Err(probe_rs_err(e)),
                 }
             }
-            Ok((text, Some(code))) => Err(ToolError::new(format!(
+            Ok((text, Some(code))) => Err(ToolError::new(esp_hint(format!(
                 "[Io] flash failed (exit {code})\ncommand: {command}\n{text}"
-            ))),
-            Ok((text, None)) => Err(ToolError::new(format!("[Timeout] flash timed out\n{text}"))),
-            Err(e) => Err(probe_rs_err(e)),
+            )))),
+            Ok((text, None)) => Err(ToolError::new(esp_hint(format!(
+                "[Timeout] flash timed out\n{text}"
+            )))),
+            Err(e) => Err(probe_rs_err(esp_hint(e))),
         }
     }
 }
