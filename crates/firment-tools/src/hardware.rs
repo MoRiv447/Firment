@@ -62,8 +62,7 @@ pub async fn run_elf(
     let mut args = json!({ "file": file, "timeout_ms": timeout_ms });
     with_optional(&mut args, "chip", chip);
     with_optional(&mut args, "probe", probe);
-    Run
-        .run(args, &ctx)
+    Run.run(args, &ctx)
         .await
         .map(|out| out.text)
         .map_err(|e| e.message)
@@ -89,9 +88,15 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let outside = std::env::temp_dir().join("firment-hardware-evil.elf");
         std::fs::write(&outside, b"x").unwrap();
-        let err = flash_elf(&dir, outside.to_str().unwrap(), Some("stm32f407vetx"), None, 1_000)
-            .await
-            .unwrap_err();
+        let err = flash_elf(
+            &dir,
+            outside.to_str().unwrap(),
+            Some("stm32f407vetx"),
+            None,
+            1_000,
+        )
+        .await
+        .unwrap_err();
         assert!(err.contains("outside the workspace"), "got: {err}");
     }
 }

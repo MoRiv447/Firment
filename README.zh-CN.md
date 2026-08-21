@@ -1,7 +1,7 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.5.11-blue)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.5.12-blue)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![CI](https://img.shields.io/badge/CI-Rust%20%2B%20Web%20%2B%20GUI-green)](.github/workflows/ci.yml)
@@ -12,7 +12,7 @@
   <img src="docs/screenshots/cli.png" alt="Firment TUI：ask_user 弹窗 + 工具调用栈 + 底部状态栏（git 分支 / 思考级别 / Esc×2 中断提示）" width="900">
 </p>
 
-> ⚠️ **状态：v0.5.11。** 第一层（通用编码 Agent）已可日常使用、
+> ⚠️ **状态：v0.5.12。** 第一层（通用编码 Agent）已可日常使用、
 > CI 全绿；第二层（嵌入式工具链闭环）已落地——构建/烧录/运行、串口监控、
 > ELF 分析、probe-rs 片内调试均可用——调试器纵深（栈回溯、SWO trace）
 > 在路线图中。接口与 TUI 仍在演进。

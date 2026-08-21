@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.5.12 (2026-08-21) — one wiring point, in-process GUI hardware
 
 - **Shared agent assembly (`firment_tools::assembly::assemble_agent`).** The
   `Agent` construction sequence (`Agent::new` + ~15 `set_*` calls + plan-mode
@@ -21,18 +21,23 @@
   rather than parsed from config.toml — diverging from the documented
   115200 / 2. Hand-written `Default` aligns the two paths; surfaced by the
   assembly migration now that every frontend wires these knobs.
+- **GUI flash/run is in-process.** New `firment_tools::hardware::{flash_elf,
+  run_elf}` reuse the exact agent-tool probe-rs pipeline (workspace sandbox,
+  install hints, ST-Link stuck-probe diagnostics, error mapping); the GUI no
+  longer locates and spawns an installed `firm.exe`, so it can never drift
+  from the CLI. Serial monitoring was already in-process; the
+  `hardware-exit` event payload is unchanged.
+- **TUI split into modules.** The 4,961-line `firment-tui/src/lib.rs` is now
+  a facade (`run` + the event loop + terminal setup) over `adapters.rs`
+  (event sink / permission checker / ask_user bridge), `commands.rs` (the
+  agent command loop), `app.rs` (application state), `view.rs`
+  (transcript rendering), `paste.rs` (bracketed-paste burst collapsing),
+  `pickers.rs` (model/session overlays) and `util.rs` (text/layout helpers).
+  Pure code movement — no behaviour change.
 - `Agent::registry()` / `Agent::verify_command()` /
   `Agent::max_subagent_depth()` accessors added to firment-core (used by
   assembly tests to assert plan mode hides mutating tools and that the
   verify gate / subagent depth knobs actually land).
-- **TUI split into modules.** The 4,961-line `firment-tui/src/lib.rs` is now
-  a facade (`run` + the event loop + terminal setup, ~1.5k lines) over
-  `adapters.rs` (event sink / permission checker / ask_user bridge),
-  `commands.rs` (the agent command loop), `app.rs` (application state +
-  rendering), `paste.rs` (bracketed-paste burst collapsing), `pickers.rs`
-  (model/session overlays) and `util.rs` (text/layout helpers). Pure code
-  movement — no behaviour change.
-- README version badges updated 0.5.10 → 0.5.11.
 
 ## v0.5.11 (2026-08-21) — hardware-in-the-loop suites
 
