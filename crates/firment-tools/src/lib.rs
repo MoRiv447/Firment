@@ -1,5 +1,6 @@
 pub mod assembly;
 pub mod decode;
+pub mod hardware;
 pub mod tools;
 
 use firment_core::{Tool, ToolRegistry};

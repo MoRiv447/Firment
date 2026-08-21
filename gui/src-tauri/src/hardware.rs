@@ -6,36 +6,8 @@ use std::time::Duration;
 
 use serde_json::json;
 use tauri::Emitter;
-use tokio::process::Command;
-use tokio::time::timeout;
 
 use crate::state::Shared;
-
-pub fn find_firm_binary() -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(home) = dirs::home_dir() {
-        candidates.push(home.join(".firment").join("bin").join("firm.exe"));
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("firm.exe"));
-            candidates.push(dir.join("..").join("debug").join("firm.exe"));
-        }
-    }
-    for c in candidates {
-        if c.exists() {
-            return Some(c);
-        }
-    }
-    // fall back to PATH lookup
-    let out = std::process::Command::new("where")
-        .arg("firm")
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).to_string());
-    out.and_then(|s| s.lines().next().map(|l| PathBuf::from(l.trim())))
-        .filter(|p| p.exists())
-}
 
 /// Handle to a live serial monitor. The reader thread owns one clone of the
 /// port; `write_port` is the other clone used by `monitor_send`.
@@ -165,60 +137,43 @@ pub fn active_monitors(shared: &Arc<Shared>) -> Vec<String> {
     shared.monitors.lock().unwrap().keys().cloned().collect()
 }
 
-/// Run a one-shot `firm flash`/`firm run` and emit the collected output.
-/// `cwd` (optional) sets the working directory of the firm subprocess so the
-/// CLI's workspace sandbox resolves relative paths against it.
+/// Flash (`kind = "flash"`) or flash+run (`kind = "run"`) in-process via the
+/// shared [`firment_tools::hardware`] entry points — the same probe-rs
+/// pipeline the agent tools use, without shelling out to a `firm` binary.
+/// Emits the collected output on the `hardware-exit` event.
 pub async fn run_hardware_command(
     shared: Arc<Shared>,
     kind: String,
-    args: Vec<String>,
+    file: String,
+    chip: Option<String>,
+    probe: Option<String>,
     cwd: Option<String>,
     timeout_secs: u64,
 ) -> Result<(), String> {
-    let firm = find_firm_binary().ok_or_else(|| {
-        "firm binary not found - install via 'firm install' or build it first".to_string()
-    })?;
-    let mut cmd = Command::new(firm);
-    cmd.args(&args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    if let Some(dir) = cwd.as_ref().filter(|d| !d.trim().is_empty()) {
-        cmd.current_dir(dir);
-    }
-    let out = timeout(
-        Duration::from_secs(timeout_secs.max(5)),
-        cmd.output(),
-    )
-    .await
-    .map_err(|_| format!("{kind} timed out after {timeout_secs}s"))?
-    .map_err(|e| e.to_string())?;
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    let code = out.status.code().unwrap_or(-1);
+    let cwd = match cwd.as_deref().filter(|d| !d.trim().is_empty()) {
+        Some(dir) => PathBuf::from(dir),
+        None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    };
+    let timeout_ms = timeout_secs.max(5) * 1_000;
+    let result = match kind.as_str() {
+        "flash" => {
+            firment_tools::hardware::flash_elf(&cwd, &file, chip.as_deref(), probe.as_deref(), timeout_ms).await
+        }
+        "run" => {
+            firment_tools::hardware::run_elf(&cwd, &file, chip.as_deref(), probe.as_deref(), timeout_ms).await
+        }
+        other => Err(format!("unknown hardware command kind: {other}")),
+    };
     let _ = shared.app.emit(
         "hardware-exit",
         json!({
             "kind": kind,
-            "code": code,
-            "stdout": stdout,
-            "stderr": stderr
+            "code": if result.is_ok() { 0 } else { 1 },
+            "stdout": result.clone().unwrap_or_default(),
+            "stderr": result.clone().err().unwrap_or_default()
         }),
     );
-    if !out.status.success() {
-        // Include stdout/stderr in the Err so the IDE's catch fallback (when
-        // the emit didn't render in time) still has the real probe-rs
-        // diagnostic. The frontend will normally have already received the
-        // emit and rendered these in the Alert description.
-        let mut msg = format!("{kind} failed with exit code {code}");
-        if !stdout.trim().is_empty() {
-            msg.push_str(&format!("\n--- stdout ---\n{stdout}"));
-        }
-        if !stderr.trim().is_empty() {
-            msg.push_str(&format!("\n--- stderr ---\n{stderr}"));
-        }
-        return Err(msg);
-    }
-    Ok(())
+    result.map(|_| ())
 }
 
 pub fn list_serial_ports() -> Vec<String> {

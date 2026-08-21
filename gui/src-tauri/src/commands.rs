@@ -393,19 +393,16 @@ pub async fn flash(
     probe: Option<String>,
     cwd: Option<String>,
 ) -> Result<(), String> {
-    // firm flash <FILE> --chip <CHIP> [--probe <PROBE>]
-    // NOTE: file is a POSITIONAL arg in the firm CLI (not --file), so it must
-    // not be passed as a named option.
-    let mut args = vec!["flash".to_string(), file];
-    if let Some(chip) = chip {
-        args.push("--chip".to_string());
-        args.push(chip);
-    }
-    if let Some(probe) = probe {
-        args.push("--probe".to_string());
-        args.push(probe);
-    }
-    hardware::run_hardware_command(shared.inner().clone(), "flash".to_string(), args, cwd, 120).await
+    hardware::run_hardware_command(
+        shared.inner().clone(),
+        "flash".to_string(),
+        file,
+        chip,
+        probe,
+        cwd,
+        120,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -417,20 +414,16 @@ pub async fn firm_run(
     cwd: Option<String>,
     timeout_secs: u64,
 ) -> Result<(), String> {
-    // firm run <FILE> --chip <CHIP> [--probe <PROBE>] --timeout <SECS>
-    // NOTE: file is a POSITIONAL arg in the firm CLI (not --file).
-    let mut args = vec!["run".to_string(), file];
-    if let Some(chip) = chip {
-        args.push("--chip".to_string());
-        args.push(chip);
-    }
-    if let Some(probe) = probe {
-        args.push("--probe".to_string());
-        args.push(probe);
-    }
-    args.push("--timeout".to_string());
-    args.push(timeout_secs.to_string());
     // Wait at most as long as the UI's requested timeout (clamped to a
     // minimum so a 0/accidental value can't spawn a forever-wait).
-    hardware::run_hardware_command(shared.inner().clone(), "run".to_string(), args, cwd, timeout_secs.max(5)).await
+    hardware::run_hardware_command(
+        shared.inner().clone(),
+        "run".to_string(),
+        file,
+        chip,
+        probe,
+        cwd,
+        timeout_secs.max(5),
+    )
+    .await
 }

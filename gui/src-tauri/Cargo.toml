@@ -29,7 +29,6 @@ firment-tools = { path = "../../crates/firment-tools" }
 anyhow = "1"
 async-trait = "0.1"
 chrono = "0.4"
-dirs = "5"
 serialport = "4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
