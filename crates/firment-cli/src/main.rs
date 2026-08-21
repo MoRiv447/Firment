@@ -154,6 +154,30 @@ enum Command {
     /// Print the tool registry specs as JSON — the single source of truth
     /// for tool names/descriptions/schemas (consumed by web/IDE surfaces).
     Tools,
+    /// Hardware-in-the-loop suite: build → flash → monitor with expectations → elf_analyze, with replay.
+    Hil {
+        /// Suite name defined in .firment/hil.toml (omit to use inline steps via --steps JSON)
+        #[arg(long)]
+        suite: Option<String>,
+        /// Inline steps as JSON array, e.g. '[{"kind":"build"},{"kind":"monitor","expect_contains":"ok"}]'
+        #[arg(long)]
+        steps: Option<String>,
+        /// Override chip id
+        #[arg(long)]
+        chip: Option<String>,
+        /// Override serial port (or "auto")
+        #[arg(long)]
+        port: Option<String>,
+        /// Replay a previous run by id, or "list" to list replays
+        #[arg(long)]
+        replay: Option<String>,
+        /// List suites defined in .firment/hil.toml
+        #[arg(long)]
+        list_suites: bool,
+        /// Simulate without touching hardware
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[tokio::main]
@@ -255,6 +279,60 @@ async fn main() -> anyhow::Result<()> {
             Command::Tools => {
                 let registry = firment_tools::default_registry();
                 println!("{}", serde_json::to_string_pretty(&registry.specs())?);
+            }
+            Command::Hil {
+                suite,
+                steps,
+                chip,
+                port,
+                replay,
+                list_suites,
+                dry_run,
+            } => {
+                let cwd = cli
+                    .cwd
+                    .clone()
+                    .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let config = load_config(&cli)?.merged_for(&cwd);
+                let mut args = serde_json::Map::new();
+                if let Some(s) = suite {
+                    args.insert("suite".to_string(), serde_json::json!(s));
+                }
+                if let Some(s) = steps {
+                    let parsed: serde_json::Value = serde_json::from_str(s)
+                        .map_err(|e| anyhow::anyhow!("--steps invalid JSON: {e}"))?;
+                    args.insert("steps".to_string(), parsed);
+                }
+                if let Some(c) = chip {
+                    args.insert("chip".to_string(), serde_json::json!(c));
+                }
+                if let Some(p) = port {
+                    args.insert("port".to_string(), serde_json::json!(p));
+                }
+                if let Some(r) = replay {
+                    args.insert("replay".to_string(), serde_json::json!(r));
+                }
+                if *list_suites {
+                    args.insert("list_suites".to_string(), serde_json::json!(true));
+                }
+                if *dry_run {
+                    args.insert("dry_run".to_string(), serde_json::json!(true));
+                }
+                match run_direct_tool(
+                    &config,
+                    cli.cwd.clone(),
+                    "hil",
+                    serde_json::Value::Object(args),
+                )
+                .await
+                {
+                    Ok(()) => {}
+                    Err(e) => {
+                        // hil returns Err on suite FAIL (with full log in the message); show it instead of a one-line error
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                }
             }
         }
         return Ok(());

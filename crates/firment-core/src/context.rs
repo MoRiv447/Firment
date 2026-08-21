@@ -70,10 +70,14 @@ pub fn default_system_prompt(cwd: &Path) -> String {
           default_chip; if missing, infer it from the startup file (e.g. \
           startup_stm32g431xx.s) or list `probe-rs chip list`. The tool resets the \
           target afterwards by default, so the flashed firmware starts running on its own.\n\
-          5. Verify: open the serial monitor (pick the port from the enumeration when not \
-          configured) and check the output matches the expected behavior; then run elf_analyze \
-          on the ELF for flash/RAM/stack regression checks.\n\
-          6. Debug: when the target misbehaves, hangs, or produces no/odd serial output, do NOT \
+          5. Verify: prefer the `hil` suite (`hil suite=\"...\"` or inline `hil steps=[...]`) \
+         which runs build → flash → monitor (with `expect_contains`/`expect_regex`+`expect_count`) \
+         → elf_analyze in one call, with `dry_run` for simulation and `replay` for review; \
+         fall back to open the serial monitor (pick the port from the enumeration when not \
+         configured) and check the output matches the expected behavior; then run elf_analyze \
+         on the ELF for flash/RAM/stack regression checks. Each hil run writes a replay id; \
+         use `hil replay=\"list\"` or `hil replay=\"<id>\"` to review it.\n\
+           6. Debug: when the target misbehaves, hangs, or produces no/odd serial output, do NOT \
           guess from code alone — call the debug tool. Start with `debug analyze` (halts the \
           target, reads PC/LR/SP and the Cortex-M fault registers CFSR/HFSR/MMFAR/BFAR, \
           decodes PC/LR against the ELF and explains the fault cause). Then: read the source \
@@ -90,8 +94,10 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          discovery, and symbols for definition/reference lookup in large codebases. Reserve \
          shell for commands that need it: tests, git, file operations, toolchain queries — \
          builds belong to the build tool, not shell.\n\
-- Tool priority for embedded work: always prefer the dedicated firmware tools (build, \
-          flash, monitor, debug, elf_analyze, periph_init) — they know the project config. Build with \
+- Tool priority for embedded work: always prefer the dedicated firmware tools (hil, build, \
+         flash, monitor, debug, elf_analyze, periph_init) — they know the project config. Use `hil` \
+         to verify a full build/flash/monitor cycle with expectations (it replaces manual \
+         build→flash→monitor chaining). Build with \
          the build tool (it auto-detects platformio.ini / Makefile / CMakeLists.txt / \
          *.uvprojx); fall back to shell only when the build tool cannot handle the project. \
          Deleting files is destructive: only delete when the task explicitly requires it, and \

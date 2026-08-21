@@ -6,6 +6,7 @@ mod elf_analyze;
 mod flash;
 mod glob;
 mod grep;
+mod hil;
 mod html;
 mod list_dir;
 pub mod monitor;
@@ -32,6 +33,7 @@ pub fn all() -> Vec<Arc<dyn Tool>> {
         Arc::new(read_file::ReadFile),
         Arc::new(run::Run),
         Arc::new(monitor::Monitor),
+        Arc::new(hil::Hil),
         Arc::new(periph_init::PeriphInit),
         Arc::new(write_file::WriteFile),
         Arc::new(flash::Flash),

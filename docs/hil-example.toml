@@ -1,0 +1,53 @@
+# Firment HIL example — copy to .firment/hil.toml and adapt
+# Each suite is an ordered recipe: build → flash → monitor (with expectations) → elf_analyze
+# Run: `firm hil --suite blink`  or via the agent: hil(suite="blink")
+# Dry-run (no hardware): `firm hil --suite blink --dry-run`
+# Replay: `firm hil --replay list` / `firm hil --replay <id>`
+
+[suite.blink]
+chip = "stm32g431rb"          # probe-rs chip id
+port = "auto"                 # auto = first detected serial port; or "COM3" / "/dev/ttyUSB0"
+elf = "build/firmware.elf"    # used by flash/run/elf steps when they omit file/elf
+
+[[suite.blink.steps]]
+kind = "build"                # auto-detects platformio.ini / Makefile / CMakeLists.txt / *.uvprojx
+timeout_ms = 600000
+
+[[suite.blink.steps]]
+kind = "flash"
+elf = "build/firmware.elf"    # must be inside workspace; chip comes from suite.chip
+timeout_ms = 180000
+# reset = true                # default true: reset after flash so firmware starts
+
+[[suite.blink.steps]]
+kind = "monitor"
+timeout_ms = 5000
+expect_contains = "LED ON"    # pass when this string appears at least expect_count times
+expect_count = 2
+# expect_regex = "LED (ON|OFF)"  # alternative: regex
+# baud = 115200
+# autodetect = false          # true to probe 9600..921600
+
+[[suite.blink.steps]]
+kind = "elf_analyze"
+elf = "build/firmware.elf"
+
+# Second suite: RTT streaming (uses probe-rs run instead of serial monitor)
+[suite.rtt]
+chip = "stm32f407vetx"
+elf = "build/firmware.elf"
+
+[[suite.rtt.steps]]
+kind = "build"
+
+[[suite.rtt.steps]]
+kind = "run"
+elf = "build/firmware.elf"
+timeout_ms = 5000
+
+[[suite.rtt.steps]]
+kind = "elf_analyze"
+elf = "build/firmware.elf"
+
+# Inline steps (no .firment/hil.toml needed) — agent/CLI can do:
+# firm hil --steps '[{"kind":"build"},{"kind":"monitor","expect_contains":"ok","timeout_ms":3000}]' --dry-run
