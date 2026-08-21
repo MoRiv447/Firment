@@ -25,6 +25,7 @@ mod commands;
 mod paste;
 mod pickers;
 mod util;
+mod view;
 
 use adapters::{ChannelSink, PermissionRequest, TuiAsker, TuiPermission};
 use app::App;
