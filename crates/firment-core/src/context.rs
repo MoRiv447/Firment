@@ -75,7 +75,13 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          → elf_analyze in one call, with `dry_run` for simulation and `replay` for review; \
          flash/run/elf steps auto-infer `.pio/build/*/firmware.elf` when `elf` is omitted, \
          and `trace` captures SWO/ITM (`duration_ms`/`clk_hz`/`baud`) for ITM firmware \
-         (e.g. `ITM_SendChar`); fall back to open the serial monitor (pick the port from the \
+         (e.g. `ITM_SendChar`). hil needs a `.firment/hil.toml` suite (or inline `steps`); \
+         when no suite is defined, fall back to the manual build → flash → monitor chain. \
+         `dry_run` only rehearses the pipeline — expect assertions always FAIL under \
+         dry-run (`[HIL_EXPECT:FAIL]`, no hardware data), so it never counts as verification. \
+         If `verify_command` is configured, the verify gate still applies for quick compile \
+         checks and must pass before completion; hil is the full end-to-end hardware \
+         verification on top of that. Otherwise open the serial monitor (pick the port from the \
          enumeration when not configured) and check the output matches the expected behavior; \
          then run elf_analyze on the ELF for flash/RAM/stack regression checks. Each hil run \
          writes a replay id; use `hil replay=\"list\"` or `hil replay=\"<id>\"` to review it.\n\
