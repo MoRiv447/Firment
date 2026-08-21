@@ -134,7 +134,7 @@ impl<'de> Deserialize<'de> for ElfConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolsConfig {
     /// Command run by the `verify` tool (platform shell), e.g. `cargo check`.
     #[serde(default)]
@@ -178,6 +178,28 @@ pub struct ToolsConfig {
     /// MCUs are not drowned out and big ones are not overly strict.
     #[serde(default)]
     pub elf: Option<ElfConfig>,
+}
+
+/// Hand-written so the in-memory default matches the serde defaults used
+/// when a key is missing from config.toml. The derived `Default` silently
+/// produced `monitor_baud = 0` and `max_subagent_depth = 0` (the latter then
+/// clamped to 1 by the agent), diverging from the documented 115200 / 2.
+impl Default for ToolsConfig {
+    fn default() -> Self {
+        Self {
+            verify_command: None,
+            symbols_backend: None,
+            build_command: None,
+            default_chip: None,
+            monitor_port: None,
+            monitor_baud: default_monitor_baud(),
+            web_search: default_web_search(),
+            web_search_api_key: None,
+            web_search_api_key_env: None,
+            max_subagent_depth: default_max_subagent_depth(),
+            elf: None,
+        }
+    }
 }
 
 impl ToolsConfig {
