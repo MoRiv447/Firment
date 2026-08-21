@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use clap::Parser;
 use firment_core::config::{config_path, parse_size};
 use firment_core::{
-    Agent, AgentEvent, Config, EventSink, PermissionChecker, PermissionError, PlanModePermission,
-    Session, SessionMode, SessionStore, ThinkingLevel, load_auth,
+    AgentEvent, Config, EventSink, PermissionChecker, PermissionError, Session, SessionMode,
+    SessionStore, ThinkingLevel, load_auth,
 };
 use std::collections::HashSet;
 use std::env;
@@ -440,14 +440,7 @@ async fn run_once(
     allow_dangerous: bool,
 ) -> anyhow::Result<()> {
     let config = config.merged_for(&session.cwd);
-    let provider = config.build_provider(Some(&session.provider), Some(&session.model))?;
-    let registry = if session.mode == SessionMode::Plan {
-        firment_tools::plan_registry()
-    } else {
-        firment_tools::default_registry()
-    };
     let store = SessionStore::default();
-    let work_dir = store.dir.join("work");
     // The verify tool runs the user-configured command from config.toml; in
     // one-shot mode it is part of the completion gate, so it is always
     // auto-approved (the dangerous-command guard still applies).
@@ -458,49 +451,20 @@ async fn run_once(
     if !auto_approve.iter().any(|t| t == "build") {
         auto_approve.push("build".to_string());
     }
-    let base_permission = Arc::new(CliPermission::new(yes, auto_approve));
-    let permission: Arc<dyn PermissionChecker> = if session.mode == SessionMode::Plan {
-        Arc::new(PlanModePermission::new(base_permission))
-    } else {
-        base_permission
-    };
-    let sink = Arc::new(CliSink);
-    let mut agent = Agent::new(
-        Some(provider),
-        registry,
+    let permission: Arc<dyn PermissionChecker> = Arc::new(CliPermission::new(yes, auto_approve));
+    let mut assembly = firment_tools::assembly::assemble_agent(
+        &config,
         session,
         store,
-        permission.clone(),
-        sink,
-        config.max_iterations,
+        Arc::new(CliSink),
+        permission,
+        None,
+        allow_dangerous,
     );
-    agent.set_allow_dangerous(allow_dangerous);
-    agent.set_verify_command(config.tools.verify_command.clone());
-    agent.set_context_budget_chars(config.context_budget_chars);
-    agent.set_compaction_strategy(config.compaction_strategy);
-    agent.set_symbols_backend(config.tools.symbols_backend.clone());
-    agent.set_build_command(config.tools.build_command.clone());
-    agent.set_default_chip(config.tools.default_chip.clone());
-    agent.set_monitor_port(config.tools.monitor_port.clone());
-    agent.set_monitor_baud(config.tools.monitor_baud);
-    agent.set_elf_config(config.tools.elf.clone());
-    agent.set_max_subagent_depth(config.tools.max_subagent_depth);
-    agent.set_web_search(
-        config.tools.web_search.clone(),
-        config.tools.resolved_web_search_api_key(),
-    );
-    agent.set_session_dir(Some(work_dir));
-    let subagent_factory: Arc<firment_core::SubagentRunner> =
-        Arc::new(firment_core::SubagentRunner::new(
-            Arc::new(config.clone()),
-            firment_tools::plan_registry(),
-            agent.session().provider.clone(),
-            agent.session().model.clone(),
-            None,
-            permission.clone(),
-        ));
-    agent.set_subagent_factory(Some(subagent_factory));
-    let text = agent.run_turn(prompt).await?;
+    if let Some(error) = assembly.provider_error {
+        anyhow::bail!(error);
+    }
+    let text = assembly.agent.run_turn(prompt).await?;
     println!("{text}");
     Ok(())
 }

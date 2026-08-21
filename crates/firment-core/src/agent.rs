@@ -281,6 +281,21 @@ impl Agent {
         &self.store
     }
 
+    /// The active tool registry (plan mode swaps in the read-only set).
+    pub fn registry(&self) -> &ToolRegistry {
+        &self.registry
+    }
+
+    /// The configured completion-gate command, if any.
+    pub fn verify_command(&self) -> Option<&str> {
+        self.verify_command.as_deref()
+    }
+
+    /// Maximum research-subagent nesting depth.
+    pub fn max_subagent_depth(&self) -> usize {
+        self.max_subagent_depth
+    }
+
     pub fn set_model(&mut self, model: impl Into<String>) {
         self.session.model = model.into();
     }

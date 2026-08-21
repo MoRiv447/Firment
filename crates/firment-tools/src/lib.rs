@@ -1,3 +1,4 @@
+pub mod assembly;
 pub mod decode;
 pub mod tools;
 
