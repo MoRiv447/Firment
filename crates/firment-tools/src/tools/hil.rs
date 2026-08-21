@@ -51,6 +51,8 @@ struct HilStep {
     duration_ms: Option<u64>,
     #[serde(default)]
     autodetect: Option<bool>,
+    #[serde(default)]
+    clk_hz: Option<u64>,
     // allow `expect` object form: { contains, regex, count }
     #[serde(default)]
     expect: Option<HilExpect>,
@@ -84,7 +86,7 @@ impl Tool for Hil {
     }
 
     fn description(&self) -> &'static str {
-        "Hardware-in-the-loop suite: orchestrated build → flash → monitor (with expectations) → elf_analyze, with replay. Prefer this over calling build/flash/monitor separately for firmware verification. Suites live in .firment/hil.toml; inline steps work too. Supports dry-run and replay."
+        "Hardware-in-the-loop suite: orchestrated build → flash → monitor/trace (with expectations) → elf_analyze, with replay. Prefer this over calling build/flash/monitor separately for firmware verification. Suites live in .firment/hil.toml; inline steps work too. Supports dry-run and replay. flash/run/elf steps auto-infer .pio/build/*/firmware.elf when file/elf is omitted."
     }
 
     fn input_schema(&self) -> Value {
@@ -92,8 +94,8 @@ impl Tool for Hil {
             "type": "object",
             "properties": {
                 "suite": {"type": "string", "description": "Suite name defined in .firment/hil.toml"},
-                "steps": {"type": "array", "description": "Inline steps [{kind, file, elf, chip, probe, port, baud, timeout_ms, expect_contains, expect_regex, expect_count, duration_ms}]"},
-                "chip": {"type": "string", "description": "Override chip for flash/run steps"},
+                "steps": {"type": "array", "description": "Inline steps [{kind, file, elf, chip, probe, port, baud, clk_hz, timeout_ms, expect_contains, expect_regex, expect_count, duration_ms}] — kinds: build/flash/run/monitor/trace/elf_analyze/delay; flash/run/elf auto-infer .pio/build/*/firmware.elf when elf omitted"},
+                "chip": {"type": "string", "description": "Override chip for flash/run/trace steps"},
                 "port": {"type": "string", "description": "Override serial port for monitor steps; 'auto' picks first detected port"},
                 "probe": {"type": "string", "description": "Override probe id"},
                 "elf": {"type": "string", "description": "Override ELF path"},
@@ -191,14 +193,26 @@ impl Tool for Hil {
                 step.probe = suite_defaults.probe.clone().or(probe_override.clone());
             }
             if step.elf.is_none() && step.file.is_none() {
-                // flash/run/elf steps may use suite elf
-                if matches!(step.kind.as_str(), "flash" | "run" | "elf_analyze" | "elf") {
-                    step.elf = suite_defaults.elf.clone().or(elf_override.clone());
-                    step.file = step.elf.clone();
+                // flash/run/elf/trace steps may use suite elf or auto-infer .pio/build
+                if matches!(
+                    step.kind.as_str(),
+                    "flash" | "run" | "elf_analyze" | "elf" | "trace" | "debug"
+                ) {
+                    if let Some(inferred) = suite_defaults.elf.clone().or(elf_override.clone()) {
+                        step.elf = Some(inferred.clone());
+                        step.file = Some(inferred);
+                    } else if let Some(auto) = infer_firmware_elf(&ctx.cwd) {
+                        let s = auto.to_string_lossy().to_string();
+                        step.elf = Some(s.clone());
+                        step.file = Some(s);
+                    }
                 }
             }
             if step.baud.is_none() {
                 step.baud = suite_defaults.baud;
+            }
+            if step.clk_hz.is_none() {
+                // default 170 MHz is handled in run_trace_step, no need to fill
             }
             // normalize expect object form into flat fields
             if let Some(exp) = step.expect.take() {
@@ -279,6 +293,7 @@ impl Tool for Hil {
                 "flash" => run_flash_step(&step.inner, ctx, dry_run, remaining).await,
                 "run" => run_run_step(&step.inner, ctx, dry_run, remaining).await,
                 "monitor" => run_monitor_step(&step.inner, ctx, dry_run, remaining).await,
+                "trace" => run_trace_step(&step.inner, ctx, dry_run, remaining).await,
                 "elf_analyze" | "elf" => run_elf_step(&step.inner, ctx, remaining).await,
                 "delay" | "sleep" => {
                     let ms = step
@@ -294,7 +309,7 @@ impl Tool for Hil {
                     Ok(format!("delay {ms} ms"))
                 }
                 _ => Err(format!(
-                    "[InvalidInput] unknown hil step kind: {kind} (expected build/flash/run/monitor/elf_analyze/delay)"
+                    "[InvalidInput] unknown hil step kind: {kind} (expected build/flash/run/monitor/trace/elf_analyze/delay)"
                 )),
             };
 
@@ -539,6 +554,58 @@ fn find_hil_file(cwd: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Auto-infer the most recently built firmware ELF when a flash/run/elf step omits
+/// its file. Covers PlatformIO (`.pio/build/<env>/firmware.elf`) and generic
+/// `build/**/*.elf` layouts, picking the newest file by mtime.
+fn infer_firmware_elf(cwd: &Path) -> Option<PathBuf> {
+    let mut candidates: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
+    // PlatformIO: .pio/build/<env>/firmware.elf
+    let pio = cwd.join(".pio").join("build");
+    if let Ok(read) = std::fs::read_dir(&pio) {
+        for entry in read.flatten() {
+            let elf = entry.path().join("firmware.elf");
+            if elf.is_file() {
+                if let Ok(meta) = std::fs::metadata(&elf) {
+                    if let Ok(m) = meta.modified() {
+                        candidates.push((elf, m));
+                    }
+                }
+            }
+        }
+    }
+    // Generic: build/**/*.elf (depth 2) and cwd/*.elf
+    for base in [cwd.join("build"), cwd.to_path_buf()] {
+        if let Ok(read) = std::fs::read_dir(&base) {
+            for entry in read.flatten() {
+                let p = entry.path();
+                if p.is_file() && p.extension().is_some_and(|e| e == "elf") {
+                    if let Ok(meta) = std::fs::metadata(&p) {
+                        if let Ok(m) = meta.modified() {
+                            candidates.push((p, m));
+                        }
+                    }
+                } else if p.is_dir() && base != cwd.to_path_buf() {
+                    // one level deeper under build/
+                    if let Ok(inner) = std::fs::read_dir(&p) {
+                        for e2 in inner.flatten() {
+                            let p2 = e2.path();
+                            if p2.is_file() && p2.extension().is_some_and(|e| e == "elf") {
+                                if let Ok(meta) = std::fs::metadata(&p2) {
+                                    if let Ok(m) = meta.modified() {
+                                        candidates.push((p2, m));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    candidates.sort_by_key(|(_, t)| *t);
+    candidates.pop().map(|(p, _)| p)
+}
+
 fn resolve_steps(
     args: &Value,
     cwd: &Path,
@@ -548,7 +615,7 @@ fn resolve_steps(
     if let Some(name) = suite_name {
         let path = find_hil_file(cwd).ok_or_else(|| {
             ToolError::new(
-                "[NotFound] hil suite requested but no .firment/hil.toml found (searched cwd and ancestors)",
+                "[NotFound] hil suite requested but no .firment/hil.toml found (searched cwd and ancestors); copy docs/hil-example.toml to .firment/hil.toml or pass inline steps=[{kind:\"build\"}, ...]",
             )
         })?;
         let text = std::fs::read_to_string(&path)
@@ -655,11 +722,9 @@ async fn run_flash_step(
         let elf = step.elf.as_deref().or(step.file.as_deref()).unwrap_or("?");
         return Ok(format!("[dry-run] flash simulated: {elf}"));
     }
-    let file = step
-        .elf
-        .as_deref()
-        .or(step.file.as_deref())
-        .ok_or_else(|| "[InvalidInput] flash step requires file/elf".to_string())?;
+    let file = step.elf.as_deref().or(step.file.as_deref()).ok_or_else(|| {
+        "[InvalidInput] flash step requires file/elf (e.g. elf=\".pio/build/nucleo_g431rb/firmware.elf\") — no ELF auto-inferred (looked in .pio/build/*/firmware.elf and build/*.elf); build first or pass elf explicitly".to_string()
+    })?;
     let resolved = crate::tools::util::resolve_within(&ctx.cwd, file, &ctx.allowed_roots)
         .map_err(|e| format!("[Permission] {e}"))?;
     let chip = step
@@ -667,8 +732,7 @@ async fn run_flash_step(
         .clone()
         .or_else(|| ctx.default_chip.clone())
         .ok_or_else(|| {
-            "[InvalidInput] missing chip: pass chip in step or set default_chip in [tools]"
-                .to_string()
+            "[InvalidInput] missing chip: pass chip in step (e.g. chip=\"stm32g431rb\") or set default_chip in [tools]".to_string()
         })?;
     let chip =
         crate::tools::util::token_arg(&chip, "chip").map_err(|e| format!("[InvalidInput] {e}"))?;
@@ -745,18 +809,18 @@ async fn run_run_step(
         let elf = step.elf.as_deref().or(step.file.as_deref()).unwrap_or("?");
         return Ok(format!("[dry-run] run simulated: {elf}"));
     }
-    let file = step
-        .elf
-        .as_deref()
-        .or(step.file.as_deref())
-        .ok_or_else(|| "[InvalidInput] run step requires file/elf".to_string())?;
+    let file = step.elf.as_deref().or(step.file.as_deref()).ok_or_else(|| {
+        "[InvalidInput] run step requires file/elf (e.g. elf=\".pio/build/nucleo_g431rb/firmware.elf\") — no ELF auto-inferred; build first or pass elf explicitly".to_string()
+    })?;
     let resolved = crate::tools::util::resolve_within(&ctx.cwd, file, &ctx.allowed_roots)
         .map_err(|e| format!("[Permission] {e}"))?;
     let chip = step
         .chip
         .clone()
         .or_else(|| ctx.default_chip.clone())
-        .ok_or_else(|| "[InvalidInput] missing chip for run step".to_string())?;
+        .ok_or_else(|| {
+            "[InvalidInput] missing chip for run step (e.g. chip=\"stm32g431rb\")".to_string()
+        })?;
     let chip =
         crate::tools::util::token_arg(&chip, "chip").map_err(|e| format!("[InvalidInput] {e}"))?;
     let probe = if let Some(p) = &step.probe {
@@ -791,6 +855,9 @@ async fn run_run_step(
         Ok((text, None)) => Ok(format!(
             "run timed out after {timeout} ms; captured:\n{text}"
         )),
+        Err(e) if e.contains("[Timeout]") => Ok(format!(
+            "run captured {timeout} ms (window closed, probe-rs timed out)\n{e}"
+        )),
         Err(e) => Err(crate::tools::util::probe_rs_err(e).message),
     }
 }
@@ -813,7 +880,27 @@ async fn run_monitor_step(
             )
         })?;
 
-    // auto port
+    if dry_run {
+        let port_display = if port_raw == "auto" {
+            "auto (simulated)".to_string()
+        } else {
+            port_raw.clone()
+        };
+        let contains = step
+            .expect_contains
+            .clone()
+            .or_else(|| step.expect.as_ref().and_then(|e| e.contains.clone()));
+        if let Some(pat) = contains {
+            return Ok(format!(
+                "[dry-run] monitor {port_display} simulated ({timeout} ms) — would check expect_contains=\"{pat}\"\n[HIL_EXPECT:FAIL] dry-run cannot verify hardware output (no data)"
+            ));
+        }
+        return Ok(format!(
+            "[dry-run] monitor {port_display} simulated ({timeout} ms)"
+        ));
+    }
+
+    // auto port (real run only)
     let port = if port_raw == "auto" {
         let ports = serialport::available_ports().unwrap_or_default();
         if ports.is_empty() {
@@ -823,20 +910,6 @@ async fn run_monitor_step(
     } else {
         port_raw.clone()
     };
-
-    if dry_run {
-        // Simulate monitor with optional expect check
-        let contains = step
-            .expect_contains
-            .clone()
-            .or_else(|| step.expect.as_ref().and_then(|e| e.contains.clone()));
-        if let Some(pat) = contains {
-            return Ok(format!(
-                "[dry-run] monitor {port} simulated ({timeout} ms) — would check expect_contains=\"{pat}\"\n[HIL_EXPECT:FAIL] dry-run cannot verify hardware output (no data)"
-            ));
-        }
-        return Ok(format!("[dry-run] monitor {port} simulated ({timeout} ms)"));
-    }
 
     let baud = step.baud.unwrap_or(ctx.monitor_baud);
     let autodetect = step.autodetect.unwrap_or(false);
@@ -917,6 +990,115 @@ async fn run_monitor_step(
     Ok(format!(
         "monitor {port} ({baud} baud, {timeout} ms)\n{captured}"
     ))
+}
+
+async fn run_trace_step(
+    step: &HilStep,
+    ctx: &ToolContext,
+    dry_run: bool,
+    remaining: u64,
+) -> Result<String, String> {
+    let duration = step
+        .duration_ms
+        .or(step.timeout_ms)
+        .unwrap_or(3000)
+        .clamp(100, 60_000)
+        .min(remaining.max(500));
+    let clk_hz = step.clk_hz.unwrap_or(170_000_000).clamp(1_000, 500_000_000);
+    let baud = step.baud.unwrap_or(2_000_000).clamp(1_000, 25_000_000);
+    let chip = step
+        .chip
+        .clone()
+        .or_else(|| ctx.default_chip.clone())
+        .ok_or_else(|| "[InvalidInput] trace step requires chip (or default_chip)".to_string())?;
+    let chip =
+        crate::tools::util::token_arg(&chip, "chip").map_err(|e| format!("[InvalidInput] {e}"))?;
+    let probe = if let Some(p) = &step.probe {
+        Some(crate::tools::util::token_arg(p, "probe").map_err(|e| format!("[InvalidInput] {e}"))?)
+    } else {
+        None
+    };
+    if dry_run {
+        return Ok(format!(
+            "[dry-run] trace simulated: {duration} ms clk {clk_hz} Hz baud {baud} chip {chip}"
+        ));
+    }
+    let probe_ok = std::process::Command::new("probe-rs")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !probe_ok {
+        return Err("[NotFound] probe-rs not on PATH".to_string());
+    }
+    // probe-rs itm swo takes no --chip/--probe flags; use env vars
+    let outer = duration.saturating_add(5_000).min(remaining.max(5_000));
+    let mut envs: Vec<(String, String)> = vec![("PROBE_RS_CHIP".to_string(), chip.clone())];
+    if let Some(p) = probe {
+        envs.push(("PROBE_RS_PROBE".to_string(), p));
+    }
+    let args = vec![
+        "itm".to_string(),
+        "swo".to_string(),
+        duration.to_string(),
+        clk_hz.to_string(),
+        baud.to_string(),
+    ];
+    let result =
+        crate::tools::util::run_probe_rs(args, &ctx.cwd, outer, Some(ctx.cancel.clone()), &envs)
+            .await;
+    let (text, code) = match result {
+        Ok(v) => v,
+        Err(e) if e.contains("[Timeout]") => (String::new(), None),
+        Err(e) => return Err(crate::tools::util::probe_rs_err(e).message),
+    };
+    match code {
+        Some(0) => {
+            let summary = if text.trim().is_empty() {
+                "no ITM packets captured (firmware must write ITM ports, e.g. ITM_SendChar)\n"
+            } else {
+                ""
+            };
+            let mut out = format!(
+                "trace captured {duration} ms (clk {clk_hz} Hz, baud {baud}) (exit 0)\n{summary}{text}"
+            );
+            // honor monitor-style expectations if provided
+            let expect_contains = step
+                .expect_contains
+                .clone()
+                .or_else(|| step.expect.as_ref().and_then(|e| e.contains.clone()));
+            let expect_regex = step
+                .expect_regex
+                .clone()
+                .or_else(|| step.expect.as_ref().and_then(|e| e.regex.clone()));
+            let expect_count = step
+                .expect_count
+                .or_else(|| step.expect.as_ref().and_then(|e| e.count))
+                .unwrap_or(1);
+            if expect_contains.is_some() || expect_regex.is_some() {
+                let regex_obj = if let Some(rx) = &expect_regex {
+                    Some(
+                        regex::Regex::new(rx)
+                            .map_err(|e| format!("[InvalidInput] expect_regex invalid: {e}"))?,
+                    )
+                } else {
+                    None
+                };
+                let (matched, _) =
+                    evaluate_expect(&text, expect_contains.as_deref(), regex_obj.as_ref());
+                let ok = matched >= expect_count;
+                let marker = if ok { "PASS" } else { "FAIL" };
+                out.push_str(&format!(
+                    "\n[HIL_EXPECT:{marker}] trace expect matched {matched}/{expect_count} — wanted contains={expect_contains:?} regex={expect_regex:?}"
+                ));
+            }
+            Ok(out)
+        }
+        None => Ok(format!(
+            "trace: capture window closed after {outer} ms on an idle SWO stream (no ITM packets — firmware must write ITM ports, e.g. ITM_SendChar)\n{text}"
+        )),
+        Some(c) => Err(format!("[Io] probe-rs trace failed (exit {c})\n{text}")),
+    }
 }
 
 fn evaluate_expect(

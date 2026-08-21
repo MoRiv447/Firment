@@ -71,12 +71,14 @@ pub fn default_system_prompt(cwd: &Path) -> String {
           startup_stm32g431xx.s) or list `probe-rs chip list`. The tool resets the \
           target afterwards by default, so the flashed firmware starts running on its own.\n\
           5. Verify: prefer the `hil` suite (`hil suite=\"...\"` or inline `hil steps=[...]`) \
-         which runs build → flash → monitor (with `expect_contains`/`expect_regex`+`expect_count`) \
+         which runs build → flash → monitor/trace (with `expect_contains`/`expect_regex`+`expect_count`) \
          → elf_analyze in one call, with `dry_run` for simulation and `replay` for review; \
-         fall back to open the serial monitor (pick the port from the enumeration when not \
-         configured) and check the output matches the expected behavior; then run elf_analyze \
-         on the ELF for flash/RAM/stack regression checks. Each hil run writes a replay id; \
-         use `hil replay=\"list\"` or `hil replay=\"<id>\"` to review it.\n\
+         flash/run/elf steps auto-infer `.pio/build/*/firmware.elf` when `elf` is omitted, \
+         and `trace` captures SWO/ITM (`duration_ms`/`clk_hz`/`baud`) for ITM firmware \
+         (e.g. `ITM_SendChar`); fall back to open the serial monitor (pick the port from the \
+         enumeration when not configured) and check the output matches the expected behavior; \
+         then run elf_analyze on the ELF for flash/RAM/stack regression checks. Each hil run \
+         writes a replay id; use `hil replay=\"list\"` or `hil replay=\"<id>\"` to review it.\n\
            6. Debug: when the target misbehaves, hangs, or produces no/odd serial output, do NOT \
           guess from code alone — call the debug tool. Start with `debug analyze` (halts the \
           target, reads PC/LR/SP and the Cortex-M fault registers CFSR/HFSR/MMFAR/BFAR, \
@@ -96,7 +98,7 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          builds belong to the build tool, not shell.\n\
 - Tool priority for embedded work: always prefer the dedicated firmware tools (hil, build, \
          flash, monitor, debug, elf_analyze, periph_init) — they know the project config. Use `hil` \
-         to verify a full build/flash/monitor cycle with expectations (it replaces manual \
+         to verify a full build/flash/monitor-or-trace cycle with expectations (it replaces manual \
          build→flash→monitor chaining). Build with \
          the build tool (it auto-detects platformio.ini / Makefile / CMakeLists.txt / \
          *.uvprojx); fall back to shell only when the build tool cannot handle the project. \

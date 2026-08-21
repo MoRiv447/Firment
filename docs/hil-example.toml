@@ -49,5 +49,25 @@ timeout_ms = 5000
 kind = "elf_analyze"
 elf = "build/firmware.elf"
 
+# Third suite: ITM/SWO trace (STM32G4 example — needs ITM_SendChar in firmware)
+[suite.trace]
+chip = "stm32g431rb"
+elf = ".pio/build/nucleo_g431rb/firmware.elf"  # auto-inferred if omitted
+
+[[suite.trace.steps]]
+kind = "build"
+
+[[suite.trace.steps]]
+kind = "flash"
+# elf auto-inferred as .pio/build/nucleo_g431rb/firmware.elf when omitted
+
+[[suite.trace.steps]]
+kind = "trace"
+duration_ms = 3000
+clk_hz = 170000000   # HCLK feeding TPIU/SWO
+baud = 2000000
+expect_contains = "counter="   # optional: hil checks captured trace against expect
+expect_count = 2
+
 # Inline steps (no .firment/hil.toml needed) — agent/CLI can do:
 # firm hil --steps '[{"kind":"build"},{"kind":"monitor","expect_contains":"ok","timeout_ms":3000}]' --dry-run

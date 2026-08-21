@@ -321,11 +321,11 @@
   },
   {
     "name": "hil",
-    "description": "Hardware-in-the-loop suite: orchestrated build → flash → monitor (with expectations) → elf_analyze, with replay. Prefer this over calling build/flash/monitor separately for firmware verification. Suites live in .firment/hil.toml; inline steps work too. Supports dry-run and replay.",
+    "description": "Hardware-in-the-loop suite: orchestrated build → flash → monitor/trace (with expectations) → elf_analyze, with replay. Prefer this over calling build/flash/monitor separately for firmware verification. Suites live in .firment/hil.toml; inline steps work too. Supports dry-run and replay. flash/run/elf steps auto-infer .pio/build/*/firmware.elf when file/elf is omitted.",
     "input_schema": {
       "properties": {
         "chip": {
-          "description": "Override chip for flash/run steps",
+          "description": "Override chip for flash/run/trace steps",
           "type": "string"
         },
         "dry_run": {
@@ -355,7 +355,7 @@
           "type": "string"
         },
         "steps": {
-          "description": "Inline steps [{kind, file, elf, chip, probe, port, baud, timeout_ms, expect_contains, expect_regex, expect_count, duration_ms}]",
+          "description": "Inline steps [{kind, file, elf, chip, probe, port, baud, clk_hz, timeout_ms, expect_contains, expect_regex, expect_count, duration_ms}] — kinds: build/flash/run/monitor/trace/elf_analyze/delay; flash/run/elf auto-infer .pio/build/*/firmware.elf when elf omitted",
           "type": "array"
         },
         "suite": {
