@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.5.11 (2026-08-21) — hardware-in-the-loop suites
+
+- **New `hil` tool — one-shot firmware verification.** Orchestrates
+  `build → flash → monitor/trace → elf_analyze` with assertions in a single
+  call, replacing manual tool chaining:
+  - Suites live in `.firment/hil.toml` (`[suite.<name>]` + ordered steps) or
+    inline via `steps=[...]`; `firm hil --suite/--steps/--chip/--port/--dry-run`
+  - Step kinds: `build` / `flash` / `run` / `monitor` / `trace` / `elf_analyze`
+    / `delay`; monitor/trace support `expect_contains` / `expect_regex` +
+    `expect_count` assertions with early exit
+  - Auto serial port/baud detection, per-suite and total timeouts,
+    cancel-aware; `dry_run` simulates hardware steps (assertions always FAIL
+    under dry-run — no hardware data)
+  - Every run writes `work/hil/<uuid>.jsonl`; `hil replay list` / `hil replay
+    <id>` renders a human-readable log
+  - flash/run/elf steps auto-infer `.pio/build/*/firmware.elf` (newest
+    mtime) when `elf` is omitted
+- **`debug trace` via hil** — SWO/ITM capture (`duration_ms`/`clk_hz`/`baud`,
+  chip via `PROBE_RS_CHIP` env) as a suite step with the same expectations
+  as monitor
+- **Actionable ST-Link diagnostics.** All probe-rs invocations (flash/run/
+  debug) now map the Windows/WinUSB "reset not supported by WinUSB" stuck-
+  probe failure (probe-rs issue #2207) to a clear error telling the model/
+  user to unplug+replug the probe and close ST tools holding it, instead of
+  an opaque failure; duplicated install-hint mappings unified into one helper
+- **System prompt clarified** — `hil` needs a `.firment/hil.toml` suite (or
+  inline steps; fall back to manual build→flash→monitor otherwise); `dry_run`
+  never counts as verification; the `verify_command` gate still applies for
+  quick compile checks on top of hil's end-to-end verification
+
 ## v0.5.10 (2026-08-18) — debugger depth: backtrace + SWO trace
 
 - **`debug backtrace` — halt and unwind the call stack.** Runs the probe-rs

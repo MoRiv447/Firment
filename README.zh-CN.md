@@ -44,7 +44,7 @@ trait 和会话格式），Web 端是 TypeScript 重新实现，通过提交的�
 - **内置工具**：`read_file`（带行号分页）、`write_file`、`edit_file`
   （锚点/行区间/hashline 编辑，回显统一 diff）、`list_dir`、`glob`、
   `grep`、`shell`、`web_search`（DuckDuckGo / Tavily / Brave）、`web_fetch`、
-  `task`（只读研究子代理）、`todo`、`ask_user`、`periph_init`、
+  `task`（只读研究子代理）、`todo`、`ask_user`、`hil`、`periph_init`、
   `elf_analyze`、`monitor`、`debug`
 - **只读计划模式**：`--plan` / `/plan` 只暴露只读工具，要求给出可执行的完整计划
 - **并行工具调用**：独立调用并发执行；同文件读写与粗粒度工具自动串行
@@ -68,6 +68,11 @@ trait 和会话格式），Web 端是 TypeScript 重新实现，通过提交的�
   低于阈值的变化默认静默吞掉
 - **`monitor`** —— 串口监控，逐行时间戳 + 波特率自动检测；取消回合立即
   释放串口
+- **`hil`** —— 硬件在环套件：一条命令串起 `build → flash → monitor`
+  （带 `expect_contains`/`expect_regex` 断言）`→ elf_analyze`，支持
+  `.firment/hil.toml` 套件或内联 steps、`dry_run` 模拟、JSONL 回放
+  （`hil replay`）、串口/波特率自动检测与总超时——替代手动串联
+  build/flash/monitor 的固件验证方式
 - **`build` / `flash` / `run`** —— CMake/Make/Keil 构建命令、probe-rs
   烧录（芯片来自 `[tools] default_chip`），全部接入 Agent 循环
 - **`debug`** —— 通过探针做完整的片内调试（基于 probe-rs，不依赖

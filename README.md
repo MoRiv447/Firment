@@ -49,7 +49,7 @@ snapshot (`web/src/lib/tools/specs.json`).
   `edit_file` (anchor / line-range / hashline edits, unified diff echo),
   `list_dir`, `glob`, `grep`, `shell`, `web_search` (DuckDuckGo / Tavily /
   Brave), `web_fetch`, `task` (read-only research subagent), `todo`,
-  `ask_user`, `periph_init`, `elf_analyze`, `monitor`, `debug`
+  `ask_user`, `hil`, `periph_init`, `elf_analyze`, `monitor`, `debug`
 - **Read-only plan mode**: `--plan` / `/plan` exposes only read tools and
   requires a decision-complete plan
 - **Parallel tool calls**: independent calls run concurrently; same-file
@@ -80,6 +80,12 @@ snapshot (`web/src/lib/tools/specs.json`).
   model fixes it); below-threshold noise is swallowed by default
 - **`monitor`** — serial monitor with per-line timestamps and baud-rate
   autodetect; cancelling a turn releases the port immediately
+- **`hil`** — hardware-in-the-loop suite: one-shot `build → flash → monitor
+  (with `expect_contains`/`expect_regex` assertions) → elf_analyze` via
+  `.firment/hil.toml` suites or inline steps, with `dry_run` simulation,
+  replayable JSONL logs (`hil replay`), auto serial port/baud, and total
+  timeout — replaces manual build/flash/monitor chaining for firmware
+  verification
 - **`build` / `flash` / `run`** — CMake/Make/Keil build commands, probe-rs
   flashing (chip from `[tools] default_chip`), all wired into the agent loop
 - **`debug`** — full on-target debugging over the probe via probe-rs
