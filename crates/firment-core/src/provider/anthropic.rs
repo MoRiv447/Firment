@@ -235,16 +235,16 @@ impl Provider for AnthropicProvider {
                         continue;
                     }
                     if data == "[DONE]" {
-                        // OpenAI-style stream sentinel. The Anthropic API never
-                        // sends it, but Anthropic-compatible gateways (e.g.
-                        // OpenRouter) terminate streams with it — previously
-                        // this was JSON-parsed and killed the whole turn AFTER
-                        // the answer had already streamed.
+                        // OpenAI-style stream sentinel: Anthropic's official API
+                        // never sends it, but compatible gateways (OpenRouter,
+                        // ...) terminate their anthropic-flavored streams with
+                        // it. Skip instead of failing the whole turn.
                         continue;
                     }
                     if stop_emitted {
-                        // `message_stop` was already seen; tolerate trailing
-                        // junk frames from gateways instead of failing the turn.
+                        // Anything after message_stop is trailer noise from
+                        // compatibility gateways (sentinels, keep-alives,
+                        // usage pings) — the turn is already complete.
                         continue;
                     }
                     let payload: Value = match serde_json::from_str(data) {

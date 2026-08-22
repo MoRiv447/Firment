@@ -2,17 +2,16 @@
 
 ## Unreleased
 
-- **Fix: OpenRouter-style `[DONE]` sentinel no longer kills Anthropic-compatible
-  streams.** The Anthropic provider JSON-parsed every `data:` frame; gateways
-  like OpenRouter terminate streams with an OpenAI-style `data: [DONE]` after
-  `message_stop`, which parsed as `[` + garbage → "bad SSE payload: expected
-  value at line 1 column 2" → the turn failed AFTER the answer had fully
-  streamed, printing a misleading "rolled back this turn's edits: no file
-  changes were recorded". The sentinel is now skipped and any trailing
-  non-JSON junk after `message_stop` is ignored (regression tests added).
-- **Cleaner error wording.** Turns with no file edits no longer claim a
-  rollback happened: provider errors/interrupts render without the
-  "rolled back this turn's edits" tail when the journal is empty.
+- **fix(provider): OpenRouter anthropic streams no longer fail every turn.**
+  OpenRouter's anthropic-compatible endpoint terminates its stream with the
+  OpenAI-style `data: [DONE]` sentinel, which the official Anthropic API
+  never sends — the parser treated it as a JSON payload and failed the turn
+  right after the (already complete) answer, surfacing "bad SSE payload:
+  expected value at line 1 column 2" plus a bogus rollback note every turn.
+  The parser now skips `[DONE]`, ignores any frame after `message_stop`
+  (trailer noise from compatibility gateways), and the agent only mentions
+  a rollback when there was actually something to roll back. Wiremock test
+  covers sentinel + post-stop garbage frames.
 
 ## v0.5.13 (2026-08-22) — RP2040 + ESP32-S31 knowledge, honest non-ARM guards
 

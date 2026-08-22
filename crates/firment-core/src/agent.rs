@@ -808,12 +808,8 @@ impl Agent {
         for _ in 0..self.max_iterations {
             self.compact_if_needed().await;
             if *cancel_rx.borrow() {
-                let summary = rollback_journal(&journal);
                 self.sink
-                    .event(AgentEvent::Info(format!(
-                        "⏹ Interrupted{}",
-                        rollback_suffix(&summary)
-                    )))
+                    .event(AgentEvent::Info(interrupted_note(&journal)))
                     .await;
                 let _ = self.store.save(&self.session);
                 self.sink
@@ -828,11 +824,8 @@ impl Agent {
             let mut stream = tokio::select! {
                 result = provider.stream(request) => result?,
                 _ = cancel_rx.changed() => {
-                    let summary = rollback_journal(&journal);
                     self.sink
-                        .event(AgentEvent::Info(format!(
-                            "⏹ Interrupted{}", rollback_suffix(&summary)
-                        )))
+                        .event(AgentEvent::Info(interrupted_note(&journal)))
                         .await;
                     let _ = self.store.save(&self.session);
                     self.sink
@@ -847,10 +840,13 @@ impl Agent {
                 // hang the whole turn — surface the failure to the UI and
                 // end the turn so the user can react / retry.
                 _ = tokio::time::sleep(self.stream_timeout) => {
-                    let summary = rollback_journal(&journal);
+                    let rollback_note = match rollback_journal(&journal) {
+                        Some(summary) => format!(" Partial edits rolled back: {summary}"),
+                        None => String::new(),
+                    };
                     self.sink
                         .event(AgentEvent::Info(format!(
-                            "⚠ Provider stream timed out after {}s; ending turn. Partial edits rolled back: {summary}",
+                            "⚠ Provider stream timed out after {}s; ending turn.{rollback_note}",
                             self.stream_timeout.as_secs()
                         )))
                         .await;
@@ -886,13 +882,16 @@ impl Agent {
                 let event = match event {
                     Ok(event) => event,
                     Err(e) => {
-                        let summary = rollback_journal(&journal);
-                        self.sink
-                            .event(AgentEvent::Error(format!(
-                                "provider error: {e}{}",
-                                rollback_suffix(&summary)
-                            )))
-                            .await;
+                        // An empty journal means nothing was rolled back —
+                        // saying "rolled back: no file changes" reads like a
+                        // second failure on top of the real one.
+                        let message = match rollback_journal(&journal) {
+                            Some(summary) => {
+                                format!("provider error; rolled back this turn's edits: {summary}")
+                            }
+                            None => format!("provider error: {e}"),
+                        };
+                        self.sink.event(AgentEvent::Error(message)).await;
                         return Err(AgentError::Provider(e));
                     }
                 };
@@ -920,12 +919,8 @@ impl Agent {
             });
 
             if cancelled {
-                let summary = rollback_journal(&journal);
                 self.sink
-                    .event(AgentEvent::Info(format!(
-                        "⏹ Interrupted{}",
-                        rollback_suffix(&summary)
-                    )))
+                    .event(AgentEvent::Info(interrupted_note(&journal)))
                     .await;
                 let _ = self.store.save(&self.session);
                 self.sink
@@ -937,10 +932,13 @@ impl Agent {
             }
 
             if stalled {
-                let summary = rollback_journal(&journal);
+                let rollback_note = match rollback_journal(&journal) {
+                    Some(summary) => format!(" Partial edits rolled back: {summary}"),
+                    None => String::new(),
+                };
                 self.sink
                     .event(AgentEvent::Info(format!(
-                        "⚠ Provider stream stalled (no events for {}s); ending turn. Partial edits rolled back: {summary}",
+                        "⚠ Provider stream stalled (no events for {}s); ending turn.{rollback_note}",
                         self.stream_timeout.as_secs()
                     )))
                     .await;
@@ -1135,10 +1133,13 @@ impl Agent {
 
             let stats = execute_tool_calls(self, &tool_calls, &ctx, &journal).await;
             if stats.timed_out {
-                let summary = rollback_journal(&journal);
+                let rollback_note = match rollback_journal(&journal) {
+                    Some(summary) => format!(" Partial edits rolled back: {summary}"),
+                    None => String::new(),
+                };
                 self.sink
                     .event(AgentEvent::Info(format!(
-                        "⚠ Tool wave timed out after {}s; ending turn. Partial edits rolled back: {summary}",
+                        "⚠ Tool wave timed out after {}s; ending turn.{rollback_note}",
                         self.tool_wave_timeout.as_secs()
                     )))
                     .await;
@@ -1171,11 +1172,13 @@ impl Agent {
         //   /undo instead of silently losing useful work.
         let unverified = self.verify_command.is_some() && mutations_since_verify > 0;
         let outcome = if unverified {
-            let summary = rollback_journal(&journal);
-            if summary.is_empty() {
-                "no file edits to roll back (verify never passed)".to_string()
-            } else {
-                format!("rolled back this turn's edits (verify never passed): {summary}")
+            match rollback_journal(&journal) {
+                Some(summary) => {
+                    format!("rolled back this turn's edits (verify never passed): {summary}")
+                }
+                None => {
+                    "verify never passed, and no file changes were recorded this turn".to_string()
+                }
             }
         } else {
             match lock_journal(&journal).commit() {
@@ -1647,7 +1650,13 @@ async fn execute_tool_calls(
         // prefixed onto the first tool result below, keeping the transcript a
         // valid assistant(tool_calls) -> tool(...) -> tool(...) sequence.
         let mut rollback_note = if any_mutation_failed {
-            let summary = rollback_journal(journal);
+            let summary = match rollback_journal(journal) {
+                Some(summary) => summary,
+                // Even when there is nothing on disk to restore, the model
+                // must learn that the whole wave was discarded — its earlier
+                // "successful" edits are no longer in effect.
+                None => "no file changes were recorded".to_string(),
+            };
             let note = format!("edit batch failed; rolled back: {summary}");
             agent.sink.event(AgentEvent::Info(note.clone())).await;
             Some(note)
@@ -1809,23 +1818,24 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
     chars.into_iter().collect()
 }
 
-fn rollback_journal(journal: &Arc<Mutex<EditJournal>>) -> String {
+fn rollback_journal(journal: &Arc<Mutex<EditJournal>>) -> Option<String> {
     match lock_journal(journal).rollback() {
-        // Empty: nothing was mutated this turn, so there is nothing to roll
-        // back — callers render no "rolled back" tail for this case.
-        Ok(files) if files.is_empty() => String::new(),
-        Ok(files) => format!("restored {} file(s): {}", files.len(), files.join(", ")),
-        Err(e) => format!("rollback incomplete: {e}"),
+        Ok(files) if files.is_empty() => None,
+        Ok(files) => Some(format!(
+            "restored {} file(s): {}",
+            files.len(),
+            files.join(", ")
+        )),
+        Err(e) => Some(format!("rollback incomplete: {e}")),
     }
 }
 
-/// `; rolled back this turn's edits: <summary>` — or empty when there was
-/// nothing to roll back, so clean turns do not emit scary rollback noise.
-fn rollback_suffix(summary: &str) -> String {
-    if summary.is_empty() {
-        String::new()
-    } else {
-        format!("; rolled back this turn's edits: {summary}")
+/// User-facing interrupt note; the rollback clause only appears when there
+/// was actually something to roll back.
+fn interrupted_note(journal: &Arc<Mutex<EditJournal>>) -> String {
+    match rollback_journal(journal) {
+        Some(summary) => format!("⏹ Interrupted; rolled back this turn's edits: {summary}"),
+        None => "⏹ Interrupted".to_string(),
     }
 }
 
