@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- **Fix: OpenRouter-style `[DONE]` sentinel no longer kills Anthropic-compatible
+  streams.** The Anthropic provider JSON-parsed every `data:` frame; gateways
+  like OpenRouter terminate streams with an OpenAI-style `data: [DONE]` after
+  `message_stop`, which parsed as `[` + garbage → "bad SSE payload: expected
+  value at line 1 column 2" → the turn failed AFTER the answer had fully
+  streamed, printing a misleading "rolled back this turn's edits: no file
+  changes were recorded". The sentinel is now skipped and any trailing
+  non-JSON junk after `message_stop` is ignored (regression tests added).
+- **Cleaner error wording.** Turns with no file edits no longer claim a
+  rollback happened: provider errors/interrupts render without the
+  "rolled back this turn's edits" tail when the journal is empty.
+
 ## v0.5.13 (2026-08-22) — RP2040 + ESP32-S31 knowledge, honest non-ARM guards
 
 - **Knowledge base: Raspberry Pi RP2040** (seed v6 → v7, re-materializes

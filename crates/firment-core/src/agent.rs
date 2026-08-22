@@ -811,7 +811,8 @@ impl Agent {
                 let summary = rollback_journal(&journal);
                 self.sink
                     .event(AgentEvent::Info(format!(
-                        "⏹ Interrupted; rolled back this turn's edits: {summary}"
+                        "⏹ Interrupted{}",
+                        rollback_suffix(&summary)
                     )))
                     .await;
                 let _ = self.store.save(&self.session);
@@ -830,7 +831,7 @@ impl Agent {
                     let summary = rollback_journal(&journal);
                     self.sink
                         .event(AgentEvent::Info(format!(
-                            "⏹ Interrupted; rolled back this turn's edits: {summary}"
+                            "⏹ Interrupted{}", rollback_suffix(&summary)
                         )))
                         .await;
                     let _ = self.store.save(&self.session);
@@ -888,7 +889,8 @@ impl Agent {
                         let summary = rollback_journal(&journal);
                         self.sink
                             .event(AgentEvent::Error(format!(
-                                "provider error; rolled back this turn's edits: {summary}"
+                                "provider error: {e}{}",
+                                rollback_suffix(&summary)
                             )))
                             .await;
                         return Err(AgentError::Provider(e));
@@ -921,7 +923,8 @@ impl Agent {
                 let summary = rollback_journal(&journal);
                 self.sink
                     .event(AgentEvent::Info(format!(
-                        "⏹ Interrupted; rolled back this turn's edits: {summary}"
+                        "⏹ Interrupted{}",
+                        rollback_suffix(&summary)
                     )))
                     .await;
                 let _ = self.store.save(&self.session);
@@ -1169,7 +1172,11 @@ impl Agent {
         let unverified = self.verify_command.is_some() && mutations_since_verify > 0;
         let outcome = if unverified {
             let summary = rollback_journal(&journal);
-            format!("rolled back this turn's edits (verify never passed): {summary}")
+            if summary.is_empty() {
+                "no file edits to roll back (verify never passed)".to_string()
+            } else {
+                format!("rolled back this turn's edits (verify never passed): {summary}")
+            }
         } else {
             match lock_journal(&journal).commit() {
                 Ok(changes) if !changes.is_empty() => {
@@ -1804,9 +1811,21 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 
 fn rollback_journal(journal: &Arc<Mutex<EditJournal>>) -> String {
     match lock_journal(journal).rollback() {
-        Ok(files) if files.is_empty() => "no file changes were recorded".to_string(),
+        // Empty: nothing was mutated this turn, so there is nothing to roll
+        // back — callers render no "rolled back" tail for this case.
+        Ok(files) if files.is_empty() => String::new(),
         Ok(files) => format!("restored {} file(s): {}", files.len(), files.join(", ")),
         Err(e) => format!("rollback incomplete: {e}"),
+    }
+}
+
+/// `; rolled back this turn's edits: <summary>` — or empty when there was
+/// nothing to roll back, so clean turns do not emit scary rollback noise.
+fn rollback_suffix(summary: &str) -> String {
+    if summary.is_empty() {
+        String::new()
+    } else {
+        format!("; rolled back this turn's edits: {summary}")
     }
 }
 

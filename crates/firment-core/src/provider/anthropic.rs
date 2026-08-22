@@ -234,6 +234,19 @@ impl Provider for AnthropicProvider {
                         // SSE heartbeat / keep-alive frame; legal, ignore it.
                         continue;
                     }
+                    if data == "[DONE]" {
+                        // OpenAI-style stream sentinel. The Anthropic API never
+                        // sends it, but Anthropic-compatible gateways (e.g.
+                        // OpenRouter) terminate streams with it — previously
+                        // this was JSON-parsed and killed the whole turn AFTER
+                        // the answer had already streamed.
+                        continue;
+                    }
+                    if stop_emitted {
+                        // `message_stop` was already seen; tolerate trailing
+                        // junk frames from gateways instead of failing the turn.
+                        continue;
+                    }
                     let payload: Value = match serde_json::from_str(data) {
                         Ok(v) => v,
                         Err(e) => {
