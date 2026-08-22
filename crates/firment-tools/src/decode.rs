@@ -23,6 +23,29 @@ impl ElfArch {
     }
 }
 
+/// Decide whether the debug target is definitely not an ARM Cortex-M part:
+/// from the firmware ELF's architecture when that file is readable, otherwise
+/// from the probe-rs chip name (`esp32*` are all Xtensa or RISC-V).
+///
+/// Returns a human-readable reason when the target is definitely non-ARM
+/// (Cortex-M-only features like CFSR fault registers or SWO/ITM trace do not
+/// exist there); None when the target may be ARM. The ELF wins when both
+/// sources are available — a wrong chip label must not block a real ARM ELF.
+pub fn non_arm_reason(chip: &str, elf: Option<&Path>) -> Option<String> {
+    if let Some(elf) = elf
+        && let Some(arch) = elf_arch(elf)
+    {
+        return match arch {
+            ElfArch::Arm => None,
+            other => Some(format!("the firmware ELF is a {} build", other.name())),
+        };
+    }
+    if chip.to_ascii_lowercase().starts_with("esp32") {
+        return Some("the chip is an ESP32 (Xtensa/RISC-V family)".to_string());
+    }
+    None
+}
+
 /// Read the ELF header's e_machine. Returns None when the file is
 /// missing/unparseable.
 pub fn elf_arch(elf: &Path) -> Option<ElfArch> {
@@ -145,5 +168,24 @@ mod tests {
         write_minimal_elf(&p, object::Architecture::Xtensa);
         assert_eq!(elf_arch(&p), Some(ElfArch::Xtensa));
         assert_eq!(elf_arch(Path::new("C:/definitely/missing.elf")), None);
+    }
+
+    #[test]
+    fn non_arm_reason_prefers_elf_then_chip_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("fw.elf");
+        // Chip-name fallback when no ELF is available.
+        assert!(non_arm_reason("esp32s31", None).is_some());
+        assert!(non_arm_reason("ESP32-C6", None).is_some());
+        assert!(non_arm_reason("stm32g431rb", None).is_none());
+        assert!(non_arm_reason("rp2040", None).is_none());
+        // A readable ARM ELF wins even if the chip label says ESP32.
+        write_minimal_elf(&p, object::Architecture::Arm);
+        assert!(non_arm_reason("esp32s3", Some(&p)).is_none());
+        // A readable RISC-V ELF blocks regardless of the label.
+        write_minimal_elf(&p, object::Architecture::Riscv32);
+        assert!(non_arm_reason("stm32f103", Some(&p)).is_some());
+        // Unparseable ELF falls through to the chip name.
+        assert!(non_arm_reason("esp32s31", Some(Path::new("C:/nope.elf"))).is_some());
     }
 }

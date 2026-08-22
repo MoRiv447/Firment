@@ -1025,16 +1025,13 @@ async fn run_trace_step(
     }
     // SWO/ITM is ARM CoreSight; ESP32* (Xtensa/RISC-V) and other non-ARM
     // targets have no TPIU/ITM to configure — fail with the alternative
-    // instead of capturing an empty stream.
-    if let Some(elf) = &step.elf
-        && let Some(arch) = crate::decode::elf_arch(Path::new(elf))
-        && arch != crate::decode::ElfArch::Arm
-    {
+    // instead of capturing an empty stream. The ELF decides when present,
+    // the chip name covers trace steps that omit it.
+    if let Some(reason) = crate::decode::non_arm_reason(&chip, step.elf.as_deref().map(Path::new)) {
         return Err(format!(
-            "[InvalidInput] trace streams SWO/ITM packets (ARM CoreSight), but {elf} \
-             is a {} build — this target has no SWO/ITM. Use a `monitor` step (UART or \
-             USB-CDC console) with expect_contains instead.",
-            arch.name()
+            "[InvalidInput] trace streams SWO/ITM packets (ARM CoreSight), but {reason} — \
+             this target has no SWO/ITM. Use a `monitor` step (UART or USB-CDC console) \
+             with expect_contains instead."
         ));
     }
     let probe_ok = std::process::Command::new("probe-rs")

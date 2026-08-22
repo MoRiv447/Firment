@@ -199,7 +199,7 @@ common_mistake = ["LPUART baud is limited when using LSE 32.768kHz; pick the rig
 # ───────────────────────── Raspberry Pi RP2040 ─────────────────────────
 [rp2040]
 family = "RP2040 (dual-core Cortex-M0+, external QSPI flash, XIP)"
-reference_manual = { name = "RP2040 Datasheet", url = "https://datasheets.raspberrypi.com/rp2040/rp2040-datasheet.pdf", pages = 656 }
+reference_manual = { name = "RP2040 Datasheet", url = "https://datasheets.raspberrypi.com/rp2040/rp2040-datasheet.pdf" }
 hal_repo = "https://github.com/raspberrypi/pico-sdk"
 sdk_version = "pico-sdk 2.x (Embassy rp for Rust)"
 last_reviewed = "2026-08-22"
@@ -223,8 +223,8 @@ common_mistake = ["Two PL011-based UARTs only; baud derives from clk_peri which 
 # ───────────────────────── ESP32-S31 ─────────────────────────
 [esp32.s31]
 family = "ESP32-S31 (dual-core RISC-V 320 MHz, WiFi 6 + BT5.4 LE/Classic + 802.15.4)"
-reference_manual = { name = "ESP32-S31 documentation (TRM pending at review time — check the document list)", url = "https://documentation.espressif.com/en/documentList?eol=false", pages = 0 }
-datasheet = { name = "ESP32-S31 Series Datasheet v0.5 PRELIMINARY (2026-07-13)", url = "https://documentation.espressif.com/esp32-s31_datasheet_en.html", pages = 0 }
+reference_manual = { name = "ESP32-S31 documentation (TRM pending at review time — check the document list)", url = "https://documentation.espressif.com/en/documentList?eol=false" }
+datasheet = { name = "ESP32-S31 Series Datasheet v0.5 PRELIMINARY (2026-07-13)", url = "https://documentation.espressif.com/esp32-s31_datasheet_en.html" }
 hal_repo = "https://github.com/espressif/esp-idf"
 sdk_version = "ESP-IDF latest/master (esp32s31 target)"
 last_reviewed = "2026-08-21"

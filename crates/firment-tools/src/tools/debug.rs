@@ -665,17 +665,13 @@ impl Tool for Debug {
                 // (CFSR/HFSR/MMFAR/BFAR are CoreSight system addresses at
                 // 0xE000EDxx). On Xtensa/RISC-V targets (ESP32*, ...) those
                 // reads return garbage — say so instead of analyzing noise.
-                if let Some(elf) = &elf
-                    && let Some(arch) = crate::decode::elf_arch(elf)
-                    && arch != crate::decode::ElfArch::Arm
-                {
+                if let Some(reason) = crate::decode::non_arm_reason(&chip, elf.as_deref()) {
                     return Err(ToolError::new(format!(
                         "[InvalidInput] debug analyze decodes Cortex-M fault registers \
-                         (CFSR/HFSR/MMFAR/BFAR), but {elf:?} is a {} build — this target \
-                         has no such registers. Use `action: halt` + `regs` + `backtrace` \
-                         instead, and read the target's own panic/fault report over the \
-                         console (e.g. ESP-IDF panic backtrace via `monitor`).",
-                        arch.name()
+                         (CFSR/HFSR/MMFAR/BFAR), but {reason} — this target has no such \
+                         registers. Use `action: halt` + `regs` + `backtrace` instead, and \
+                         read the target's own panic/fault report over the console (e.g. \
+                         ESP-IDF panic backtrace via `monitor`)."
                     )));
                 }
                 let (regs_text, regs_code) = run_probe_rs_retry(
