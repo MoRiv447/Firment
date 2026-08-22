@@ -1,0 +1,34 @@
+# rp2040-gpio.toml — RP2040 platform/GPIO original cheatsheet (engineering notes cross-checked against pico-sdk hardware headers and the RP2040 datasheet)
+[meta]
+family = "RP2040"
+topic = "GPIO / platform / boot"
+confidence = "verified"
+last_reviewed = "2026-08-22"
+source = "RP2040 Datasheet cross-checked line-by-line against raspberrypi/pico-sdk headers (hardware/gpio.h, platform_defs.h, addressmap.h, multicore.c)"
+
+[overview]
+core = "Dual Cortex-M0+ (ARMv6-M); SDK boots at 125 MHz, fastest OFFICIALLY supported clock is 200 MHz (pico-sdk 2.1.1+); 264 KB SRAM (256 KB striped across 4 banks + 2x4 KB); 32 hardware spinlocks, per-core hardware divider and 2 interpolators"
+gpios = "30 user GPIOs (bank 0, GPIO0-29) plus 6 dedicated QSPI pads (SCLK/SSn/SD0-SD3) that are NOT user GPIOs; NO internal flash — code runs from external QSPI through a 16 KB XIP cache"
+input_only = "NONE: every user GPIO is full I/O. Watch out: if MULTIPLE GPIOs are routed as inputs to the SAME peripheral input, the peripheral sees their logical OR"
+drive = "Per-pad selectable 2 / 4 / 8 / 12 mA, slew control, Schmitt trigger, weak pull-up/down"
+voltage = "3.3 V I/O; NOT 5 V tolerant"
+
+[key_pins]
+funcsel = "Every GPIO has 9 functions selected by FUNCSEL: F1=SPI, F2=UART, F3=I2C, F4=PWM, F5=SIO(CPU GPIO), F6=PIO0, F7=PIO1; F8=clock GPIN/GPOUT only on GPIO20-25; F9=USB VBUS/overcurrent detect. UART is ALWAYS F2 on every pin (F1 is SPI!) and any peripheral can go to any pin — there is no fixed pin map"
+adc = "ADC only exists on GPIO26-29 (inputs 0-3, 12-bit SAR, 500 kS/s from the 48 MHz clk_adc) plus internal temperature sensor on channel 4 (T = 27 - (V - 0.706)/0.001721)"
+boot = "Holding BOOTSEL while resetting enters the ROM's USB mass-storage UF2 mode ('RPI-RP2' drive): drag-drop .uf2 to flash. With a valid flash image the chip boots normally; no strapping pins exist"
+boot2 = "The FIRST 256 bytes of flash are the second-stage bootloader, checksummed by the ROM with a bit-reflected CRC32 (seed 0xffffffff, little-endian tail) — an invalid CRC makes the chip silently fall back to BOOTSEL mode; let the SDK generate boot2, never overwrite those bytes"
+console = "No fixed console pins; Raspberry Pi Pico wiring convention puts UART0 on GPIO0 (TX) / GPIO1 (RX); stdio can also route to USB CDC instead of UART"
+usb = "USB 1.1 Low/Full-Speed device-or-host controller (4 KB DPRAM); its clock MUST be exactly 48 MHz from PLL_USB — clk_adc and clk_rtc also derive from that PLL"
+multicore = "Core 1 is launched by core 0 pushing {0, 0, 1, VTOR, SP, PC} over the inter-core FIFO (core 1 echoes each word back); the two FIFOs are 8 x 32-bit each direction; spinlocks 0-13 are reserved by the SDK"
+
+common_mistake = [
+  "Expecting internal flash or EEPROM — there is none; persisting data means erasing/programming the external flash with flash_range_program, which requires executing from RAM with interrupts disabled because XIP stalls during writes",
+  "Hand-patching the flash head and getting the boot2 CRC32 wrong — the chip silently drops into BOOTSEL mass-storage mode and your firmware 'never starts'",
+  "Porting STM32 alternate-function habits: RP2040 has no fixed peripheral pin map — route the peripheral to the pin via FUNCSEL (UART=F2, SPI=F1 everywhere)",
+  "Routing TWO GPIOs as inputs to the same peripheral input (e.g. two candidates for UART RX) — the peripheral receives the logical OR of both, giving phantom bytes",
+  "Spending GPIO26-29 freely and then needing the ADC — they are the only four ADC-capable pads",
+  "Reconfiguring PLL_SYS for a higher clk_sys and breaking USB/ADC/RTC — all three hang off the separate 48 MHz PLL_USB, which itself must stay at exactly 48 MHz",
+  "Assuming watchdog periods like STM32: on RP2040-E1 silicon the maximum WDT period is ~8.4 s, and watchdog_get_time_remaining returns the last WRITTEN value, not the true remaining time",
+  "Hard-coding 125 MHz clock math and then running the officially-certified 200 MHz setup (PICO_USE_FASTEST_SUPPORTED_CLOCK) — every baud/divider constant shifts",
+]

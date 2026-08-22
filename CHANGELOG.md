@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **Knowledge base: Raspberry Pi RP2040** (seed v6 → v7, re-materializes
+  automatically). Two cheatsheets verified line-by-line against the official
+  pico-sdk hardware headers (hardware/gpio.h funcsel table, platform_defs.h,
+  multicore.c) and the RP2040 datasheet:
+  - `rp2040-gpio` — platform/boot facts agents get wrong: no internal flash
+    (XIP through a 16 KB cache; flash writes need RAM-executed code),
+    CRC32-checked 256-byte boot2 whose failure silently drops to BOOTSEL
+    UF2 mode, F1=SPI/F2=UART/F3=I2C on every pin, multi-input logical-OR
+    pitfall, ADC only on GPIO26-29 (+temp ch4), PLL_USB must stay exactly
+    48 MHz (USB+ADC+RTC), WDT capped ~8.4 s by errata RP2040-E1
+  - `rp2040-uart` — two PL011-based UARTs, baud divisor comes from clk_peri
+    which the SDK retimes onto the 48 MHz PLL_USB when clk_sys changes,
+    DREQ numbers for DMA pacing
+  - `periph_init` resolves `rp2040*` parts and injects the cheatsheets;
+    `vendor-index.toml` gains the `[rp2040]` family. probe-rs supports the
+    chip locally, so build → flash → monitor works end-to-end.
 - **Honest non-ARM guards for the debug/HIL tools.** `debug analyze` decodes
   Cortex-M fault registers (CFSR/HFSR/MMFAR/BFAR) and `trace` streams
   SWO/ITM — both are ARM CoreSight features that simply do not exist on

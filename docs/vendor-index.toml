@@ -196,6 +196,30 @@ hal_functions = ["HAL_UART_Init", "HAL_LPUART_Init"]
 confidence = "verified"
 common_mistake = ["LPUART baud is limited when using LSE 32.768kHz; pick the right USART clock source (PCLK/HSI16/LSE) first"]
 
+# ───────────────────────── Raspberry Pi RP2040 ─────────────────────────
+[rp2040]
+family = "RP2040 (dual-core Cortex-M0+, external QSPI flash, XIP)"
+reference_manual = { name = "RP2040 Datasheet", url = "https://datasheets.raspberrypi.com/rp2040/rp2040-datasheet.pdf", pages = 656 }
+hal_repo = "https://github.com/raspberrypi/pico-sdk"
+sdk_version = "pico-sdk 2.x (Embassy rp for Rust)"
+last_reviewed = "2026-08-22"
+
+[[rp2040.quickref]]
+topic = "GPIO / platform / boot"
+cheatsheet = "cheatsheets/rp2040-gpio.toml"
+doc_section = "RP2040 datasheet §2 (systems) / §5 (IO) + pico-sdk hardware/gpio.h funcsel table"
+key_pins = ["BOOTSEL = UF2 mass-storage bootloader", "GPIO26-29 = ADC0-3 + temp sensor ch4", "F1=SPI F2=UART F3=I2C on every pin", "first 256 flash bytes = CRC32-checked boot2"]
+confidence = "verified"
+common_mistake = ["No internal flash: XIP through a 16 KB cache, flash writes need RAM-executed code with IRQs off; PLL_USB must stay exactly 48 MHz (USB+ADC+RTC hang off it)."]
+
+[[rp2040.quickref]]
+topic = "UART"
+cheatsheet = "cheatsheets/rp2040-uart.toml"
+doc_section = "RP2040 datasheet §4.4 UART + hardware/uart.h"
+hal_functions = ["uart_init", "uart_set_baudrate", "uart_write_bytes"]
+confidence = "verified"
+common_mistake = ["Two PL011-based UARTs only; baud derives from clk_peri which the SDK retimes onto the 48 MHz PLL_USB when clk_sys changes; DREQ UART0 TX/RX = 20/21, UART1 = 22/23."]
+
 # ───────────────────────── ESP32-S31 ─────────────────────────
 [esp32.s31]
 family = "ESP32-S31 (dual-core RISC-V 320 MHz, WiFi 6 + BT5.4 LE/Classic + 802.15.4)"

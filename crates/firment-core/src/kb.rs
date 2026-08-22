@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 
 /// Bump when the bundled seed knowledge base changes (forces re-materialization).
-pub const SEED_VERSION: &str = "6";
+pub const SEED_VERSION: &str = "7";
 
 const SEED_FILES: &[(&str, &str)] = &[
     (
@@ -53,6 +53,14 @@ const SEED_FILES: &[(&str, &str)] = &[
     (
         "cheatsheets/esp32s3-gpio.toml",
         include_str!("../../../docs/cheatsheets/esp32s3-gpio.toml"),
+    ),
+    (
+        "cheatsheets/rp2040-gpio.toml",
+        include_str!("../../../docs/cheatsheets/rp2040-gpio.toml"),
+    ),
+    (
+        "cheatsheets/rp2040-uart.toml",
+        include_str!("../../../docs/cheatsheets/rp2040-uart.toml"),
     ),
     (
         "cheatsheets/esp32s3-uart.toml",
@@ -190,6 +198,8 @@ mod tests {
         assert!(esp32.get("s3").is_some());
         assert!(esp32.get("c6").is_some());
         assert!(esp32.get("c3").is_some());
+        let rp2040 = value.get("rp2040").expect("rp2040 table");
+        assert!(rp2040.get("family").is_some());
         assert!(
             dir.path().join("cheatsheets/stm32f1-uart.toml").is_file(),
             "cheatsheet missing"
@@ -205,6 +215,10 @@ mod tests {
         assert!(
             dir.path().join("cheatsheets/esp32s31-gpio.toml").is_file(),
             "esp32s31 cheatsheet missing"
+        );
+        assert!(
+            dir.path().join("cheatsheets/rp2040-gpio.toml").is_file(),
+            "rp2040 cheatsheet missing"
         );
         ensure_seed_kb_in(dir.path()).unwrap(); // idempotent
     }

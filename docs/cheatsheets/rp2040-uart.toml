@@ -1,0 +1,25 @@
+# rp2040-uart.toml — RP2040 UART original cheatsheet (engineering notes cross-checked against pico-sdk hardware headers and the RP2040 datasheet)
+[meta]
+family = "RP2040"
+topic = "UART"
+confidence = "verified"
+last_reviewed = "2026-08-22"
+source = "RP2040 Datasheet cross-checked against raspberrypi/pico-sdk headers (hardware/uart.h, platform_defs.h, regs/dreq.h, runtime_init_clocks.c)"
+
+[overview]
+controllers = "Exactly 2 UARTs (UART0, UART1), both ARM PL011-based with the modem/IrDA parts stripped: only TX, RX, RTS, CTS exist"
+baud = "Baud divisor is computed from clk_peri — NOT necessarily clk_sys: the SDK default is clk_peri = clk_sys (125 MHz), but when a non-default system clock is set the SDK retimes clk_peri onto the 48 MHz PLL_USB. Same register values give different baud rates depending on which regime you are in"
+flow = "Hardware RTS/CTS flow control on any GPIO pair via F2 funcsel"
+dma = "DMA-paced transfers through DREQ: UART0_TX=20, UART0_RX=21, UART1_TX=22, UART1_RX=23 (12 DMA channels total, plus 4 pacing timers)"
+
+[key_pins]
+routing = "Any of the 30 user GPIOs can carry either UART via F2 funcsel; common UART0 console spots: GPIO0/GPIO1 (Pico default TX/RX), GPIO12-15, GPIO16-19, GPIO28/GPIO29; UART1 clusters: GPIO4-11, GPIO20-25, GPIO26/27 (CTS/RTS)"
+usb_console = "On Pico boards stdio often goes to USB CDC instead of UART0 — if logs appear on USB but not on your USB-UART bridge to GPIO0/1, check which stdio driver is enabled before rewiring"
+
+common_mistake = [
+  "Computing baud divisors from clk_sys after the SDK silently moved clk_peri onto the 48 MHz PLL_USB (or vice versa) — read back the actual clock setup or fix clk_peri explicitly",
+  "Looking for a third UART — there are exactly two; extra serial lines mean PIO state machines, not more PL011s",
+  "Expecting IrDA, modem-control or synchronous mode — this PL011 variant exposes only TX/RX/RTS/CTS",
+  "Leaving two candidate RX pins routed to one UART input — multiple inputs to the same peripheral line are logically ORed and produce phantom characters",
+  "Talking UART before clocks are up in bare-metal code: clk_peri comes from the PLLs/XOSC configuration, so reset-default divisor math does not survive your own clock init",
+]

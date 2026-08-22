@@ -153,6 +153,8 @@ fn family_for(part: &str) -> Option<&'static str> {
         Some("stm32g0")
     } else if p.starts_with("stm32h7") {
         Some("stm32h7")
+    } else if p.starts_with("rp2040") {
+        Some("rp2040")
     } else if p.starts_with("esp32s31") {
         // Must be tested BEFORE "esp32s3": "esp32s31".starts_with("esp32s3").
         Some("esp32s31")
@@ -490,6 +492,8 @@ mod tests {
         assert_eq!(family_for("stm32g070"), Some("stm32g0"));
         assert_eq!(family_for("stm32g431rbt6"), Some("stm32g4"));
         assert_eq!(family_for("stm32h723vgt6"), Some("stm32h7"));
+        assert_eq!(family_for("rp2040"), Some("rp2040"));
+        assert_eq!(family_for("RP2040"), Some("rp2040"));
         assert_eq!(family_for("esp32s31"), Some("esp32s31"));
         assert_eq!(family_for("esp32s31nrv16"), Some("esp32s31"));
         assert_eq!(family_for("esp32s3"), Some("esp32s3"));
@@ -528,6 +532,41 @@ mod tests {
         assert!(
             out.text.contains("stm32h7-uart.toml") || out.text.contains("D-Cache"),
             "H7 cheatsheet (D-Cache) must be injected, got: {}",
+            out.text
+        );
+    }
+
+    #[tokio::test]
+    async fn rp2040_cheatsheets_are_injected() {
+        let dir = tempdir().unwrap();
+        let out = PeriphInit
+            .run(
+                json!({"part": "rp2040", "peripheral": "gpio"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(
+            out.text.contains("rp2040-gpio.toml"),
+            "RP2040 GPIO cheatsheet must be injected, got: {}",
+            out.text
+        );
+        assert!(
+            !out.text.contains("HAL_GPIO_Init"),
+            "non-STM32 parts must not get STM32 HAL skeletons, got: {}",
+            out.text
+        );
+
+        let out = PeriphInit
+            .run(
+                json!({"part": "rp2040", "peripheral": "uart"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(
+            out.text.contains("rp2040-uart.toml"),
+            "RP2040 UART cheatsheet must be injected, got: {}",
             out.text
         );
     }
