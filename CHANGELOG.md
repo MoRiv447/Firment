@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.5.14 (2026-08-22) — audit hardening release
 
 - **Comprehensive five-agent bug audit** (core loop, providers/session/config,
   file & shell tools, embedded tools, TUI/CLI/GUI). Confirmed fixes:
@@ -18,8 +18,9 @@
     WHILE the child ran — any command emitting more than the ~64 KB pipe
     buffer (e.g. `cargo build -vv`) blocked forever and was misreported as a
     timeout with all output lost. Drains now run concurrently with wait(), the
-    post-exit collection has a firm 15 s deadline, and children get
-    kill-on-drop as an orphan safety net. `timeout_ms: 0` no longer disables
+    post-exit collection has a firm 15 s deadline, children get kill-on-drop
+    as an orphan net, and killed commands KEEP their partial output (a timed
+    out build's compiler errors survive). `timeout_ms: 0` no longer disables
     the shell tool's timeout; `token_arg` rejects leading `-`.
   - **tools/shell detector**: new bypass shapes covered — PowerShell
     `-EncodedCommand` (opaque base64), `find … -delete`, `robocopy /MIR`,
@@ -57,9 +58,10 @@
     interruption instead of dropped; out-of-range option digits and bare Enter
     in ask_user modals no longer answer "declined" on the user's behalf;
     `firm install` handles profiles lacking a trailing newline (previously it
-    broke the profile AND appended duplicates forever); the TUI git status
-    latch no longer sticks after one failure; `/output` only persists the new
-    cap when the provider rebuild succeeded.
+    broke the profile AND appended duplicates forever — plus the CI-caught
+    regression where fresh profiles shipped an empty leading line); the TUI
+    git status latch no longer sticks after one failure; `/output` only
+    persists the new cap when the provider rebuild succeeded.
 - **fix(provider): OpenRouter anthropic streams no longer fail every turn.**
   OpenRouter's anthropic-compatible endpoint terminates its stream with the
   OpenAI-style `data: [DONE]` sentinel, which the official Anthropic API
@@ -70,6 +72,11 @@
   (trailer noise from compatibility gateways), and the agent only mentions
   a rollback when there was actually something to roll back. Wiremock test
   covers sentinel + post-stop garbage frames.
+- **fix(cli): self-install from the installed copy no longer fails.** Running
+  `firm install` via PATH launched the already-installed binary, which tried
+  to copy its file onto itself (locked on Windows). The self-copy is skipped
+  with guidance to run the freshly built binary instead; completions and PATH
+  registration still refresh.
 
 ## v0.5.13 (2026-08-22) — RP2040 + ESP32-S31 knowledge, honest non-ARM guards
 

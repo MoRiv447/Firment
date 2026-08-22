@@ -1120,7 +1120,7 @@ checksum = "26b73573e6edcd2af0cdf47bd6cb58f0b3839491263c314eaad1ccf24430e1de"
 
 [[package]]
 name = "firment-core"
-version = "0.5.13"
+version = "0.5.14"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -1141,7 +1141,7 @@ dependencies = [
 
 [[package]]
 name = "firment-gui"
-version = "0.5.13"
+version = "0.5.14"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1160,7 +1160,7 @@ dependencies = [
 
 [[package]]
 name = "firment-tools"
-version = "0.5.13"
+version = "0.5.14"
 dependencies = [
  "async-trait",
  "firment-core",
