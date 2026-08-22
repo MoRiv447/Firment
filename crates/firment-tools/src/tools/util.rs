@@ -242,29 +242,38 @@ pub(crate) async fn run_command(
 
     let cancel_fut = cancel.map(|c| Box::pin(c.cancelled()));
 
-    let status = if timeout_ms == 0 {
-        if let Some(cancel_fut) = cancel_fut {
-            tokio::select! {
-                status = child.wait() => status,
-                _ = cancel_fut => {
-                    let (text, code) = kill_tree_and_report(
-                        &mut child,
-                        command,
-                        "cancelled: interrupted before the command finished (process tree \
-                         terminated)".to_string(),
-                    )
-                    .await;
-                    return Ok((text, code));
+    // Kill/timeout/cancel outcomes are RECORDED, not returned immediately:
+    // the buffered partial output is collected below and appended. Discarding
+    // what an already-killed process had printed (e.g. a timed-out build's
+    // compiler errors) was half of the original pipe bug.
+    let mut interrupted: Option<String> = None;
+    let mut exit: Option<std::io::Result<std::process::ExitStatus>> = None;
+    if timeout_ms == 0 {
+        match cancel_fut {
+            Some(cancel_fut) => {
+                tokio::select! {
+                    st = child.wait() => exit = Some(st),
+                    _ = cancel_fut => {
+                        let (text, _) = kill_tree_and_report(
+                            &mut child,
+                            command,
+                            "cancelled: interrupted before the command finished (process tree \
+                             terminated)".to_string(),
+                        )
+                        .await;
+                        interrupted = Some(text);
+                    }
                 }
             }
-        } else {
-            child.wait().await
+            None => {
+                exit = Some(child.wait().await);
+            }
         }
     } else {
         tokio::select! {
-            status = child.wait() => status,
+            st = child.wait() => exit = Some(st),
             _ = tokio::time::sleep(Duration::from_millis(timeout_ms)) => {
-                let (text, code) = kill_tree_and_report(
+                let (text, _) = kill_tree_and_report(
                     &mut child,
                     command,
                     format!(
@@ -272,7 +281,7 @@ pub(crate) async fn run_command(
                     ),
                 )
                 .await;
-                return Ok((text, code));
+                interrupted = Some(text);
             }
             _ = async {
                 if let Some(c) = cancel.as_ref() {
@@ -281,14 +290,14 @@ pub(crate) async fn run_command(
                     std::future::pending::<()>().await;
                 }
             } => {
-                let (text, code) = kill_tree_and_report(
+                let (text, _) = kill_tree_and_report(
                     &mut child,
                     command,
                     "cancelled: interrupted before the command finished (process tree \
                      terminated)".to_string(),
                 )
                 .await;
-                return Ok((text, code));
+                interrupted = Some(text);
             }
         }
     };
@@ -296,19 +305,32 @@ pub(crate) async fn run_command(
     // background grandchild holding the pipe write-ends would otherwise block
     // forever. If the deadline fires we mark truncation instead of hanging.
     let (out_buf, err_buf, drain_timed_out) = collect_drain(drain).await;
-
-    let stdout = truncate(&String::from_utf8_lossy(&out_buf), 32_000);
-    let stderr = truncate(&String::from_utf8_lossy(&err_buf), 32_000);
-    let status = status.map_err(|e| format!("wait failed: {e}"))?;
-    let code = status.code();
-    let status_text = code
-        .map(|c| c.to_string())
-        .unwrap_or_else(|| "signal".to_string());
     let drain_note = if drain_timed_out {
         "\n[output truncated: the process finished but output was still streaming after 15s]"
     } else {
         ""
     };
+
+    if let Some(reason) = interrupted {
+        let stdout = truncate(&String::from_utf8_lossy(&out_buf), 32_000);
+        let stderr = truncate(&String::from_utf8_lossy(&err_buf), 32_000);
+        return Ok((
+            format!(
+                "{reason}\n--- partial stdout ---\n{stdout}\n--- partial stderr ---\n{stderr}{drain_note}"
+            ),
+            None,
+        ));
+    }
+
+    let status = exit
+        .expect("neither exited nor interrupted")
+        .map_err(|e| format!("wait failed: {e}"))?;
+    let stdout = truncate(&String::from_utf8_lossy(&out_buf), 32_000);
+    let stderr = truncate(&String::from_utf8_lossy(&err_buf), 32_000);
+    let code = status.code();
+    let status_text = code
+        .map(|c| c.to_string())
+        .unwrap_or_else(|| "signal".to_string());
     Ok((
         format!(
             "command: {command}\nexit code: {status_text}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}{drain_note}"
@@ -594,10 +616,12 @@ mod tests {
     #[tokio::test]
     async fn timeout_kills_long_running_command_promptly() {
         let dir = tempdir().unwrap();
+        // Print something FIRST, then hang: the kill path must preserve the
+        // partial output instead of discarding it with the process.
         let slow = if cfg!(windows) {
-            "ping -n 30 127.0.0.1 >nul"
+            "echo build-ok& ping -n 30 127.0.0.1 >nul"
         } else {
-            "sleep 30"
+            "echo build-ok; sleep 30"
         };
         let started = std::time::Instant::now();
         let (text, code) = run_command(slow, dir.path(), 400, None, None)
@@ -605,6 +629,10 @@ mod tests {
             .expect("run_command returns Ok");
         assert!(code.is_none(), "timeout must report a killed process");
         assert!(text.contains("timed out"), "got: {text}");
+        assert!(
+            text.contains("build-ok"),
+            "partial output must survive the kill, got: {text}"
+        );
         assert!(
             started.elapsed() < std::time::Duration::from_secs(5),
             "timeout returned too late: {:?}",
