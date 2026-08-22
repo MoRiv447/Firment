@@ -65,13 +65,26 @@ pub fn install(to: Option<PathBuf>, files_only: bool) -> Result<()> {
 pub fn install_files(source: &Path, dir: &Path) -> Result<(PathBuf, PathBuf)> {
     fs::create_dir_all(dir)?;
     let target = dir.join(exe_name());
-    fs::copy(source, &target).with_context(|| {
-        format!(
-            "failed to copy {} -> {} (if the target is running, exit it first)",
-            source.display(),
+    // Re-running `firm install` from the ALREADY-INSTALLED binary would copy
+    // a file onto itself — on Windows the running exe is locked (hard error),
+    // on Unix fs::copy would truncate the running image. Skip the copy and
+    // keep going: completions and PATH registration are still useful.
+    if same_file(source, &target) {
+        eprintln!(
+            "ℹ The running firm is already the installed one ({}); nothing to copy.\n  To \
+             install a freshly built binary, run it from the build directory instead:\n  \
+             .\\target\\release\\firm install",
             target.display()
-        )
-    })?;
+        );
+    } else {
+        fs::copy(source, &target).with_context(|| {
+            format!(
+                "failed to copy {} -> {} (if the target is running, exit it first)",
+                source.display(),
+                target.display()
+            )
+        })?;
+    }
     let completions = dir.join("firm.completions.ps1");
     let mut file = fs::File::create(&completions)?;
     let mut cmd = crate::Cli::command();
@@ -437,6 +450,18 @@ mod tests {
         assert!(completions.is_file());
         let content = fs::read_to_string(&completions).unwrap();
         assert!(content.contains("firm"));
+    }
+
+    #[test]
+    fn install_files_is_idempotent_when_run_from_the_installed_copy() {
+        // `firm install` launched via PATH: source == target. Must not fail
+        // (Windows locks the running exe) nor clobber the file.
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join(exe_name());
+        fs::write(&target, b"installed-bytes").unwrap();
+        let (t, completions) = install_files(&target, dir.path()).unwrap();
+        assert_eq!(fs::read(&t).unwrap(), b"installed-bytes");
+        assert!(completions.is_file());
     }
 
     #[test]
