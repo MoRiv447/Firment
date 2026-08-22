@@ -359,11 +359,12 @@ fn ensure_profile_completion(profile: &Path, completions: &Path) -> Result<bool>
     if let Some(parent) = profile.parent() {
         fs::create_dir_all(parent)?;
     }
-    // A profile without a trailing newline would glue the dot-sourcing line
-    // onto the last statement, breaking the user's shell startup — AND make
-    // the idempotency check never match (append on every install). Ensure
-    // the separator first.
-    if !profile.exists() || !ends_with_newline(profile) {
+    // A profile WITHOUT a trailing newline would glue the dot-sourcing line
+    // onto the last statement — breaking the shell startup AND making the
+    // idempotency check never match (re-appending on every install). Only a
+    // pre-existing file needs the separator; a fresh file must start clean,
+    // otherwise every first install ships an empty leading line.
+    if profile.exists() && !ends_with_newline(profile) {
         use std::io::Write as _;
         let mut file = fs::OpenOptions::new()
             .create(true)
@@ -507,5 +508,23 @@ mod tests {
         assert!(!ensure_profile_completion(&profile, &completions).unwrap());
         let content = fs::read_to_string(&profile).unwrap();
         assert_eq!(content.lines().count(), 1);
+        // A fresh file must start clean: no empty leading line from the
+        // missing-newline separator (regression: first install shipped
+        // "\n<line>" and the idempotency check then never matched).
+        assert!(!content.starts_with('\n'), "got: {content:?}");
+    }
+
+    #[test]
+    fn profile_line_appends_cleanly_to_a_file_without_trailing_newline() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = dir.path().join("profile.ps1");
+        let completions = dir.path().join("firm.completions.ps1");
+        fs::write(&profile, "Set-ExecutionPolicy Bypass").unwrap();
+        assert!(ensure_profile_completion(&profile, &completions).unwrap());
+        let content = fs::read_to_string(&profile).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "Set-ExecutionPolicy Bypass");
+        assert!(lines[1].starts_with(". \""));
     }
 }
