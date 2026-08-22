@@ -30,9 +30,6 @@ pub async fn monitor_start(
     baud: u32,
     elf: Option<String>,
 ) -> Result<(), String> {
-    if shared.monitors.lock().unwrap().contains_key(&port) {
-        return Err(format!("a monitor is already running on {port}"));
-    }
     let mut handle = serialport::new(&port, baud)
         .timeout(Duration::from_millis(100))
         .open()
@@ -43,21 +40,29 @@ pub async fn monitor_start(
         .map_err(|e| format!("failed to clone serial port {port}: {e}"))?;
 
     let stop = Arc::new(AtomicBool::new(false));
-    let monitor = SerialMonitor {
+    // Insert AFTER the (blocking) open but under one lock pass with the
+    // duplicate check: the check-to-insert window is now a few in-memory
+    // operations instead of spanning the device-open call, so two rapid
+    // starts can no longer both slip through and orphan the first reader.
+    let monitor = Arc::new(SerialMonitor {
         write_port: Arc::new(tokio::sync::Mutex::new(write_port)),
         stop: stop.clone(),
-    };
-    shared
-        .monitors
-        .lock()
-        .unwrap()
-        .insert(port.clone(), Arc::new(monitor));
+    });
+    {
+        let mut map = shared.monitors.lock().unwrap();
+        if map.contains_key(&port) {
+            return Err(format!("a monitor is already running on {port}"));
+        }
+        map.insert(port.clone(), monitor.clone());
+    }
 
     // ---- reader task ----
     let app = shared.app.clone();
+    let shared_for_reader = shared.clone();
     let port_out = port.clone();
     let elf_path = elf.map(PathBuf::from);
     let stop_r = stop.clone();
+    let monitor_ref = monitor.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut buf = [0u8; 4096];
         let mut partial = String::new();
@@ -98,6 +103,19 @@ pub async fn monitor_start(
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::TimedOut => continue,
                 Err(_) => break,
+            }
+        }
+        // Dead port (device unplugged, driver error): remove the map entry so
+        // the port can be started again and active_monitors stays truthful.
+        // Compare by Arc pointer to only remove OUR entry (never a newer
+        // monitor the user already restarted on the same port).
+        {
+            let mut map = shared_for_reader.monitors.lock().unwrap();
+            if map
+                .get(&port_out)
+                .is_some_and(|entry| Arc::ptr_eq(entry, &monitor_ref))
+            {
+                map.remove(&port_out);
             }
         }
         let _ = app.emit("monitor-exited", json!({ "port": port_out }));

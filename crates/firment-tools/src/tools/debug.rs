@@ -97,10 +97,11 @@ const CFSR_BITS: &[(u32, &str, &str)] = &[
         "instruction access violation (MPU fault)",
     ),
     (1 << 1, "DACCVIOL", "data access violation (MPU fault)"),
-    (1 << 2, "MUNSTKERR", "unstacking error on exception entry"),
-    (1 << 3, "MSTKERR", "stacking error on exception entry"),
+    // bit 2 reserved; MemManage stacking bits are 3/4/5 per ARMv7-M B3.4.
+    (1 << 3, "MUNSTKERR", "unstacking error on exception return"),
+    (1 << 4, "MSTKERR", "stacking error on exception entry"),
     (
-        1 << 4,
+        1 << 5,
         "MLSPERR",
         "floating-point lazy stacking error (M4F)",
     ),
@@ -119,9 +120,11 @@ const CFSR_BITS: &[(u32, &str, &str)] = &[
         "LSPERR",
         "floating-point lazy state preservation error (M4F)",
     ),
-    (1 << 14, "BUSFAULTVALID", "BFAR holds a valid fault address"),
+    // bit 14 reserved; BFARVALID is BFSR bit 7 = CFSR bit 15.
+    (1 << 15, "BFARVALID", "BFAR holds a valid fault address"),
     // UFSR occupies CFSR bits [31:16]: UNDEFINSTR=16, INVSTATE=17,
-    // INVPC=18, NOCP=19, STKOF=20 (M33 only), UNALIGNED=24, DIVBYZERO=25.
+    // INVPC=18, NOCP=19, STKOF=20 (ARMv7-M and M33), UNALIGNED=24,
+    // DIVBYZERO=25.
     (1 << 16, "UNDEFINSTR", "executed an undefined instruction"),
     (
         1 << 17,
@@ -188,7 +191,7 @@ fn cfsr_analysis(cfsr: u64, hfsr: u64, mmfar: u64, bfar: u64) -> Vec<String> {
     } else {
         lines.push("MMFAR = 0x00000000 (not valid)".to_string());
     }
-    if cfsr & (1 << 14) != 0 {
+    if cfsr & (1 << 15) != 0 {
         lines.push(format!(
             "BFAR = 0x{bfar:08x} (valid — faulting bus address)"
         ));
@@ -1037,8 +1040,8 @@ XPSR/PSR: 0x01000000
 
     #[test]
     fn cfsr_analysis_flags_and_valid_addresses() {
-        // UNDEFINSTR (bit 16) + FORCED + valid BFAR.
-        let lines = cfsr_analysis((1 << 16) | (1 << 14), 0x4000_0000, 0, 0x0800_AAAA);
+        // UNDEFINSTR (bit 16) + BFARVALID (bit 15) + FORCED + valid BFAR.
+        let lines = cfsr_analysis((1 << 16) | (1 << 15), 0x4000_0000, 0, 0x0800_AAAA);
         let joined = lines.join("\n");
         assert!(joined.contains("[UNDEFINSTR]"), "got: {joined}");
         assert!(joined.contains("[FORCED]"), "got: {joined}");
@@ -1047,6 +1050,22 @@ XPSR/PSR: 0x01000000
             joined.contains("MMFAR = 0x00000000 (not valid)"),
             "got: {joined}"
         );
+        // bit 14 is RESERVED on ARMv7-M: it must not be reported as
+        // BFARVALID (the old off-by-one bug).
+        let lines = cfsr_analysis(1 << 14, 0, 0, 0xdeadbeef);
+        let joined = lines.join("\n");
+        assert!(
+            joined.contains("BFAR = 0x00000000 (not valid)"),
+            "reserved bit 14 must not validate BFAR, got: {joined}"
+        );
+
+        // MemManage stacking bits are 3/4/5 (bit 2 reserved) — the old table
+        // shifted them down by one, mislabeling every stacking fault.
+        let lines = cfsr_analysis((1 << 3) | (1 << 4) | (1 << 5), 0, 0, 0);
+        let joined = lines.join("\n");
+        assert!(joined.contains("[MUNSTKERR]"), "got: {joined}");
+        assert!(joined.contains("[MSTKERR]"), "got: {joined}");
+        assert!(joined.contains("[MLSPERR]"), "got: {joined}");
 
         // IBUSERR with BFAR not valid.
         let lines = cfsr_analysis(1 << 8, 0, 0, 0);

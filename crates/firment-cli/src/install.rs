@@ -359,12 +359,31 @@ fn ensure_profile_completion(profile: &Path, completions: &Path) -> Result<bool>
     if let Some(parent) = profile.parent() {
         fs::create_dir_all(parent)?;
     }
+    // A profile without a trailing newline would glue the dot-sourcing line
+    // onto the last statement, breaking the user's shell startup — AND make
+    // the idempotency check never match (append on every install). Ensure
+    // the separator first.
+    if !profile.exists() || !ends_with_newline(profile) {
+        use std::io::Write as _;
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(profile)?;
+        writeln!(file)?;
+    }
     let mut file = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(profile)?;
     writeln!(file, "{line}")?;
     Ok(true)
+}
+
+fn ends_with_newline(path: &Path) -> bool {
+    let Ok(content) = fs::read_to_string(path) else {
+        return false;
+    };
+    content.ends_with('\n') || content.ends_with('\r')
 }
 
 fn same_file(a: &Path, b: &Path) -> bool {

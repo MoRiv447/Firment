@@ -2,6 +2,64 @@
 
 ## Unreleased
 
+- **Comprehensive five-agent bug audit** (core loop, providers/session/config,
+  file & shell tools, embedded tools, TUI/CLI/GUI). Confirmed fixes:
+  - **core**: a provider stream-*creation* failure on a later iteration
+    (HTTP 429/500/DNS) bypassed journal rollback and stranded earlier edits —
+    it now mirrors the mid-stream error path; the verify hard gate could be
+    bypassed by `[verify, edit_file]` in one concurrent wave (the pass zeroed
+    mutations that had not been verified) — the counter now only clears when
+    the wave verified AND mutated nothing; auto-compaction now counts
+    serialized tool-call arguments toward the context budget (write/edit args
+    carry whole files); a crashing `elf_analyze` fails the gate CLOSED instead
+    of downgrading to advisory; journal rollback retains entries whose restore
+    failed (e.g. file locked by an IDE) instead of deleting their backups.
+  - **tools/process**: `run_command`/`run_probe_rs` never drained stdout/stderr
+    WHILE the child ran — any command emitting more than the ~64 KB pipe
+    buffer (e.g. `cargo build -vv`) blocked forever and was misreported as a
+    timeout with all output lost. Drains now run concurrently with wait(), the
+    post-exit collection has a firm 15 s deadline, and children get
+    kill-on-drop as an orphan safety net. `timeout_ms: 0` no longer disables
+    the shell tool's timeout; `token_arg` rejects leading `-`.
+  - **tools/shell detector**: new bypass shapes covered — PowerShell
+    `-EncodedCommand` (opaque base64), `find … -delete`, `robocopy /MIR`,
+    `wmic … call delete/create`, glued `git push -fu/-ff`, scripting-API
+    deletes (`os.system(`, `subprocess.`, `unlinksync(`, `::delete(`,
+    `.delete(`), cmd delayed expansion (`cmd /v` + `!VAR!`). Regression tests
+    for each shape plus benign counterparts.
+  - **embedded**: CFSR MemManage stacking bits were shifted down by one
+    (MUNSTKERR/MSTKERR/MLSPERR = bits 3/4/5, bit 2 reserved) and BFARVALID is
+    bit **15**, not 14 — precise bus faults used to print "BFAR not valid",
+    hiding the faulting address (regression-tested, incl. reserved-bit-14);
+    hil `replay` ids are validated (absolute paths replaced the base dir →
+    arbitrary file read without approval); hil `delay` steps respect the suite
+    time budget and turn cancellation; typo'd step keys fail loudly
+    (`deny_unknown_fields`) instead of silently verifying nothing;
+    `expect_count: 0` can no longer pass vacuously; cancelled probe-rs runs
+    keep their `[Cancelled]` tag instead of being relabeled `[Io]`; monitor
+    baud values beyond u32 are rejected instead of wrapping.
+  - **providers/session/schema**: OpenAI path honors per-request
+    `max_tokens` (build_provider's always-present default made it dead code —
+    the 2048-token summarization cap never applied); schema validation now
+    enforces fractional minimums/maxima, recurses into arrays and nested
+    objects, and treats `oneOf` as exactly-one over required-based branches;
+    session loads repair dangling assistant tool_calls after corrupt-line
+    skips (both providers would have 400'd forever) but only when corruption
+    actually occurred, so intact transcripts round-trip unchanged; session
+    saves flush+fsync before rename and retry Windows handle contention;
+    anthropic text deltas can no longer overwrite a tool-use accumulator, and
+    empty tool_use ids get synthesized.
+  - **TUI/CLI/GUI**: a panic inside a running turn no longer strands the UI
+    busy forever (TUI emits TurnEnd via catch_unwind; GUI resets its running
+    flag); dead serial ports are removed from the GUI monitor map so they can
+    be restarted without app restart, with the duplicate-start race narrowed
+    to in-memory timing; pasted text buffered during a burst is flushed on
+    interruption instead of dropped; out-of-range option digits and bare Enter
+    in ask_user modals no longer answer "declined" on the user's behalf;
+    `firm install` handles profiles lacking a trailing newline (previously it
+    broke the profile AND appended duplicates forever); the TUI git status
+    latch no longer sticks after one failure; `/output` only persists the new
+    cap when the provider rebuild succeeded.
 - **fix(provider): OpenRouter anthropic streams no longer fail every turn.**
   OpenRouter's anthropic-compatible endpoint terminates its stream with the
   OpenAI-style `data: [DONE]` sentinel, which the official Anthropic API

@@ -381,12 +381,7 @@ impl Agent {
         let tools_chars = serde_json::to_string(&self.registry.specs())
             .map(|s| s.chars().count())
             .unwrap_or(0);
-        let messages_chars: usize = self
-            .session
-            .messages
-            .iter()
-            .map(|m| message_text(m).chars().count())
-            .sum();
+        let messages_chars: usize = self.session.messages.iter().map(message_size).sum();
         let total = system_chars + tools_chars + messages_chars;
         let budget = self.context_budget_chars.max(1);
         let pct = total as f64 * 100.0 / budget as f64;
@@ -510,7 +505,14 @@ impl Agent {
         });
         match tool.run(args, ctx).await {
             Ok(out) => Some(classify_gate(&out.text, &cfg)),
-            Err(e) => Some(ElfGateOutcome::Report(e.message)),
+            // Fail CLOSED: a crashing/misconfigured elf_analyze must not
+            // silently convert the blocking gate into an advisory report —
+            // surface the tool error as a block so the model (or user) fixes
+            // the analyzer itself.
+            Err(e) => Some(ElfGateOutcome::Blocked(format!(
+                "[GATE:BLOCK] elf_analyze failed, gate result unknown: {}",
+                e.message
+            ))),
         }
     }
 
@@ -822,7 +824,30 @@ impl Agent {
             let request = self.build_request();
             let provider = self.provider.as_ref().ok_or(AgentError::NoProvider)?;
             let mut stream = tokio::select! {
-                result = provider.stream(request) => result?,
+                result = provider.stream(request) => match result {
+                    Ok(stream) => stream,
+                    // Stream CREATION can also fail (HTTP 429/500, DNS, ...)
+                    // on a later iteration after earlier waves already edited
+                    // files. Mirror the mid-stream error path: roll back,
+                    // inform, persist — otherwise the edits are stranded
+                    // neither committed nor undoable.
+                    Err(e) => {
+                        let message = match rollback_journal(&journal) {
+                            Some(summary) => {
+                                format!("provider error; rolled back this turn's edits: {summary}")
+                            }
+                            None => format!("provider error: {e}"),
+                        };
+                        self.sink.event(AgentEvent::Error(message)).await;
+                        let _ = self.store.save(&self.session);
+                        self.sink
+                            .event(AgentEvent::TurnEnd {
+                                text: String::new(),
+                            })
+                            .await;
+                        return Err(AgentError::Provider(e));
+                    }
+                },
                 _ = cancel_rx.changed() => {
                     self.sink
                         .event(AgentEvent::Info(interrupted_note(&journal)))
@@ -1120,7 +1145,17 @@ impl Agent {
                             .await;
                     }
                 }
-                self.store.save(&self.session)?;
+                // The turn's real work (tools + journal commit) already
+                // succeeded: a final save failure (e.g. Windows handle
+                // contention on the session file) must not fail the whole
+                // turn — surface it and still end cleanly.
+                if let Err(e) = self.store.save(&self.session) {
+                    self.sink
+                        .event(AgentEvent::Error(format!(
+                            "warning: could not persist the session transcript: {e}"
+                        )))
+                        .await;
+                }
                 // Persist BEFORE TurnEnd so transcript-refreshing clients see
                 // the final message.
                 self.sink
@@ -1156,7 +1191,12 @@ impl Agent {
                 self.elf_gate_done = false;
                 self.elf_gate_dirty = true;
             }
-            if stats.verify_passed {
+            // Only clear the counter when the wave verified AND mutated
+            // nothing: a wave like [verify, edit_file] runs both concurrently
+            // (no dependency edge between a broad tool and a later mutation),
+            // so those edits landed unverified — or after the check ran.
+            // Zeroing here would silently bypass the turn-end verify gate.
+            if stats.verify_passed && stats.mutations == 0 {
                 mutations_since_verify = 0;
             }
         }
@@ -1220,12 +1260,7 @@ impl Agent {
         const DIGEST_CHARS: usize = 6000;
         const ROUNDS_KEPT: usize = 3;
         const DROP_EXTRA_ROUNDS: usize = 5;
-        let total: usize = self
-            .session
-            .messages
-            .iter()
-            .map(|m| message_text(m).chars().count())
-            .sum();
+        let total: usize = self.session.messages.iter().map(message_size).sum();
         if total <= self.context_budget_chars {
             return;
         }
@@ -1787,6 +1822,24 @@ fn message_text(message: &ChatMessage) -> &str {
         | ChatMessage::User { content }
         | ChatMessage::Assistant { content, .. }
         | ChatMessage::Tool { content, .. } => content,
+    }
+}
+
+/// Approximate on-wire size of a message: its text plus, for assistant
+/// messages, the serialized tool-call arguments — write_file/edit_file carry
+/// whole file contents in there, so counting only the prose made the budget
+/// see a fraction of the real request and delayed auto-compaction until the
+/// provider started rejecting oversized requests.
+fn message_size(message: &ChatMessage) -> usize {
+    let base = message_text(message).chars().count();
+    match message {
+        ChatMessage::Assistant { tool_calls, .. } => {
+            base + tool_calls
+                .iter()
+                .map(|call| call.arguments.to_string().chars().count())
+                .sum::<usize>()
+        }
+        _ => base,
     }
 }
 

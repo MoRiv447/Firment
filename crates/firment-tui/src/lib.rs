@@ -197,7 +197,7 @@ async fn run_loop(
     // drives, and awaiting it inline in this select would freeze key/event
     // handling for the whole UI (no Esc interrupt, no Ctrl+Q).
     let mut git_ticker = tokio::time::interval(Duration::from_secs(4));
-    let (git_tx, mut git_rx) = mpsc::channel::<GitInfo>(1);
+    let (git_tx, mut git_rx) = mpsc::channel::<Option<GitInfo>>(1);
     let mut git_in_flight = false;
     let mut dirty = true;
     loop {
@@ -209,15 +209,22 @@ async fn run_loop(
                     let tx = git_tx.clone();
                     let cwd = app.cwd.clone();
                     tokio::spawn(async move {
-                        if let Some(info) = git_info(&cwd).await {
-                            let _ = tx.send(info).await;
-                        }
+                        // Always resolve the in-flight latch — including the
+                        // None case (not a repo / git missing) — or the status
+                        // bar would never refresh again after one failure.
+                        let info = git_info(&cwd).await;
+                        let _ = tx.send(info).await;
                     });
                 }
             }
-            Some(info) = git_rx.recv() => {
+            Some(maybe_info) = git_rx.recv() => {
                 git_in_flight = false;
-                app.git = Some(info);
+                // None = not a repo / git unavailable: clear the latch (so
+                // later ticks retry) without clobbering a previously known
+                // good state.
+                if let Some(info) = maybe_info {
+                    app.git = Some(info);
+                }
                 dirty = true;
             }
             event = event_rx.recv() => {

@@ -22,7 +22,11 @@ struct HilSuite {
     steps: Vec<HilStep>,
 }
 
+// deny_unknown_fields: a typo'd expectation key (`expect_contins`) would
+// otherwise be silently dropped and the step trivially PASS without
+// verifying anything.
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct HilStep {
     kind: String,
     #[serde(default)]
@@ -300,11 +304,22 @@ impl Tool for Hil {
                         .inner
                         .duration_ms
                         .or(step.inner.timeout_ms)
-                        .unwrap_or(1000);
+                        .unwrap_or(1000)
+                        // Respect the suite's total-time budget: a typo'd
+                        // duration_ms must not hang past total_timeout.
+                        .min(remaining.max(1));
                     if dry_run {
                         tokio::time::sleep(Duration::from_millis(ms.min(200))).await;
                     } else {
-                        tokio::time::sleep(Duration::from_millis(ms)).await;
+                        // Honor turn cancellation mid-sleep.
+                        tokio::select! {
+                            _ = tokio::time::sleep(Duration::from_millis(ms)) => {}
+                            _ = ctx.cancel.cancelled() => {
+                                return Err(ToolError::new(
+                                    "[Cancelled] hil suite interrupted during delay step",
+                                ));
+                            }
+                        }
                     }
                     Ok(format!("delay {ms} ms"))
                 }
@@ -486,6 +501,18 @@ fn handle_replay(arg: &str, ctx: &ToolContext) -> Result<ToolOutput, ToolError> 
             }
         }
         return Ok(ToolOutput { text: out });
+    }
+    // Replay ids are UUIDs minted by this tool. Validating the charset is
+    // not cosmetic: PathBuf::join with an absolute path REPLACES the base,
+    // so an unchecked id would read arbitrary files — and the replay path
+    // runs without the approval prompt sibling paths require.
+    if !arg
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(ToolError::new(format!(
+            "[InvalidInput] replay id must be a UUID (alphanumerics and - _ only), got: {arg}"
+        )));
     }
     let path = base.join(format!("{arg}.jsonl"));
     if !path.is_file() {
@@ -934,7 +961,9 @@ async fn run_monitor_step(
     let expect_count = step
         .expect_count
         .or_else(|| step.expect.as_ref().and_then(|e| e.count))
-        .unwrap_or(1);
+        .unwrap_or(1)
+        // expect_count = 0 would pass vacuously before any byte arrives.
+        .max(1);
     let regex_obj = if let Some(rx) = &expect_regex {
         Some(
             regex::Regex::new(rx)

@@ -448,7 +448,10 @@ impl Config {
         provider
             .api_key_env
             .as_ref()
+            // An empty-but-set variable is treated as unset, matching the
+            // inline-key rule above and resolved_web_search_api_key.
             .and_then(|env_name| env::var(env_name).ok())
+            .filter(|k| !k.is_empty())
     }
 
     /// Persist an API key to `auth.json` (kept separate from config.toml so

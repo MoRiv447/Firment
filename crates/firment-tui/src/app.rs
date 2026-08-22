@@ -412,12 +412,25 @@ impl App {
                 if d.is_ascii_digit() && d != '0' && self.question_input.is_empty() =>
             {
                 let idx = (d as usize) - ('1' as usize);
-                question.options.get(idx).cloned()
+                match question.options.get(idx).cloned() {
+                    Some(option) => Some(option),
+                    // Out-of-range digit: a stray keypress must not answer
+                    // (decline) on the user's behalf — put the modal back.
+                    None => {
+                        self.question = Some(question);
+                        return false;
+                    }
+                }
             }
             KeyCode::Enter => {
                 let typed: String = self.question_input.iter().collect();
                 let typed = typed.trim().to_string();
-                if typed.is_empty() { None } else { Some(typed) }
+                if typed.is_empty() {
+                    // Empty Enter is a no-op, not a decline.
+                    self.question = Some(question);
+                    return false;
+                }
+                Some(typed)
             }
             KeyCode::Backspace => {
                 self.question_input.pop();

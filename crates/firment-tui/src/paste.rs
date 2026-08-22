@@ -177,9 +177,14 @@ impl PasteBurst {
         if let Some((c, _)) = self.held.take() {
             self.out.push_back(PasteOut::InsertChar(c));
         }
+        // A pending burst buffer is REAL typed/pasted text: dropping it here
+        // (any non-plain key arriving within FLUSH_DELAY) would silently lose
+        // characters. Flush it as a paste insertion instead.
+        if let Some(text) = self.buffer.take() {
+            self.out.push_back(PasteOut::HandlePaste(text));
+        }
         self.last_char_time = None;
         self.last_inserted = None;
-        self.buffer = None;
         self.buffer_last_update = None;
         self.suppress_enter_until = None;
     }

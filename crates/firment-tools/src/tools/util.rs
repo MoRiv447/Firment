@@ -130,6 +130,11 @@ pub(crate) fn token_arg(value: &str, what: &str) -> Result<String, String> {
     if value.is_empty() {
         return Err(format!("[InvalidInput] {what} must not be empty"));
     }
+    // A leading dash would make the value look like a CLI flag to probe-rs
+    // (argv-array exec — no shell injection, but argument confusion).
+    if value.starts_with('-') {
+        return Err(format!("[InvalidInput] {what} must not start with '-'"));
+    }
     if !value
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':' | '/'))
@@ -206,7 +211,15 @@ pub(crate) async fn run_command(
         }
     }
 
-    let mut child = cmd.spawn().map_err(|e| format!("spawn failed: {e}"))?;
+    let mut child = cmd
+        .kill_on_drop(true) // drop-safety net: see comment above the drain task
+        .spawn()
+        .map_err(|e| format!("spawn failed: {e}"))?;
+    // If the surrounding future is dropped by an outer wave cancellation
+    // before our own cancel branch can run, the direct child is still
+    // terminated instead of orphaned (tokio does NOT kill on drop by
+    // default). The tree-kill paths below remain the thorough mechanism.
+
     let mut stdout = child
         .stdout
         .take()
@@ -215,25 +228,18 @@ pub(crate) async fn run_command(
         .stderr
         .take()
         .ok_or_else(|| "stderr handle unavailable".to_string())?;
-    let mut out_buf: Vec<u8> = Vec::new();
-    let mut err_buf: Vec<u8> = Vec::new();
-    let mut drain_timed_out = false;
-    let read_streams = async {
-        // Drain with a firm deadline: a background grandchild holding the
-        // pipe write-ends would otherwise block forever. 15s is generous for
-        // a finished process; if it still fires we mark the output instead
-        // of silently truncating it.
-        drain_timed_out = tokio::time::timeout(Duration::from_secs(15), async {
-            let _ = AsyncReadExt::read_to_end(&mut stdout, &mut out_buf).await;
-            let _ = AsyncReadExt::read_to_end(&mut stderr, &mut err_buf).await;
-        })
-        .await
-        .is_err();
-    };
-    let mut read_streams = Box::pin(read_streams);
-    // Dropping a tokio Child future does NOT kill the child: only explicit
-    // termination (or an explicit cancel branch like this one) stops the
-    // process tree.
+
+    // Drive the drains CONCURRENTLY with wait(): a child emitting more than
+    // the OS pipe buffer (~64 KB per pipe) blocks on write and would never
+    // exit, turning long builds into spurious timeouts with all output lost.
+    let drain = tokio::spawn(async move {
+        let mut out_buf: Vec<u8> = Vec::new();
+        let mut err_buf: Vec<u8> = Vec::new();
+        let _ = AsyncReadExt::read_to_end(&mut stdout, &mut out_buf).await;
+        let _ = AsyncReadExt::read_to_end(&mut stderr, &mut err_buf).await;
+        (out_buf, err_buf)
+    });
+
     let cancel_fut = cancel.map(|c| Box::pin(c.cancelled()));
 
     let status = if timeout_ms == 0 {
@@ -241,13 +247,14 @@ pub(crate) async fn run_command(
             tokio::select! {
                 status = child.wait() => status,
                 _ = cancel_fut => {
-                    return kill_tree_and_report(
+                    let (text, code) = kill_tree_and_report(
                         &mut child,
                         command,
                         "cancelled: interrupted before the command finished (process tree \
                          terminated)".to_string(),
                     )
                     .await;
+                    return Ok((text, code));
                 }
             }
         } else {
@@ -257,7 +264,7 @@ pub(crate) async fn run_command(
         tokio::select! {
             status = child.wait() => status,
             _ = tokio::time::sleep(Duration::from_millis(timeout_ms)) => {
-                return kill_tree_and_report(
+                let (text, code) = kill_tree_and_report(
                     &mut child,
                     command,
                     format!(
@@ -265,6 +272,7 @@ pub(crate) async fn run_command(
                     ),
                 )
                 .await;
+                return Ok((text, code));
             }
             _ = async {
                 if let Some(c) = cancel.as_ref() {
@@ -273,20 +281,21 @@ pub(crate) async fn run_command(
                     std::future::pending::<()>().await;
                 }
             } => {
-                return kill_tree_and_report(
+                let (text, code) = kill_tree_and_report(
                     &mut child,
                     command,
                     "cancelled: interrupted before the command finished (process tree \
                      terminated)".to_string(),
                 )
                 .await;
+                return Ok((text, code));
             }
         }
     };
-    // Drain what the process left behind with a firm deadline: a background
-    // grandchild holding the pipe write-ends would otherwise block forever.
-    let _ = (&mut read_streams).await;
-    drop(read_streams);
+    // Collect the output with a firm deadline: after the process exited, a
+    // background grandchild holding the pipe write-ends would otherwise block
+    // forever. If the deadline fires we mark truncation instead of hanging.
+    let (out_buf, err_buf, drain_timed_out) = collect_drain(drain).await;
 
     let stdout = truncate(&String::from_utf8_lossy(&out_buf), 32_000);
     let stderr = truncate(&String::from_utf8_lossy(&err_buf), 32_000);
@@ -308,6 +317,19 @@ pub(crate) async fn run_command(
     ))
 }
 
+/// Join a spawned drain task with a firm deadline. After the process exited,
+/// a background grandchild holding the pipe write-ends would otherwise block
+/// forever; if the 15 s deadline fires we return empty buffers and let the
+/// caller mark the output as truncated.
+async fn collect_drain(
+    drain: tokio::task::JoinHandle<(Vec<u8>, Vec<u8>)>,
+) -> (Vec<u8>, Vec<u8>, bool) {
+    match tokio::time::timeout(Duration::from_secs(15), drain).await {
+        Ok(Ok((out, err))) => (out, err, false),
+        _ => (Vec::new(), Vec::new(), true),
+    }
+}
+
 /// Kill the direct child plus its whole tree (timeout or cancellation) and
 /// report the interruption. `exit code: None` tells the caller the process did
 /// not finish on its own.
@@ -315,13 +337,13 @@ async fn kill_tree_and_report(
     child: &mut tokio::process::Child,
     command: &str,
     reason: String,
-) -> Result<(String, Option<i32>), String> {
+) -> (String, Option<i32>) {
     if let Some(pid) = child.id() {
         kill_process_tree(pid);
     }
     let _ = child.kill().await;
     let _ = child.wait().await;
-    Ok((format!("command: {command}\n{reason}"), None))
+    (format!("command: {command}\n{reason}"), None)
 }
 
 /// Run a `probe-rs` subcommand directly with an explicit argument array (no
@@ -354,7 +376,10 @@ pub(crate) async fn run_probe_rs(
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
-    let mut child = cmd.spawn().map_err(|e| format!("spawn failed: {e}"))?;
+    let mut child = cmd
+        .kill_on_drop(true) // same drop-safety net as run_command
+        .spawn()
+        .map_err(|e| format!("spawn failed: {e}"))?;
     let mut stdout = child
         .stdout
         .take()
@@ -363,13 +388,17 @@ pub(crate) async fn run_probe_rs(
         .stderr
         .take()
         .ok_or_else(|| "stderr handle unavailable".to_string())?;
-    let mut out_buf: Vec<u8> = Vec::new();
-    let mut err_buf: Vec<u8> = Vec::new();
-    let read_streams = async {
+
+    // Drain CONCURRENTLY with wait(): probe-rs emits progress/log lines the
+    // whole run; without a concurrent reader, output beyond the OS pipe
+    // buffer blocks the child and turns real runs into spurious timeouts.
+    let drain = tokio::spawn(async move {
+        let mut out_buf: Vec<u8> = Vec::new();
+        let mut err_buf: Vec<u8> = Vec::new();
         let _ = AsyncReadExt::read_to_end(&mut stdout, &mut out_buf).await;
         let _ = AsyncReadExt::read_to_end(&mut stderr, &mut err_buf).await;
-    };
-    let mut read_streams = Box::pin(read_streams);
+        (out_buf, err_buf)
+    });
 
     let status = tokio::select! {
         status = child.wait() => status,
@@ -378,6 +407,7 @@ pub(crate) async fn run_probe_rs(
             // zombie on Unix until this process exits.
             let _ = child.kill().await;
             let _ = child.wait().await;
+            drain.abort();
             return Err(format!(
                 "[Timeout] probe-rs timed out after {timeout_ms} ms and was killed"
             ));
@@ -391,12 +421,18 @@ pub(crate) async fn run_probe_rs(
         } => {
             let _ = child.kill().await;
             let _ = child.wait().await;
+            drain.abort();
             return Err(
                 "[Cancelled] probe-rs was interrupted by turn cancellation".to_string(),
             );
         }
     };
-    let _ = (&mut read_streams).await;
+    // Post-exit collection with a firm deadline: a grandchild holding the
+    // pipe write-ends would otherwise hang here forever.
+    let (out_buf, err_buf) = match tokio::time::timeout(Duration::from_secs(15), drain).await {
+        Ok(Ok(buffers)) => buffers,
+        _ => (Vec::new(), Vec::new()),
+    };
     let code = status.map_err(|e| format!("wait failed: {e}"))?.code();
 
     let stdout = String::from_utf8_lossy(&out_buf).to_string();
@@ -419,6 +455,10 @@ pub(crate) fn probe_rs_err(e: String) -> ToolError {
             "[NotFound] probe-rs is not installed or not on PATH: install it with \
              `cargo install probe-rs-tools` or download from the probe-rs GitHub Releases",
         )
+    } else if e.contains("[Cancelled]") {
+        // Turn cancellation is not an I/O failure — keep the honest tag
+        // instead of relabeling it [Io].
+        ToolError::new(e)
     } else if e.contains("reset not supported by WinUSB")
         || e.contains("Failed to open the debug probe")
     {

@@ -206,13 +206,21 @@ impl EditJournal {
     }
 
     /// Restore every recorded file to its pre-turn state and drop the batch.
+    /// Entries whose restore failed are RETAINED (with their backups) so a
+    /// later rollback/undo can retry — deleting their backups would leave the
+    /// mutated content in place forever with no recovery path (e.g. a file
+    /// locked by an IDE or flash tool on Windows).
     pub fn rollback(&mut self) -> Result<Vec<String>, String> {
         let mut restored = Vec::new();
         let mut errors = Vec::new();
-        for entry in self.entries.iter().rev() {
-            match restore_entry(&self.dir, entry) {
+        let mut kept: Vec<EntryRecord> = Vec::new();
+        for entry in self.entries.drain(..).rev() {
+            match restore_entry(&self.dir, &entry) {
                 Ok(()) => restored.push(entry.path.to_string_lossy().into_owned()),
-                Err(e) => errors.push(e),
+                Err(e) => {
+                    errors.push(e);
+                    kept.push(entry);
+                }
             }
         }
         for entry in &self.entries {
@@ -220,7 +228,7 @@ impl EditJournal {
                 let _ = fs::remove_file(self.dir.join(&entry.backup));
             }
         }
-        self.entries.clear();
+        self.entries = kept.into_iter().rev().collect();
         if errors.is_empty() {
             Ok(restored)
         } else {

@@ -150,7 +150,11 @@ impl OpenAIProvider {
         if !tools.is_empty() {
             body["tools"] = json!(tools);
         }
-        if let Some(t) = self.max_tokens.or(request.max_tokens) {
+        // Per-request caps (e.g. the 2048-token summarization cap) win over
+        // the provider-level default, mirroring anthropic.rs — otherwise
+        // build_provider's always-present default made request.max_tokens
+        // dead code.
+        if let Some(t) = request.max_tokens.or(self.max_tokens) {
             body["max_tokens"] = json!(t);
         }
         if let Some(t) = self.temperature.or(request.temperature) {

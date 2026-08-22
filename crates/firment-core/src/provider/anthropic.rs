@@ -276,10 +276,18 @@ impl Provider for AnthropicProvider {
                             match delta.get("type").and_then(|t| t.as_str()) {
                                 Some("text_delta") => {
                                     if let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
-                                        if let Some(Block::Text(buf)) = blocks.get_mut(&idx) {
-                                            buf.push_str(text);
-                                        } else {
-                                            blocks.insert(idx, Block::Text(text.to_string()));
+                                        match blocks.get_mut(&idx) {
+                                            Some(Block::Text(buf)) => {
+                                                buf.push_str(text);
+                                            }
+                                            // A protocol-conformant server never
+                                            // sends text deltas for a tool_use
+                                            // index; overwriting the accumulator
+                                            // here would destroy the tool call.
+                                            None => {
+                                                blocks.insert(idx, Block::Text(text.to_string()));
+                                            }
+                                            Some(Block::ToolUse { .. }) => {}
                                         }
                                         yield Ok(ProviderEvent::Text(text.to_string()));
                                     }
@@ -299,6 +307,14 @@ impl Provider for AnthropicProvider {
                             if let Some(Block::ToolUse { id, name, arguments }) = blocks.remove(&idx)
                                 && !name.is_empty()
                             {
+                                // A gateway omitting the id would round-trip
+                                // empty tool_use/tool_result ids, which strict
+                                // APIs reject — synthesize a stable one.
+                                let id = if id.is_empty() {
+                                    format!("toolu_synthesized_{idx}")
+                                } else {
+                                    id
+                                };
                                 yield Ok(ProviderEvent::ToolCall(ToolCall {
                                     id,
                                     name,

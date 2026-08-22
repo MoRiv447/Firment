@@ -164,13 +164,15 @@ impl SessionStore {
         let path = self.path_for(id);
         let file = fs::File::open(&path).map_err(|_| SessionError::NotFound(id.to_string()))?;
         let mut meta: Option<MetaLine> = None;
-        let mut messages = Vec::new();
+        let mut messages: Vec<ChatMessage> = Vec::new();
+        let mut corrupt_lines = 0usize;
         for line in std::io::BufReader::new(file).lines() {
             let Ok(line) = line else { continue };
             if line.trim().is_empty() {
                 continue;
             }
             let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+                corrupt_lines += 1;
                 continue;
             };
             let kind = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -190,6 +192,14 @@ impl SessionStore {
         }
         let meta =
             meta.ok_or_else(|| SessionError::Corrupt(path.clone(), "missing meta line".into()))?;
+        // A skipped line may have been a tool result, leaving an assistant
+        // tool_call dangling — which both providers reject with HTTP 400 on
+        // the next request. Only repair in that case: an intact transcript
+        // must round-trip byte-for-byte (an assistant may legitimately carry
+        // un-answered tool_calls in stored-but-not-yet-run states).
+        if corrupt_lines > 0 {
+            repair_dangling_tool_calls(&mut messages);
+        }
         let model = migrate_legacy_model(&meta.model);
         let session = Session {
             id: meta.id,
@@ -269,6 +279,35 @@ impl SessionStore {
     }
 }
 
+/// After a corrupt-line skip, an assistant message may have lost its tool
+/// results (a single damaged `Tool` line). Both providers reject a
+/// `tool_calls`-bearing assistant without the matching results (HTTP 400),
+/// and the next successful save would persist the amputated transcript
+/// forever. Strip call ids that have no following result; an assistant left
+/// with zero ids degrades to a plain content-only message.
+fn repair_dangling_tool_calls(messages: &mut [ChatMessage]) {
+    // Collect ids that DO have a result.
+    let mut answered: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for m in messages.iter() {
+        if let ChatMessage::Tool { tool_call_id, .. } = m {
+            answered.insert(tool_call_id.clone());
+        }
+    }
+    for m in messages.iter_mut() {
+        if let ChatMessage::Assistant { tool_calls, .. } = m
+            && !tool_calls.is_empty()
+        {
+            let before = tool_calls.len();
+            tool_calls.retain(|call| answered.contains(&call.id));
+            if tool_calls.len() != before {
+                tracing::warn!(
+                    "session repair: dropped {before} dangling tool_call(s) after corrupt-line skip"
+                );
+            }
+        }
+    }
+}
+
 fn serialize_session(session: &Session) -> Result<String, SessionError> {
     let meta = MetaLine {
         kind: "meta".to_string(),
@@ -344,9 +383,28 @@ fn atomic_write(path: &Path, content: &str) -> Result<(), SessionError> {
     let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
     use std::io::Write;
     tmp.write_all(content.as_bytes())?;
-    tmp.persist(path)
-        .map_err(|e| SessionError::Io(std::io::Error::other(e.to_string())))?;
-    Ok(())
+    // Flush to disk before the rename: without sync_all a power loss can
+    // persist the (empty) directory entry while losing the data.
+    tmp.flush()?;
+    tmp.as_file().sync_all()?;
+    // On Windows persist fails if another handle holds the target open
+    // without FILE_SHARE_DELETE (AV scanner, indexer, a second firm
+    // instance) — retry briefly before giving up. PersistError hands the
+    // temp file back so it can be retried.
+    let mut last_err = None;
+    let mut pending = Some(tmp);
+    while pending.is_some() {
+        let file = pending.take().unwrap();
+        match file.persist(path) {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                last_err = Some(SessionError::Io(std::io::Error::other(e.to_string())));
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                pending = Some(e.file);
+            }
+        }
+    }
+    Err(last_err.unwrap())
 }
 
 fn now_secs() -> u64 {

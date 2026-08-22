@@ -8,6 +8,7 @@ use firment_core::{
     Agent, AgentEvent, Cancellable, Config, PermissionChecker, ProviderConfig, Session,
     SessionMode, SessionStore, ThinkingLevel, ToolRegistry,
 };
+use futures::FutureExt;
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 #[allow(clippy::too_many_arguments)]
@@ -37,17 +38,45 @@ pub(crate) fn spawn_agent_task(
                         let _turn = turn_lock.lock().await;
                         let mut agent = agent.lock().await;
                         agent.reset_cancel();
-                        if let Err(e) = agent.run_turn(&text).await {
-                            agent.emit(AgentEvent::Error(e.to_string())).await;
-                            // Error paths of run_turn (max iterations, provider
-                            // failure, ...) emit no TurnEnd, so the TUI would
-                            // stay busy forever; close the turn explicitly.
-                            agent
-                                .emit(AgentEvent::TurnEnd {
-                                    text: String::new(),
-                                })
-                                .await;
-                            let _ = agent.save_session();
+                        // A panic inside run_turn (provider serde, a tool bug,
+                        // ...) would unwind the spawned task silently: no
+                        // TurnEnd ever fires and the TUI stays busy forever.
+                        // Catch it, close the turn, keep the app alive.
+                        let result = std::panic::AssertUnwindSafe(agent.run_turn(&text))
+                            .catch_unwind()
+                            .await;
+                        match result {
+                            Ok(Ok(_)) => {}
+                            Ok(Err(e)) => {
+                                agent.emit(AgentEvent::Error(e.to_string())).await;
+                                // Error paths of run_turn (max iterations, provider
+                                // failure, ...) emit no TurnEnd, so the TUI would
+                                // stay busy forever; close the turn explicitly.
+                                agent
+                                    .emit(AgentEvent::TurnEnd {
+                                        text: String::new(),
+                                    })
+                                    .await;
+                                let _ = agent.save_session();
+                            }
+                            Err(panic_payload) => {
+                                let detail = panic_payload
+                                    .downcast_ref::<&str>()
+                                    .map(|s| s.to_string())
+                                    .or_else(|| panic_payload.downcast_ref::<String>().cloned())
+                                    .unwrap_or_else(|| "unknown panic".to_string());
+                                agent
+                                    .emit(AgentEvent::Error(format!(
+                                        "internal error (turn panicked): {detail}"
+                                    )))
+                                    .await;
+                                agent
+                                    .emit(AgentEvent::TurnEnd {
+                                        text: String::new(),
+                                    })
+                                    .await;
+                                let _ = agent.save_session();
+                            }
                         }
                     });
                 }

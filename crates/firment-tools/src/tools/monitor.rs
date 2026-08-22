@@ -223,11 +223,17 @@ impl Tool for Monitor {
                     enumerate_ports()
                 ))
             })?;
-        let baud = args
-            .get("baud")
-            .and_then(|b| b.as_u64())
-            .map(|b| b as u32)
-            .unwrap_or(ctx.monitor_baud);
+        let baud = match args.get("baud").and_then(|b| b.as_u64()) {
+            // u32 cast would silently wrap a nonsense value (2^32 + k → k).
+            Some(b) if b <= u32::MAX as u64 => b as u32,
+            Some(b) => {
+                return Err(ToolError::new(format!(
+                    "[InvalidInput] baud {b} is out of range (max {})",
+                    u32::MAX
+                )));
+            }
+            None => ctx.monitor_baud,
+        };
         let autodetect = args
             .get("autodetect")
             .and_then(|a| a.as_bool())

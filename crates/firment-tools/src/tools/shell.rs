@@ -102,9 +102,34 @@ pub fn dangerous_reason(command: &str) -> Option<&'static str> {
             || token.contains("remove(")
             || token.contains("rename(")
             || token.contains("move(")
+            // Glued scripting-API calls evade the token equality above:
+            // `python -c "import os; os.system('del x')"` tokenizes as
+            // `os.system(del`, which matches neither `del` nor `os.remove`.
+            || token.contains("os.system")
+            || token.contains("subprocess.")
+            || token.contains("unlinksync")
+            || token.contains("::delete")
+            || token.contains(".delete(")
         {
             return Some("delete/move via scripting API");
         }
+    }
+
+    // PowerShell -EncodedCommand hides the entire payload in base64: no
+    // blacklist token or metacharacter survives to be scanned.
+    if tokens
+        .iter()
+        .any(|t| t.contains("encodedcommand") || *t == "-enc" || *t == "-e")
+        && tokens
+            .iter()
+            .any(|t| t.starts_with("powershell") || t.starts_with("pwsh"))
+    {
+        return Some("powershell -EncodedCommand (opaque base64 payload)");
+    }
+    // cmd delayed expansion (`cmd /v:on /c "set v=del& !v! x"`) is variable
+    // indirection the %VAR% rule cannot see.
+    if lower.contains('!') && tokens.iter().any(|t| *t == "/v" || *t == "/v:on") {
+        return Some("cmd delayed expansion !VAR! (cannot be verified statically)");
     }
 
     let joined = tokens.join(" ");
@@ -113,9 +138,34 @@ pub fn dangerous_reason(command: &str) -> Option<&'static str> {
     } else if joined.contains("git reset") && joined.contains("--hard") {
         Some("git reset --hard (discard local changes)")
     } else if joined.contains("git push")
-        && (joined.contains("--force") || joined.contains(" -f ") || joined.ends_with(" -f"))
+        && (joined.contains("--force")
+            // Glued short flags (-fu, -ff) are what models actually emit.
+            || tokens
+                .iter()
+                .enumerate()
+                .any(|(i, t)| i > 0 && joined.contains("git push") && t.starts_with("-f") && t.len() > 2))
     {
         Some("git force push (overwrite remote history)")
+    }
+    // find -delete mass-deletes without any blacklisted token.
+    else if tokens.iter().any(|t| *t == "find" || t.ends_with("/find"))
+        && tokens.contains(&"-delete")
+    {
+        Some("find -delete (mass file deletion)")
+    }
+    // robocopy /MIR mirrors an empty/source dir onto the target — the
+    // rd/s-equivalent that deletes everything not present in the source.
+    else if tokens.iter().any(|t| t.starts_with("robocopy"))
+        && (joined.contains("/mir") || joined.contains("/purge"))
+    {
+        Some("robocopy /MIR or /PURGE (mirror-deletes the destination)")
+    }
+    // wic datafile ... call delete / wmic process call create: arbitrary
+    // file deletion / execution outside the reg-delete rule.
+    else if tokens.contains(&"wmic")
+        && (tokens.contains(&"delete") || joined.contains("call create"))
+    {
+        Some("wmic delete/create (arbitrary file or process operation)")
     } else {
         None
     }
@@ -198,10 +248,13 @@ impl Tool for Shell {
             Some(c) => resolve_within(&ctx.cwd, c, &ctx.allowed_roots).map_err(ToolError::new)?,
             None => ctx.cwd.clone(),
         };
-        let timeout_ms = args
-            .get("timeout_ms")
-            .and_then(|t| t.as_u64())
-            .unwrap_or(120_000);
+        let timeout_ms = match args.get("timeout_ms").and_then(|t| t.as_u64()) {
+            // Schema says minimum 1, but args are not schema-enforced at this
+            // layer: a model-supplied 0 would select run_command's "no
+            // timeout" mode and hang the tool until turn cancellation.
+            Some(0) | None => 120_000,
+            Some(t) => t,
+        };
         let env = args.get("env").and_then(|e| e.as_object()).map(|obj| {
             obj.iter()
                 .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
@@ -325,6 +378,37 @@ mod tests {
             "Get-ChildItem *.py",
             "copy todo.py todo.bak",
             "mkdir build",
+        ] {
+            assert!(dangerous_reason(cmd).is_none(), "should allow safe: {cmd}");
+        }
+    }
+
+    #[test]
+    fn hardened_detector_catches_new_bypass_shapes() {
+        for cmd in [
+            // base64 hides every blacklist token
+            "powershell -EncodedCommand RwBvAHQALQBDAHUAbAB0AHUAcgBlAA==",
+            // mass deletion with no blacklisted verb
+            "find . -name \"*.tmp\" -delete",
+            // mirror-deletes the destination
+            "robocopy empty_dir . /MIR",
+            // scripting-API delete outside the reg rule
+            "wmic datafile where name=\"todo.py\" call delete",
+            // glued force flag models actually emit
+            "git push -fu origin main",
+            "git push -ff origin main",
+        ] {
+            assert!(
+                dangerous_reason(cmd).is_some(),
+                "should detect dangerous: {cmd}"
+            );
+        }
+        // Benign shapes that must NOT trip the new rules.
+        for cmd in [
+            "git push origin main",
+            "find . -name \"*.rs\"",
+            "robocopy src dst /E",
+            "echo done!",
         ] {
             assert!(dangerous_reason(cmd).is_none(), "should allow safe: {cmd}");
         }
