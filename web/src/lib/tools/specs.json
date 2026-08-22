@@ -617,6 +617,10 @@
         "prompt": {
           "description": "What the subagent should investigate and what to report back. Be specific about the expected output format.",
           "type": "string"
+        },
+        "provider": {
+          "description": "Optional provider name override (a provider configured in config.toml, e.g. an Ollama endpoint added via add-provider). Defaults to the session provider. Combine with model to run cheap subagents on a local/small backend.",
+          "type": "string"
         }
       },
       "required": [

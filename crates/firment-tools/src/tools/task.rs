@@ -21,6 +21,7 @@ impl Tool for Task {
             "properties": {
                 "prompt": {"type": "string", "description": "What the subagent should investigate and what to report back. Be specific about the expected output format."},
                 "model": {"type": "string", "description": "Optional model override for the subagent (defaults to the session model)"},
+                "provider": {"type": "string", "description": "Optional provider name override (a provider configured in config.toml, e.g. an Ollama endpoint added via add-provider). Defaults to the session provider. Combine with model to run cheap subagents on a local/small backend."},
                 "cwd": {"type": "string", "description": "Optional subdirectory of the workspace to focus the subagent on"}
             },
             "required": ["prompt"]
@@ -54,10 +55,12 @@ impl Tool for Task {
             None => ctx.cwd.clone(),
         };
         let model = args.get("model").and_then(|m| m.as_str());
+        let provider = args.get("provider").and_then(|p| p.as_str());
         let report = factory
             .run_subagent(
                 prompt,
                 cwd,
+                provider,
                 model,
                 ctx.subagent_depth + 1,
                 ctx.cancel.clone(),
@@ -79,7 +82,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use tempfile::tempdir;
 
-    type Capture = (String, PathBuf, Option<String>, usize);
+    type Capture = (String, PathBuf, Option<String>, Option<String>, usize);
 
     #[derive(Clone)]
     struct StubFactory {
@@ -93,6 +96,7 @@ mod tests {
             &self,
             prompt: &str,
             cwd: PathBuf,
+            provider: Option<&str>,
             model: Option<&str>,
             depth: usize,
             _cancel: firment_core::Cancellable,
@@ -100,6 +104,7 @@ mod tests {
             self.captures.lock().unwrap().push((
                 prompt.to_string(),
                 cwd,
+                provider.map(|p| p.to_string()),
                 model.map(|m| m.to_string()),
                 depth,
             ));
@@ -197,8 +202,29 @@ mod tests {
         assert_eq!(captured.len(), 1);
         assert_eq!(captured[0].0, "research x");
         assert_eq!(captured[0].1, dir.path());
-        assert_eq!(captured[0].2.as_deref(), Some("deepseek-v4-flash"));
-        assert_eq!(captured[0].3, 1);
+        // No provider override: None (session provider is inherited).
+        assert_eq!(captured[0].2, None);
+        assert_eq!(captured[0].3.as_deref(), Some("deepseek-v4-flash"));
+        assert_eq!(captured[0].4, 1);
+    }
+
+    #[tokio::test]
+    async fn provider_and_model_overrides_are_passed_through() {
+        let dir = tempdir().unwrap();
+        let captures = Arc::new(Mutex::new(Vec::new()));
+        let factory = StubFactory {
+            answer: "n/a".to_string(),
+            captures: captures.clone(),
+        };
+        Task.run(
+            json!({"prompt": "triage logs", "provider": "sbc-ollama", "model": "qwen3.5:0.8b"}),
+            &ctx(dir.path(), 0, 2, Some(factory)),
+        )
+        .await
+        .unwrap();
+        let captured = captures.lock().unwrap();
+        assert_eq!(captured[0].2.as_deref(), Some("sbc-ollama"));
+        assert_eq!(captured[0].3.as_deref(), Some("qwen3.5:0.8b"));
     }
 
     #[tokio::test]

@@ -15,12 +15,17 @@ use std::sync::Arc;
 pub trait SubagentFactory: Send + Sync {
     /// Run a nested read-only agent with the given prompt and return its final
     /// text. `depth` is the nesting level of the new agent (1 for the first).
-    /// `cancel` is the parent's turn-level cancellation signal; when it fires
-    /// the nested agent stops at its next checkpoint.
+    /// `provider` optionally overrides the provider name from config (e.g. an
+    /// Ollama endpoint added via `add-provider`) so cheap subagents can run on
+    /// a different backend than the main loop; `model` likewise overrides the
+    /// model within that provider. `cancel` is the parent's turn-level
+    /// cancellation signal; when it fires the nested agent stops at its next
+    /// checkpoint.
     async fn run_subagent(
         &self,
         prompt: &str,
         cwd: PathBuf,
+        provider: Option<&str>,
         model: Option<&str>,
         depth: usize,
         cancel: Cancellable,
@@ -89,16 +94,24 @@ impl SubagentFactory for SubagentRunner {
         &self,
         prompt: &str,
         cwd: PathBuf,
+        provider: Option<&str>,
         model: Option<&str>,
         depth: usize,
         cancel: Cancellable,
     ) -> Result<String, String> {
+        // Provider override first (a configured name, e.g. an Ollama endpoint
+        // on the SBC), then the model override; both fall back to the
+        // session's own values.
+        let provider_name = provider.unwrap_or(&self.provider_name);
         let model = model.unwrap_or(&self.model).to_string();
         let provider = self
             .config
-            .build_provider(Some(&self.provider_name), Some(&model))
+            .build_provider(Some(provider_name), Some(&model))
             .map_err(|e| format!("[Provider] failed to start subagent: {e}"))?;
-        let session = Session::new(cwd, self.provider_name.clone(), model.clone());
+        // Record the EFFECTIVE provider: the nested session's metadata must
+        // reflect what actually ran (an override would otherwise be invisible
+        // in the transcript).
+        let session = Session::new(cwd, provider_name.to_string(), model.clone());
         let store = SessionStore::new(
             std::env::temp_dir()
                 .join("firment-subagents")
