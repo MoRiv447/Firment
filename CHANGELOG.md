@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.5.13 (2026-08-22) — RP2040 + ESP32-S31 knowledge, honest non-ARM guards
 
 - **Knowledge base: Raspberry Pi RP2040** (seed v6 → v7, re-materializes
   automatically). Two cheatsheets verified line-by-line against the official
@@ -18,21 +18,10 @@
   - `periph_init` resolves `rp2040*` parts and injects the cheatsheets;
     `vendor-index.toml` gains the `[rp2040]` family. probe-rs supports the
     chip locally, so build → flash → monitor works end-to-end.
-- **Honest non-ARM guards for the debug/HIL tools.** `debug analyze` decodes
-  Cortex-M fault registers (CFSR/HFSR/MMFAR/BFAR) and `trace` streams
-  SWO/ITM — both are ARM CoreSight features that simply do not exist on
-  Xtensa/RISC-V targets like the ESP32 family. Both now read the firmware
-  ELF's architecture (`decode::elf_arch`) up front and fail with the
-  alternative path (halt/regs/backtrace + console panic report, or a
-  `monitor` step) instead of analyzing garbage or capturing an empty stream.
-- **flash: ESP32 failure hint.** When flashing an `esp32*` chip fails,
-  the error now points at `espflash` / `idf.py flash` as the vendor-supported
-  fallback — probe-rs support for the family (especially Xtensa parts and
-  brand-new silicon) lags Espressif's own tooling.
-- **Knowledge base: ESP32-S31** (seed v5 → v6, re-materializes automatically).
-  Two new cheatsheets built from the official ESP32-S31 Series Datasheet
-  v0.5 PRELIMINARY (2026-07-13) — Espressif's new dual-core RISC-V 320 MHz
-  flagship (Wi-Fi 6 + BT 5.4 LE/Classic + 802.15.4):
+- **Knowledge base: ESP32-S31** (also seed v7). Two cheatsheets built from
+  the official ESP32-S31 Series Datasheet v0.5 PRELIMINARY (2026-07-13) —
+  Espressif's new dual-core RISC-V 320 MHz flagship (Wi-Fi 6 + BT 5.4
+  LE/Classic + 802.15.4):
   - `esp32s31-gpio` — 60 GPIOs with numbering holes (GPIO29/41 do not
     exist), strapping on GPIO36/37/60/61 (boot mode = GPIO61:GPIO60; 0,0 is
     invalid), console on GPIO58/59, USB-Serial/JTAG on GPIO33/34, pad JTAG
@@ -40,10 +29,24 @@
     DAC on GPIO4/5, no input-only pins (unlike S3)
   - `esp32s31-uart` — FOUR UART controllers + LP_UART (S3 has three),
     5 MBaud, LP_UART fixed pins GPIO2-7, hw-flow-control/LP_I2C conflict
-  - `periph_init` resolves `esp32s31*` parts (must be matched before the
-    `esp32s3` prefix) and injects the matching cheatsheet;
-    `vendor-index.toml` gains the `[esp32.s31]` family (datasheet link;
-    TRM still pending upstream at review time)
+  - `periph_init` resolves `esp32s31*` parts (matched before the `esp32s3`
+    prefix); `vendor-index.toml` gains the `[esp32.s31]` family (datasheet
+    link; TRM still pending upstream at review time).
+- **Honest non-ARM guards for the debug/HIL tools.** `debug analyze` decodes
+  Cortex-M fault registers (CFSR/HFSR/MMFAR/BFAR) and `trace` streams
+  SWO/ITM — both are ARM CoreSight features that simply do not exist on
+  Xtensa/RISC-V targets like the ESP32 family. Both now decide up front via
+  `decode::non_arm_reason()` — the firmware ELF's architecture when that
+  file is readable, else the probe-rs chip name (`esp32*`) — and fail with
+  the alternative path (halt/regs/backtrace + console panic report, or a
+  `monitor` step) instead of analyzing garbage or capturing an empty
+  stream. The ELF wins over the chip label so a mislabelled chip cannot
+  block a real ARM ELF. Known gap: non-ARM chips without an elf parameter
+  and without an `esp32*` name still pass the guard.
+- **flash: ESP32 failure hint.** When flashing an `esp32*` chip fails,
+  the error now points at `espflash` / `idf.py flash` as the vendor-supported
+  fallback — probe-rs support for the family (especially Xtensa parts and
+  brand-new silicon) lags Espressif's own tooling.
 
 ## v0.5.12 (2026-08-21) — one wiring point, in-process GUI hardware
 
