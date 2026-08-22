@@ -126,6 +126,21 @@ MCU 不带 RTC 或时钟漂移时，一律以 SBC 接收时刻为准；MCU 自�
 
 ## 5. P0 硬件验证清单（Cubie A7A 到手后照此执行）
 
+> **执行进度（2026-08-22 晚，经 ssh radxa@192.168.31.217 免密通道远程执行）**：
+>
+> | # | 状态 | 备注 |
+> |---|---|---|
+> | 前置 | ✅ | 免密 SSH 公钥已装（ed25519）；Debian 11 bullseye / 8×A55 / 5.8G RAM；apt 主源缺失已修复（原仅 radxa github.io 源，已禁用备份） |
+> | 1 | ✅ | mosquitto 2.0.11 安装并 active |
+> | 2 | ✅ | 1883 MQTT + **9001 WebSocket** 双监听 0.0.0.0；本地 pub/sub 回环 OK；桌面→SBC 的 1883/9001 TCP 可达 |
+> | 3 | 🔄 | ollama root 后台安装中（arm64 包 ~1.2GB 含 CUDA 组件，国内链路慢）；脚本完成后**自动** `ollama pull qwen3.5:0.8b` 并冒烟 `/v1/models` + chat completion。晨检命令：`ssh radxa@192.168.31.217 "tail -8 /tmp/ollama-install.log; systemctl is-active ollama; curl -s http://127.0.0.1:11434/v1/models \| head -c 200"` |
+> | 4 | ⏳ | 待 ESP32-C3 SuperMini 接入（烧录方式待定：SBC esptool 或桌面烧好再插）|
+> | 5 | ✅ | 板载蓝牙 = AIC USB 芯片（aic_btusb），hci0 UP RUNNING 无错误，特性位含 LE |
+> | 6 | ✅(环境受限) | BlueZ 链路健康、bluer 可用；扫描零结果仅因环境无广播设备，待真实节点接入复验 |
+> | 7 | ⏳ | 待 S31 到货 |
+>
+> 安全提醒：radxa 账户当前为弱密码，建议后续 `passwd` 更换并仅保留密钥登录。
+
 | # | 步骤 | 通过标准 |
 |---|---|---|
 | 1 | 刷官方 Debian/Ubuntu ARM64，`apt install mosquitto mosquitto-clients` | 服务自启 |
