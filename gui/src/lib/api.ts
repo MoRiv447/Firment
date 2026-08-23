@@ -18,8 +18,9 @@ import type {
 // ---------- session / agent ----------
 
 export const api = {
-  startTurn: (input: string) => invoke('start_turn', { input }),
-  cancelTurn: () => invoke('cancel_turn'),
+  startTurn: (sessionId: string, input: string) =>
+    invoke('start_turn', { sessionId, input }),
+  cancelTurn: (sessionId: string) => invoke('cancel_turn', { sessionId }),
   listSessions: () => invoke<SessionSummaryDto[]>('list_sessions'),
   workbenchState: (cwd: string) => invoke<WorkbenchStateDto>('workbench_state', { cwd }),
   workbenchSetMainline: (cwd: string, sessionId: string) =>

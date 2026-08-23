@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { initialTurnState, turnReducer, type TurnState } from '../turnReducer';
+import { initialTurnState, turnReducer, turnsReducer, type TurnState } from '../turnReducer';
 import type { FrontendEvent } from '../../types';
 
 function feed(events: FrontendEvent[], start: TurnState = initialTurnState()): TurnState {
@@ -78,5 +78,37 @@ describe('turnReducer (IDE event->UI contract)', () => {
     const after = feed([{ type: 'text_delta', text: 'x' }], before);
     expect(before.turn?.text).toBe('');
     expect(after.turn?.text).toBe('x');
+  });
+});
+
+describe('turnsReducer (multi-session routing)', () => {
+  const start: FrontendEvent = { type: 'turn_start', session_id: 'a' };
+  const deltaA: FrontendEvent = { type: 'text_delta', session_id: 'a', text: 'hi' };
+  const startB: FrontendEvent = { type: 'turn_start', session_id: 'b' };
+  const endA: FrontendEvent = { type: 'turn_end', session_id: 'a', text: '' };
+
+  it('routes events to per-session slots independently', () => {
+    let state = turnsReducer({}, start);
+    state = turnsReducer(state, deltaA);
+    // A different session starting must NOT touch session a's slot.
+    state = turnsReducer(state, startB);
+    expect(Object.keys(state).sort()).toEqual(['a', 'b']);
+    expect(state.a.running).toBe(true);
+    expect(state.b.running).toBe(true);
+    expect(state.a.turn?.text).toBe('hi');
+    expect(state.b.turn?.text).toBe('');
+  });
+
+  it('ends only the session that emitted turn_end', () => {
+    let state = turnsReducer({}, start);
+    state = turnsReducer(state, startB);
+    state = turnsReducer(state, endA);
+    expect(state.a.running).toBe(false);
+    expect(state.b.running).toBe(true);
+  });
+
+  it('ignores events without a session id (legacy/global)', () => {
+    const orphan: FrontendEvent = { type: 'turn_start' };
+    expect(turnsReducer({}, orphan)).toEqual({});
   });
 });

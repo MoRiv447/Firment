@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 
-use firment_core::Agent;
 use firment_core::Cancellable;
 use firment_core::SessionStore;
 use firment_core::ToolRegistry;
@@ -21,6 +20,25 @@ use crate::hardware::SerialMonitor;
 /// never take effect (mirrors the TUI's command-loop design).
 pub type CancelHandles = (watch::Sender<bool>, Cancellable);
 
+/// Per-session turn plumbing for parallel chats. The agent itself is built
+/// fresh for every turn (it binds the session snapshot + config), so a slot
+/// only tracks what outlives a single build: whether a turn is in flight and
+/// how to cancel it.
+#[derive(Clone)]
+pub struct AgentSlot {
+    pub cancel: Arc<Mutex<Option<CancelHandles>>>,
+    pub running: Arc<AtomicBool>,
+}
+
+impl AgentSlot {
+    pub fn new() -> Self {
+        Self {
+            cancel: Arc::new(Mutex::new(None)),
+            running: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Shared {
     pub app: tauri::AppHandle,
@@ -29,13 +47,13 @@ pub struct Shared {
     pub store: Arc<Mutex<SessionStore>>,
     #[allow(dead_code)] // reserved for the M4 tool-schema pane
     pub registry: Arc<ToolRegistry>,
-    pub agent: Arc<tokio::sync::Mutex<Option<Agent>>>,
-    pub cancel: Arc<Mutex<Option<CancelHandles>>>,
+    /// One turn slot per session id — parallel conversations each get their
+    /// own agent, cancel handles and running flag.
+    pub agents: Arc<Mutex<HashMap<String, AgentSlot>>>,
     pub perm_waiters: Arc<Mutex<HashMap<u64, oneshot::Sender<bool>>>>,
     pub ask_waiters: Arc<Mutex<HashMap<u64, oneshot::Sender<Option<String>>>>>,
     #[allow(dead_code)] // reserved for the M4 collaboration panel
     pub collab: Arc<dyn CollabBackend>,
-    pub running: Arc<AtomicBool>,
     pub monitors: Arc<Mutex<HashMap<String, Arc<SerialMonitor>>>>,
 }
 

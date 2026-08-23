@@ -19,6 +19,7 @@ export function SessionSidebar({
   onNew,
   onDelete,
   onOpenWorkbench,
+  runningIds,
 }: {
   sessions: SessionSummaryDto[];
   currentId: string | null;
@@ -27,6 +28,8 @@ export function SessionSidebar({
   onSelect: (id: string) => void;
   onNew: (mode: 'agent' | 'plan') => void;
   onDelete: (id: string) => void;
+  /** Sessions with a turn currently streaming in the background. */
+  runningIds?: Set<string>;
   /** Open the Workbench view scoped to this session's project path. */
   onOpenWorkbench: (cwd: string) => void;
 }) {
@@ -178,6 +181,21 @@ export function SessionSidebar({
         }
         description={
           <Space size={4} wrap>
+            {runningIds?.has(s.id) && (
+              <Tag
+                color="#2f6bff"
+                style={{
+                  fontSize: 10,
+                  marginRight: 0,
+                  borderRadius: 0,
+                  border: '2px solid #000',
+                  fontWeight: 700,
+                  lineHeight: '16px',
+                }}
+              >
+                ⚡ running
+              </Tag>
+            )}
             <Tag
               style={{
                 fontSize: 11,

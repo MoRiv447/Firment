@@ -85,28 +85,32 @@ export interface TimelineEntryDto {
 }
 
 export type FrontendEvent =
-  | { type: 'turn_start' }
-  | { type: 'text_delta'; text: string }
-  | { type: 'tool_start'; name: string; args: unknown; seq: number }
-  | { type: 'tool_end'; name: string; ok: boolean; summary: string; seq: number }
-  | { type: 'turn_end'; text: string }
-  | { type: 'info'; message: string }
+  | { type: 'turn_start'; session_id?: string | null }
+  | { type: 'text_delta'; session_id?: string | null; text: string }
+  | { type: 'tool_start'; session_id?: string | null; name: string; args: unknown; seq: number }
+  | { type: 'tool_end'; session_id?: string | null; name: string; ok: boolean; summary: string; seq: number }
+  | { type: 'turn_end'; session_id?: string | null; text: string }
+  | { type: 'info'; session_id?: string | null; message: string }
   | { type: 'settings'; provider: string | null; model: string | null; thinking: string | null; mode: string | null }
   | { type: 'models'; models: string[] }
   | { type: 'sessions'; sessions: SessionSummaryDto[] }
   | { type: 'session_loaded'; session: SessionDto }
-  | { type: 'error'; message: string };
+  | { type: 'error'; session_id?: string | null; message: string };
 
 export interface PermissionRequest {
   id: number;
   tool: string;
   args: unknown;
   reason: string;
+  /** Which chat's agent is asking (parallel turns). */
+  session_id?: string;
 }
 
 export interface AskRequest {
   id: number;
   question: string;
+  /** Which chat's agent is asking (parallel turns). */
+  session_id?: string;
   options: string[];
 }
 

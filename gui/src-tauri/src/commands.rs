@@ -9,39 +9,59 @@ use tauri::Emitter;
 use crate::agent_core::{build_agent, default_provider_model};
 use crate::events::{session_dto, session_summary_dto, FrontendEvent};
 use crate::hardware;
-use crate::state::Shared;
+use crate::state::{AgentSlot, Shared};
 
 // ---------- session lifecycle ----------
 
 #[tauri::command]
 pub async fn start_turn(
     shared: tauri::State<'_, Arc<Shared>>,
+    session_id: String,
     input: String,
 ) -> Result<(), String> {
     let shared = shared.inner().clone();
-    if shared.running.load(Ordering::SeqCst) {
-        return Err("agent is already running - cancel it first".to_string());
-    }
-    shared.running.store(true, Ordering::SeqCst);
-    tauri::async_runtime::spawn(async move {
-        let result = {
-            let mut guard = shared.agent.lock().await;
-            match guard.as_mut() {
-                Some(agent) => {
-                    // A previous cancel leaves the watch channel armed (true),
-                    // which would make this new turn abort instantly at the
-                    // first checkpoint. Clear it before every turn.
-                    agent.reset_cancel();
-                    agent.run_turn(&input).await
-                }
-                None => Err(firment_core::AgentError::NoProvider),
+    // Fast reject while a turn is already in flight for THIS session (other
+    // sessions may run freely in parallel).
+    {
+        let map = shared.agents.lock().unwrap();
+        if let Some(slot) = map.get(&session_id) {
+            if slot.running.load(Ordering::SeqCst) {
+                return Err("this session already has a turn running - cancel it first".to_string());
             }
-        };
-        shared.running.store(false, Ordering::SeqCst);
+        }
+    }
+    // Build the agent fresh from the CURRENT session snapshot and config:
+    // settings/provider changes therefore apply on the very next turn
+    // without any explicit reload step.
+    let store = shared.store.lock().unwrap().clone();
+    let session = store.load(&session_id).map_err(|e| e.to_string())?;
+    let (agent, handles) = build_agent(&shared, session).map_err(|e| e.to_string())?;
+
+    // Reserve the slot AFTER building (build can fail cheaply) but re-check
+    // running under the map lock so two concurrent start_turns cannot both
+    // slip through.
+    let slot = {
+        let mut map = shared.agents.lock().unwrap();
+        let slot = map.entry(session_id.clone()).or_insert_with(AgentSlot::new);
+        if slot.running.swap(true, Ordering::SeqCst) {
+            return Err("this session already has a turn running - cancel it first".to_string());
+        }
+        *slot.cancel.lock().unwrap() = Some(handles);
+        slot.clone()
+    };
+    tauri::async_runtime::spawn(async move {
+        // A previous cancel leaves the watch channel armed (true), which
+        // would make this new turn abort instantly at the first checkpoint.
+        // Clear it before every turn.
+        let mut agent = agent;
+        agent.reset_cancel();
+        let result = agent.run_turn(&input).await;
+        slot.running.store(false, Ordering::SeqCst);
         if let Err(e) = result {
             let _ = shared.app.emit(
                 "agent-event",
                 FrontendEvent::Error {
+                    session_id: Some(session_id),
                     message: e.to_string(),
                 },
             );
@@ -55,12 +75,19 @@ pub async fn start_turn(
 }
 
 #[tauri::command]
-pub async fn cancel_turn(shared: tauri::State<'_, Arc<Shared>>) -> Result<(), String> {
+pub async fn cancel_turn(
+    shared: tauri::State<'_, Arc<Shared>>,
+    session_id: String,
+) -> Result<(), String> {
     let shared = shared.inner().clone();
     // Must NOT go through the agent lock: run_turn holds it for the whole
     // turn, so a cancel waiting on the lock would block until the turn
     // finishes and never take effect. Fire the pre-extracted handles instead.
-    let handles = shared.cancel.lock().unwrap().clone();
+    let handles = {
+        let map = shared.agents.lock().unwrap();
+        map.get(&session_id)
+            .and_then(|slot| slot.cancel.lock().unwrap().clone())
+    };
     if let Some((tx, signal)) = handles {
         let _ = tx.send(true);
         signal.cancel();
@@ -84,14 +111,6 @@ pub async fn new_session(
     mode: String,
 ) -> Result<crate::events::SessionDto, String> {
     let shared = shared.inner().clone();
-    // Swapping the agent while a turn runs would block on the agent lock
-    // until the turn finishes — reject instead so the UI stays responsive.
-    if shared.running.load(Ordering::SeqCst) {
-        return Err(
-            "an agent turn is running — wait for it or cancel it before switching sessions"
-                .to_string(),
-        );
-    }
     let (provider, model) = {
         let config = shared.config.lock().unwrap().clone();
         default_provider_model(&config)
@@ -105,8 +124,8 @@ pub async fn new_session(
     session.mode = session_mode;
     let store = shared.store.lock().unwrap().clone();
     store.save(&session).map_err(|e| e.to_string())?;
-    let agent = build_agent(&shared, session.clone()).map_err(|e| e.to_string())?;
-    *shared.agent.lock().await = Some(agent);
+    // No global agent to swap anymore: each start_turn builds its own agent,
+    // so creating a session never disturbs turns running in other chats.
     let dto = session_dto(&session);
     let _ = shared.app.emit(
         "agent-event",
@@ -123,17 +142,10 @@ pub async fn load_session(
     id: String,
 ) -> Result<crate::events::SessionDto, String> {
     let shared = shared.inner().clone();
-    // Same guard as new_session: don't block on the agent lock mid-turn.
-    if shared.running.load(Ordering::SeqCst) {
-        return Err(
-            "an agent turn is running — wait for it or cancel it before switching sessions"
-                .to_string(),
-        );
-    }
+    // Switching chats never disturbs turns running elsewhere — parallel
+    // sessions each own their agent, so there is nothing global to guard.
     let store = shared.store.lock().unwrap().clone();
     let session = store.load(&id).map_err(|e| e.to_string())?;
-    let agent = build_agent(&shared, session.clone()).map_err(|e| e.to_string())?;
-    *shared.agent.lock().await = Some(agent);
     let dto = session_dto(&session);
     let _ = shared.app.emit(
         "agent-event",
@@ -149,6 +161,16 @@ pub async fn delete_session(
     shared: tauri::State<'_, Arc<Shared>>,
     id: String,
 ) -> Result<(), String> {
+    // Deleting while a turn is running would let run_turn's final save
+    // resurrect the session file — refuse until the turn ends or is cancelled.
+    {
+        let map = shared.agents.lock().unwrap();
+        if let Some(slot) = map.get(&id) {
+            if slot.running.load(Ordering::SeqCst) {
+                return Err("cannot delete: a turn is running in this session - cancel it first".to_string());
+            }
+        }
+    }
     let store = shared.store.lock().unwrap();
     store.delete(&id).map_err(|e| e.to_string())
 }
@@ -311,22 +333,9 @@ pub async fn save_settings(
             .map_err(|e| e.to_string())?;
     }
 
-    // Rebuild the running agent so the new settings apply to the NEXT turn
-    // immediately — the old agent kept the pre-save provider/model/tools.
-    // Skipped while a turn is in flight (it would tear down the lock the
-    // turn holds); the next new/load session picks the new settings anyway.
-    let shared = shared.inner().clone();
-    if !shared.running.load(Ordering::SeqCst) {
-        let session = {
-            let guard = shared.agent.lock().await;
-            guard.as_ref().map(|a| a.session().clone())
-        };
-        if let Some(session) = session {
-            if let Ok(agent) = build_agent(&shared, session) {
-                *shared.agent.lock().await = Some(agent);
-            }
-        }
-    }
+    // No agent rebuild needed: start_turn builds a fresh agent from the
+    // current session snapshot + config, so saved settings apply on the
+    // very next turn in every chat automatically.
     Ok(())
 }
 

@@ -9,6 +9,7 @@ import {
 } from '@ant-design/icons';
 import {
   api,
+  notifySessionsChanged,
   onAgentEvent,
   onAskRequest,
   onMonitorExited,
@@ -28,7 +29,8 @@ import { ChatView } from './views/ChatView';
 import { SessionSidebar } from './views/SessionSidebar';
 import { SettingsView } from './views/SettingsView';
 import { SerialView } from './views/SerialView';
-import { initialTurnState, turnReducer } from './lib/turnReducer';
+import { initialTurnState, turnsReducer } from './lib/turnReducer';
+import type { TurnMap } from './lib/turnReducer';
 import { FlashView } from './views/FlashView';
 import { WorkbenchView } from './views/WorkbenchView';
 
@@ -39,21 +41,18 @@ type ViewKey = 'chat' | 'settings' | 'serial' | 'flash' | 'collab';
 export default function App() {
   const [sessions, setSessions] = useState<SessionSummaryDto[]>([]);
   const [session, setSession] = useState<SessionDto | null>(null);
-  // Turn lifecycle state is driven by the pure turnReducer (unit-tested in
-  // __tests__/turnReducer.test.ts); side effects (transcript refresh) stay
-  // in the event handler below.
-  const [turnState, dispatchTurn] = useReducer(turnReducer, undefined, initialTurnState);
-  const { running, turn } = turnState;
-  // Latest `running` value for event-handler closures (registered once with
-  // [] deps) without stale-state captures.
-  const runningRef = useRef(running);
-  runningRef.current = running;
-  // A session switch requested while a turn is running: cancel first, then
-  // run the pending action when turn_end lands.
-  const pendingSwitchRef = useRef<(() => void) | null>(null);
+  // Per-session turn lifecycle: parallel chats each stream their own turn,
+  // keyed by session id. The pure turnReducer is reused per slot (unit-tested
+  // in __tests__/turnReducer.test.ts); side effects (transcript refresh)
+  // stay in the event handler below.
+  const [turnsById, dispatchTurn] = useReducer(turnsReducer, undefined, () => ({} as TurnMap));
+  const currentTurnState =
+    (session ? turnsById[session.id] : undefined) ?? initialTurnState();
+  const { running, turn } = currentTurnState;
+  const anyRunning = Object.values(turnsById).some((t) => t.running);
   // Info events (stall / tool-wave timeout / compaction notices) surfaced in
-  // the chat so the user can tell a slow model from a wedged turn.
-  const [infos, setInfos] = useState<{ id: number; text: string }[]>([]);
+  // the chat they belong to.
+  const [infos, setInfos] = useState<{ id: number; sid: string | null; text: string }[]>([]);
   const [view, setView] = useState<ViewKey>('chat');
   // Permission requests arrive concurrently (tool waves run in parallel), so
   // they must be queued — a single overwriting state would leave the first
@@ -77,9 +76,15 @@ export default function App() {
 
     unlisteners.push(
       onAgentEvent((e) => {
+        // Route to the session that owns the event; fall back to the
+        // currently open chat for legacy/unstamped events.
+        const sid =
+          (e as { session_id?: string | null }).session_id ||
+          sessionRef.current?.id ||
+          null;
         switch (e.type) {
           case 'turn_start':
-            setInfos([]);
+            setInfos((prev) => prev.filter((i) => i.sid !== sid));
             dispatchTurn(e);
             break;
           case 'text_delta':
@@ -91,32 +96,28 @@ export default function App() {
             break;
           case 'error':
             // Error ends the turn WITHOUT a turn_end (start_turn emits only
-            // Error on failure), so the queued session switch must run here
-            // too — otherwise switching mid-turn that dies with an error
-            // would silently never happen. Also drop stale dialogs.
+            // Error on failure). Drop stale dialogs ONLY when the failing
+            // chat is the one on screen — another session's crash must not
+            // close our permission dialog.
             dispatchTurn(e);
-            setPermQueue([]);
-            setAskReq(null);
-            runPendingSwitch();
+            if (!sid || sid === sessionRef.current?.id) {
+              setPermQueue([]);
+              setAskReq(null);
+            }
             break;
           case 'turn_end':
             dispatchTurn(e);
-            // A session switch queued while the turn was running: the cancel
-            // fired from the sidebar handler lands here, so run it now that
-            // the turn is truly over (the transcript refresh below would
-            // otherwise race the session swap).
-            setPermQueue([]);
-            setAskReq(null);
-            if (runPendingSwitch()) {
-              break;
+            if (!sid || sid === sessionRef.current?.id) {
+              setPermQueue([]);
+              setAskReq(null);
+              // Clear the streaming turn so the transcript (refreshed below)
+              // is the single source of truth — otherwise the same reply
+              // shows twice (once in turn.text, once in session.messages).
+              void api.sessionTranscript(sid!).then(setSession).catch(console.error);
             }
-            // Clear the streaming turn so the transcript (refreshed below)
-            // is the single source of truth — otherwise the same reply shows
-            // twice (once in turn.text, once in session.messages).
-            const sid = sessionRef.current?.id;
-            if (sid) {
-              void api.sessionTranscript(sid).then(setSession).catch(console.error);
-            }
+            // The finished session's sidebar row (preview / updated_at)
+            // changed on disk either way.
+            notifySessionsChanged();
             break;
           case 'session_loaded':
             setSession(e.session);
@@ -126,9 +127,13 @@ export default function App() {
             break;
           case 'info':
             console.info('[firm]', e.message);
-            // Surface timeouts/stalls in the chat (sticky, newest last) so
-            // the user can tell a slow model from a wedged turn.
-            setInfos((prev) => [...prev.slice(-4), { id: Date.now(), text: e.message }]);
+            // Surface timeouts/stalls in the chat they belong to (sticky,
+            // newest last) so the user can tell a slow model from a wedged
+            // turn.
+            setInfos((prev) => [
+              ...prev.slice(-8),
+              { id: Date.now(), sid, text: e.message },
+            ]);
             break;
           default:
             break;
@@ -176,58 +181,32 @@ export default function App() {
     [],
   );
 
-  // Run the session switch queued while a turn was running. Returns true when
-  // a switch was pending (the caller must skip its own post-turn work).
-  const runPendingSwitch = () => {
-    const pending = pendingSwitchRef.current;
-    pendingSwitchRef.current = null;
-    if (pending) {
-      pending();
-      return true;
-    }
-    return false;
+  const handleNewSession = (mode: 'agent' | 'plan') => {
+    // Creating a chat never disturbs turns running in other chats.
+    void api
+      .newSession(workCwd || 'C:\\', mode)
+      .then((s) => {
+        setSession(s);
+        setView('chat');
+        void api.listSessions().then(setSessions);
+      })
+      .catch(console.error);
   };
 
-  const handleNewSession = async (mode: 'agent' | 'plan') => {
-    const run = () => {
-      void api
-        .newSession(workCwd || 'C:\\', mode)
-        .then((s) => {
-          setSession(s);
-          setView('chat');
-          void api.listSessions().then(setSessions);
-        })
-        .catch(console.error);
-    };
-    if (runningRef.current) {
-      // Cancel the in-flight turn; turn_end fires the queued action.
-      pendingSwitchRef.current = run;
-      void api.cancelTurn().catch(console.error);
-    } else {
-      run();
-    }
-  };
-
-  const handleSelectSession = async (id: string) => {
-    const run = () => {
-      void api
-        .loadSession(id)
-        .then((s) => {
-          setSession(s);
-          setView('chat');
-        })
-        .catch(console.error);
-    };
-    if (runningRef.current) {
-      pendingSwitchRef.current = run;
-      void api.cancelTurn().catch(console.error);
-    } else {
-      run();
-    }
+  const handleSelectSession = (id: string) => {
+    // Switching is free: the other chat's turn keeps running in the
+    // background and its sidebar row shows a ⚡ badge until it finishes.
+    void api
+      .loadSession(id)
+      .then((s) => {
+        setSession(s);
+        setView('chat');
+      })
+      .catch(console.error);
   };
 
   const handleDeleteSession = async (id: string) => {
-    const run = () => {
+    const run = () =>
       void api
         .deleteSession(id)
         .then(async () => {
@@ -244,25 +223,28 @@ export default function App() {
             }
           }
         })
-        .catch(console.error);
-    };
-    // Deleting while a turn runs would let run_turn's final save resurrect
-    // the session — cancel first, delete when the turn actually ends.
-    if (runningRef.current && sessionRef.current?.id === id) {
-      pendingSwitchRef.current = run;
-      void api.cancelTurn().catch(console.error);
-    } else {
-      run();
+        .catch((err: unknown) => {
+          // Backend refuses while that session's turn is still winding down;
+          // cancel + retry covers the window between flag flip and disk save.
+          console.error(err);
+          void api.cancelTurn(id).catch(console.error);
+          setTimeout(() => void run(), 600);
+        });
+    if ((turnsById[id] ?? initialTurnState).running) {
+      void api.cancelTurn(id).catch(console.error);
     }
+    void run();
   };
 
   const handleSend = (input: string) => {
+    const sid = sessionRef.current?.id;
+    if (!sid) return;
     const snapshot = sessionRef.current?.messages ?? [];
     // 乐观追加用户消息，发送后立即显示在聊天区（turn_end 后以 transcript 为准）
     setSession((s) =>
       s ? { ...s, messages: [...s.messages, { role: 'user', content: input }] } : s,
     );
-    void api.startTurn(input).catch((err) => {
+    void api.startTurn(sid, input).catch((err) => {
       console.error(err);
       // 发送失败（如 agent 正忙）：回滚乐观消息，避免界面上出现"幽灵消息"
       setSession((s) => (s ? { ...s, messages: snapshot } : s));
@@ -270,7 +252,9 @@ export default function App() {
   };
 
   const handleCancel = () => {
-    void api.cancelTurn();
+    if (sessionRef.current) {
+      void api.cancelTurn(sessionRef.current.id);
+    }
   };
 
   return (
@@ -352,6 +336,11 @@ export default function App() {
             onSelect={handleSelectSession}
             onNew={handleNewSession}
             onDelete={handleDeleteSession}
+            runningIds={new Set(
+              Object.entries(turnsById)
+                .filter(([, t]) => t.running)
+                .map(([id]) => id),
+            )}
             onOpenWorkbench={(projectCwd) => {
               // Hand the project path to the Workbench view and switch to it.
               localStorage.setItem('workbench-last-cwd', projectCwd);
@@ -390,7 +379,7 @@ export default function App() {
                 { key: 'collab', icon: <TeamOutlined />, label: 'Workbench' },
               ]}
             />
-            {running && (
+            {anyRunning && (
               <Tag
                 color="#2f6bff"
                 style={{
@@ -400,7 +389,7 @@ export default function App() {
                   boxShadow: '2px 2px 0 #000000',
                 }}
               >
-                ⚡ agent running
+                ⚡ {Object.values(turnsById).filter((t) => t.running).length} running
               </Tag>
             )}
             {session && (
@@ -455,7 +444,9 @@ export default function App() {
                 session={session}
                 running={running}
                 turn={turn}
-                infos={infos}
+                infos={infos.filter(
+                  (i) => !i.sid || i.sid === session?.id,
+                )}
                 onSend={handleSend}
                 onCancel={handleCancel}
               />

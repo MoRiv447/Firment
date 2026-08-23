@@ -7,28 +7,40 @@ use serde::Serialize;
 /// Frontend-facing event DTO. `firment-core` types carry no serde derives
 /// (except `ChatMessage`, `ToolCall`, ...), so we map into a small tagged
 /// enum before emitting over Tauri's event bus.
+///
+/// Turn-flow variants carry `session_id` so the frontend can route them to
+/// the right chat when several sessions run turns in parallel. `None` means
+/// the event is app-global (settings, session list, ...) or came from a
+/// context without a session.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FrontendEvent {
-    TurnStart,
+    TurnStart {
+        session_id: Option<String>,
+    },
     TextDelta {
+        session_id: Option<String>,
         text: String,
     },
     ToolStart {
+        session_id: Option<String>,
         name: String,
         args: serde_json::Value,
         seq: u64,
     },
     ToolEnd {
+        session_id: Option<String>,
         name: String,
         ok: bool,
         summary: String,
         seq: u64,
     },
     TurnEnd {
+        session_id: Option<String>,
         text: String,
     },
     Info {
+        session_id: Option<String>,
         message: String,
     },
     Settings {
@@ -47,6 +59,7 @@ pub enum FrontendEvent {
         session: SessionDto,
     },
     Error {
+        session_id: Option<String>,
         message: String,
     },
 }
@@ -102,11 +115,16 @@ pub fn session_summary_dto(s: &SessionSummary) -> SessionSummaryDto {
     }
 }
 
-pub fn frontend_event(e: &AgentEvent) -> FrontendEvent {
+pub fn frontend_event(e: &AgentEvent, session_id: Option<&str>) -> FrontendEvent {
+    let sid = session_id.map(|s| s.to_string());
     match e {
-        AgentEvent::TurnStart => FrontendEvent::TurnStart,
-        AgentEvent::TextDelta(text) => FrontendEvent::TextDelta { text: text.clone() },
+        AgentEvent::TurnStart => FrontendEvent::TurnStart { session_id: sid },
+        AgentEvent::TextDelta(text) => FrontendEvent::TextDelta {
+            session_id: sid,
+            text: text.clone(),
+        },
         AgentEvent::ToolStart { name, args, seq } => FrontendEvent::ToolStart {
+            session_id: sid,
             name: name.clone(),
             args: args.clone(),
             seq: *seq,
@@ -117,13 +135,18 @@ pub fn frontend_event(e: &AgentEvent) -> FrontendEvent {
             summary,
             seq,
         } => FrontendEvent::ToolEnd {
+            session_id: sid,
             name: name.clone(),
             ok: *ok,
             summary: summary.clone(),
             seq: *seq,
         },
-        AgentEvent::TurnEnd { text } => FrontendEvent::TurnEnd { text: text.clone() },
+        AgentEvent::TurnEnd { text } => FrontendEvent::TurnEnd {
+            session_id: sid,
+            text: text.clone(),
+        },
         AgentEvent::Info(message) => FrontendEvent::Info {
+            session_id: sid,
             message: message.clone(),
         },
         AgentEvent::Settings {
@@ -147,6 +170,7 @@ pub fn frontend_event(e: &AgentEvent) -> FrontendEvent {
             session: session_dto(session),
         },
         AgentEvent::Error(message) => FrontendEvent::Error {
+            session_id: sid,
             message: message.clone(),
         },
     }

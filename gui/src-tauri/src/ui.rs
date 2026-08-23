@@ -24,15 +24,17 @@ const ASK_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Forwards agent events onto the Tauri event bus ("agent-event") and the
 /// collaboration bus. Mirrors the TUI's `ChannelSink`, exchanging the mpsc
-/// channel for `AppHandle::emit`.
+/// channel for `AppHandle::emit`. Each sink is bound to one session so
+/// turn-flow events can be routed to the right chat in parallel mode.
 pub struct GuiSink {
     pub shared: Arc<Shared>,
+    pub session_id: String,
 }
 
 #[async_trait]
 impl EventSink for GuiSink {
     async fn event(&self, event: AgentEvent) {
-        let fe = frontend_event(&event);
+        let fe = frontend_event(&event, Some(&self.session_id));
         let _ = self.shared.app.emit("agent-event", fe);
     }
 }
@@ -41,6 +43,8 @@ impl EventSink for GuiSink {
 /// The frontend replies via `respond_permission(id, allowed)`.
 pub struct GuiPermission {
     pub shared: Arc<Shared>,
+    /// Shown on the dialog so the user knows WHICH chat is asking.
+    pub session_id: String,
 }
 
 #[async_trait]
@@ -63,7 +67,7 @@ impl PermissionChecker for GuiPermission {
         self.shared.perm_waiters.lock().unwrap().insert(id, tx);
         let _ = self.shared.app.emit(
             "permission-request",
-            json!({ "id": id, "tool": tool, "args": args, "reason": reason }),
+            json!({ "id": id, "tool": tool, "args": args, "reason": reason, "session_id": self.session_id }),
         );
         match timeout(PERMISSION_TIMEOUT, rx).await {
             Ok(Ok(true)) => Ok(()),
@@ -86,6 +90,8 @@ impl PermissionChecker for GuiPermission {
 /// `respond_ask(id, answer)`.
 pub struct GuiAsker {
     pub shared: Arc<Shared>,
+    /// Shown on the dialog so the user knows WHICH chat is asking.
+    pub session_id: String,
 }
 
 #[async_trait]
@@ -96,7 +102,7 @@ impl Asker for GuiAsker {
         self.shared.ask_waiters.lock().unwrap().insert(id, tx);
         let _ = self.shared.app.emit(
             "ask-request",
-            json!({ "id": id, "question": question, "options": options }),
+            json!({ "id": id, "question": question, "options": options, "session_id": self.session_id }),
         );
         match timeout(ASK_TIMEOUT, rx).await {
             Ok(Ok(Some(answer))) => Ok(answer),

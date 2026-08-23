@@ -1,10 +1,23 @@
 import { useState } from 'react';
-import { Alert, Button, Input, Modal, Space, Typography } from 'antd';
+import { Alert, Button, Input, Modal, Space, Tag, Typography } from 'antd';
 import { api } from '../lib/api';
 import { ToolCard } from './ToolCard';
-import type { PermissionRequest, ToolCardState } from '../types';
+import type { AskRequest, PermissionRequest, ToolCardState } from '../types';
 
 const { Text } = Typography;
+
+/** Which chat's agent is asking — matters once several chats run in parallel. */
+function SessionChip({ sid }: { sid?: string }) {
+  if (!sid) return null;
+  return (
+    <Tag
+      color="#2f6bff"
+      style={{ borderRadius: 0, border: '2px solid #000', fontWeight: 700 }}
+    >
+      chat {sid.slice(0, 8)}
+    </Tag>
+  );
+}
 
 export function PermissionDialog({
   req,
@@ -46,6 +59,12 @@ export function PermissionDialog({
         </Space>
       }
     >
+      <Space size={6} style={{ marginBottom: 8 }}>
+        <SessionChip sid={req.session_id} />
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          This chat wants to run a tool before continuing.
+        </Text>
+      </Space>
       <ToolCard tool={toolCard} standalone />
       {req.reason && (
         <Alert style={{ marginTop: 8 }} type="info" showIcon message={<Text>{req.reason}</Text>} />
@@ -58,7 +77,7 @@ export function AskDialog({
   req,
   onClose,
 }: {
-  req: { id: number; question: string; options: string[] };
+  req: AskRequest;
   onClose: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -115,6 +134,9 @@ export function AskDialog({
         )
       }
     >
+      <Space size={6} style={{ marginBottom: 8 }}>
+        <SessionChip sid={req.session_id} />
+      </Space>
       <Text>{req.question}</Text>
       {req.options.length === 0 && (
         <Input.TextArea

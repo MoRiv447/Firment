@@ -4,25 +4,33 @@ use firment_core::{Agent, Config, Session};
 use tauri::Emitter;
 
 use crate::events::FrontendEvent;
-use crate::state::Shared;
+use crate::state::{CancelHandles, Shared};
 use crate::ui::{GuiAsker, GuiPermission, GuiSink};
 
-/// Rebuild the agent around a session, wiring GUI sinks for events,
+/// Build the agent around a session, wiring GUI sinks for events,
 /// permissions and questions. All agent knobs (registries, plan-mode policy,
 /// tool config, subagents) come from the shared [`firment_tools::assembly`]
 /// module so the GUI, TUI and CLI stay behaviourally identical.
-pub fn build_agent(shared: &Arc<Shared>, session: Session) -> anyhow::Result<Agent> {
+///
+/// Returns the cancellation handles alongside the agent: `run_turn` holds
+/// the agent lock for the whole turn, so cancel must be able to fire them
+/// directly without contending for that lock. The caller stores them in the
+/// session's [`crate::state::AgentSlot`].
+pub fn build_agent(shared: &Arc<Shared>, session: Session) -> anyhow::Result<(Agent, CancelHandles)> {
     let config = shared.config.lock().unwrap().clone();
     let merged = config.merged_for(&session.cwd);
 
     let sink: Arc<GuiSink> = Arc::new(GuiSink {
         shared: shared.clone(),
+        session_id: session.id.clone(),
     });
     let permission: Arc<GuiPermission> = Arc::new(GuiPermission {
         shared: shared.clone(),
+        session_id: session.id.clone(),
     });
     let asker: Arc<GuiAsker> = Arc::new(GuiAsker {
         shared: shared.clone(),
+        session_id: session.id.clone(),
     });
 
     // The GUI permission dialog is the decision point, so dangerous shell
@@ -38,18 +46,17 @@ pub fn build_agent(shared: &Arc<Shared>, session: Session) -> anyhow::Result<Age
     );
 
     if let Some(error) = assembly.provider_error.take() {
-        let _ = shared
-            .app
-            .emit("agent-event", FrontendEvent::Error { message: error });
+        let _ = shared.app.emit(
+            "agent-event",
+            FrontendEvent::Error {
+                session_id: None,
+                message: error,
+            },
+        );
     }
 
-    // Cancellation handles were extracted by the assembly BEFORE the agent
-    // moves into the lock. `run_turn` holds the agent lock for the whole
-    // turn, so cancel must be able to fire these directly without
-    // contending for the same lock.
-    *shared.cancel.lock().unwrap() = Some((assembly.cancel_tx, assembly.cancel_signal));
-
-    Ok(assembly.agent)
+    let handles = (assembly.cancel_tx, assembly.cancel_signal);
+    Ok((assembly.agent, handles))
 }
 
 pub fn default_provider_model(config: &Config) -> (String, String) {

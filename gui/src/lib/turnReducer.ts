@@ -79,3 +79,21 @@ export function turnReducer(state: TurnState, e: FrontendEvent): TurnState {
       return state;
   }
 }
+
+/**
+ * Multi-session wrapper: parallel chats each own a TurnState keyed by
+ * session id. The backend stamps turn-flow events with `session_id`; the
+ * wrapper routes them to the right slot and delegates to the pure
+ * single-session reducer above. Sessions without activity simply have no
+ * entry.
+ */
+export type TurnMap = Record<string, TurnState>;
+
+export function turnsReducer(state: TurnMap, e: FrontendEvent): TurnMap {
+  const sid = (e as { session_id?: string | null }).session_id || undefined;
+  if (!sid) return state;
+  const current = state[sid] ?? initialTurnState();
+  const next = turnReducer(current, e);
+  if (next === current) return state;
+  return { ...state, [sid]: next };
+}
