@@ -15,7 +15,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionKind {
+    /// Sessions written before the Normal/Mainline/Branch triple existed
+    /// persisted `"main"` for EVERY chat (the old enum had no Normal). The
+    /// alias reads those files as plain Normal conversations; whichever one
+    /// a project registers as its mainline is re-promoted by the workbench
+    /// state self-heal.
     #[default]
+    #[serde(alias = "main")]
     Normal,
     Mainline,
     Branch,
@@ -504,4 +510,47 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: sessions persisted before the Normal/Mainline/Branch
+    /// triple carry `"session_kind": "main"` (the old enum had no Normal,
+    /// so every saved chat wrote it). Without the serde alias the meta line
+    /// failed to parse, `list()` silently skipped the file and whole
+    /// projects went blank in every UI. Legacy "main" maps to Normal; the
+    /// registered mainline is re-promoted by workbench_state's self-heal.
+    #[test]
+    fn legacy_main_kind_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let store_dir = dir.path().join("sessions");
+        fs::create_dir_all(&store_dir).unwrap();
+        let id = "legacy-main-session";
+        // Hand-written JSONL exactly as the pre-refactor binary wrote it.
+        let meta = format!(
+            r#"{{"type":"meta","id":"{id}","cwd":"{}","provider":"openrouter","model":"test-model","thinking":"off","mode":"agent","parent_session":null,"session_kind":"main","created_at":100,"updated_at":200}}"#,
+            dir.path().to_string_lossy().replace('\\', "\\\\")
+        );
+        let path = store_dir.join(format!("{id}.jsonl"));
+        fs::write(&path, format!("{meta}\n")).unwrap();
+
+        let store = SessionStore::new(store_dir.clone());
+
+        // list() must not skip the file.
+        let summaries = store.list().unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].kind, SessionKind::Normal);
+
+        // load() must succeed and map to Normal.
+        let loaded = store.load(id).unwrap();
+        assert_eq!(loaded.kind, SessionKind::Normal);
+
+        // Re-saving rewrites the kind in the new spelling.
+        store.save(&loaded).unwrap();
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("\"session_kind\":\"normal\""));
+        assert!(!raw.contains("\"session_kind\":\"main\""));
+    }
 }
