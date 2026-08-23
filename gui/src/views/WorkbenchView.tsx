@@ -38,33 +38,53 @@ export function WorkbenchView() {
   const [branchModal, setBranchModal] = useState<{ parentId: string; title: string } | null>(null);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [elf, setElf] = useState<ElfCardDto | null>(null);
+  const [elfError, setElfError] = useState<string | null>(null);
   const [quality, setQuality] = useState<QualityItemDto[]>([]);
   const [timeline, setTimeline] = useState<TimelineEntryDto[]>([]);
+  const [projects, setProjects] = useState<string[]>([]);
+
+  const rememberProject = (dir: string) => {
+    localStorage.setItem('workbench-last-cwd', dir);
+    setProjects((prev) => {
+      const norm = dir.replace(/\\/g, '/').replace(/\/$/, '');
+      const next = [dir, ...prev.filter((p) => p.replace(/\\/g, '/').replace(/\/$/, '') !== norm)];
+      localStorage.setItem('workbench-projects', JSON.stringify(next.slice(0, 8)));
+      return next.slice(0, 8);
+    });
+  };
 
   const refresh = async (dir: string) => {
     setError(null);
     // Remember the project across view switches and app restarts.
-    localStorage.setItem('workbench-last-cwd', dir);
+    rememberProject(dir);
     try {
-      const [wb, sessions] = await Promise.all([
-        api.workbenchState(dir),
-        api.listSessions(),
-      ]);
+      const wb = await api.workbenchState(dir);
+      const all = await api.listSessions();
       setState(wb);
       // Only show sessions belonging to this project root.
       const root = dir.replace(/\\/g, '/').replace(/\/$/, '').toLowerCase();
       setSessions(
-        sessions.filter((s) => s.cwd.replace(/\\/g, '/').toLowerCase().startsWith(root)),
+        all.filter((s) => s.cwd.replace(/\\/g, '/').toLowerCase().startsWith(root)),
       );
       setCurrentSessionId(null);
+      // Return the FRESH state so callers can chain insights on the new
+      // mainline without waiting for the next React render.
+      return wb;
     } catch (err) {
       setError(String(err));
+      return null;
     }
   };
 
   // Restore the last opened project automatically, so navigating away and
   // back (or restarting the app) lands on the same workbench.
   useEffect(() => {
+    try {
+      const saved = localStorage.getItem('workbench-projects');
+      if (saved) setProjects(JSON.parse(saved) as string[]);
+    } catch {
+      /* ignore malformed lists */
+    }
     const last = localStorage.getItem('workbench-last-cwd');
     if (last) {
       setCwd(last);
@@ -74,15 +94,17 @@ export function WorkbenchView() {
   }, []);
 
   // W1d cards: ELF stats + verification badges + change timeline, scoped to
-  // the project's mainline session.
+  // the project's mainline session. Takes the FRESH workbench state so the
+  // first Open-project click already populates the cards.
   const refreshInsights = async (dir: string, mainlineSession: string) => {
     setElf(null);
+    setElfError(null);
     setQuality([]);
     setTimeline([]);
     try {
-      setElf(await api.workbenchElf(dir).catch(() => null));
-    } catch {
-      setElf(null);
+      setElf(await api.workbenchElf(dir));
+    } catch (err) {
+      setElfError(String(err));
     }
     try {
       setQuality(await api.workbenchQuality(mainlineSession));
@@ -95,9 +117,14 @@ export function WorkbenchView() {
   const load = async () => {
     if (!cwd.trim()) return;
     setBusy(true);
-    await refresh(cwd.trim());
-    if (state?.config.mainline_session) {
-      await refreshInsights(cwd.trim(), state.config.mainline_session);
+    const wb = await refresh(cwd.trim());
+    if (wb?.config.mainline_session) {
+      await refreshInsights(cwd.trim(), wb.config.mainline_session);
+    } else {
+      setElf(null);
+      setElfError(null);
+      setQuality([]);
+      setTimeline([]);
     }
     setBusy(false);
   };
@@ -123,6 +150,7 @@ export function WorkbenchView() {
     try {
       await api.workbenchSetMainline(state.root, sessionId);
       await refresh(state.root);
+      await refreshInsights(state.root, sessionId);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -140,7 +168,8 @@ export function WorkbenchView() {
       const session = await api.newSession(state.root, 'agent');
       await api.workbenchSetMainline(state.root, session.id);
       setCurrentSessionId(session.id);
-      await refresh(state.root);
+      const wb = await refresh(state.root);
+      if (wb) await refreshInsights(state.root, wb.config.mainline_session);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -178,6 +207,27 @@ export function WorkbenchView() {
               Open project
             </Button>
           </Space>
+
+          {projects.length > 0 && (
+            <Space wrap size={4}>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                known projects:
+              </Text>
+              {projects.map((p) => (
+                <Tag
+                  key={p}
+                  style={{ cursor: 'pointer', fontSize: 12 }}
+                  color={p === cwd ? 'blue' : 'default'}
+                  onClick={() => {
+                    setCwd(p);
+                    void load();
+                  }}
+                >
+                  {p}
+                </Tag>
+              ))}
+            </Space>
+          )}
 
           {error && <Alert type="error" showIcon message={error} />}
 
@@ -234,6 +284,15 @@ export function WorkbenchView() {
                   </Button>
                 }
               >
+                {elfError && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    style={{ marginBottom: 12 }}
+                    message="ELF budget card unavailable"
+                    description={elfError}
+                  />
+                )}
                 {elf && (
                   <Card type="inner" size="small" title="ELF budget" style={{ marginBottom: 12 }}>
                     <Space wrap size={24}>

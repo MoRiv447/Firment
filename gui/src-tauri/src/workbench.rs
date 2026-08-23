@@ -32,9 +32,17 @@ pub struct WorkbenchStateDto {
 }
 
 async fn run_git(cwd: &Path, args: &[&str]) -> Option<String> {
-    let output = tokio::process::Command::new("git")
-        .args(args)
-        .current_dir(cwd)
+    let mut command = tokio::process::Command::new("git");
+    command.args(args).current_dir(cwd);
+    // GUI has no console: spawning git without this flag flashes a black
+    // terminal window on every workbench refresh.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = command
         .output()
         .await
         .ok()
