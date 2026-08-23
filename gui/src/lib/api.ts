@@ -83,3 +83,19 @@ export function onMonitorExited(cb: (e: { port: string }) => void): Promise<Unli
 export function onHardwareExit(cb: (e: HardwareExit) => void): Promise<UnlistenFn> {
   return listen<HardwareExit>('hardware-exit', (ev) => cb(ev.payload));
 }
+
+// ---- cross-view session refresh -------------------------------------------
+// The sidebar's session list lives in App; views that mutate sessions
+// (Workbench branch/mainline ops, deletes elsewhere) dispatch this window
+// event so App re-fetches the list and every tag stays truthful.
+const SESSIONS_CHANGED = 'firment:sessions-changed';
+
+export function notifySessionsChanged(): void {
+  window.dispatchEvent(new CustomEvent(SESSIONS_CHANGED));
+}
+
+export function onSessionsChanged(cb: () => void): () => void {
+  const handler = () => cb();
+  window.addEventListener(SESSIONS_CHANGED, handler);
+  return () => window.removeEventListener(SESSIONS_CHANGED, handler);
+}

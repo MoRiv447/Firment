@@ -9,11 +9,12 @@ import {
   Space,
   Statistic,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
-import { api } from '../lib/api';
+import { api, notifySessionsChanged } from '../lib/api';
 import type {
   ElfCardDto,
   QualityItemDto,
@@ -126,6 +127,9 @@ export function WorkbenchView() {
       setQuality([]);
       setTimeline([]);
     }
+    // Manual refresh heals the sidebar too (e.g. sessions changed on disk
+    // while the app was open).
+    notifySessionsChanged();
     setBusy(false);
   };
 
@@ -137,6 +141,8 @@ export function WorkbenchView() {
       setBranchModal(null);
       await refresh(cwd.trim());
       setCurrentSessionId(id);
+      // The sidebar owns its own session list: tell it a branch was added.
+      notifySessionsChanged();
     } catch (err) {
       setError(String(err));
     } finally {
@@ -151,6 +157,8 @@ export function WorkbenchView() {
       await api.workbenchSetMainline(state.root, sessionId);
       await refresh(state.root);
       await refreshInsights(state.root, sessionId);
+      // Promotion demotes the old mainline too — both rows change tag.
+      notifySessionsChanged();
     } catch (err) {
       setError(String(err));
     } finally {
@@ -170,6 +178,8 @@ export function WorkbenchView() {
       setCurrentSessionId(session.id);
       const wb = await refresh(state.root);
       if (wb) await refreshInsights(state.root, wb.config.mainline_session);
+      // Without this the sidebar still shows the fresh session as NORMAL.
+      notifySessionsChanged();
     } catch (err) {
       setError(String(err));
     } finally {
@@ -373,6 +383,9 @@ export function WorkbenchView() {
                         {f.toUpperCase()}
                       </Tag.CheckableTag>
                     ))}
+                    <Tooltip title="Reload sessions from disk">
+                      <Button size="small" type="text" loading={busy} onClick={load} icon={<ReloadOutlined />} />
+                    </Tooltip>
                   </Space>
                 }
               >

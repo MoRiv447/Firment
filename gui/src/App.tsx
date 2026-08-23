@@ -14,6 +14,7 @@ import {
   onMonitorExited,
   onMonitorOutput,
   onPermissionRequest,
+  onSessionsChanged,
 } from './lib/api';
 import type {
   AskRequest,
@@ -163,6 +164,17 @@ export default function App() {
       void api.listSessions().then(setSessions).catch(console.error);
     }
   }, [session?.id]);
+
+  // Workbench mutations (branch create, set mainline) happen outside this
+  // component's state; the event bus is how their views tell us to re-fetch
+  // so sidebar tags (NORMAL/MAINLINE/BRANCH) never go stale.
+  useEffect(
+    () =>
+      onSessionsChanged(() => {
+        void api.listSessions().then(setSessions).catch(console.error);
+      }),
+    [],
+  );
 
   // Run the session switch queued while a turn was running. Returns true when
   // a switch was pending (the caller must skip its own post-turn work).
