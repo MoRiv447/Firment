@@ -1,0 +1,246 @@
+//! Workbench project state: `.firment/workbench.toml` in the repo root.
+//!
+//! The file is the single source of truth for the workbench (see
+//! `docs/gui-workbench.md` §2): project meta, the mainline session, branch
+//! registry, member scopes, quick commands, the pin/resource map and ADRs.
+//! Single-player works with just this file; teams sync it through git.
+//!
+//! Schema notes: unknown fields are KEPT (serde default tolerance) so future
+//! versions can add sections without breaking older readers; every section
+//! is optional so a fresh project can start from an empty file.
+
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+
+pub const WORKBENCH_FILE: &str = "workbench.toml";
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ProjectMeta {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub created_at: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct GuardConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Standby-watch cadence in minutes (small-model guard rounds).
+    #[serde(default)]
+    pub standby_minutes: u32,
+    /// Severity at which the guard escalates to the big model.
+    #[serde(default = "default_escalate_sev")]
+    pub escalate_sev: String,
+}
+
+fn default_escalate_sev() -> String {
+    "warn".to_string()
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct WorkbenchSection {
+    /// Session id of the project's main line.
+    #[serde(default)]
+    pub mainline_session: String,
+    #[serde(default)]
+    pub guard: GuardConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct BranchEntry {
+    /// "mainline" or another branch's id — forms the session tree.
+    #[serde(default)]
+    pub parent: String,
+    #[serde(default)]
+    pub title: String,
+    /// Optional git branch the workbench keeps this line on.
+    #[serde(default)]
+    pub git_branch: String,
+    /// open | merged | archived
+    #[serde(default = "default_branch_status")]
+    pub status: String,
+    #[serde(default)]
+    pub created_at: u64,
+}
+
+fn default_branch_status() -> String {
+    "open".to_string()
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ScopeEntry {
+    pub member: String,
+    #[serde(default)]
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct QuickCommand {
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(default)]
+    pub steps: Vec<String>,
+    #[serde(default)]
+    pub vars: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PinEntry {
+    pub func: String,
+    #[serde(default)]
+    pub owner: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct DecisionEntry {
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub date: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct WorkbenchConfig {
+    #[serde(default)]
+    pub project: ProjectMeta,
+    #[serde(default)]
+    pub workbench: WorkbenchSection,
+    #[serde(default)]
+    pub scope: std::collections::BTreeMap<String, ScopeEntry>,
+    /// Branch registry keyed by short id (session id prefix).
+    #[serde(default)]
+    pub branch: std::collections::BTreeMap<String, BranchEntry>,
+    #[serde(default)]
+    pub quickcmd: std::collections::BTreeMap<String, QuickCommand>,
+    /// Pin/resource map keyed by pin name (e.g. "PA5").
+    #[serde(default)]
+    pub pinmap: std::collections::BTreeMap<String, PinEntry>,
+    #[serde(default)]
+    pub decision: Vec<DecisionEntry>,
+}
+
+impl WorkbenchConfig {
+    /// Path of the workbench file for a repo root: `<root>/.firment/workbench.toml`.
+    pub fn path_for(root: &Path) -> PathBuf {
+        root.join(".firment").join(WORKBENCH_FILE)
+    }
+
+    /// Load from a repo root. A missing file yields the empty default
+    /// (fresh project); a corrupt file is an error — the workbench must not
+    /// silently invent state.
+    pub fn load(root: &Path) -> Result<Self, String> {
+        let path = Self::path_for(root);
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        toml::from_str(&text).map_err(|e| format!("corrupt {}: {e}", path.display()))
+    }
+
+    /// Persist atomically to the repo root (tmp + rename), creating
+    /// `.firment/` when needed.
+    pub fn save(&self, root: &Path) -> Result<(), String> {
+        let path = Self::path_for(root);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let body = toml::to_string_pretty(self).map_err(|e| format!("serialize workbench: {e}"))?;
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, body).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// The mainline session id, if the workbench declares one.
+    pub fn mainline_session(&self) -> Option<&str> {
+        let s = self.workbench.mainline_session.trim();
+        (!s.is_empty()).then_some(s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write as _;
+
+    fn root_with(toml_text: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join(".firment")).unwrap();
+        let mut f = std::fs::File::create(WorkbenchConfig::path_for(&root)).unwrap();
+        f.write_all(toml_text.as_bytes()).unwrap();
+        (dir, root)
+    }
+
+    #[test]
+    fn missing_file_yields_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = WorkbenchConfig::load(dir.path()).unwrap();
+        assert_eq!(cfg, WorkbenchConfig::default());
+    }
+
+    #[test]
+    fn documented_example_parses_and_roundtrips() {
+        let example = r#"
+[project]
+name = "fw-thermostat"
+created_at = 1755850000
+
+[workbench]
+mainline_session = "e5bd87a2-057c-4a3e-a87b-7cb5bf6b3335"
+guard = { enabled = true, standby_minutes = 30, escalate_sev = "warn" }
+
+[branch.a1b2c3d4]
+parent = "mainline"
+title = "传感器漂移排查"
+git_branch = "exp/drift-hunt"
+status = "open"
+created_at = 1755851000
+
+[scope.owner]
+member = "alice"
+paths = ["**"]
+
+[quickcmd.flash-usb0]
+steps = ["flash", "monitor"]
+vars = { port = "COM14" }
+
+[pinmap.PA5]
+func = "LED status"
+owner = "alice"
+
+[[decision]]
+title = "传感器总线选 CAN 而非 RS485"
+body = "节点数可能扩到 16"
+date = "2026-08-22"
+"#;
+        let (dir, root) = root_with(example);
+        let cfg = WorkbenchConfig::load(&root).unwrap();
+        assert_eq!(cfg.project.name, "fw-thermostat");
+        assert_eq!(
+            cfg.workbench.mainline_session,
+            "e5bd87a2-057c-4a3e-a87b-7cb5bf6b3335"
+        );
+        assert!(cfg.workbench.guard.enabled);
+        assert_eq!(cfg.branch["a1b2c3d4"].git_branch, "exp/drift-hunt");
+        assert_eq!(cfg.quickcmd["flash-usb0"].steps, vec!["flash", "monitor"]);
+        assert_eq!(cfg.pinmap["PA5"].func, "LED status");
+        assert_eq!(cfg.decision.len(), 1);
+        // Round-trip: save -> load keeps the same data.
+        cfg.save(&root).unwrap();
+        let reloaded = WorkbenchConfig::load(&root).unwrap();
+        assert_eq!(cfg, reloaded);
+        drop(dir);
+    }
+
+    #[test]
+    fn corrupt_file_is_an_error_not_silently_default() {
+        let (dir, root) = root_with("[project\nname = broken");
+        let err = WorkbenchConfig::load(&root).unwrap_err();
+        assert!(err.contains("corrupt"), "got: {err}");
+        drop(dir);
+    }
+}

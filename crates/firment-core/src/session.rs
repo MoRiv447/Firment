@@ -6,6 +6,25 @@ use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Kind of a session in the workbench tree: the project's long-lived
+/// `Main` line, or a `Branch` spawned from it (an experiment / subtask).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionKind {
+    #[default]
+    Main,
+    Branch,
+}
+
+impl SessionKind {
+    pub fn label(&self) -> &'static str {
+        match self {
+            SessionKind::Main => "main",
+            SessionKind::Branch => "branch",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Session {
     pub id: String,
@@ -14,6 +33,10 @@ pub struct Session {
     pub model: String,
     pub thinking: ThinkingLevel,
     pub mode: SessionMode,
+    /// Workbench tree linkage: `Some(parent id)` marks this as a branch of
+    /// another session. `None` on main-line sessions.
+    pub parent_session: Option<String>,
+    pub kind: SessionKind,
     pub created_at: u64,
     pub updated_at: u64,
     pub messages: Vec<ChatMessage>,
@@ -29,6 +52,8 @@ impl Session {
             model: model.into(),
             thinking: ThinkingLevel::Off,
             mode: SessionMode::Agent,
+            parent_session: None,
+            kind: SessionKind::Main,
             created_at: now,
             updated_at: now,
             messages: Vec::new(),
@@ -66,6 +91,9 @@ pub struct SessionSummary {
     pub model: String,
     pub cwd: PathBuf,
     pub preview: String,
+    /// Workbench tree linkage (see `Session::parent_session`).
+    pub kind: SessionKind,
+    pub parent_session: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -93,6 +121,12 @@ struct MetaLine {
     thinking: ThinkingLevel,
     #[serde(default)]
     mode: SessionMode,
+    // Workbench tree linkage. Defaults keep pre-workbench JSONL files
+    // loadable unchanged (they are all main-line sessions).
+    #[serde(default)]
+    parent_session: Option<String>,
+    #[serde(default)]
+    session_kind: SessionKind,
     created_at: u64,
     updated_at: u64,
 }
@@ -208,6 +242,8 @@ impl SessionStore {
             model: model.clone(),
             thinking: meta.thinking,
             mode: meta.mode,
+            parent_session: meta.parent_session,
+            kind: meta.session_kind,
             created_at: meta.created_at,
             updated_at: meta.updated_at,
             messages,
@@ -242,6 +278,8 @@ impl SessionStore {
                 model: migrate_legacy_model(&meta.model),
                 cwd: meta.cwd,
                 preview: String::new(),
+                kind: meta.session_kind,
+                parent_session: meta.parent_session,
             });
         }
         out.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
@@ -250,6 +288,31 @@ impl SessionStore {
 
     pub fn latest(&self) -> Result<Option<SessionSummary>, SessionError> {
         Ok(self.list()?.into_iter().next())
+    }
+
+    /// Spawn a workbench BRANCH session from an existing one: same cwd,
+    /// provider and model, fresh (empty) message history, linked to its
+    /// parent via `parent_session`. The branch starts with a synthetic user
+    /// note carrying `title` so the transcript preview is meaningful.
+    ///
+    /// Deleting a parent does NOT cascade: orphaned branches keep running
+    /// and render as roots in the tree view.
+    pub fn create_branch(&self, parent_id: &str, title: &str) -> Result<Session, SessionError> {
+        let parent = self.load(parent_id)?;
+        let mut child = Session::new(parent.cwd.clone(), &parent.provider, &parent.model);
+        child.thinking = parent.thinking;
+        child.mode = parent.mode;
+        child.kind = SessionKind::Branch;
+        child.parent_session = Some(parent.id.clone());
+        if !title.trim().is_empty() {
+            let title = title.trim();
+            let t: String = title.chars().take(48).collect();
+            child.push(ChatMessage::User {
+                content: format!("[branch] {t}"),
+            });
+        }
+        self.save(&child)?;
+        Ok(child)
     }
 
     /// Delete a session and all of its sidecar data (undo backups, spilled
@@ -317,6 +380,8 @@ fn serialize_session(session: &Session) -> Result<String, SessionError> {
         model: session.model.clone(),
         thinking: session.thinking,
         mode: session.mode,
+        parent_session: session.parent_session.clone(),
+        session_kind: session.kind,
         created_at: session.created_at,
         updated_at: session.updated_at,
     };

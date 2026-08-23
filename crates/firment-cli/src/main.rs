@@ -550,12 +550,22 @@ fn list_sessions() -> anyhow::Result<()> {
             .load(&summary.id)
             .map(|s| s.title())
             .unwrap_or_default();
+        // Workbench tree marker: branches show their parent id so the list
+        // reads as a tree at a glance.
+        let kind_tag = match (&summary.kind, &summary.parent_session) {
+            (firment_core::SessionKind::Branch, Some(parent)) => {
+                format!("[branch of {}] ", &parent[..8.min(parent.len())])
+            }
+            (firment_core::SessionKind::Branch, None) => "[branch] ".to_string(),
+            _ => String::new(),
+        };
         println!(
-            "{:<36} {}  {:<24} {}  {}",
+            "{:<36} {}  {:<24} {}  {}{}",
             summary.id,
             format_ts(summary.updated_at),
             summary.model,
             summary.cwd.display(),
+            kind_tag,
             preview
         );
     }

@@ -367,6 +367,48 @@ async fn session_roundtrip() {
     assert_eq!(list[0].id, session.id);
 }
 
+#[tokio::test]
+async fn create_branch_links_child_and_roundtrips() {
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let mut main = Session::new(dir.path().to_path_buf(), "default", "test-model");
+    main.push(ChatMessage::User {
+        content: "mainline work".to_string(),
+    });
+    store.save(&main).unwrap();
+
+    // Branch inherits cwd/provider/model, gets fresh history and a
+    // parent link.
+    let branch = store.create_branch(&main.id, "sensor drift hunt").unwrap();
+    assert_ne!(branch.id, main.id);
+    assert_eq!(branch.cwd, main.cwd);
+    assert_eq!(branch.provider, main.provider);
+    assert_eq!(branch.model, main.model);
+    assert_eq!(branch.kind, firment_core::SessionKind::Branch);
+    assert_eq!(branch.parent_session.as_deref(), Some(main.id.as_str()));
+    // Synthetic title note gives the transcript preview meaning.
+    assert!(
+        matches!(&branch.messages[0], ChatMessage::User { content }
+            if content.contains("sensor drift hunt")),
+        "got: {:?}",
+        branch.messages.first()
+    );
+
+    // Reload from disk: the linkage survives the round-trip.
+    let reloaded = store.load(&branch.id).unwrap();
+    assert_eq!(reloaded.kind, firment_core::SessionKind::Branch);
+    assert_eq!(reloaded.parent_session.as_deref(), Some(main.id.as_str()));
+
+    // Listing surfaces kind/parent for tree rendering.
+    let list = store.list().unwrap();
+    let listed_branch = list.iter().find(|s| s.id == branch.id).unwrap();
+    assert_eq!(listed_branch.kind, firment_core::SessionKind::Branch);
+    assert_eq!(
+        listed_branch.parent_session.as_deref(),
+        Some(main.id.as_str())
+    );
+}
+
 #[test]
 fn session_load_migrates_deprecated_deepseek_model() {
     let dir = tempdir().unwrap();

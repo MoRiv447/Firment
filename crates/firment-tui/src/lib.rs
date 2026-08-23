@@ -1119,6 +1119,8 @@ mod tests {
                 model: "m1".to_string(),
                 cwd: PathBuf::from("."),
                 preview: "first".to_string(),
+                kind: firment_core::SessionKind::Main,
+                parent_session: None,
             },
             firment_core::SessionSummary {
                 id: "22222222-bbbb".to_string(),
@@ -1126,6 +1128,8 @@ mod tests {
                 model: "m2".to_string(),
                 cwd: PathBuf::from("."),
                 preview: "second".to_string(),
+                kind: firment_core::SessionKind::Branch,
+                parent_session: Some("11111111-aaaa".to_string()),
             },
         ]));
         assert!(app.session_picker.is_some());

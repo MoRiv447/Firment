@@ -13,6 +13,7 @@ pub mod session;
 pub mod subagent;
 pub mod tool;
 pub mod types;
+pub mod workbench;
 
 pub use agent::{Agent, AgentError, AgentEvent, EventSink};
 pub use ask::{Asker, QuestionRequest};
@@ -28,7 +29,8 @@ pub use provider::{
     AnthropicProvider, ChatRequest, OpenAIProvider, Provider, ProviderError, ProviderEvent,
     ProviderStream, StopReason,
 };
-pub use session::{Session, SessionError, SessionStore, SessionSummary};
+pub use session::{Session, SessionError, SessionKind, SessionStore, SessionSummary};
 pub use subagent::{NullSink, SubagentFactory, SubagentRunner};
 pub use tool::{Tool, ToolContext, ToolError, ToolOutput, ToolRegistry};
 pub use types::{ChatMessage, SessionMode, ThinkingLevel, ToolCall, ToolSpec};
+pub use workbench::WorkbenchConfig;
