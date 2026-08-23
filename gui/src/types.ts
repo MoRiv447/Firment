@@ -30,6 +30,25 @@ export interface SessionSummaryDto {
   model: string;
   cwd: string;
   preview: string;
+  kind: string; // "main" | "branch"
+  parent_session: string | null;
+}
+
+export interface GitStatusDto {
+  branch: string;
+  dirty_files: number;
+}
+
+export interface WorkbenchConfigDto {
+  project_name: string;
+  mainline_session: string;
+  toml_raw: string;
+}
+
+export interface WorkbenchStateDto {
+  config: WorkbenchConfigDto;
+  git: GitStatusDto | null;
+  root: string;
 }
 
 export type FrontendEvent =

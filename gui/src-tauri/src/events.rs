@@ -71,6 +71,9 @@ pub struct SessionSummaryDto {
     pub model: String,
     pub cwd: String,
     pub preview: String,
+    /// Workbench tree linkage ("main" | "branch").
+    pub kind: String,
+    pub parent_session: Option<String>,
 }
 
 pub fn session_dto(s: &Session) -> SessionDto {
@@ -94,6 +97,8 @@ pub fn session_summary_dto(s: &SessionSummary) -> SessionSummaryDto {
         model: s.model.clone(),
         cwd: s.cwd.to_string_lossy().into_owned(),
         preview: s.preview.clone(),
+        kind: s.kind.label().to_string(),
+        parent_session: s.parent_session.clone(),
     }
 }
 

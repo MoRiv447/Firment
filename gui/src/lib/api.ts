@@ -9,6 +9,7 @@ import type {
   SessionDto,
   SessionSummaryDto,
   SettingsDto,
+  WorkbenchStateDto,
 } from '../types';
 
 // ---------- session / agent ----------
@@ -17,6 +18,11 @@ export const api = {
   startTurn: (input: string) => invoke('start_turn', { input }),
   cancelTurn: () => invoke('cancel_turn'),
   listSessions: () => invoke<SessionSummaryDto[]>('list_sessions'),
+  workbenchState: (cwd: string) => invoke<WorkbenchStateDto>('workbench_state', { cwd }),
+  workbenchSetMainline: (cwd: string, sessionId: string) =>
+    invoke('workbench_set_mainline', { cwd, sessionId }),
+  workbenchBranchCreate: (parentId: string, title: string) =>
+    invoke<string>('workbench_branch_create', { parentId, title }),
   newSession: (cwd: string, mode: string) => invoke<SessionDto>('new_session', { cwd, mode }),
   loadSession: (id: string) => invoke<SessionDto>('load_session', { id }),
   deleteSession: (id: string) => invoke('delete_session', { id }),

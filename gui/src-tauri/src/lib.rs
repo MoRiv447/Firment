@@ -5,6 +5,7 @@ mod events;
 mod hardware;
 mod state;
 mod ui;
+mod workbench;
 
 use std::sync::Arc;
 
@@ -98,6 +99,9 @@ pub fn run() {
             commands::active_monitors,
             commands::flash,
             commands::firm_run,
+            workbench::workbench_state,
+            workbench::workbench_set_mainline,
+            workbench::workbench_branch_create,
         ]);
 
     builder

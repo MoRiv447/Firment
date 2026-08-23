@@ -29,7 +29,7 @@ import { SettingsView } from './views/SettingsView';
 import { SerialView } from './views/SerialView';
 import { initialTurnState, turnReducer } from './lib/turnReducer';
 import { FlashView } from './views/FlashView';
-import { CollabView } from './views/CollabView';
+import { WorkbenchView } from './views/WorkbenchView';
 
 const { Sider, Header, Content } = Layout;
 
@@ -370,7 +370,7 @@ export default function App() {
                 { key: 'serial', icon: <UsbOutlined />, label: 'Serial monitor' },
                 { key: 'flash', icon: <RocketOutlined />, label: 'Flash / Run' },
                 { key: 'settings', icon: <ApiOutlined />, label: 'Settings' },
-                { key: 'collab', icon: <TeamOutlined />, label: 'Team' },
+                { key: 'collab', icon: <TeamOutlined />, label: 'Workbench' },
               ]}
             />
             {running && (
@@ -446,7 +446,7 @@ export default function App() {
             {view === 'settings' && <SettingsView />}
             {view === 'serial' && <SerialView lines={monitorLines} />}
             {view === 'flash' && <FlashView />}
-            {view === 'collab' && <CollabView />}
+            {view === 'collab' && <WorkbenchView />}
           </Content>
         </Layout>
       </Layout>
