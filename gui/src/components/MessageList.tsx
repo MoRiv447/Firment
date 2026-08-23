@@ -71,7 +71,8 @@ function ToolCallBlock({ calls }: { calls: ToolCall[] }) {
 }
 
 /// Historical tool calls start collapsed (name + one-line arg preview);
-/// expanding shows the full card. Live cards during streaming stay expanded.
+/// the header toggles open AND closed — expanding swaps in the full card
+/// below it. Live cards during streaming stay expanded.
 function CollapsedToolCard({ call }: { call: ToolCall }) {
   const [open, setOpen] = useState(false);
   let preview = '';
@@ -81,29 +82,40 @@ function CollapsedToolCard({ call }: { call: ToolCall }) {
     preview = String(call.arguments ?? '');
   }
   if (preview.length > 90) preview = `${preview.slice(0, 90)}…`;
-  if (open) {
-    return <ToolCard tool={{ seq: 1, name: call.name, args: call.arguments, status: 'ok' }} />;
-  }
   return (
-    <div
-      onClick={() => setOpen(true)}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6,
-        cursor: 'pointer',
-        padding: '4px 10px',
-        border: '2px solid #000000',
-        background: '#12151b',
-      }}
-    >
-      <RightOutlined style={{ fontSize: 9, color: '#9aa3b2' }} />
-      <Tag color="green" style={{ borderRadius: 0, border: '2px solid #000', color: '#e6e9ef', fontWeight: 700 }}>
-        ✓ {call.name}
-      </Tag>
-      <Text type="secondary" style={{ fontSize: 12, flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-        {preview}
-      </Text>
+    <div>
+      <div
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          cursor: 'pointer',
+          padding: '4px 10px',
+          border: '2px solid #000000',
+          background: '#12151b',
+        }}
+      >
+        {open ? (
+          <DownOutlined style={{ fontSize: 9, color: '#9aa3b2' }} />
+        ) : (
+          <RightOutlined style={{ fontSize: 9, color: '#9aa3b2' }} />
+        )}
+        <Tag color="green" style={{ borderRadius: 0, border: '2px solid #000', color: '#e6e9ef', fontWeight: 700 }}>
+          ✓ {call.name}
+        </Tag>
+        {!open && (
+          <Text type="secondary" style={{ fontSize: 12, flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+            {preview}
+          </Text>
+        )}
+      </div>
+      {open && (
+        <ToolCard
+          tool={{ seq: 1, name: call.name, args: call.arguments, status: 'ok' }}
+          standalone
+        />
+      )}
     </div>
   );
 }
