@@ -33,11 +33,13 @@ export function SessionSidebar({
   // ---- build the session tree -------------------------------------------
   // Branch sessions (parent_session set) nest under their parent; everything
   // else is a root. Roots WITH children are project mainlines and get a
-  // workbench jump button.
+  // workbench jump button. Orphaned branches (parent deleted) are hoisted to
+  // roots so they never vanish from the list.
+  const ids = new Set(sessions.map((s) => s.id));
   const byParent = new Map<string, SessionSummaryDto[]>();
   const roots: SessionSummaryDto[] = [];
   for (const s of sessions) {
-    if (s.parent_session) {
+    if (s.parent_session && ids.has(s.parent_session)) {
       const arr = byParent.get(s.parent_session) ?? [];
       arr.push(s);
       byParent.set(s.parent_session, arr);
@@ -50,16 +52,20 @@ export function SessionSidebar({
 
   const renderRow = (s: SessionSummaryDto, depth: number) => {
     const kids = byParent.get(s.id) ?? [];
-    const isProjectRoot = depth === 0 && kids.length > 0;
     return (
       <div key={s.id}>
-        {renderItem(s, depth, isProjectRoot)}
+        {renderItem(s, depth, kids)}
         {kids.map((k) => renderRow(k, depth + 1))}
       </div>
     );
   };
 
-  const renderItem = (s: SessionSummaryDto, depth: number, isProjectRoot: boolean) => (
+  const renderItem = (s: SessionSummaryDto, depth: number, kids: SessionSummaryDto[]) => {
+    // MAINLINE badge: a main-kind session with nested branches. The folder
+    // button: any session with children is a project root worth jumping
+    // from. Branches keep their ↳ BRANCH tag instead.
+    const isProjectRoot = s.kind === 'main' && kids.length > 0;
+    return (
     <List.Item
       key={s.id}
       onClick={() => onSelect(s.id)}
@@ -174,7 +180,8 @@ export function SessionSidebar({
         }
       />
     </List.Item>
-  );
+    );
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: 4, gap: 6 }}>

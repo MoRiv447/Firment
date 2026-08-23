@@ -76,7 +76,19 @@ pub async fn workbench_state(cwd: String) -> Result<WorkbenchStateDto, String> {
 }
 
 #[tauri::command]
-pub async fn workbench_set_mainline(cwd: String, session_id: String) -> Result<(), String> {
+pub async fn workbench_set_mainline(
+    shared: tauri::State<'_, Arc<Shared>>,
+    cwd: String,
+    session_id: String,
+) -> Result<(), String> {
+    // The mainline must point at a real session: setting it to a deleted or
+    // typo'd id would leave the workbench permanently "(unset)".
+    shared
+        .store
+        .lock()
+        .unwrap()
+        .load(&session_id)
+        .map_err(|e| format!("cannot set mainline: {e}"))?;
     let mut cfg = WorkbenchConfig::load(Path::new(&cwd))?;
     cfg.workbench.mainline_session = session_id;
     cfg.save(Path::new(&cwd))

@@ -98,7 +98,8 @@ pub fn analyze_elf_file(elf: &Path) -> Result<(u64, u64, usize), String> {
 }
 
 /// Parse an ELF/PE/COFF file into an analysis report.
-fn analyze(elf: &Path) -> Result<ElfReport, ToolError> {    let data =
+fn analyze(elf: &Path) -> Result<ElfReport, ToolError> {
+    let data =
         std::fs::read(elf).map_err(|e| ToolError::new(format!("[Io] cannot read ELF: {e}")))?;
     let file = object::File::parse(&*data)
         .map_err(|e| ToolError::new(format!("[InvalidInput] not a parseable binary: {e}")))?;
