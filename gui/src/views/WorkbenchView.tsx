@@ -4,15 +4,23 @@ import {
   Card,
   Empty,
   Input,
+  List,
   Modal,
   Space,
   Statistic,
   Tag,
   Typography,
 } from 'antd';
+import { ReloadOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
-import type { SessionSummaryDto, WorkbenchStateDto } from '../types';
+import type {
+  ElfCardDto,
+  QualityItemDto,
+  SessionSummaryDto,
+  TimelineEntryDto,
+  WorkbenchStateDto,
+} from '../types';
 
 const { Text, Title } = Typography;
 
@@ -29,6 +37,9 @@ export function WorkbenchView() {
   const [error, setError] = useState<string | null>(null);
   const [branchModal, setBranchModal] = useState<{ parentId: string; title: string } | null>(null);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [elf, setElf] = useState<ElfCardDto | null>(null);
+  const [quality, setQuality] = useState<QualityItemDto[]>([]);
+  const [timeline, setTimeline] = useState<TimelineEntryDto[]>([]);
 
   const refresh = async (dir: string) => {
     setError(null);
@@ -61,14 +72,33 @@ export function WorkbenchView() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  // v1: the project path is entered manually; W2 will remember the last
-  // opened project per machine.
-  useEffect(() => {}, []);
+
+  // W1d cards: ELF stats + verification badges + change timeline, scoped to
+  // the project's mainline session.
+  const refreshInsights = async (dir: string, mainlineSession: string) => {
+    setElf(null);
+    setQuality([]);
+    setTimeline([]);
+    try {
+      setElf(await api.workbenchElf(dir).catch(() => null));
+    } catch {
+      setElf(null);
+    }
+    try {
+      setQuality(await api.workbenchQuality(mainlineSession));
+      setTimeline(await api.workbenchTimeline(mainlineSession, 10));
+    } catch {
+      /* keep cards empty */
+    }
+  };
 
   const load = async () => {
     if (!cwd.trim()) return;
     setBusy(true);
     await refresh(cwd.trim());
+    if (state?.config.mainline_session) {
+      await refreshInsights(cwd.trim(), state.config.mainline_session);
+    }
     setBusy(false);
   };
 
@@ -186,6 +216,78 @@ export function WorkbenchView() {
                   <Text type="secondary" style={{ fontSize: 12 }}>
                     No .firment/workbench.toml yet — creating a branch will generate it.
                   </Text>
+                )}
+              </Card>
+
+              <Card
+                type="inner"
+                title="Insights"
+                size="small"
+                extra={
+                  <Button
+                    size="small"
+                    icon={<ReloadOutlined />}
+                    disabled={busy || !state.config.mainline_session}
+                    onClick={() => refreshInsights(state.root, state.config.mainline_session)}
+                  >
+                    refresh
+                  </Button>
+                }
+              >
+                {elf && (
+                  <Card type="inner" size="small" title="ELF budget" style={{ marginBottom: 12 }}>
+                    <Space wrap size={24}>
+                      <Statistic title="flash" value={(elf.flash_bytes / 1024).toFixed(1)} suffix="KiB" />
+                      <Statistic title="RAM (data+bss)" value={(elf.ram_bytes / 1024).toFixed(1)} suffix="KiB" />
+                      <Statistic title="functions" value={elf.functions} />
+                    </Space>
+                    {elf.gate && (
+                      <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 6 }}>
+                        gate thresholds: stack +{elf.gate.stack_threshold}B · flash +
+                        {elf.gate.flash_threshold_kib}KiB · ram +{elf.gate.ram_threshold_kib}KiB
+                        {elf.gate.strict ? ' · strict' : ''}
+                      </Text>
+                    )}
+                    <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
+                      {elf.file}
+                    </Text>
+                  </Card>
+                )}
+                {quality.length > 0 && (
+                  <Card type="inner" size="small" title="Verification badges (mainline)" style={{ marginBottom: 12 }}>
+                    <Space wrap size={8}>
+                      {quality.map((q) => (
+                        <Tag key={q.tool} color={q.ok ? 'green' : 'red'} style={{ fontSize: 12 }}>
+                          {q.tool}: {q.ok ? 'PASS' : 'FAIL'}
+                        </Tag>
+                      ))}
+                    </Space>
+                  </Card>
+                )}
+                {timeline.length > 0 && (
+                  <Card type="inner" size="small" title="Change timeline (mainline)">
+                    <List
+                      size="small"
+                      dataSource={timeline}
+                      renderItem={(entry) => (
+                        <List.Item style={{ padding: '4px 0' }}>
+                          <div style={{ width: '100%' }}>
+                            <Text type="secondary" style={{ fontSize: 11 }}>
+                              #{entry.seq} · {new Date(entry.created_at * 1000).toLocaleString()}
+                            </Text>
+                            {entry.files.map((f) => (
+                              <div key={f.path} style={{ fontSize: 12 }}>
+                                <Text code>{f.path}</Text>{' '}
+                                <Text type="secondary">
+                                  {f.old_lines} → {f.new_lines}
+                                </Text>
+                              </div>
+                            ))}
+                          </div>
+                        </List.Item>
+                      )}
+                    />
+                  </Card>
                 )}
               </Card>
 

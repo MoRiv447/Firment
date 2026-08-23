@@ -2,7 +2,7 @@ mod ask_user;
 mod build;
 mod debug;
 mod edit_file;
-mod elf_analyze;
+pub(crate) mod elf_analyze;
 pub(crate) mod flash;
 mod glob;
 mod grep;

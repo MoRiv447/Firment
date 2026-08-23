@@ -2,13 +2,16 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type {
   AskRequest,
+  ElfCardDto,
   FrontendEvent,
   HardwareExit,
   MonitorLine,
   PermissionRequest,
+  QualityItemDto,
   SessionDto,
   SessionSummaryDto,
   SettingsDto,
+  TimelineEntryDto,
   WorkbenchStateDto,
 } from '../types';
 
@@ -23,6 +26,12 @@ export const api = {
     invoke('workbench_set_mainline', { cwd, sessionId }),
   workbenchBranchCreate: (parentId: string, title: string) =>
     invoke<string>('workbench_branch_create', { parentId, title }),
+  workbenchElf: (cwd: string, elf?: string) =>
+    invoke<ElfCardDto>('workbench_elf', { cwd, elf: elf ?? null }),
+  workbenchQuality: (sessionId: string) =>
+    invoke<QualityItemDto[]>('workbench_quality', { sessionId }),
+  workbenchTimeline: (sessionId: string, limit?: number) =>
+    invoke<TimelineEntryDto[]>('workbench_timeline', { sessionId, limit: limit ?? null }),
   newSession: (cwd: string, mode: string) => invoke<SessionDto>('new_session', { cwd, mode }),
   loadSession: (id: string) => invoke<SessionDto>('load_session', { id }),
   deleteSession: (id: string) => invoke('delete_session', { id }),

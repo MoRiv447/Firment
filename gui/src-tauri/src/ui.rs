@@ -12,7 +12,7 @@ use tokio::sync::oneshot;
 use tokio::time::timeout;
 
 use crate::events::frontend_event;
-use crate::state::{Shared, next_seq};
+use crate::state::{next_seq, Shared};
 
 /// How long a permission dialog may stay unanswered before the tool call is
 /// denied. The GUI waves run tools concurrently, so an unrendered dialog must
@@ -67,7 +67,9 @@ impl PermissionChecker for GuiPermission {
         );
         match timeout(PERMISSION_TIMEOUT, rx).await {
             Ok(Ok(true)) => Ok(()),
-            Ok(Ok(false)) => Err(PermissionError::denied(format!("user denied tool '{tool}'"))),
+            Ok(Ok(false)) => Err(PermissionError::denied(format!(
+                "user denied tool '{tool}'"
+            ))),
             Ok(Err(_)) => Err(PermissionError::denied("permission dialog closed")),
             Err(_) => {
                 self.shared.perm_waiters.lock().unwrap().remove(&id);
@@ -92,16 +94,20 @@ impl Asker for GuiAsker {
         let id = next_seq();
         let (tx, rx) = oneshot::channel();
         self.shared.ask_waiters.lock().unwrap().insert(id, tx);
-        let _ = self.shared
-            .app
-            .emit("ask-request", json!({ "id": id, "question": question, "options": options }));
+        let _ = self.shared.app.emit(
+            "ask-request",
+            json!({ "id": id, "question": question, "options": options }),
+        );
         match timeout(ASK_TIMEOUT, rx).await {
             Ok(Ok(Some(answer))) => Ok(answer),
             Ok(Ok(None)) => Err("user dismissed the question".to_string()),
             Ok(Err(e)) => Err(e.to_string()),
             Err(_) => {
                 self.shared.ask_waiters.lock().unwrap().remove(&id);
-                Err(format!("question timed out after {}s", ASK_TIMEOUT.as_secs()))
+                Err(format!(
+                    "question timed out after {}s",
+                    ASK_TIMEOUT.as_secs()
+                ))
             }
         }
     }

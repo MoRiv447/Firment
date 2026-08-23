@@ -120,3 +120,178 @@ pub async fn workbench_branch_create(
 
     Ok(branch.id)
 }
+
+// ---------- W1d: ELF budget card / verification badges / change timeline ----------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ElfCardDto {
+    pub file: String,
+    pub flash_bytes: u64,
+    pub ram_bytes: u64,
+    pub functions: usize,
+    /// Gate thresholds from config [tools.elf], when configured.
+    pub gate: Option<GateThresholdsDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GateThresholdsDto {
+    pub stack_threshold: u32,
+    pub flash_threshold_kib: u64,
+    pub ram_threshold_kib: u64,
+    pub strict: bool,
+}
+
+/// ELF stats for the budget card. `elf` overrides; otherwise the newest match
+/// of the configured [tools.elf] glob inside `cwd` is used.
+#[tauri::command]
+pub async fn workbench_elf(
+    shared: tauri::State<'_, Arc<Shared>>,
+    cwd: String,
+    elf: Option<String>,
+) -> Result<ElfCardDto, String> {
+    let root = PathBuf::from(&cwd);
+    let resolved = match elf {
+        Some(p) if !p.trim().is_empty() => {
+            let p = PathBuf::from(p.trim());
+            if p.is_absolute() {
+                p
+            } else {
+                root.join(p)
+            }
+        }
+        _ => {
+            let glob = {
+                let config = shared.config.lock().unwrap();
+                config
+                    .tools
+                    .elf
+                    .as_ref()
+                    .and_then(|e| (!e.glob.is_empty()).then(|| e.glob.clone()))
+            }
+            .ok_or_else(|| {
+                "no ELF configured: pass elf=<path> or set [tools.elf] glob in config.toml"
+                    .to_string()
+            })?;
+            firment_core::agent::newest_elf_match(&root, &glob).ok_or_else(|| {
+                format!(
+                    "no file matches the configured ELF glob ({glob}) under {}",
+                    root.display()
+                )
+            })?
+        }
+    };
+
+    // Gate thresholds for context (they are DELTA thresholds, shown as
+    // reference next to the absolute numbers).
+    let gate = {
+        let config = shared.config.lock().unwrap();
+        config.tools.elf.as_ref().map(|e| GateThresholdsDto {
+            stack_threshold: e.stack_threshold,
+            flash_threshold_kib: e.flash_threshold_kib,
+            ram_threshold_kib: e.ram_threshold_kib,
+            strict: e.strict,
+        })
+    };
+
+    let file_display = resolved.to_string_lossy().into_owned();
+    let stats = tokio::task::spawn_blocking(move || firment_tools::analyze_elf_file(&resolved))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("[InvalidInput] {e}"))?;
+
+    Ok(ElfCardDto {
+        file: file_display,
+        flash_bytes: stats.0,
+        ram_bytes: stats.1,
+        functions: stats.2,
+        gate,
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct QualityItemDto {
+    pub tool: String,
+    pub ok: bool,
+    pub snippet: String,
+}
+
+/// Last build/verify/hil/flash/run outcome per tool, derived from the
+/// session transcript (most recent tool result per name wins).
+#[tauri::command]
+pub async fn workbench_quality(
+    shared: tauri::State<'_, Arc<Shared>>,
+    session_id: String,
+) -> Result<Vec<QualityItemDto>, String> {
+    let store = shared.store.lock().unwrap().clone();
+    let session = store.load(&session_id).map_err(|e| e.to_string())?;
+    const WATCHED: [&str; 5] = ["build", "verify", "hil", "flash", "run"];
+    const FAIL_TAGS: [&str; 6] = [
+        "[Io]",
+        "[Timeout]",
+        "[InvalidInput]",
+        "[Permission]",
+        "[NotFound]",
+        "FAILED",
+    ];
+    let mut last: std::collections::BTreeMap<String, (bool, String)> =
+        std::collections::BTreeMap::new();
+    for msg in session.messages.iter().rev() {
+        // edition-2021 crate: no let-chains, so nest the guards.
+        if let firment_core::ChatMessage::Tool { name, content, .. } = msg {
+            if WATCHED.contains(&name.as_str()) && !last.contains_key(name) {
+                let ok = !FAIL_TAGS.iter().any(|tag| content.contains(tag));
+                let snippet: String = content.chars().take(120).collect();
+                last.insert(name.clone(), (ok, snippet));
+            }
+        }
+    }
+    Ok(last
+        .into_iter()
+        .map(|(tool, (ok, snippet))| QualityItemDto { tool, ok, snippet })
+        .collect())
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TimelineFileDto {
+    pub path: String,
+    pub old_lines: usize,
+    pub new_lines: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TimelineEntryDto {
+    pub seq: u64,
+    pub created_at: u64,
+    pub files: Vec<TimelineFileDto>,
+}
+
+/// Committed-change timeline for a session (newest first), from the
+/// per-session change ledger.
+#[tauri::command]
+pub async fn workbench_timeline(
+    shared: tauri::State<'_, Arc<Shared>>,
+    session_id: String,
+    limit: Option<usize>,
+) -> Result<Vec<TimelineEntryDto>, String> {
+    let store = shared.store.lock().unwrap().clone();
+    let ledger = firment_core::journal::Ledger::new(store.ledger_path(&session_id));
+    let entries = ledger.entries();
+    let limit = limit.unwrap_or(12);
+    Ok(entries
+        .into_iter()
+        .rev()
+        .take(limit)
+        .map(|(seq, created_at, changes)| TimelineEntryDto {
+            seq,
+            created_at,
+            files: changes
+                .into_iter()
+                .map(|c| TimelineFileDto {
+                    path: c.path.to_string_lossy().into_owned(),
+                    old_lines: c.old_lines,
+                    new_lines: c.new_lines,
+                })
+                .collect(),
+        })
+        .collect())
+}

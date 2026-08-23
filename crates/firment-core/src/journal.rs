@@ -143,6 +143,19 @@ impl Ledger {
         }
         truncate_chars(&out, max_chars)
     }
+
+    /// Structured ledger entries in file order (oldest first), for embedders
+    /// (GUI workbench timeline). Missing file yields an empty vec.
+    pub fn entries(&self) -> Vec<(u64, u64, Vec<LedgerChange>)> {
+        fs::read_to_string(&self.path)
+            .map(|text| {
+                text.lines()
+                    .filter_map(|l| serde_json::from_str::<LedgerLine>(l).ok())
+                    .map(|line| (line.seq, line.created_at, line.changes))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 /// Per-turn edit journal: backs up every file before the first mutation and
@@ -236,8 +249,6 @@ impl EditJournal {
         }
     }
 
-    /// Seal the turn's mutations as an undo entry and return the change
-    /// ledger entries. Empty batches are skipped.
     pub fn commit(&mut self) -> Result<Vec<LedgerChange>, String> {
         if self.entries.is_empty() {
             return Ok(Vec::new());

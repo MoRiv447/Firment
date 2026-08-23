@@ -51,6 +51,39 @@ export interface WorkbenchStateDto {
   root: string;
 }
 
+export interface GateThresholdsDto {
+  stack_threshold: number;
+  flash_threshold_kib: number;
+  ram_threshold_kib: number;
+  strict: boolean;
+}
+
+export interface ElfCardDto {
+  file: string;
+  flash_bytes: number;
+  ram_bytes: number;
+  functions: number;
+  gate: GateThresholdsDto | null;
+}
+
+export interface QualityItemDto {
+  tool: string;
+  ok: boolean;
+  snippet: string;
+}
+
+export interface TimelineFileDto {
+  path: string;
+  old_lines: number;
+  new_lines: number;
+}
+
+export interface TimelineEntryDto {
+  seq: number;
+  created_at: number;
+  files: TimelineFileDto[];
+}
+
 export type FrontendEvent =
   | { type: 'turn_start' }
   | { type: 'text_delta'; text: string }

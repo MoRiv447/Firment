@@ -3,6 +3,8 @@ pub mod decode;
 pub mod hardware;
 pub mod tools;
 
+pub use tools::elf_analyze::analyze_elf_file;
+
 use firment_core::{Tool, ToolRegistry};
 use std::sync::Arc;
 

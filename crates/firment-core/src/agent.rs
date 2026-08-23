@@ -1905,7 +1905,7 @@ fn summarize(text: &str) -> String {
 /// Newest file under `cwd` matching `pattern` (glob; `**` crosses directories,
 /// `*`/`?` match within a segment, `\\` is normalized to `/`). Hidden dirs,
 /// `target/` and `node_modules/` are skipped.
-fn newest_elf_match(cwd: &Path, pattern: &str) -> Option<PathBuf> {
+pub fn newest_elf_match(cwd: &Path, pattern: &str) -> Option<PathBuf> {
     let pattern_norm = pattern.replace('\\', "/");
     fn walk(
         dir: &Path,

@@ -102,6 +102,9 @@ pub fn run() {
             workbench::workbench_state,
             workbench::workbench_set_mainline,
             workbench::workbench_branch_create,
+            workbench::workbench_elf,
+            workbench::workbench_quality,
+            workbench::workbench_timeline,
         ]);
 
     builder

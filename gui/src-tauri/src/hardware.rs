@@ -136,7 +136,8 @@ pub async fn monitor_send(shared: Arc<Shared>, port: &str, data: &str) -> Result
     let mut w = monitor.write_port.lock().await;
     w.write_all(data.as_bytes())
         .map_err(|e| format!("write to {port} failed: {e}"))?;
-    w.flush().map_err(|e| format!("flush to {port} failed: {e}"))?;
+    w.flush()
+        .map_err(|e| format!("flush to {port} failed: {e}"))?;
     Ok(())
 }
 
@@ -175,10 +176,24 @@ pub async fn run_hardware_command(
     let timeout_ms = timeout_secs.max(5) * 1_000;
     let result = match kind.as_str() {
         "flash" => {
-            firment_tools::hardware::flash_elf(&cwd, &file, chip.as_deref(), probe.as_deref(), timeout_ms).await
+            firment_tools::hardware::flash_elf(
+                &cwd,
+                &file,
+                chip.as_deref(),
+                probe.as_deref(),
+                timeout_ms,
+            )
+            .await
         }
         "run" => {
-            firment_tools::hardware::run_elf(&cwd, &file, chip.as_deref(), probe.as_deref(), timeout_ms).await
+            firment_tools::hardware::run_elf(
+                &cwd,
+                &file,
+                chip.as_deref(),
+                probe.as_deref(),
+                timeout_ms,
+            )
+            .await
         }
         other => Err(format!("unknown hardware command kind: {other}")),
     };

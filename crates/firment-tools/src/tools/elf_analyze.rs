@@ -90,9 +90,15 @@ fn kib(bytes: u64) -> String {
     }
 }
 
+/// Programmatic entry for embedders (the GUI workbench card): returns
+/// `(flash_bytes, ram_bytes, function_count)` for a firmware ELF.
+pub fn analyze_elf_file(elf: &Path) -> Result<(u64, u64, usize), String> {
+    let report = analyze(elf).map_err(|e| e.message)?;
+    Ok((report.mem.flash(), report.mem.ram(), report.functions.len()))
+}
+
 /// Parse an ELF/PE/COFF file into an analysis report.
-fn analyze(elf: &Path) -> Result<ElfReport, ToolError> {
-    let data =
+fn analyze(elf: &Path) -> Result<ElfReport, ToolError> {    let data =
         std::fs::read(elf).map_err(|e| ToolError::new(format!("[Io] cannot read ELF: {e}")))?;
     let file = object::File::parse(&*data)
         .map_err(|e| ToolError::new(format!("[InvalidInput] not a parseable binary: {e}")))?;

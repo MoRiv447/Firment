@@ -39,9 +39,12 @@ pub async fn start_turn(
         };
         shared.running.store(false, Ordering::SeqCst);
         if let Err(e) = result {
-            let _ = shared
-                .app
-                .emit("agent-event", FrontendEvent::Error { message: e.to_string() });
+            let _ = shared.app.emit(
+                "agent-event",
+                FrontendEvent::Error {
+                    message: e.to_string(),
+                },
+            );
             // No TurnEnd on error: the frontend's error handler already
             // resets `running` and keeps the error text visible in the turn
             // until the next turn_start. Success paths emit TurnEnd inside
@@ -84,7 +87,10 @@ pub async fn new_session(
     // Swapping the agent while a turn runs would block on the agent lock
     // until the turn finishes — reject instead so the UI stays responsive.
     if shared.running.load(Ordering::SeqCst) {
-        return Err("an agent turn is running — wait for it or cancel it before switching sessions".to_string());
+        return Err(
+            "an agent turn is running — wait for it or cancel it before switching sessions"
+                .to_string(),
+        );
     }
     let (provider, model) = {
         let config = shared.config.lock().unwrap().clone();
@@ -95,20 +101,19 @@ pub async fn new_session(
     } else {
         SessionMode::Agent
     };
-    let mut session = Session::new(
-        std::path::PathBuf::from(&cwd),
-        provider,
-        model.clone(),
-    );
+    let mut session = Session::new(std::path::PathBuf::from(&cwd), provider, model.clone());
     session.mode = session_mode;
     let store = shared.store.lock().unwrap().clone();
     store.save(&session).map_err(|e| e.to_string())?;
     let agent = build_agent(&shared, session.clone()).map_err(|e| e.to_string())?;
     *shared.agent.lock().await = Some(agent);
     let dto = session_dto(&session);
-    let _ = shared.app.emit("agent-event", FrontendEvent::SessionLoaded {
-        session: dto.clone(),
-    });
+    let _ = shared.app.emit(
+        "agent-event",
+        FrontendEvent::SessionLoaded {
+            session: dto.clone(),
+        },
+    );
     Ok(dto)
 }
 
@@ -120,16 +125,22 @@ pub async fn load_session(
     let shared = shared.inner().clone();
     // Same guard as new_session: don't block on the agent lock mid-turn.
     if shared.running.load(Ordering::SeqCst) {
-        return Err("an agent turn is running — wait for it or cancel it before switching sessions".to_string());
+        return Err(
+            "an agent turn is running — wait for it or cancel it before switching sessions"
+                .to_string(),
+        );
     }
     let store = shared.store.lock().unwrap().clone();
     let session = store.load(&id).map_err(|e| e.to_string())?;
     let agent = build_agent(&shared, session.clone()).map_err(|e| e.to_string())?;
     *shared.agent.lock().await = Some(agent);
     let dto = session_dto(&session);
-    let _ = shared.app.emit("agent-event", FrontendEvent::SessionLoaded {
-        session: dto.clone(),
-    });
+    let _ = shared.app.emit(
+        "agent-event",
+        FrontendEvent::SessionLoaded {
+            session: dto.clone(),
+        },
+    );
     Ok(dto)
 }
 
@@ -186,7 +197,10 @@ pub async fn fetch_models(
     provider: String,
 ) -> Result<Vec<String>, String> {
     let config = shared.config.lock().unwrap().clone();
-    config.list_models(&provider).await.map_err(|e| e.to_string())
+    config
+        .list_models(&provider)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -196,7 +210,9 @@ pub async fn set_api_key(
     key: String,
 ) -> Result<(), String> {
     let config = shared.config.lock().unwrap();
-    config.set_api_key(&provider, &key).map_err(|e| e.to_string())
+    config
+        .set_api_key(&provider, &key)
+        .map_err(|e| e.to_string())
 }
 
 #[derive(Serialize, Deserialize)]
@@ -233,9 +249,7 @@ pub struct ProviderEntryDto {
 }
 
 #[tauri::command]
-pub async fn get_settings(
-    shared: tauri::State<'_, Arc<Shared>>,
-) -> Result<SettingsDto, String> {
+pub async fn get_settings(shared: tauri::State<'_, Arc<Shared>>) -> Result<SettingsDto, String> {
     let config = shared.config.lock().unwrap().clone();
     let (_, model) = default_provider_model(&config);
     let mut providers: Vec<ProviderEntryDto> = config
@@ -338,9 +352,7 @@ pub async fn remove_provider(
     name: String,
 ) -> Result<(), String> {
     let mut config = shared.config.lock().unwrap();
-    config
-        .remove_provider(&name)
-        .map_err(|e| e.to_string())
+    config.remove_provider(&name).map_err(|e| e.to_string())
 }
 
 // ---------- hardware ----------
@@ -379,9 +391,7 @@ pub async fn monitor_send(
 }
 
 #[tauri::command]
-pub async fn active_monitors(
-    shared: tauri::State<'_, Arc<Shared>>,
-) -> Result<Vec<String>, String> {
+pub async fn active_monitors(shared: tauri::State<'_, Arc<Shared>>) -> Result<Vec<String>, String> {
     Ok(hardware::active_monitors(shared.inner()))
 }
 
