@@ -1119,7 +1119,7 @@ mod tests {
                 model: "m1".to_string(),
                 cwd: PathBuf::from("."),
                 preview: "first".to_string(),
-                kind: firment_core::SessionKind::Main,
+                kind: firment_core::SessionKind::Normal,
                 parent_session: None,
             },
             firment_core::SessionSummary {

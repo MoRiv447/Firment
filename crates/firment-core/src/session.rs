@@ -6,20 +6,26 @@ use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Kind of a session in the workbench tree: the project's long-lived
-/// `Main` line, or a `Branch` spawned from it (an experiment / subtask).
+/// Kind of a session in the workbench model:
+/// - `Normal` — a plain standalone conversation (default; every
+///   pre-workbench session loads as this)
+/// - `Mainline` — the long-lived project line registered in
+///   `.firment/workbench.toml`
+/// - `Branch` — an experiment/subtask spawned from a mainline or branch
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionKind {
     #[default]
-    Main,
+    Normal,
+    Mainline,
     Branch,
 }
 
 impl SessionKind {
     pub fn label(&self) -> &'static str {
         match self {
-            SessionKind::Main => "main",
+            SessionKind::Normal => "normal",
+            SessionKind::Mainline => "mainline",
             SessionKind::Branch => "branch",
         }
     }
@@ -53,7 +59,7 @@ impl Session {
             thinking: ThinkingLevel::Off,
             mode: SessionMode::Agent,
             parent_session: None,
-            kind: SessionKind::Main,
+            kind: SessionKind::Normal,
             created_at: now,
             updated_at: now,
             messages: Vec::new(),
@@ -313,6 +319,27 @@ impl SessionStore {
         }
         self.save(&child)?;
         Ok(child)
+    }
+
+    /// Promote a session to the project MAINLINE: the session itself becomes
+    /// `Mainline`, and any OTHER Mainline session sharing its cwd is demoted
+    /// back to Normal (one mainline per project). Errors if the target does
+    /// not exist.
+    pub fn mark_mainline(&self, session_id: &str) -> Result<(), SessionError> {
+        let mut target = self.load(session_id)?;
+        for summary in self.list()? {
+            if summary.id != target.id
+                && summary.kind == SessionKind::Mainline
+                && summary.cwd == target.cwd
+            {
+                let mut demoted = self.load(&summary.id)?;
+                demoted.kind = SessionKind::Normal;
+                self.save(&demoted)?;
+            }
+        }
+        target.kind = SessionKind::Mainline;
+        self.save(&target)?;
+        Ok(())
     }
 
     /// Delete a session and all of its sidecar data (undo backups, spilled

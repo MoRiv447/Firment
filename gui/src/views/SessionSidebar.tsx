@@ -61,10 +61,11 @@ export function SessionSidebar({
   };
 
   const renderItem = (s: SessionSummaryDto, depth: number, kids: SessionSummaryDto[]) => {
-    // MAINLINE badge: a main-kind session with nested branches. The folder
-    // button: any session with children is a project root worth jumping
-    // from. Branches keep their ↳ BRANCH tag instead.
-    const isProjectRoot = s.kind === 'main' && kids.length > 0;
+    // Category tag: every session carries exactly one of NORMAL / MAINLINE /
+    // BRANCH so the workbench model is visible at a glance. MAINLINE badge:
+    // a main-kind session with nested branches. The folder button: any
+    // session with children is a project root worth jumping from.
+    const isProjectRoot = s.kind === 'mainline' && kids.length > 0;
     return (
     <List.Item
       key={s.id}
@@ -117,6 +118,22 @@ export function SessionSidebar({
       <List.Item.Meta
         title={
           <Space size={4}>
+            {/* Category tag — exactly one per session. */}
+            {s.kind === 'mainline' && (
+              <Tag
+                style={{
+                  fontSize: 10,
+                  marginRight: 0,
+                  borderRadius: 0,
+                  border: '2px solid #000',
+                  background: '#14532d',
+                  color: '#bbf7d0',
+                  lineHeight: '16px',
+                }}
+              >
+                MAINLINE
+              </Tag>
+            )}
             {(s.kind === 'branch' || depth > 0) && (
               <Tag
                 style={{
@@ -132,19 +149,19 @@ export function SessionSidebar({
                 ↳ BRANCH
               </Tag>
             )}
-            {isProjectRoot && (
+            {s.kind === 'normal' && (
               <Tag
                 style={{
                   fontSize: 10,
                   marginRight: 0,
                   borderRadius: 0,
-                  border: '2px solid #000',
-                  background: '#14532d',
-                  color: '#bbf7d0',
+                  border: '2px solid #14532d',
+                  background: 'transparent',
+                  color: '#4ade80',
                   lineHeight: '16px',
                 }}
               >
-                MAINLINE
+                NORMAL
               </Tag>
             )}
             <Text

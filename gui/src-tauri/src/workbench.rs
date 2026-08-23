@@ -38,15 +38,10 @@ async fn run_git(cwd: &Path, args: &[&str]) -> Option<String> {
     // terminal window on every workbench refresh.
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
-    let output = command
-        .output()
-        .await
-        .ok()
-        .filter(|o| o.status.success())?;
+    let output = command.output().await.ok().filter(|o| o.status.success())?;
     Some(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
@@ -70,12 +65,26 @@ fn load_config(cwd: &Path) -> WorkbenchConfigDto {
 }
 
 #[tauri::command]
-pub async fn workbench_state(cwd: String) -> Result<WorkbenchStateDto, String> {
+pub async fn workbench_state(
+    shared: tauri::State<'_, Arc<Shared>>,
+    cwd: String,
+) -> Result<WorkbenchStateDto, String> {
     let root = PathBuf::from(&cwd);
     if !root.is_dir() {
         return Err(format!("cwd does not exist: {}", root.display()));
     }
     let git = git_status(&root).await;
+
+    // One-time self-heal for sessions created before the Normal/Mainline/
+    // Branch triple existed: the registered mainline gets promoted (and any
+    // sibling Mainline in the same project demoted to Normal) so the sidebar
+    // tags are truthful without user action.
+    let cfg = load_config(&root);
+    if !cfg.mainline_session.is_empty() {
+        let store = shared.store.lock().unwrap().clone();
+        let _ = store.mark_mainline(&cfg.mainline_session);
+    }
+
     Ok(WorkbenchStateDto {
         config: load_config(&root),
         git,
@@ -91,11 +100,13 @@ pub async fn workbench_set_mainline(
 ) -> Result<(), String> {
     // The mainline must point at a real session: setting it to a deleted or
     // typo'd id would leave the workbench permanently "(unset)".
+    // mark_mainline promotes the target to Mainline and demotes any other
+    // Mainline session sharing its cwd back to Normal.
     shared
         .store
         .lock()
         .unwrap()
-        .load(&session_id)
+        .mark_mainline(&session_id)
         .map_err(|e| format!("cannot set mainline: {e}"))?;
     let mut cfg = WorkbenchConfig::load(Path::new(&cwd))?;
     cfg.workbench.mainline_session = session_id;

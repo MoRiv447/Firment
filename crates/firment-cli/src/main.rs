@@ -553,6 +553,7 @@ fn list_sessions() -> anyhow::Result<()> {
         // Workbench tree marker: branches show their parent id so the list
         // reads as a tree at a glance.
         let kind_tag = match (&summary.kind, &summary.parent_session) {
+            (firment_core::SessionKind::Mainline, _) => "[mainline] ".to_string(),
             (firment_core::SessionKind::Branch, Some(parent)) => {
                 format!("[branch of {}] ", &parent[..8.min(parent.len())])
             }

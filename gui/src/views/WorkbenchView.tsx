@@ -186,10 +186,17 @@ export function WorkbenchView() {
     }
   };
 
-  const tree = sessions.map((s) => ({
-    ...s,
-    isMainline: state?.config.mainline_session === s.id,
-  }));
+  // Session-tree kind filter: 'all' shows everything; the other values keep
+  // only sessions of that category.
+  const [kindFilter, setKindFilter] = useState<'all' | 'normal' | 'mainline' | 'branch'>('all');
+
+  const tree = sessions
+    .filter((s) => kindFilter === 'all' || s.kind === kindFilter)
+    .map((s) => ({
+      ...s,
+      isMainline:
+        state?.config.mainline_session === s.id || s.kind === 'mainline',
+    }));
 
   return (
     <div style={{ padding: 20, height: '100%', overflowY: 'auto' }}>
@@ -350,17 +357,40 @@ export function WorkbenchView() {
                 )}
               </Card>
 
-              <Card type="inner" title="Session tree" size="small">
+              <Card
+                type="inner"
+                title="Session tree"
+                size="small"
+                extra={
+                  <Space size={4}>
+                    {(['all', 'normal', 'mainline', 'branch'] as const).map((f) => (
+                      <Tag.CheckableTag
+                        key={f}
+                        checked={kindFilter === f}
+                        onChange={() => setKindFilter(f)}
+                        style={{ fontSize: 11 }}
+                      >
+                        {f.toUpperCase()}
+                      </Tag.CheckableTag>
+                    ))}
+                  </Space>
+                }
+              >
                 {tree.length === 0 && (
                   <Space direction="vertical" size={8} style={{ width: '100%' }}>
                     <Empty description="No sessions under this path yet" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-                    <Button type="primary" loading={busy} onClick={createMainline}>
-                      New mainline chat here
-                    </Button>
+                    {kindFilter === 'all' && (
+                      <Button type="primary" loading={busy} onClick={createMainline}>
+                        New mainline chat here
+                      </Button>
+                    )}
                   </Space>
                 )}
                 <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                  {tree.map((s) => (
+                  {tree.map((s) => {
+                    const tagColor =
+                      s.kind === 'mainline' ? 'gold' : s.kind === 'branch' ? 'blue' : 'green';
+                    return (
                     <div
                       key={s.id}
                       style={{
@@ -372,7 +402,7 @@ export function WorkbenchView() {
                         borderRadius: 6,
                       }}
                     >
-                      <Tag color={s.kind === 'main' ? 'gold' : 'blue'}>
+                      <Tag color={tagColor}>
                         {s.isMainline ? 'MAINLINE' : s.kind.toUpperCase()}
                       </Tag>
                       <Text style={{ flex: 1, fontSize: 13 }} ellipsis>
@@ -400,7 +430,8 @@ export function WorkbenchView() {
                         + branch
                       </Button>
                     </div>
-                  ))}
+                    );
+                  })}
                 </Space>
               </Card>
 
