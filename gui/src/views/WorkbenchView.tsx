@@ -87,6 +87,24 @@ export function WorkbenchView() {
     }
   };
 
+  // One-click mainline bootstrap for a fresh project: create a session rooted
+  // at the project path and register it as the mainline in workbench.toml.
+  const createMainline = async () => {
+    if (!state) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const session = await api.newSession(state.root, 'agent');
+      await api.workbenchSetMainline(state.root, session.id);
+      setCurrentSessionId(session.id);
+      await refresh(state.root);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const loadSession = async (id: string) => {
     setCurrentSessionId(id);
     try {
@@ -160,7 +178,12 @@ export function WorkbenchView() {
 
               <Card type="inner" title="Session tree" size="small">
                 {tree.length === 0 && (
-                  <Empty description="No sessions under this path yet" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                  <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                    <Empty description="No sessions under this path yet" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                    <Button type="primary" loading={busy} onClick={createMainline}>
+                      New mainline chat here
+                    </Button>
+                  </Space>
                 )}
                 <Space direction="vertical" size={6} style={{ width: '100%' }}>
                   {tree.map((s) => (
