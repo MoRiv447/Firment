@@ -340,6 +340,11 @@ export default function App() {
             onSelect={handleSelectSession}
             onNew={handleNewSession}
             onDelete={handleDeleteSession}
+            onOpenWorkbench={(projectCwd) => {
+              // Hand the project path to the Workbench view and switch to it.
+              localStorage.setItem('workbench-last-cwd', projectCwd);
+              setView('collab');
+            }}
           />
         </Sider>
         <Layout style={{ background: '#0a0c10' }}>

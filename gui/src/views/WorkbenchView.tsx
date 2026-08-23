@@ -30,7 +30,10 @@ export function WorkbenchView() {
   const [branchModal, setBranchModal] = useState<{ parentId: string; title: string } | null>(null);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
 
-  const refresh = async (dir: string) => {    setError(null);
+  const refresh = async (dir: string) => {
+    setError(null);
+    // Remember the project across view switches and app restarts.
+    localStorage.setItem('workbench-last-cwd', dir);
     try {
       const [wb, sessions] = await Promise.all([
         api.workbenchState(dir),
@@ -48,6 +51,16 @@ export function WorkbenchView() {
     }
   };
 
+  // Restore the last opened project automatically, so navigating away and
+  // back (or restarting the app) lands on the same workbench.
+  useEffect(() => {
+    const last = localStorage.getItem('workbench-last-cwd');
+    if (last) {
+      setCwd(last);
+      void refresh(last);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // v1: the project path is entered manually; W2 will remember the last
   // opened project per machine.
   useEffect(() => {}, []);
