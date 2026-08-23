@@ -126,18 +126,22 @@ MCU 不带 RTC 或时钟漂移时，一律以 SBC 接收时刻为准；MCU 自�
 
 ## 5. P0 硬件验证清单（Cubie A7A 到手后照此执行）
 
-> **执行进度（2026-08-22 晚，经 ssh radxa@192.168.31.217 免密通道远程执行）**：
+> **执行进度（2026-08-23 更新，经 ssh 免密通道远程执行）**：
 >
 > | # | 状态 | 备注 |
 > |---|---|---|
-> | 前置 | ✅ | 免密 SSH 公钥已装（ed25519）；Debian 11 bullseye / 8×A55 / 5.8G RAM；apt 主源缺失已修复（原仅 radxa github.io 源，已禁用备份） |
+> | 前置 | ✅ | 免密 SSH 公钥已装（ed25519）；Debian 11 bullseye / 8×A55 / 5.8G RAM；apt 主源缺失已修复（原仅 radxa github.io 源，已禁用备份）。注意 SBC 走 WiFi（wlan0，~600KB/s 到桌面），大文件传输用"桌面下载→scp"路线 |
 > | 1 | ✅ | mosquitto 2.0.11 安装并 active |
 > | 2 | ✅ | 1883 MQTT + **9001 WebSocket** 双监听 0.0.0.0；本地 pub/sub 回环 OK；桌面→SBC 的 1883/9001 TCP 可达 |
-> | 3 | 🔄 | ollama root 后台安装中（arm64 包 ~1.2GB 含 CUDA 组件，国内链路慢）；脚本完成后**自动** `ollama pull qwen3.5:0.8b` 并冒烟 `/v1/models` + chat completion。晨检命令：`ssh radxa@192.168.31.217 "tail -8 /tmp/ollama-install.log; systemctl is-active ollama; curl -s http://127.0.0.1:11434/v1/models \| head -c 200"` |
-> | 4 | ⏳ | 待 ESP32-C3 SuperMini 接入（烧录方式待定：SBC esptool 或桌面烧好再插）|
+> | 3 | ✅ | ollama + qwen3.5:0.8b 部署完成，LAN 端点 `http://192.168.1.6:11434/v1` 实测可用。**坑位记录**：① 新版 ollama 推理引擎拆为独立 `llama-server` 组件，安装中断会缺它（症状：`error starting llama-server`）——完整包 1.47GB 走"桌面下载→scp→`tar --zstd -xf`"补齐（是 zstd 不是 gzip！）；② ollama.com 直链在 SBC 上被重置，桌面链路正常；③ qwen3.5:0.8b 是 thinking 模型，reasoning 字段消耗 token，实测热态 ~8-10 tok/s（CPU 8×A55，冷启动首请求 ~70s）；④ `OLLAMA_HOST=0.0.0.0` 已写入 unit，LAN 可达 |
+> | 4 | ⏳ | 待 ESP32-C3 SuperMini 接入；参考固件已备：`docs/examples/esp32c3-mqtt-node/main.ino` |
 > | 5 | ✅ | 板载蓝牙 = AIC USB 芯片（aic_btusb），hci0 UP RUNNING 无错误，特性位含 LE |
 > | 6 | ✅(环境受限) | BlueZ 链路健康、bluer 可用；扫描零结果仅因环境无广播设备，待真实节点接入复验 |
 > | 7 | ⏳ | 待 S31 到货 |
+>
+> GPU 澄清：A733 集成的 Mali-G57 是图形 GPU，ollama 的加速后端（CUDA/ROCm/Metal）
+> 均不支持 Mali——推理走 CPU（8×A55），安装包里的 cuda_v12/v13 组件是死重。
+> 0.8B 的尺寸选择正是为 CPU-only 前提做的。
 >
 > 安全提醒：radxa 账户当前为弱密码，建议后续 `passwd` 更换并仅保留密钥登录。
 
