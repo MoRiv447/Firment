@@ -1,4 +1,5 @@
 import { Alert, Card, Space, Tag, Typography } from 'antd';
+import { DownOutlined, RightOutlined } from '@ant-design/icons';
 import type { ToolCardState } from '../types';
 
 const { Text } = Typography;
@@ -23,7 +24,18 @@ function dangerousName(name: string, args: unknown): boolean {
   return false;
 }
 
-export function ToolCard({ tool, standalone }: { tool: ToolCardState; standalone?: boolean }) {
+export function ToolCard({
+  tool,
+  standalone,
+  collapsible,
+}: {
+  tool: ToolCardState;
+  standalone?: boolean;
+  /** When set, the card title carries a chevron and toggles on click — used
+   * by historical (collapsed-by-default) renderings so the tool name shows
+   * exactly once in both states. */
+  collapsible?: { open: boolean; onToggle: () => void };
+}) {
   const danger = dangerousName(tool.name, tool.args);
   const color =
     tool.status === 'ok' ? 'green' : tool.status === 'failed' ? 'red' : danger ? 'orange' : 'blue';
@@ -57,10 +69,21 @@ export function ToolCard({ tool, standalone }: { tool: ToolCardState; standalone
       }}
       styles={{
         body: { paddingTop: 8 },
-        header: { minHeight: 38, borderBottom: '2px solid #000000' },
+        header: {
+          minHeight: 38,
+          borderBottom: collapsible ? 'none' : '2px solid #000000',
+          ...(collapsible ? { cursor: 'pointer' } : {}),
+        },
       }}
+      onClick={collapsible?.onToggle}
       title={
         <Space size={8}>
+          {collapsible &&
+            (collapsible.open ? (
+              <DownOutlined style={{ fontSize: 9, color: '#9aa3b2' }} />
+            ) : (
+              <RightOutlined style={{ fontSize: 9, color: '#9aa3b2' }} />
+            ))}
           {tool.status !== 'running' && <Text strong>{icon}</Text>}
           <Tag
             color={color}
