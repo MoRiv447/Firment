@@ -134,7 +134,7 @@ MCU 不带 RTC 或时钟漂移时，一律以 SBC 接收时刻为准；MCU 自�
 > | 1 | ✅ | mosquitto 2.0.11 安装并 active |
 > | 2 | ✅ | 1883 MQTT + **9001 WebSocket** 双监听 0.0.0.0；本地 pub/sub 回环 OK；桌面→SBC 的 1883/9001 TCP 可达 |
 > | 3 | ✅ | ollama + qwen3.5:0.8b 部署完成，LAN 端点 `http://192.168.1.6:11434/v1` 实测可用。**坑位记录**：① 新版 ollama 推理引擎拆为独立 `llama-server` 组件，安装中断会缺它（症状：`error starting llama-server`）——完整包 1.47GB 走"桌面下载→scp→`tar --zstd -xf`"补齐（是 zstd 不是 gzip！）；② ollama.com 直链在 SBC 上被重置，桌面链路正常；③ qwen3.5:0.8b 是 thinking 模型，reasoning 字段消耗 token，实测热态 ~8-10 tok/s（CPU 8×A55，冷启动首请求 ~70s）；④ `OLLAMA_HOST=0.0.0.0` 已写入 unit，LAN 可达 |
-> | 4 | ⏳ | 待 ESP32-C3 SuperMini 接入；参考固件已备：`docs/examples/esp32c3-mqtt-node/main.ino` |
+> | 4 | ✅ | ESP32-**S3** SuperMini 实测通过（C3 不在手边）：固件 `docs/examples/esp32c3-mqtt-node/main.ino`，WiFi 入网 → MQTT 连接 → 遥测帧到达 broker（含断电自愈重连）。**坑位记录**：① 该板 USB 口是 USB-Serial-JTAG——烧录后的 RTS 复位必然进下载模式（`boot:0x0`），需**手动按 RST 键**启动应用；② 编译须加 `CDCOnBoot=cdc` 才能在原生口看到日志；③ 桌面工具链：arduino-cli + esp32 core 3.3.11 + PubSubClient 2.8 |
 > | 5 | ✅ | 板载蓝牙 = AIC USB 芯片（aic_btusb），hci0 UP RUNNING 无错误，特性位含 LE |
 > | 6 | ✅(环境受限) | BlueZ 链路健康、bluer 可用；扫描零结果仅因环境无广播设备，待真实节点接入复验 |
 > | 7 | ⏳ | 待 S31 到货 |

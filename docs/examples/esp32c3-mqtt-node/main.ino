@@ -49,19 +49,33 @@ void on_message(char* topic, byte* body, unsigned int len) {
 
 void connect_wifi() {
   WiFi.mode(WIFI_STA);
+  Serial.printf("[wifi] connecting to %s", WIFI_SSID);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
+  int waited = 0;
   while (WiFi.status() != WL_CONNECTED) {
     delay(300);
+    waited += 300;
+    Serial.print(WiFi.status());
+    if (waited > 15000) {
+      Serial.println();
+      Serial.printf("[wifi] FAILED status=%d — check SSID/band (ESP32 is 2.4GHz only)\n",
+                    WiFi.status());
+      waited = 0;  // keep retrying so a later fix lands without re-flash
+    }
   }
+  Serial.printf("\n[wifi] connected, IP: %s\n", WiFi.localIP().toString().c_str());
 }
 
 void connect_mqtt() {
   while (!mqtt.connected()) {
+    Serial.printf("[mqtt] connecting to %s:%u ...\n", MQTT_HOST, MQTT_PORT);
     if (mqtt.connect(NODE_NAME)) {
       char topic[64];
       snprintf(topic, sizeof(topic), "firment/device/%s/cmd", NODE_NAME);
       mqtt.subscribe(topic);
+      Serial.println("[mqtt] connected");
     } else {
+      Serial.printf("[mqtt] failed rc=%d, retry in 1.5s\n", mqtt.state());
       delay(1500);
     }
   }
@@ -69,10 +83,13 @@ void connect_mqtt() {
 
 void setup() {
   Serial.begin(115200);
+  delay(200);
+  Serial.println("\n[node] boot");
   connect_wifi();
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
   mqtt.setCallback(on_message);
   connect_mqtt();
+  Serial.println("[node] ready");
 }
 
 void loop() {
