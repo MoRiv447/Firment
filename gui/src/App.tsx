@@ -104,6 +104,7 @@ export default function App() {
             dispatchTurn(e);
             break;
           case 'text_delta':
+          case 'thinking':
           case 'tool_start':
           case 'tool_end':
             // Pure state transitions live in turnReducer (unit-tested);
@@ -433,6 +434,7 @@ export default function App() {
                   onClick: ({ key }) => void handleSetSessionProp(api.setSessionMode(session.id, key)),
                   selectedKeys: [session.mode],
                 }}
+                trigger={['click']}
                 disabled={running}
               >
                 <Tag
@@ -464,6 +466,7 @@ export default function App() {
                   onClick: ({ key }) => void handleSetSessionProp(api.setSessionThinking(session.id, key)),
                   selectedKeys: [session.thinking],
                 }}
+                trigger={['click']}
                 disabled={running}
               >
                 <Tag
@@ -494,6 +497,7 @@ export default function App() {
                     void handleSetSessionProp(api.setSessionBudget(session.id, Number(key))),
                   selectedKeys: [String(session.context_budget_chars || 262144)],
                 }}
+                trigger={['click']}
                 onOpenChange={setCtxMenuOpen}
                 disabled={running}
               >
