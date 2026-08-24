@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
-import { Button, ConfigProvider, Layout, Menu, Tag, theme } from 'antd';
+import { Button, ConfigProvider, Dropdown, Layout, Menu, Tag, theme, Tooltip } from 'antd';
 import {
   ApiOutlined,
   MessageOutlined,
@@ -19,6 +19,7 @@ import {
 } from './lib/api';
 import type {
   AskRequest,
+  ContextUsageDto,
   MonitorLine,
   PermissionRequest,
   SessionDto,
@@ -53,6 +54,9 @@ export default function App() {
   // Info events (stall / tool-wave timeout / compaction notices) surfaced in
   // the chat they belong to.
   const [infos, setInfos] = useState<{ id: number; sid: string | null; text: string }[]>([]);
+  // Rough context usage for the OPEN session (header chip); refreshed when
+  // the session changes and after every transcript refresh.
+  const [usage, setUsage] = useState<ContextUsageDto | null>(null);
   const [view, setView] = useState<ViewKey>('chat');
   // Permission requests arrive concurrently (tool waves run in parallel), so
   // they must be queued — a single overwriting state would leave the first
@@ -70,6 +74,15 @@ export default function App() {
   useEffect(() => {
     void api.listSessions().then(setSessions).catch(console.error);
   }, []);
+
+  // Context usage follows the open session and its message count.
+  useEffect(() => {
+    if (!session) return;
+    void api
+      .sessionContextUsage(session.id)
+      .then(setUsage)
+      .catch(() => setUsage(null));
+  }, [session?.id, session?.messages.length, session?.context_budget_chars]);
 
   useEffect(() => {
     const unlisteners: Promise<() => void>[] = [];
@@ -113,7 +126,14 @@ export default function App() {
               // Clear the streaming turn so the transcript (refreshed below)
               // is the single source of truth — otherwise the same reply
               // shows twice (once in turn.text, once in session.messages).
-              void api.sessionTranscript(sid!).then(setSession).catch(console.error);
+              void api
+                .sessionTranscript(sid!)
+                .then((s) => {
+                  setSession(s);
+                  // Message count changed → refresh the header usage chip.
+                  void api.sessionContextUsage(s.id).then(setUsage).catch(() => {});
+                })
+                .catch(console.error);
             }
             // The finished session's sidebar row (preview / updated_at)
             // changed on disk either way.
@@ -257,6 +277,14 @@ export default function App() {
     }
   };
 
+  // Apply a per-session knob change (mode / thinking / budget): the backend
+  // persists it and returns the fresh session dto.
+  const handleSetSessionProp = (p: Promise<SessionDto>) => {
+    void p
+      .then((s) => setSession(s))
+      .catch((err) => console.error(err));
+  };
+
   return (
     <ConfigProvider
       theme={{
@@ -393,18 +421,101 @@ export default function App() {
               </Tag>
             )}
             {session && (
-              <Tag
-                style={{
-                  borderRadius: 0,
-                  marginInlineEnd: 0,
-                  border: '2px solid #000000',
-                  background: '#facc15',
-                  color: '#000000',
-                  fontWeight: 700,
+              <Dropdown
+                menu={{
+                  items: [
+                    { key: 'agent', label: 'agent (full tools)' },
+                    { key: 'plan', label: 'plan (read-only tools)' },
+                  ],
+                  onClick: ({ key }) => void handleSetSessionProp(api.setSessionMode(session.id, key)),
+                  selectedKeys: [session.mode],
                 }}
+                disabled={running}
               >
-                {session.mode}
-              </Tag>
+                <Tag
+                  style={{
+                    borderRadius: 0,
+                    marginInlineEnd: 0,
+                    border: '2px solid #000000',
+                    background: '#facc15',
+                    color: '#000000',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {session.mode} ▾
+                </Tag>
+              </Dropdown>
+            )}
+            {session && (
+              <Dropdown
+                menu={{
+                  items: [
+                    { key: 'off', label: 'thinking: off' },
+                    { key: 'low', label: 'thinking: low' },
+                    { key: 'medium', label: 'thinking: medium' },
+                    { key: 'high', label: 'thinking: high' },
+                    { key: 'xhigh', label: 'thinking: xhigh' },
+                    { key: 'max', label: 'thinking: max' },
+                  ],
+                  onClick: ({ key }) => void handleSetSessionProp(api.setSessionThinking(session.id, key)),
+                  selectedKeys: [session.thinking],
+                }}
+                disabled={running}
+              >
+                <Tag
+                  color="purple"
+                  style={{
+                    borderRadius: 0,
+                    marginInlineEnd: 0,
+                    border: '2px solid #000000',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  🧠 {session.thinking} ▾
+                </Tag>
+              </Dropdown>
+            )}
+            {session && (
+              <Tooltip
+                title={
+                  usage
+                    ? `context ~${Math.round(usage.total_chars / 1024)}k of ${Math.round(usage.budget / 1024)}k chars (${usage.pct.toFixed(0)}%) — click chip to change budget`
+                    : 'context usage'
+                }
+              >
+                <Dropdown
+                  menu={{
+                    items: [
+                      { key: '65536', label: '64k chars' },
+                      { key: '131072', label: '128k chars' },
+                      { key: '262144', label: '256k chars (default)' },
+                      { key: '524288', label: '512k chars' },
+                      { key: '1048576', label: '1M chars' },
+                    ],
+                    onClick: ({ key }) =>
+                      void handleSetSessionProp(api.setSessionBudget(session.id, Number(key))),
+                    selectedKeys: [String(session.context_budget_chars || 262144)],
+                  }}
+                  disabled={running}
+                >
+                  <Tag
+                    color={
+                      (usage?.pct ?? 0) > 90 ? 'red' : (usage?.pct ?? 0) > 70 ? 'orange' : 'green'
+                    }
+                    style={{
+                      borderRadius: 0,
+                      marginInlineEnd: 0,
+                      border: '2px solid #000000',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    ctx {usage ? `${usage.pct.toFixed(0)}%` : '…'} ▾
+                  </Tag>
+                </Dropdown>
+              </Tooltip>
             )}
             <Button
               size="small"

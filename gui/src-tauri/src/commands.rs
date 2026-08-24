@@ -35,7 +35,11 @@ pub async fn start_turn(
     // without any explicit reload step.
     let store = shared.store.lock().unwrap().clone();
     let session = store.load(&session_id).map_err(|e| e.to_string())?;
-    let (agent, handles) = build_agent(&shared, session).map_err(|e| e.to_string())?;
+    let budget = session.context_budget_chars;
+    let (mut agent, handles) = build_agent(&shared, session).map_err(|e| e.to_string())?;
+    if budget > 0 {
+        agent.set_context_budget_chars(budget);
+    }
 
     // Reserve the slot AFTER building (build can fail cheaply) but re-check
     // running under the map lock so two concurrent start_turns cannot both
@@ -167,7 +171,10 @@ pub async fn delete_session(
         let map = shared.agents.lock().unwrap();
         if let Some(slot) = map.get(&id) {
             if slot.running.load(Ordering::SeqCst) {
-                return Err("cannot delete: a turn is running in this session - cancel it first".to_string());
+                return Err(
+                    "cannot delete: a turn is running in this session - cancel it first"
+                        .to_string(),
+                );
             }
         }
     }
@@ -183,6 +190,116 @@ pub async fn session_transcript(
     let store = shared.store.lock().unwrap().clone();
     let session = store.load(&id).map_err(|e| e.to_string())?;
     Ok(session_dto(&session))
+}
+
+// ---------- per-session chat knobs (thinking / mode / context budget) ----
+//
+// The GUI rebuilds the agent from the saved session on every start_turn,
+// so persisting these to the session file is all it takes for the change
+// to apply from the next message onwards.
+
+#[tauri::command]
+pub async fn set_session_thinking(
+    shared: tauri::State<'_, Arc<Shared>>,
+    session_id: String,
+    level: String,
+) -> Result<crate::events::SessionDto, String> {
+    let level = level
+        .parse::<firment_core::ThinkingLevel>()
+        .map_err(|e: std::io::Error| e.to_string())?;
+    let shared = shared.inner().clone();
+    let store = shared.store.lock().unwrap().clone();
+    let mut session = store.load(&session_id).map_err(|e| e.to_string())?;
+    session.thinking = level;
+    store.save(&session).map_err(|e| e.to_string())?;
+    Ok(session_dto(&session))
+}
+
+#[tauri::command]
+pub async fn set_session_mode(
+    shared: tauri::State<'_, Arc<Shared>>,
+    session_id: String,
+    mode: String,
+) -> Result<crate::events::SessionDto, String> {
+    let mode = match mode.to_ascii_lowercase().as_str() {
+        "agent" => SessionMode::Agent,
+        "plan" => SessionMode::Plan,
+        other => return Err(format!("invalid mode '{other}' (expected agent|plan)")),
+    };
+    let shared = shared.inner().clone();
+    let store = shared.store.lock().unwrap().clone();
+    let mut session = store.load(&session_id).map_err(|e| e.to_string())?;
+    session.mode = mode;
+    store.save(&session).map_err(|e| e.to_string())?;
+    Ok(session_dto(&session))
+}
+
+#[tauri::command]
+pub async fn set_session_budget(
+    shared: tauri::State<'_, Arc<Shared>>,
+    session_id: String,
+    chars: usize,
+) -> Result<crate::events::SessionDto, String> {
+    if chars != 0 && !(16_384..=4_194_304).contains(&chars) {
+        return Err("budget must be 0 (default) or between 16384 and 4194304 chars".to_string());
+    }
+    let shared = shared.inner().clone();
+    let store = shared.store.lock().unwrap().clone();
+    let mut session = store.load(&session_id).map_err(|e| e.to_string())?;
+    session.context_budget_chars = chars;
+    store.save(&session).map_err(|e| e.to_string())?;
+    Ok(session_dto(&session))
+}
+
+#[derive(Serialize)]
+pub struct ContextUsageDto {
+    pub system_chars: u64,
+    pub messages_chars: u64,
+    /// Budget in effect (session override or the agent default).
+    pub budget: u64,
+    pub total_chars: u64,
+    pub pct: f64,
+}
+
+/// Rough context usage matching the TUI's `/context` estimate: system
+/// prompt + transcript chars against the compaction budget. Tool-schema
+/// chars are omitted (registry-dependent); treat the number as a lower
+/// bound that trends correctly.
+#[tauri::command]
+pub async fn session_context_usage(
+    shared: tauri::State<'_, Arc<Shared>>,
+    session_id: String,
+) -> Result<ContextUsageDto, String> {
+    const DEFAULT_BUDGET: u64 = 256 * 1024;
+    let shared = shared.inner().clone();
+    let store = shared.store.lock().unwrap().clone();
+    let session = store.load(&session_id).map_err(|e| e.to_string())?;
+    let system_chars = firment_core::context::system_prompt_for(&session.cwd, session.mode)
+        .chars()
+        .count() as u64;
+    let messages_chars: u64 = session
+        .messages
+        .iter()
+        .map(|m| match m {
+            firment_core::types::ChatMessage::System { content }
+            | firment_core::types::ChatMessage::User { content }
+            | firment_core::types::ChatMessage::Assistant { content, .. }
+            | firment_core::types::ChatMessage::Tool { content, .. } => content.chars().count(),
+        })
+        .sum::<usize>() as u64;
+    let budget = if session.context_budget_chars > 0 {
+        session.context_budget_chars as u64
+    } else {
+        DEFAULT_BUDGET
+    };
+    let total_chars = system_chars + messages_chars;
+    Ok(ContextUsageDto {
+        system_chars,
+        messages_chars,
+        budget,
+        total_chars,
+        pct: (total_chars as f64 / budget.max(1) as f64) * 100.0,
+    })
 }
 
 // ---------- permission / ask responses ----------

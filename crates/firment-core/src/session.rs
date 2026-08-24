@@ -45,6 +45,10 @@ pub struct Session {
     pub model: String,
     pub thinking: ThinkingLevel,
     pub mode: SessionMode,
+    /// Per-session context budget in chars (compaction threshold). `0` means
+    /// "unset" — the agent's built-in default applies. Adjustable from the
+    /// GUI/TUI without touching global config. Persisted via MetaLine.
+    pub context_budget_chars: usize,
     /// Workbench tree linkage: `Some(parent id)` marks this as a branch of
     /// another session. `None` on main-line sessions.
     pub parent_session: Option<String>,
@@ -64,6 +68,7 @@ impl Session {
             model: model.into(),
             thinking: ThinkingLevel::Off,
             mode: SessionMode::Agent,
+            context_budget_chars: 0,
             parent_session: None,
             kind: SessionKind::Normal,
             created_at: now,
@@ -133,6 +138,10 @@ struct MetaLine {
     thinking: ThinkingLevel,
     #[serde(default)]
     mode: SessionMode,
+    /// Per-session compaction budget in chars; 0 = agent default. Defaults
+    /// keep pre-budget JSONL files loadable unchanged.
+    #[serde(default)]
+    context_budget_chars: usize,
     // Workbench tree linkage. Defaults keep pre-workbench JSONL files
     // loadable unchanged (they are all main-line sessions).
     #[serde(default)]
@@ -254,6 +263,7 @@ impl SessionStore {
             model: model.clone(),
             thinking: meta.thinking,
             mode: meta.mode,
+            context_budget_chars: meta.context_budget_chars,
             parent_session: meta.parent_session,
             kind: meta.session_kind,
             created_at: meta.created_at,
@@ -413,6 +423,7 @@ fn serialize_session(session: &Session) -> Result<String, SessionError> {
         model: session.model.clone(),
         thinking: session.thinking,
         mode: session.mode,
+        context_budget_chars: session.context_budget_chars,
         parent_session: session.parent_session.clone(),
         session_kind: session.kind,
         created_at: session.created_at,

@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type {
   AskRequest,
+  ContextUsageDto,
   ElfCardDto,
   FrontendEvent,
   HardwareExit,
@@ -21,6 +22,14 @@ export const api = {
   startTurn: (sessionId: string, input: string) =>
     invoke('start_turn', { sessionId, input }),
   cancelTurn: (sessionId: string) => invoke('cancel_turn', { sessionId }),
+  setSessionThinking: (sessionId: string, level: string) =>
+    invoke<SessionDto>('set_session_thinking', { sessionId, level }),
+  setSessionMode: (sessionId: string, mode: string) =>
+    invoke<SessionDto>('set_session_mode', { sessionId, mode }),
+  setSessionBudget: (sessionId: string, chars: number) =>
+    invoke<SessionDto>('set_session_budget', { sessionId, chars }),
+  sessionContextUsage: (sessionId: string) =>
+    invoke<ContextUsageDto>('session_context_usage', { sessionId }),
   listSessions: () => invoke<SessionSummaryDto[]>('list_sessions'),
   workbenchState: (cwd: string) => invoke<WorkbenchStateDto>('workbench_state', { cwd }),
   workbenchSetMainline: (cwd: string, sessionId: string) =>

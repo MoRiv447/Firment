@@ -16,7 +16,10 @@ use crate::ui::{GuiAsker, GuiPermission, GuiSink};
 /// the agent lock for the whole turn, so cancel must be able to fire them
 /// directly without contending for that lock. The caller stores them in the
 /// session's [`crate::state::AgentSlot`].
-pub fn build_agent(shared: &Arc<Shared>, session: Session) -> anyhow::Result<(Agent, CancelHandles)> {
+pub fn build_agent(
+    shared: &Arc<Shared>,
+    session: Session,
+) -> anyhow::Result<(Agent, CancelHandles)> {
     let config = shared.config.lock().unwrap().clone();
     let merged = config.merged_for(&session.cwd);
 

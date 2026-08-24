@@ -19,9 +19,19 @@ export interface SessionDto {
   model: string;
   mode: string;
   thinking: string;
+  /** Per-session compaction budget in chars; 0 = agent default. */
+  context_budget_chars?: number;
   created_at: number;
   updated_at: number;
   messages: ChatMessage[];
+}
+
+export interface ContextUsageDto {
+  system_chars: number;
+  messages_chars: number;
+  budget: number;
+  total_chars: number;
+  pct: number;
 }
 
 export interface SessionSummaryDto {
