@@ -39,6 +39,13 @@ fn parse_broker(broker: &str) -> (String, u16) {
 
 async fn run(shared: Arc<Shared>, broker: String) {
     let (host, port) = parse_broker(&broker);
+    emit(
+        &shared,
+        FrontendEvent::Info {
+            session_id: None,
+            message: format!("[mqtt] link starting -> {host}:{port}"),
+        },
+    );
     loop {
         let (client, mut eventloop) = {
             let opts = rumqttc::MqttOptions::new("firment-gui", &host, port);
@@ -76,6 +83,13 @@ async fn run(shared: Arc<Shared>, broker: String) {
                         &shared,
                         FrontendEvent::GuardStatus {
                             frame: format!("{{\"connected\":false,\"error\":\"{e}\"}}"),
+                        },
+                    );
+                    emit(
+                        &shared,
+                        FrontendEvent::Info {
+                            session_id: None,
+                            message: format!("[mqtt] link error: {e} — retrying in 3s"),
                         },
                     );
                     // Backoff then rebuild the whole client: rumqttc event

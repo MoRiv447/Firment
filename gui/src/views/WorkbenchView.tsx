@@ -446,15 +446,23 @@ export function WorkbenchView({
                   ))}
                 </div>
               )}
-              {guardFrame &&
-                !guardFrame.includes('"connected"') && (
-                  <details style={{ marginTop: 6 }}>
-                    <summary>
-                      <Text type="secondary" style={{ fontSize: 11 }}>guard status</Text>
-                    </summary>
-                    <pre style={{ fontSize: 10, margin: '4px 0 0' }}>{guardFrame}</pre>
-                  </details>
-                )}
+              {(() => {
+                let err: string | null = null;
+                try {
+                  const g = JSON.parse(guardFrame || '{}');
+                  if (g.connected === false) err = String(g.error ?? 'disconnected');
+                } catch {
+                  /* non-JSON frame — ignore */
+                }
+                return err ? (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    style={{ marginTop: 6, borderRadius: 0 }}
+                    message={`mqtt link: ${err} (retrying every 3s)`}
+                  />
+                ) : null;
+              })()}
             </>
           )}
         </Card>
