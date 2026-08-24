@@ -40,6 +40,19 @@ export interface PinEntryDto {
   owner: string;
 }
 
+export interface BoardPinmapDto {
+  board: string;
+  pins: PinEntryDto[];
+}
+
+export interface DeviceBindingDto {
+  node: string;
+  role: string;
+  note: string;
+  /** Optional device_cmd prefix whitelist (empty = allow all, logged). */
+  allow: string[];
+}
+
 export interface DecisionEntryDto {
   title: string;
   body: string;

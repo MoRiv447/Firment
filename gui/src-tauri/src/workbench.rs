@@ -113,7 +113,7 @@ pub async fn workbench_set_mainline(
     cfg.save(Path::new(&cwd))
 }
 
-// ---------- pin/resource registry ([pinmap] in workbench.toml) ----------
+// ---------- pin/resource registry ([pinmap.<board>] in workbench.toml) ----
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PinEntryDto {
@@ -122,16 +122,28 @@ pub struct PinEntryDto {
     pub owner: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct BoardPinmapDto {
+    pub board: String,
+    pub pins: Vec<PinEntryDto>,
+}
+
 #[tauri::command]
-pub async fn workbench_pinmap_list(cwd: String) -> Result<Vec<PinEntryDto>, String> {
+pub async fn workbench_pinmap_list(cwd: String) -> Result<Vec<BoardPinmapDto>, String> {
     let cfg = WorkbenchConfig::load(Path::new(&cwd))?;
     Ok(cfg
         .pinmap
         .into_iter()
-        .map(|(pin, e)| PinEntryDto {
-            pin,
-            func: e.func,
-            owner: e.owner,
+        .map(|(board, pins)| BoardPinmapDto {
+            board,
+            pins: pins
+                .into_iter()
+                .map(|(pin, e)| PinEntryDto {
+                    pin,
+                    func: e.func,
+                    owner: e.owner,
+                })
+                .collect(),
         })
         .collect())
 }
@@ -139,19 +151,21 @@ pub async fn workbench_pinmap_list(cwd: String) -> Result<Vec<PinEntryDto>, Stri
 #[tauri::command]
 pub async fn workbench_pinmap_set(
     cwd: String,
+    board: String,
     pin: String,
     func: String,
     owner: String,
-) -> Result<Vec<PinEntryDto>, String> {
+) -> Result<Vec<BoardPinmapDto>, String> {
     // Same normalization as the agent-side pinmap tool so GUI edits and
     // agent claims always land on the same key.
     let key = pin.trim().to_uppercase();
-    if key.is_empty() || func.trim().is_empty() {
-        return Err("pin and func are required".into());
+    let board = board.trim().to_string();
+    if board.is_empty() || key.is_empty() || func.trim().is_empty() {
+        return Err("board, pin and func are required".into());
     }
     let root = PathBuf::from(&cwd);
     let mut cfg = WorkbenchConfig::load(&root)?;
-    cfg.pinmap.insert(
+    cfg.pinmap.entry(board).or_default().insert(
         key,
         firment_core::PinEntry {
             func: func.trim().to_string(),
@@ -163,12 +177,84 @@ pub async fn workbench_pinmap_set(
 }
 
 #[tauri::command]
-pub async fn workbench_pinmap_remove(cwd: String, pin: String) -> Result<Vec<PinEntryDto>, String> {
+pub async fn workbench_pinmap_remove(
+    cwd: String,
+    board: String,
+    pin: String,
+) -> Result<Vec<BoardPinmapDto>, String> {
     let root = PathBuf::from(&cwd);
     let mut cfg = WorkbenchConfig::load(&root)?;
-    cfg.pinmap.remove(pin.trim().to_uppercase().as_str());
+    if let Some(board_pins) = cfg.pinmap.get_mut(board.trim()) {
+        board_pins.remove(pin.trim().to_uppercase().as_str());
+        if board_pins.is_empty() {
+            cfg.pinmap.remove(board.trim());
+        }
+    }
     cfg.save(&root)?;
     workbench_pinmap_list(cwd).await
+}
+
+// ---------- per-project device registry ([devices] in workbench.toml) ----
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DeviceBindingDto {
+    pub node: String,
+    pub role: String,
+    pub note: String,
+    pub allow: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn workbench_devices_list(cwd: String) -> Result<Vec<DeviceBindingDto>, String> {
+    let cfg = WorkbenchConfig::load(Path::new(&cwd))?;
+    Ok(cfg
+        .devices
+        .into_iter()
+        .map(|(node, d)| DeviceBindingDto {
+            node,
+            role: d.role,
+            note: d.note,
+            allow: d.allow,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn workbench_devices_set(
+    cwd: String,
+    node: String,
+    role: String,
+    note: String,
+    allow: Vec<String>,
+) -> Result<Vec<DeviceBindingDto>, String> {
+    let node = node.trim().to_string();
+    if node.is_empty() {
+        return Err("node is required".into());
+    }
+    let root = PathBuf::from(&cwd);
+    let mut cfg = WorkbenchConfig::load(&root)?;
+    cfg.devices.insert(
+        node,
+        firment_core::DeviceEntry {
+            role: role.trim().to_string(),
+            note: note.trim().to_string(),
+            allow: allow.into_iter().map(|a| a.trim().to_string()).collect(),
+        },
+    );
+    cfg.save(&root)?;
+    workbench_devices_list(cwd).await
+}
+
+#[tauri::command]
+pub async fn workbench_devices_remove(
+    cwd: String,
+    node: String,
+) -> Result<Vec<DeviceBindingDto>, String> {
+    let root = PathBuf::from(&cwd);
+    let mut cfg = WorkbenchConfig::load(&root)?;
+    cfg.devices.remove(node.trim());
+    cfg.save(&root)?;
+    workbench_devices_list(cwd).await
 }
 
 // ---------- ADR-lite decision log ([[decision]] in workbench.toml) -------

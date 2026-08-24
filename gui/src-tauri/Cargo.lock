@@ -1174,6 +1174,7 @@ name = "firment-tools"
 version = "0.5.14"
 dependencies = [
  "async-trait",
+ "chrono",
  "firment-core",
  "futures",
  "globset",
@@ -1181,6 +1182,7 @@ dependencies = [
  "object",
  "regex",
  "reqwest 0.12.28",
+ "rumqttc",
  "serde",
  "serde_json",
  "serialport",

@@ -196,12 +196,34 @@ fn forward(shared: &Arc<Shared>, topic: &str, payload: &[u8]) {
     let frame = String::from_utf8_lossy(payload).into_owned();
     match route_topic(topic) {
         Some(Route::Device { node, kind }) => {
+            // Side-sink for the device_log tool: every frame lands in a
+            // daily JSONL next to config.toml (single writer = this task,
+            // so plain appends are safe).
+            sink_frame(&frame);
             emit(shared, FrontendEvent::DeviceFrame { node, kind, frame });
         }
         Some(Route::GuardStatus) => {
+            sink_frame(&frame);
             emit(shared, FrontendEvent::GuardStatus { frame });
         }
         None => {} // collab/presence etc. land in M4
+    }
+}
+
+/// Append one raw frame to `device-log-<YYYYMMDD>.jsonl` in the config dir.
+/// Best-effort: a logging failure never breaks the live feed. Single
+/// writer (this MQTT task) so plain appends are safe.
+fn sink_frame(frame: &str) {
+    use std::io::Write as _;
+    let day = chrono::Utc::now().format("%Y%m%d");
+    let path = firment_core::config::config_dir().join(format!("device-log-{day}.jsonl"));
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let clean = frame.replace('\n', " ");
+        let _ = writeln!(f, "{clean}");
     }
 }
 

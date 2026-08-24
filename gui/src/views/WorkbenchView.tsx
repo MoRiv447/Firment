@@ -18,11 +18,12 @@ import { useEffect, useState } from 'react';
 import { api, notifySessionsChanged, onAgentEvent } from '../lib/api';
 import type {
   AlertEntry,
+  BoardPinmapDto,
   DecisionEntryDto,
+  DeviceBindingDto,
   DeviceEntry,
   ElfCardDto,
   KbEntryDto,
-  PinEntryDto,
   QualityItemDto,
   SessionSummaryDto,
   TimelineEntryDto,
@@ -102,11 +103,18 @@ export function WorkbenchView({
   const [quality, setQuality] = useState<QualityItemDto[]>([]);
   const [timeline, setTimeline] = useState<TimelineEntryDto[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
-  // Pin/resource registry ([pinmap] in workbench.toml), shared with the
-  // agent's `pinmap` tool — GUI edits and agent claims land on one table.
-  const [pinmap, setPinmap] = useState<PinEntryDto[]>([]);
+  // Pin/resource registry ([pinmap.<board>] in workbench.toml), shared with
+  // the agent's `pinmap` tool — GUI edits and agent claims land on one
+  // table, scoped per board (board name == MQTT node name).
+  const [pinmap, setPinmap] = useState<BoardPinmapDto[]>([]);
+  const [pinBoard, setPinBoard] = useState<string | null>(null);
+  const [newBoard, setNewBoard] = useState('');
   const [newPin, setNewPin] = useState('');
   const [newFunc, setNewFunc] = useState('');
+  // Per-project device bindings ([devices.<node>] in workbench.toml).
+  const [bindings, setBindings] = useState<DeviceBindingDto[]>([]);
+  const [bindNode, setBindNode] = useState('');
+  const [bindRole, setBindRole] = useState('');
   // ADR-lite decision log ([[decision]]); branches whose title matches a
   // decision inherit it automatically at creation.
   const [decisions, setDecisions] = useState<DecisionEntryDto[]>([]);
@@ -195,7 +203,12 @@ export function WorkbenchView({
     setBusy(true);
     const wb = await refresh(cwd.trim());
     try {
-      setPinmap(await api.workbenchPinmapList(cwd.trim()));
+      const boards = await api.workbenchPinmapList(cwd.trim());
+      setPinmap(boards);
+      setPinBoard((prev) => {
+        if (prev && boards.some((b) => b.board === prev)) return prev;
+        return boards[0]?.board ?? null;
+      });
     } catch {
       setPinmap([]);
     }
@@ -203,6 +216,11 @@ export function WorkbenchView({
       setDecisions(await api.workbenchDecisionList(cwd.trim()));
     } catch {
       setDecisions([]);
+    }
+    try {
+      setBindings(await api.workbenchDevicesList(cwd.trim()));
+    } catch {
+      setBindings([]);
     }
     try {
       const files = await api.workbenchKbList(cwd.trim());
@@ -231,10 +249,10 @@ export function WorkbenchView({
   };
 
   const addPin = async () => {
-    if (!cwd.trim() || !newPin.trim() || !newFunc.trim()) return;
+    if (!cwd.trim() || !pinBoard || !newPin.trim() || !newFunc.trim()) return;
     setBusy(true);
     try {
-      setPinmap(await api.workbenchPinmapSet(cwd.trim(), newPin, newFunc, 'user'));
+      setPinmap(await api.workbenchPinmapSet(cwd.trim(), pinBoard, newPin, newFunc, 'user'));
       setNewPin('');
       setNewFunc('');
     } catch (err) {
@@ -245,10 +263,44 @@ export function WorkbenchView({
   };
 
   const removePin = async (pin: string) => {
+    if (!cwd.trim() || !pinBoard) return;
+    setBusy(true);
+    try {
+      setPinmap(await api.workbenchPinmapRemove(cwd.trim(), pinBoard, pin));
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const addBoard = () => {
+    const name = newBoard.trim();
+    if (name) setPinBoard(name);
+    setNewBoard('');
+  };
+
+  const bindDevice = async () => {
+    if (!cwd.trim() || !bindNode.trim()) return;
+    setBusy(true);
+    try {
+      setBindings(
+        await api.workbenchDevicesSet(cwd.trim(), bindNode.trim(), bindRole.trim(), '', []),
+      );
+      setBindNode('');
+      setBindRole('');
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const unbindDevice = async (node: string) => {
     if (!cwd.trim()) return;
     setBusy(true);
     try {
-      setPinmap(await api.workbenchPinmapRemove(cwd.trim(), pin));
+      setBindings(await api.workbenchDevicesRemove(cwd.trim(), node));
     } catch (err) {
       setError(String(err));
     } finally {
@@ -425,13 +477,19 @@ export function WorkbenchView({
   return (
     <div style={{ padding: 20, height: '100%', overflowY: 'auto' }}>
       <Card size="small" title="Project workbench">
-        {/* SBC data plane: broker link + node table + alert ring. Global —
-            visible before any project is opened. */}
+        {/* SBC data plane: broker link + node table + alert ring. Global
+            (nodes belong to the machine, not a project) and DEFAULT
+            COLLAPSED — per-project context lives in the project's own
+            Devices card below. */}
+        <details style={{ marginBottom: 12 }}>
+          <summary style={{ cursor: 'pointer', fontSize: 12, color: '#9aa3b2' }}>
+            All device traffic (unfiltered) — click to expand
+          </summary>
         <Card
           type="inner"
           size="small"
           title="Devices & guard"
-          style={{ marginBottom: 12 }}
+          style={{ marginTop: 8 }}
           extra={
             (() => {
               // Three states: positive off, positive online, and "no news
@@ -513,11 +571,12 @@ export function WorkbenchView({
                     style={{ marginTop: 6, borderRadius: 0 }}
                     message={`mqtt link: ${err} (retrying every 3s)`}
                   />
-                ) : null;
-              })()}
-            </>
-          )}
-        </Card>
+                 ) : null;
+               })()}
+             </>
+           )}
+         </Card>
+        </details>
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
           <Space wrap>
             <Input
@@ -595,67 +654,200 @@ export function WorkbenchView({
 
               <Card
                 type="inner"
+                title="Devices"
+                size="small"
+                extra={
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    nodes this project owns — the agent's device_cmd can only reach these
+                  </Text>
+                }
+              >
+                {bindings.length === 0 && (
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    No devices bound. Bind a node (use its MQTT node name) so the agent can
+                    send it commands via device_cmd.
+                  </Text>
+                )}
+                {bindings.map((d) => {
+                  const live = devices.find((x) => x.node === d.node);
+                  return (
+                    <div
+                      key={d.node}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        padding: '4px 6px',
+                        borderBottom: '1px solid #f0f0f0',
+                      }}
+                    >
+                      <Tag
+                        color={live ? 'green' : 'default'}
+                        style={{ borderRadius: 0, fontWeight: 700 }}
+                      >
+                        {live ? '●' : '○'} {d.node}
+                      </Tag>
+                      <Text style={{ flex: 1, fontSize: 12 }}>
+                        {d.role || '—'}
+                        {d.note ? <Text type="secondary"> · {d.note}</Text> : null}
+                        {d.allow.length > 0 && (
+                          <Text type="secondary" style={{ fontSize: 10 }}>
+                            {' '}
+                            [allow: {d.allow.join(', ')}]
+                          </Text>
+                        )}
+                      </Text>
+                      {live && (
+                        <Text type="secondary" style={{ fontSize: 10 }}>
+                          ×{live.count} · {new Date(live.ts).toLocaleTimeString()}
+                        </Text>
+                      )}
+                      <Button size="small" type="text" danger disabled={busy} onClick={() => unbindDevice(d.node)}>
+                        ✕
+                      </Button>
+                    </div>
+                  );
+                })}
+                <Space.Compact style={{ width: '100%', marginTop: 8 }}>
+                  {devices.filter((d) => !bindings.some((b) => b.node === d.node)).length > 0 ? (
+                    <Select
+                      size="small"
+                      placeholder="pick an online node"
+                      style={{ minWidth: 150 }}
+                      value={bindNode || undefined}
+                      onChange={(v) => setBindNode(v)}
+                      options={devices
+                        .filter((d) => !bindings.some((b) => b.node === d.node))
+                        .map((d) => ({ value: d.node, label: `${d.node} (${d.count} frames)` }))}
+                    />
+                  ) : (
+                    <Input
+                      size="small"
+                      placeholder="node name (s3-node-1)"
+                      value={bindNode}
+                      onChange={(e) => setBindNode(e.target.value)}
+                      style={{ maxWidth: 170, fontFamily: 'Consolas, monospace' }}
+                    />
+                  )}
+                  <Input
+                    size="small"
+                    placeholder="role (main mcu / sensor node…)"
+                    value={bindRole}
+                    onChange={(e) => setBindRole(e.target.value)}
+                    onPressEnter={bindDevice}
+                  />
+                  <Button size="small" type="dashed" disabled={busy || !bindNode.trim()} onClick={bindDevice}>
+                    bind
+                  </Button>
+                </Space.Compact>
+              </Card>
+
+              <Card
+                type="inner"
                 title="Pin assignments"
                 size="small"
                 extra={
                   <Text type="secondary" style={{ fontSize: 11 }}>
-                    shared with the agent's pinmap tool
+                    board-scoped, shared with the agent's pinmap tool
                   </Text>
                 }
               >
-                {pinmap.length === 0 && (
+                {pinmap.length === 0 && !pinBoard && (
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    No pins claimed yet. The agent registers allocations here before wiring
-                    peripherals; add known ones manually below.
+                    No boards/pins yet. Pick a board name (use the device's MQTT node name,
+                    e.g. s3-node-1) and claim pins — the agent sees the same table.
                   </Text>
                 )}
-                {pinmap.length > 0 && (
-                  <div style={{ marginBottom: 8 }}>
-                    {pinmap.map((p) => (
-                      <div
-                        key={p.pin}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 8,
-                          padding: '3px 6px',
-                          borderBottom: '1px solid #f0f0f0',
-                        }}
-                      >
-                        <Tag color="blue" style={{ borderRadius: 0, fontWeight: 700, minWidth: 64, textAlign: 'center' }}>
-                          {p.pin}
-                        </Tag>
-                        <Text style={{ flex: 1, fontSize: 12 }}>{p.func}</Text>
-                        <Text type="secondary" style={{ fontSize: 11 }}>
-                          {p.owner || '—'}
-                        </Text>
-                        <Button size="small" type="text" danger disabled={busy} onClick={() => removePin(p.pin)}>
-                          ✕
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <Space.Compact style={{ width: '100%', marginTop: 4 }}>
+                <Space wrap size={4} style={{ marginBottom: 6 }}>
+                  {pinmap.map((b) => (
+                    <Tag
+                      key={b.board}
+                      color={b.board === pinBoard ? 'blue' : 'default'}
+                      style={{ cursor: 'pointer', fontSize: 12 }}
+                      onClick={() => setPinBoard(b.board)}
+                    >
+                      {b.board} ({b.pins.length})
+                    </Tag>
+                  ))}
                   <Input
                     size="small"
-                    placeholder="pin (PA5)"
-                    value={newPin}
-                    onChange={(e) => setNewPin(e.target.value)}
-                    onPressEnter={addPin}
-                    style={{ maxWidth: 110, fontFamily: 'Consolas, monospace' }}
+                    placeholder="new board name"
+                    value={newBoard}
+                    onChange={(e) => setNewBoard(e.target.value)}
+                    onPressEnter={addBoard}
+                    style={{ width: 150, fontFamily: 'Consolas, monospace', fontSize: 11 }}
                   />
-                  <Input
-                    size="small"
-                    placeholder="function (LED / USART1_TX…)"
-                    value={newFunc}
-                    onChange={(e) => setNewFunc(e.target.value)}
-                    onPressEnter={addPin}
-                  />
-                  <Button size="small" type="dashed" disabled={busy} onClick={addPin}>
-                    claim
+                  <Button size="small" type="dashed" disabled={busy || !newBoard.trim()} onClick={addBoard}>
+                    use board
                   </Button>
-                </Space.Compact>
+                </Space>
+                {pinBoard && (
+                  <>
+                    {(() => {
+                      const selected = pinmap.find((b) => b.board === pinBoard);
+                      if (!selected || selected.pins.length === 0) {
+                        return (
+                          <Text type="secondary" style={{ fontSize: 12 }}>
+                            Board "{pinBoard}" has no claimed pins yet.
+                          </Text>
+                        );
+                      }
+                      return (
+                        <div style={{ marginBottom: 8 }}>
+                          {selected.pins.map((p) => (
+                            <div
+                              key={p.pin}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 8,
+                                padding: '3px 6px',
+                                borderBottom: '1px solid #f0f0f0',
+                              }}
+                            >
+                              <Tag color="blue" style={{ borderRadius: 0, fontWeight: 700, minWidth: 64, textAlign: 'center' }}>
+                                {p.pin}
+                              </Tag>
+                              <Text style={{ flex: 1, fontSize: 12 }}>{p.func}</Text>
+                              <Text type="secondary" style={{ fontSize: 11 }}>
+                                {p.owner || '—'}
+                              </Text>
+                              <Button
+                                size="small"
+                                type="text"
+                                danger
+                                disabled={busy}
+                                onClick={() => removePin(p.pin)}
+                              >
+                                ✕
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                    <Space.Compact style={{ width: '100%', marginTop: 4 }}>
+                      <Input
+                        size="small"
+                        placeholder="pin (PA5)"
+                        value={newPin}
+                        onChange={(e) => setNewPin(e.target.value)}
+                        onPressEnter={addPin}
+                        style={{ maxWidth: 110, fontFamily: 'Consolas, monospace' }}
+                      />
+                      <Input
+                        size="small"
+                        placeholder="function (LED / USART1_TX…)"
+                        value={newFunc}
+                        onChange={(e) => setNewFunc(e.target.value)}
+                        onPressEnter={addPin}
+                      />
+                      <Button size="small" type="dashed" disabled={busy} onClick={addPin}>
+                        claim on {pinBoard}
+                      </Button>
+                    </Space.Compact>
+                  </>
+                )}
               </Card>
 
               <Card

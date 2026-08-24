@@ -10,7 +10,8 @@ import type {
   HardwareExit,
   MonitorLine,
   PermissionRequest,
-  PinEntryDto,
+  BoardPinmapDto,
+  DeviceBindingDto,
   QualityItemDto,
   SessionDto,
   SessionSummaryDto,
@@ -35,11 +36,16 @@ export const api = {
     invoke<ContextUsageDto>('session_context_usage', { sessionId }),
   listSessions: () => invoke<SessionSummaryDto[]>('list_sessions'),
   workbenchState: (cwd: string) => invoke<WorkbenchStateDto>('workbench_state', { cwd }),
-  workbenchPinmapList: (cwd: string) => invoke<PinEntryDto[]>('workbench_pinmap_list', { cwd }),
-  workbenchPinmapSet: (cwd: string, pin: string, func: string, owner: string) =>
-    invoke<PinEntryDto[]>('workbench_pinmap_set', { cwd, pin, func, owner }),
-  workbenchPinmapRemove: (cwd: string, pin: string) =>
-    invoke<PinEntryDto[]>('workbench_pinmap_remove', { cwd, pin }),
+  workbenchPinmapList: (cwd: string) => invoke<BoardPinmapDto[]>('workbench_pinmap_list', { cwd }),
+  workbenchPinmapSet: (cwd: string, board: string, pin: string, func: string, owner: string) =>
+    invoke<BoardPinmapDto[]>('workbench_pinmap_set', { cwd, board, pin, func, owner }),
+  workbenchPinmapRemove: (cwd: string, board: string, pin: string) =>
+    invoke<BoardPinmapDto[]>('workbench_pinmap_remove', { cwd, board, pin }),
+  workbenchDevicesList: (cwd: string) => invoke<DeviceBindingDto[]>('workbench_devices_list', { cwd }),
+  workbenchDevicesSet: (cwd: string, node: string, role: string, note: string, allow: string[]) =>
+    invoke<DeviceBindingDto[]>('workbench_devices_set', { cwd, node, role, note, allow }),
+  workbenchDevicesRemove: (cwd: string, node: string) =>
+    invoke<DeviceBindingDto[]>('workbench_devices_remove', { cwd, node }),
   workbenchDecisionList: (cwd: string) => invoke<DecisionEntryDto[]>('workbench_decision_list', { cwd }),
   workbenchDecisionAdd: (cwd: string, title: string, body: string) =>
     invoke<DecisionEntryDto[]>('workbench_decision_add', { cwd, title, body }),
