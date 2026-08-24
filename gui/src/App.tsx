@@ -18,8 +18,10 @@ import {
   onSessionsChanged,
 } from './lib/api';
 import type {
+  AlertEntry,
   AskRequest,
   ContextUsageDto,
+  DeviceEntry,
   MonitorLine,
   PermissionRequest,
   SessionDto,
@@ -60,6 +62,11 @@ export default function App() {
   // While the budget menu is open the ctx tooltip stays hidden — otherwise
   // hovering pops the info box and clicking pops two boxes at once.
   const [ctxMenuOpen, setCtxMenuOpen] = useState(false);
+  // SBC data plane (MQTT link): per-node rolling view, alert ring, guard
+  // heartbeat. Global (not project-scoped) — the broker is machine-level.
+  const [devices, setDevices] = useState<Record<string, DeviceEntry>>({});
+  const [alerts, setAlerts] = useState<AlertEntry[]>([]);
+  const [guardFrame, setGuardFrame] = useState<string | null>(null);
   const [view, setView] = useState<ViewKey>('chat');
   // Permission requests arrive concurrently (tool waves run in parallel), so
   // they must be queued — a single overwriting state would leave the first
@@ -158,6 +165,31 @@ export default function App() {
               ...prev.slice(-8),
               { id: Date.now(), sid, text: e.message },
             ]);
+            break;
+          case 'device_frame': {
+            const ts = Date.now();
+            setDevices((prev) => {
+              const old = prev[e.node];
+              return {
+                ...prev,
+                [e.node]: {
+                  node: e.node,
+                  lastKind: e.kind,
+                  lastFrame: e.frame.slice(0, 200),
+                  ts,
+                  count: (old?.count ?? 0) + 1,
+                },
+              };
+            });
+            if (e.kind === 'alert') {
+              setAlerts((prev) =>
+                [{ node: e.node, frame: e.frame.slice(0, 300), ts }, ...prev].slice(0, 30),
+              );
+            }
+            break;
+          }
+          case 'guard_status':
+            setGuardFrame(e.frame);
             break;
           default:
             break;
@@ -551,7 +583,13 @@ export default function App() {
             {view === 'settings' && <SettingsView />}
             {view === 'serial' && <SerialView lines={monitorLines} />}
             {view === 'flash' && <FlashView />}
-            {view === 'collab' && <WorkbenchView />}
+            {view === 'collab' && (
+              <WorkbenchView
+                devices={Object.values(devices).sort((a, b) => b.ts - a.ts)}
+                alerts={alerts}
+                guardFrame={guardFrame}
+              />
+            )}
           </Content>
         </Layout>
       </Layout>

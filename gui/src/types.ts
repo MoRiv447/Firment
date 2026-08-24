@@ -53,6 +53,21 @@ export interface KbEntryDto {
   content: string;
 }
 
+/** Aggregated per-node view of SBC device traffic (GUI-side rolling). */
+export interface DeviceEntry {
+  node: string;
+  lastKind: string;
+  lastFrame: string;
+  ts: number;
+  count: number;
+}
+
+export interface AlertEntry {
+  node: string;
+  frame: string;
+  ts: number;
+}
+
 export interface SessionSummaryDto {
   id: string;
   updated_at: number;
@@ -121,6 +136,8 @@ export type FrontendEvent =
   | { type: 'tool_end'; session_id?: string | null; name: string; ok: boolean; summary: string; seq: number }
   | { type: 'turn_end'; session_id?: string | null; text: string }
   | { type: 'info'; session_id?: string | null; message: string }
+  | { type: 'device_frame'; node: string; kind: string; frame: string }
+  | { type: 'guard_status'; frame: string }
   | { type: 'settings'; provider: string | null; model: string | null; thinking: string | null; mode: string | null }
   | { type: 'models'; models: string[] }
   | { type: 'sessions'; sessions: SessionSummaryDto[] }

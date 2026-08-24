@@ -3,9 +3,19 @@
 // Publishes a heartbeat + a fake sensor metric to the SBC broker every 5 s,
 // subscribes to its command topic and echoes payloads back as telemetry.
 //
+// RGB experiment (GPIO48 WS2812, S3 SuperMini onboard LED):
+//   publish to firment/device/<node>/cmd :
+//     rgb:on          -> last color at full brightness
+//     rgb:off         -> black
+//     rgb:#ff8800     -> set color (hex)
+//   Every change is republished RETAINED on .../<node>/state as
+//   {"rgb":{"state":"on","hex":"#ff8800"}} so the SBC guard / small model /
+//   firm always see the CURRENT light state without asking.
+//
 // Build (Arduino IDE or arduino-cli):
 //   board: "ESP32C3 Dev Module"   (S3: "ESP32S3 Dev Module")
 //   libs : PubSubClient (Nick O'Leary)
+//   note : neopixelWrite() is builtin to arduino-esp32 >= 2.0.9 (no lib needed)
 //
 // Flash from the SBC itself (after arduino-cli is installed there) or from
 // any desktop with the board plugged in:
@@ -20,14 +30,71 @@ const char* WIFI_PASS = "YOUR_WIFI_PASS";
 // SBC broker (see docs/sbc-agent.md §3.1)
 const char* MQTT_HOST = "192.168.1.6";
 const uint16_t MQTT_PORT = 1883;
-const char* NODE_NAME = "c3-node-1";
+const char* NODE_NAME = "s3-node-1";
 // -------------------------------------------------------------------------
+
+#define RGB_PIN 48  // WS2812 on S3 SuperMini boards
 
 WiFiClient wifi;
 PubSubClient mqtt(wifi);
 
 unsigned long last_pub = 0;
 uint32_t seq = 0;
+
+// ---- rgb state ----------------------------------------------------------
+bool rgb_on = false;
+uint8_t rgb_r = 255, rgb_g = 255, rgb_b = 255;
+char rgb_hex[8] = "#ffffff";
+
+void apply_rgb() {
+  if (rgb_on) {
+    neopixelWrite(RGB_PIN, rgb_r, rgb_g, rgb_b);
+  } else {
+    neopixelWrite(RGB_PIN, 0, 0, 0);
+  }
+}
+
+void rgb_hex_to_parts(const char* hex) {
+  if (hex[0] == '#') hex++;
+  auto byte_at = [&](int i) -> uint8_t {
+    char buf[3] = {hex[i], hex[i + 1], 0};
+    return (uint8_t)strtol(buf, nullptr, 16);
+  };
+  rgb_r = byte_at(0);
+  rgb_g = byte_at(2);
+  rgb_b = byte_at(4);
+  snprintf(rgb_hex, sizeof(rgb_hex), "#%02x%02x%02x", rgb_r, rgb_g, rgb_b);
+}
+
+void publish_state() {
+  char topic[64];
+  snprintf(topic, sizeof(topic), "firment/device/%s/state", NODE_NAME);
+  char msg[160];
+  snprintf(msg, sizeof(msg),
+           "{\"node\":\"%s\",\"kind\":\"state\",\"rgb\":{\"state\":\"%s\",\"hex\":\"%s\",\"r\":%u,\"g\":%u,\"b\":%u}}",
+           NODE_NAME, rgb_on ? "on" : "off", rgb_hex, rgb_r, rgb_g, rgb_b);
+  mqtt.publish(topic, msg, true);  // retained: late joiners see current state
+}
+
+void handle_cmd(const char* cmd) {
+  if (strncmp(cmd, "rgb:", 4) == 0) {
+    const char* arg = cmd + 4;
+    if (strcasecmp(arg, "on") == 0) {
+      rgb_on = true;
+    } else if (strcasecmp(arg, "off") == 0) {
+      rgb_on = false;
+    } else if (arg[0] == '#' && strlen(arg) == 7) {
+      rgb_hex_to_parts(arg);
+      rgb_on = true;
+    } else {
+      return;  // unknown rgb arg — ignore silently
+    }
+    apply_rgb();
+    publish_state();
+    return;
+  }
+  publish("echo", cmd);  // prove downlink works for everything else
+}
 
 void publish(const char* kind, const char* payload) {
   char topic[64];
@@ -44,7 +111,7 @@ void on_message(char* topic, byte* body, unsigned int len) {
   unsigned int n = len < sizeof(cmd) - 1 ? len : sizeof(cmd) - 1;
   memcpy(cmd, body, n);
   cmd[n] = 0;
-  publish("echo", cmd);  // prove downlink works
+  handle_cmd(cmd);
 }
 
 void connect_wifi() {
@@ -85,10 +152,13 @@ void setup() {
   Serial.begin(115200);
   delay(200);
   Serial.println("\n[node] boot");
+  neopixelWrite(RGB_PIN, 0, 0, 2);  // dim blue = booting
   connect_wifi();
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
   mqtt.setCallback(on_message);
   connect_mqtt();
+  apply_rgb();
+  publish_state();  // retained: announce current rgb on (re)connect
   Serial.println("[node] ready");
 }
 

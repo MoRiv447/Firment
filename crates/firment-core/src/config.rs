@@ -33,6 +33,18 @@ pub struct Config {
     /// Auto-compaction strategy (see `CompactionStrategy`).
     #[serde(default)]
     pub compaction_strategy: CompactionStrategy,
+    /// MQTT broker for the SBC data plane (guard / device telemetry). Absent
+    /// or empty `broker` = feature off (single-player without an SBC).
+    #[serde(default)]
+    pub mqtt: MqttConfig,
+}
+
+/// `[mqtt]` in config.toml.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MqttConfig {
+    /// "host:port" of the mosquitto broker, e.g. "192.168.1.6:1883".
+    #[serde(default)]
+    pub broker: String,
 }
 
 /// ELF binary-analysis gate policy. Written as a string (glob only) in
@@ -280,6 +292,7 @@ impl Config {
             context_budget_chars: default_context_budget(),
             max_output_tokens: None,
             compaction_strategy: CompactionStrategy::default(),
+            mqtt: MqttConfig::default(),
         }
     }
 

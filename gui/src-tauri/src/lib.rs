@@ -3,6 +3,7 @@ mod collab;
 mod commands;
 mod events;
 mod hardware;
+mod mqtt;
 mod state;
 mod ui;
 mod workbench;
@@ -41,7 +42,11 @@ pub fn run() {
                 monitors: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             });
 
-            app.manage(shared);
+            app.manage(shared.clone());
+
+            // SBC data-plane link (no-op unless [mqtt] broker is configured).
+            mqtt::spawn_if_configured(shared);
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -48,6 +48,19 @@ pub enum FrontendEvent {
         session_id: Option<String>,
         message: String,
     },
+    /// One frame from the SBC data plane (device telemetry/state/alert/echo).
+    DeviceFrame {
+        node: String,
+        /// Topic suffix: telemetry | state | alert | echo | ...
+        kind: String,
+        /// Raw JSON payload as received.
+        frame: String,
+    },
+    /// Guard service status/heartbeat (retained on firment/guard/status),
+    /// plus the GUI link's own connected flag.
+    GuardStatus {
+        frame: String,
+    },
     Settings {
         provider: Option<String>,
         model: Option<String>,

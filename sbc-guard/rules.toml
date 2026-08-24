@@ -1,0 +1,25 @@
+# sbc-guard rules — deterministic pre-filter (docs/sbc-agent.md §3.3)
+#
+# The raw stream NEVER goes to the model. These regexes decide what is worth
+# looking at; only hits reach qwen for classification/summary (if enabled).
+# Edit + restart the service to apply.
+
+[[rule]]
+name = "panic"
+pattern = '(panic|Guru Meditation|assert failed)'
+sev = "error"
+
+[[rule]]
+name = "err-log"
+pattern = '\b(E \(|ERROR|error:)'
+sev = "error"
+
+[[rule]]
+name = "warn-log"
+pattern = '\b(W \(|WARN|warning:)'
+sev = "warn"
+
+[[rule]]
+name = "reset"
+pattern = '(rst:|boot:|reboot)'
+sev = "warn"

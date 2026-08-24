@@ -17,7 +17,9 @@ import { ReloadOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import { api, notifySessionsChanged } from '../lib/api';
 import type {
+  AlertEntry,
   DecisionEntryDto,
+  DeviceEntry,
   ElfCardDto,
   KbEntryDto,
   PinEntryDto,
@@ -34,7 +36,15 @@ const { Text, Title } = Typography;
  * .firment/workbench.toml, quick repo status. Multi-user scopes and the
  * small-model guard land in W2/W3 (docs/gui-workbench.md).
  */
-export function WorkbenchView() {
+export function WorkbenchView({
+  devices = [],
+  alerts = [],
+  guardFrame,
+}: {
+  devices?: DeviceEntry[];
+  alerts?: AlertEntry[];
+  guardFrame?: string | null;
+}) {
   const [cwd, setCwd] = useState('');
   const [state, setState] = useState<WorkbenchStateDto | null>(null);
   const [sessions, setSessions] = useState<SessionSummaryDto[]>([]);
@@ -370,6 +380,84 @@ export function WorkbenchView() {
   return (
     <div style={{ padding: 20, height: '100%', overflowY: 'auto' }}>
       <Card size="small" title="Project workbench">
+        {/* SBC data plane: broker link + node table + alert ring. Global —
+            visible before any project is opened. */}
+        <Card
+          type="inner"
+          size="small"
+          title="Devices & guard"
+          style={{ marginBottom: 12 }}
+          extra={
+            (() => {
+              let connected = false;
+              try {
+                connected = guardFrame ? JSON.parse(guardFrame).connected === true : false;
+              } catch {
+                connected = false;
+              }
+              return (
+                <Tag color={connected ? 'green' : 'default'} style={{ borderRadius: 0, fontWeight: 700 }}>
+                  {connected ? '● broker online' : '○ broker off'}
+                </Tag>
+              );
+            })()
+          }
+        >
+          {devices.length === 0 && alerts.length === 0 ? (
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              No device traffic yet. Configure [mqtt] broker in config.toml (e.g.
+              "192.168.1.6:1883") and restart; nodes publish to firment/device/#.
+            </Text>
+          ) : (
+            <>
+              {devices.map((d) => (
+                <div
+                  key={d.node}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '3px 0',
+                    borderBottom: '1px solid #f0f0f0',
+                  }}
+                >
+                  <Tag color="blue" style={{ borderRadius: 0, fontWeight: 700 }}>
+                    {d.node}
+                  </Tag>
+                  <Tag style={{ borderRadius: 0, fontSize: 10 }}>{d.lastKind}</Tag>
+                  <Text style={{ fontSize: 11, flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                    {d.lastFrame}
+                  </Text>
+                  <Text type="secondary" style={{ fontSize: 10 }}>
+                    ×{d.count} · {new Date(d.ts).toLocaleTimeString()}
+                  </Text>
+                </div>
+              ))}
+              {alerts.length > 0 && (
+                <div style={{ marginTop: 8 }}>
+                  <Text type="warning" style={{ fontSize: 11, fontWeight: 700 }}>
+                    ⚠ recent alerts ({alerts.length})
+                  </Text>
+                  {alerts.slice(0, 5).map((a, i) => (
+                    <div key={i} style={{ fontSize: 11, padding: '2px 0' }}>
+                      <Tag color="red" style={{ borderRadius: 0, fontSize: 10 }}>{a.node}</Tag>
+                      <Text type="secondary" style={{ fontSize: 11 }}>{a.frame}</Text>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {guardFrame &&
+                !guardFrame.includes('"connected"') && (
+                  <details style={{ marginTop: 6 }}>
+                    <summary>
+                      <Text type="secondary" style={{ fontSize: 11 }}>guard status</Text>
+                    </summary>
+                    <pre style={{ fontSize: 10, margin: '4px 0 0' }}>{guardFrame}</pre>
+                  </details>
+                )}
+            </>
+          )}
+        </Card>
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
           <Space wrap>
             <Input

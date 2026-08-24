@@ -1,0 +1,14 @@
+broker_host = "127.0.0.1"
+broker_port = 1883
+data_dir = "~/sbc-guard-data"
+rules_file = "rules.toml"
+
+[ollama]
+# Flip to true once you want hits classified by qwen3.5:0.8b (~10 tok/s CPU).
+enabled = false
+url = "http://127.0.0.1:11434/v1/chat/completions"
+model = "qwen3.5:0.8b"
+
+[guard]
+standby_minutes = 10
+escalate_sev = "warn"

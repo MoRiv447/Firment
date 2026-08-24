@@ -1,0 +1,15 @@
+[Unit]
+Description=Firment SBC guard (collector + pre-filter + small-model classifier)
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=radxa
+WorkingDirectory=/home/radxa/sbc-guard
+ExecStart=/usr/bin/python3 /home/radxa/sbc-guard/guardd.py /home/radxa/sbc-guard/config.toml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
