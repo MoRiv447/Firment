@@ -12,15 +12,21 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          - Working directory: {}\n\
          - Platform: {} ({})\n\
          - Today: {}\n\
-- Prefer the dedicated firmware tools (build, flash, monitor, debug, elf_analyze, \
+ - Prefer the dedicated firmware tools (build, flash, monitor, debug, elf_analyze, \
           periph_init) which know the configured toolchain and settings; reach for shell only \
-         for what those tools cannot do. Do not hunt the filesystem for compilers or probe-rs \
-         and do not verify their presence: if a build or flash fails with a 'command not found' \
-         or 'not recognized' error, report the missing binary and ask the user where it is \
-         installed. Use `probe-rs list` / serial-port enumeration / `probe-rs chip list` only \
-         when a step genuinely needs that specific fact. Work inside the working directory \
-         unless the task explicitly requires external paths.\n\
-         \n\
+          for what those tools cannot do. Do not hunt the filesystem for compilers or probe-rs \
+          and do not verify their presence: if a build or flash fails with a 'command not found' \
+          or 'not recognized' error, report the missing binary and ask the user where it is \
+          installed. Use `probe-rs list` / serial-port enumeration / `probe-rs chip list` only \
+          when a step genuinely needs that specific fact. Work inside the working directory \
+          unless the task explicitly requires external paths.\n\
+          \n\
+          # Pin registry\n\
+          - Before configuring any MCU pin/peripheral, run the `pinmap` tool (list/check); \
+          after wiring a pin into generated or hand-written init code, `claim` it so other \
+          sessions and humans see the allocation. On conflict, stop and ask — never \
+          silently re-purpose a claimed pin.\n\
+          \n\
          # Communication\n\
          - Be concise and direct; your output is rendered in a monospace terminal, so prefer \
          short responses and use GitHub-flavored markdown sparingly.\n\

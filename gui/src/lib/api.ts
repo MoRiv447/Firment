@@ -8,6 +8,7 @@ import type {
   HardwareExit,
   MonitorLine,
   PermissionRequest,
+  PinEntryDto,
   QualityItemDto,
   SessionDto,
   SessionSummaryDto,
@@ -32,6 +33,11 @@ export const api = {
     invoke<ContextUsageDto>('session_context_usage', { sessionId }),
   listSessions: () => invoke<SessionSummaryDto[]>('list_sessions'),
   workbenchState: (cwd: string) => invoke<WorkbenchStateDto>('workbench_state', { cwd }),
+  workbenchPinmapList: (cwd: string) => invoke<PinEntryDto[]>('workbench_pinmap_list', { cwd }),
+  workbenchPinmapSet: (cwd: string, pin: string, func: string, owner: string) =>
+    invoke<PinEntryDto[]>('workbench_pinmap_set', { cwd, pin, func, owner }),
+  workbenchPinmapRemove: (cwd: string, pin: string) =>
+    invoke<PinEntryDto[]>('workbench_pinmap_remove', { cwd, pin }),
   workbenchSetMainline: (cwd: string, sessionId: string) =>
     invoke('workbench_set_mainline', { cwd, sessionId }),
   workbenchBranchCreate: (parentId: string, title: string) =>

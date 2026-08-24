@@ -136,6 +136,47 @@ impl Tool for PeriphInit {
         if let Some(hal_note) = project_hal_note(&ctx.cwd) {
             text.push_str(&format!("\n## 工程注意\n{hal_note}"));
         }
+        // Pin-registry linkage: show the project's claims and flag any of
+        // the requested pins that are taken by a different function, so the
+        // skeleton's TODO(fill) never silently double-allocates a pin.
+        if let Ok(cfg) = firment_core::WorkbenchConfig::load(&ctx.cwd) {
+            let requested: Vec<String> = pins
+                .as_deref()
+                .map(|p| {
+                    p.split([',', '/', ';', ' '])
+                        .map(|s| s.trim().to_uppercase())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let conflicts: Vec<String> = requested
+                .iter()
+                .filter_map(|pin| {
+                    cfg.pinmap.get(pin).and_then(|entry| {
+                        let f = entry.func.to_lowercase();
+                        // Same-peripheral claim (e.g. "USART1_TX" vs the
+                        // uart skeleton) is a confirmation, not a conflict.
+                        let related = peripheral == "uart" && f.contains("usart")
+                            || peripheral == "i2c" && f.contains("i2c")
+                            || peripheral == "spi" && f.contains("spi")
+                            || peripheral == "gpio";
+                        (!related).then(|| format!("{pin}: registered as '{}'", entry.func))
+                    })
+                })
+                .collect();
+            if !cfg.pinmap.is_empty() {
+                text.push_str("\n## 引脚分配表（.firment/workbench.toml）\n| 引脚 | 功能 | 登记人 |\n|---|---|---|\n");
+                for (pin, entry) in &cfg.pinmap {
+                    text.push_str(&format!("| {pin} | {} | {} |\n", entry.func, entry.owner));
+                }
+            }
+            if !conflicts.is_empty() {
+                text.push_str(&format!(
+                    "\n## ⚠ 引脚冲突（先和用户确认，或用 pinmap 工具查看/协调）\n - {}\n",
+                    conflicts.join("\n - ")
+                ));
+            }
+        }
         Ok(ToolOutput { text })
     }
 }

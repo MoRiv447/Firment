@@ -11,6 +11,7 @@ mod html;
 mod list_dir;
 pub mod monitor;
 mod periph_init;
+mod pinmap;
 mod read_file;
 pub(crate) mod run;
 mod shell;
@@ -35,6 +36,7 @@ pub fn all() -> Vec<Arc<dyn Tool>> {
         Arc::new(monitor::Monitor),
         Arc::new(hil::Hil),
         Arc::new(periph_init::PeriphInit),
+        Arc::new(pinmap::Pinmap),
         Arc::new(write_file::WriteFile),
         Arc::new(flash::Flash),
         Arc::new(debug::Debug),

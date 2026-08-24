@@ -33,4 +33,5 @@ pub use session::{Session, SessionError, SessionKind, SessionStore, SessionSumma
 pub use subagent::{NullSink, SubagentFactory, SubagentRunner};
 pub use tool::{Tool, ToolContext, ToolError, ToolOutput, ToolRegistry};
 pub use types::{ChatMessage, SessionMode, ThinkingLevel, ToolCall, ToolSpec};
+pub use workbench::PinEntry;
 pub use workbench::WorkbenchConfig;

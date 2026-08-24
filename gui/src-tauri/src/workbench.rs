@@ -113,6 +113,64 @@ pub async fn workbench_set_mainline(
     cfg.save(Path::new(&cwd))
 }
 
+// ---------- pin/resource registry ([pinmap] in workbench.toml) ----------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PinEntryDto {
+    pub pin: String,
+    pub func: String,
+    pub owner: String,
+}
+
+#[tauri::command]
+pub async fn workbench_pinmap_list(cwd: String) -> Result<Vec<PinEntryDto>, String> {
+    let cfg = WorkbenchConfig::load(Path::new(&cwd))?;
+    Ok(cfg
+        .pinmap
+        .into_iter()
+        .map(|(pin, e)| PinEntryDto {
+            pin,
+            func: e.func,
+            owner: e.owner,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn workbench_pinmap_set(
+    cwd: String,
+    pin: String,
+    func: String,
+    owner: String,
+) -> Result<Vec<PinEntryDto>, String> {
+    // Same normalization as the agent-side pinmap tool so GUI edits and
+    // agent claims always land on the same key.
+    let key = pin.trim().to_uppercase();
+    if key.is_empty() || func.trim().is_empty() {
+        return Err("pin and func are required".into());
+    }
+    let root = PathBuf::from(&cwd);
+    let mut cfg = WorkbenchConfig::load(&root)?;
+    cfg.pinmap.insert(
+        key,
+        firment_core::PinEntry {
+            func: func.trim().to_string(),
+            owner: owner.trim().to_string(),
+        },
+    );
+    cfg.save(&root)?;
+    workbench_pinmap_list(cwd).await
+}
+
+#[tauri::command]
+pub async fn workbench_pinmap_remove(cwd: String, pin: String) -> Result<Vec<PinEntryDto>, String> {
+    let root = PathBuf::from(&cwd);
+    let mut cfg = WorkbenchConfig::load(&root)?;
+    cfg.pinmap.remove(pin.trim().to_uppercase().as_str());
+    cfg.save(&root)?;
+    workbench_pinmap_list(cwd).await
+}
+
 /// Create a workbench branch session under `parent_id`. Returns the new
 /// session id (also linked via parent in the session store).
 #[tauri::command]

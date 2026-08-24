@@ -17,6 +17,7 @@ import { useEffect, useState } from 'react';
 import { api, notifySessionsChanged } from '../lib/api';
 import type {
   ElfCardDto,
+  PinEntryDto,
   QualityItemDto,
   SessionSummaryDto,
   TimelineEntryDto,
@@ -43,6 +44,11 @@ export function WorkbenchView() {
   const [quality, setQuality] = useState<QualityItemDto[]>([]);
   const [timeline, setTimeline] = useState<TimelineEntryDto[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
+  // Pin/resource registry ([pinmap] in workbench.toml), shared with the
+  // agent's `pinmap` tool — GUI edits and agent claims land on one table.
+  const [pinmap, setPinmap] = useState<PinEntryDto[]>([]);
+  const [newPin, setNewPin] = useState('');
+  const [newFunc, setNewFunc] = useState('');
 
   const rememberProject = (dir: string) => {
     localStorage.setItem('workbench-last-cwd', dir);
@@ -119,6 +125,11 @@ export function WorkbenchView() {
     if (!cwd.trim()) return;
     setBusy(true);
     const wb = await refresh(cwd.trim());
+    try {
+      setPinmap(await api.workbenchPinmapList(cwd.trim()));
+    } catch {
+      setPinmap([]);
+    }
     if (wb?.config.mainline_session) {
       await refreshInsights(cwd.trim(), wb.config.mainline_session);
     } else {
@@ -131,6 +142,32 @@ export function WorkbenchView() {
     // while the app was open).
     notifySessionsChanged();
     setBusy(false);
+  };
+
+  const addPin = async () => {
+    if (!cwd.trim() || !newPin.trim() || !newFunc.trim()) return;
+    setBusy(true);
+    try {
+      setPinmap(await api.workbenchPinmapSet(cwd.trim(), newPin, newFunc, 'user'));
+      setNewPin('');
+      setNewFunc('');
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removePin = async (pin: string) => {
+    if (!cwd.trim()) return;
+    setBusy(true);
+    try {
+      setPinmap(await api.workbenchPinmapRemove(cwd.trim(), pin));
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const createBranch = async () => {
@@ -284,6 +321,71 @@ export function WorkbenchView() {
                     No .firment/workbench.toml yet — creating a branch will generate it.
                   </Text>
                 )}
+              </Card>
+
+              <Card
+                type="inner"
+                title="Pin assignments"
+                size="small"
+                extra={
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    shared with the agent's pinmap tool
+                  </Text>
+                }
+              >
+                {pinmap.length === 0 && (
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    No pins claimed yet. The agent registers allocations here before wiring
+                    peripherals; add known ones manually below.
+                  </Text>
+                )}
+                {pinmap.length > 0 && (
+                  <div style={{ marginBottom: 8 }}>
+                    {pinmap.map((p) => (
+                      <div
+                        key={p.pin}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8,
+                          padding: '3px 6px',
+                          borderBottom: '1px solid #f0f0f0',
+                        }}
+                      >
+                        <Tag color="blue" style={{ borderRadius: 0, fontWeight: 700, minWidth: 64, textAlign: 'center' }}>
+                          {p.pin}
+                        </Tag>
+                        <Text style={{ flex: 1, fontSize: 12 }}>{p.func}</Text>
+                        <Text type="secondary" style={{ fontSize: 11 }}>
+                          {p.owner || '—'}
+                        </Text>
+                        <Button size="small" type="text" danger disabled={busy} onClick={() => removePin(p.pin)}>
+                          ✕
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <Space.Compact style={{ width: '100%', marginTop: 4 }}>
+                  <Input
+                    size="small"
+                    placeholder="pin (PA5)"
+                    value={newPin}
+                    onChange={(e) => setNewPin(e.target.value)}
+                    onPressEnter={addPin}
+                    style={{ maxWidth: 110, fontFamily: 'Consolas, monospace' }}
+                  />
+                  <Input
+                    size="small"
+                    placeholder="function (LED / USART1_TX…)"
+                    value={newFunc}
+                    onChange={(e) => setNewFunc(e.target.value)}
+                    onPressEnter={addPin}
+                  />
+                  <Button size="small" type="dashed" disabled={busy} onClick={addPin}>
+                    claim
+                  </Button>
+                </Space.Compact>
               </Card>
 
               <Card

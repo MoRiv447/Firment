@@ -34,6 +34,12 @@ export interface ContextUsageDto {
   pct: number;
 }
 
+export interface PinEntryDto {
+  pin: string;
+  func: string;
+  owner: string;
+}
+
 export interface SessionSummaryDto {
   id: string;
   updated_at: number;

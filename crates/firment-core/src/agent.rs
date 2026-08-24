@@ -929,13 +929,7 @@ impl Agent {
                         self.sink.event(AgentEvent::TextDelta(text.clone())).await;
                     }
                     ProviderEvent::Thinking(text) => {
-                        // Reasoning-native models emit thinking blocks even
-                        // when the request never enabled them; honour the
-                        // knob so "off" means the UI stays quiet (the tokens
-                        // themselves are upstream behaviour we cannot stop).
-                        if self.session.thinking != ThinkingLevel::Off {
-                            self.sink.event(AgentEvent::Thinking(text)).await;
-                        }
+                        self.sink.event(AgentEvent::Thinking(text)).await;
                     }
                     ProviderEvent::ToolCall(call) => tool_calls.push(call),
                     ProviderEvent::Stop { .. } => {}
