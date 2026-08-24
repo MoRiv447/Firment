@@ -15,17 +15,36 @@ use rumqttc::AsyncClient;
 use crate::events::FrontendEvent;
 use crate::state::Shared;
 
-/// Spawn the MQTT link when `[mqtt] broker` is configured; no-op otherwise
-/// (single-player without an SBC must not see errors).
+/// Spawn the MQTT link when `[mqtt] broker` is configured; announce loudly
+/// otherwise, so a silent card can always be told apart from an unconfigured
+/// one. Runs on its own thread + private single-thread runtime — immune to
+/// anything weird in the host async runtime.
 pub fn spawn_if_configured(shared: Arc<Shared>) {
     let broker = {
         let cfg = shared.config.lock().unwrap();
         cfg.mqtt.broker.trim().to_string()
     };
     if broker.is_empty() {
+        use tauri::Emitter as _;
+        let _ = shared.app.emit(
+            "agent-event",
+            FrontendEvent::Info {
+                session_id: None,
+                message: "[mqtt] no [mqtt] broker configured — data-plane link off"
+                    .to_string(),
+            },
+        );
         return;
     }
-    tauri::async_runtime::spawn(async move { run(shared, broker).await });
+    let app = shared.app.clone();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("mqtt runtime");
+        rt.block_on(run(shared, broker));
+        drop(app);
+    });
 }
 
 /// Split "host:port" (port optional, default 1883). IPv6 literals are not
