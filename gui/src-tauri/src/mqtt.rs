@@ -10,10 +10,27 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::Utc;
 use rumqttc::AsyncClient;
 
 use crate::events::FrontendEvent;
 use crate::state::Shared;
+
+/// File-based link trace, independent of the frontend:
+/// `%APPDATA%\firment\mqtt-link.log` (next to config.toml). Ends every
+/// "is it even running" debate.
+fn trace(shared: &Arc<Shared>, line: &str) {
+    use std::io::Write as _;
+    let path = firment_core::config::config_dir().join("mqtt-link.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(f, "{} {line}", Utc::now().to_rfc3339());
+    }
+    let _ = shared;
+}
 
 /// Spawn the MQTT link when `[mqtt] broker` is configured; announce loudly
 /// otherwise, so a silent card can always be told apart from an unconfigured
@@ -24,6 +41,7 @@ pub fn spawn_if_configured(shared: Arc<Shared>) {
         let cfg = shared.config.lock().unwrap();
         cfg.mqtt.broker.trim().to_string()
     };
+    trace(&shared, &format!("spawn: broker read as {broker:?}"));
     if broker.is_empty() {
         use tauri::Emitter as _;
         let _ = shared.app.emit(
@@ -57,6 +75,7 @@ fn parse_broker(broker: &str) -> (String, u16) {
 
 async fn run(shared: Arc<Shared>, broker: String) {
     let (host, port) = parse_broker(&broker);
+    trace(&shared, &format!("link starting -> {host}:{port}"));
     emit(
         &shared,
         FrontendEvent::Info {
@@ -74,6 +93,7 @@ async fn run(shared: Arc<Shared>, broker: String) {
             .subscribe("firment/#", rumqttc::QoS::AtMostOnce)
             .await
         {
+            trace(&shared, &format!("subscribe failed: {e}"));
             emit(
                 &shared,
                 FrontendEvent::Info {
@@ -82,6 +102,7 @@ async fn run(shared: Arc<Shared>, broker: String) {
                 },
             );
         } else {
+            trace(&shared, "subscribe ok (queued)");
             emit(
                 &shared,
                 FrontendEvent::GuardStatus {
@@ -90,13 +111,39 @@ async fn run(shared: Arc<Shared>, broker: String) {
             );
         }
 
+        let mut frames: u64 = 0;
+        let mut connacked = false;
+        // The webview attaches its listeners AFTER setup() emits the initial
+        // status — early events are lost. Re-announce periodically so the
+        // frontend always converges on the true link state.
+        let mut last_status = std::time::Instant::now() - Duration::from_secs(60);
         loop {
             match eventloop.poll().await {
                 Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(p))) => {
+                    frames += 1;
+                    if frames == 1 {
+                        trace(&shared, "first frame received");
+                    }
                     forward(&shared, &p.topic, &p.payload);
                 }
-                Ok(_) => {}
+                Ok(rumqttc::Event::Incoming(rumqttc::Packet::ConnAck(_))) => {
+                    connacked = true;
+                    trace(&shared, "CONNACK — broker session established");
+                }
+                Ok(_) => {
+                    if last_status.elapsed() >= Duration::from_secs(10) {
+                        last_status = std::time::Instant::now();
+                        trace(&shared, &format!("status heartbeat (frames={frames})"));
+                        emit(&shared, FrontendEvent::GuardStatus {
+                            frame: format!("{{\"connected\":true,\"broker\":\"{broker}\",\"frames\":{frames}}}"),
+                        });
+                    }
+                }
                 Err(e) => {
+                    trace(
+                        &shared,
+                        &format!("eventloop error (connacked={connacked}, frames={frames}): {e}"),
+                    );
                     emit(
                         &shared,
                         FrontendEvent::GuardStatus {

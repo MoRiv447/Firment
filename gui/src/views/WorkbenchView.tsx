@@ -434,15 +434,22 @@ export function WorkbenchView({
           style={{ marginBottom: 12 }}
           extra={
             (() => {
-              let connected = false;
+              // Three states: positive off, positive online, and "no news
+              // yet" — never render unknown as off.
+              let state: 'on' | 'off' | 'unknown' = 'unknown';
               try {
-                connected = guardFrame ? JSON.parse(guardFrame).connected === true : false;
+                const g = JSON.parse(guardFrame || '{}');
+                if (g.connected === true) state = 'on';
+                else if (g.connected === false) state = 'off';
               } catch {
-                connected = false;
+                /* non-JSON frame — treat as unknown */
               }
               return (
-                <Tag color={connected ? 'green' : 'default'} style={{ borderRadius: 0, fontWeight: 700 }}>
-                  {connected ? '● broker online' : '○ broker off'}
+                <Tag
+                  color={state === 'on' ? 'green' : state === 'off' ? 'default' : 'default'}
+                  style={{ borderRadius: 0, fontWeight: 700 }}
+                >
+                  {state === 'on' ? '● broker online' : state === 'off' ? '○ broker off' : '… broker ?'}
                 </Tag>
               );
             })()
