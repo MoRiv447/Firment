@@ -14,10 +14,13 @@ Run:  python3 guardd.py [config.toml]     (systemd unit in this directory)
 """
 
 import json
+import queue
 import re
 import sys
+import threading
 import time
 from pathlib import Path
+from typing import Optional
 
 import paho.mqtt.client as mqtt
 import requests
@@ -89,6 +92,8 @@ class Guard:
         self.g = cfg.get("guard", {})
         self.started = time.time()
         self.counters = {"frames": 0, "matches": 0, "llm_calls": 0, "llm_fail": 0}
+        self.work_queue: "queue.Queue" = queue.Queue()
+        threading.Thread(target=self._worker, daemon=True).start()
 
     # ---- data plane ------------------------------------------------------
     def sink(self, node: str, frame: str):
@@ -107,7 +112,7 @@ class Guard:
         return None
 
     # ---- small model (optional) ------------------------------------------
-    def classify(self, text: str) -> dict | None:
+    def classify(self, text: str) -> Optional[dict]:
         if not self.o.get("enabled"):
             return None
         prompt = (
@@ -115,6 +120,9 @@ class Guard:
             '{"sev":"debug|info|warn|error","summary":"<max 12 words>","category":"'
             '<wifi|power|sensor|mcu|other>"}\nLine: ' + text[:300]
         )
+        # qwen3.5 is a THINKING model: its reasoning consumes output tokens
+        # before any content appears (P0 notes). Budget generously or
+        # content comes back empty every time.
         for _attempt in range(2):  # one retry on invalid JSON
             self.counters["llm_calls"] += 1
             try:
@@ -124,12 +132,14 @@ class Guard:
                         "model": self.o.get("model", "qwen3.5:0.8b"),
                         "messages": [{"role": "user", "content": prompt}],
                         "temperature": 0,
-                        "max_tokens": 120,
+                        "max_tokens": 800,
                     },
-                    timeout=90,
+                    timeout=180,
                 )
-                content = resp.json()["choices"][0]["message"]["content"]
-                # strip thinking blocks / code fences defensively
+                msg = resp.json()["choices"][0]["message"]
+                content = msg.get("content") or ""
+                # Strip a <think>...</think> block if the template inlined it.
+                content = re.sub(r"<think>.*?</think>", "", content, flags=re.S)
                 start, end = content.find("{"), content.rfind("}")
                 obj = json.loads(content[start : end + 1])
                 if {"sev", "summary"} <= set(obj) and obj["sev"] in ("debug", "info", "warn", "error"):
@@ -138,6 +148,22 @@ class Guard:
                 pass
             self.counters["llm_fail"] += 1
         return None
+
+    def enqueue_escalate(self, node: str, rule: str, sev: str, hit: str, full: str):
+        """Classification takes minutes on the CPU-only SBC — never run it
+        inside the paho callback or the broker keepalive expires and we
+        disconnect/reconnect mid-stream. Hits go to a worker thread."""
+        self.work_queue.put((node, rule, sev, hit, full))
+
+    def _worker(self):
+        while True:
+            node, rule, sev, hit, full = self.work_queue.get()
+            try:
+                self.escalate(node, rule, sev, hit, full)
+            except Exception as e:
+                print(f"[worker] escalate failed: {e}", flush=True)
+            finally:
+                self.work_queue.task_done()
 
     def escalate(self, node: str, rule: str, sev: str, hit: str, full: str):
         llm = self.classify(full)
@@ -172,8 +198,13 @@ class Guard:
 
 def on_message(_c, _u, msg: mqtt.MQTTMessage):
     try:
-        frame = msg.payload.decode("utf-8", "replace")
+        # Strip CR/LF: file-based publishers (-f) and serial bridges often
+        # append newlines that would otherwise leak into stored/classified
+        # payloads.
+        frame = msg.payload.decode("utf-8", "replace").strip()
     except Exception:
+        return
+    if not frame:
         return
     node = "unknown"
     try:
@@ -191,7 +222,7 @@ def on_message(_c, _u, msg: mqtt.MQTTMessage):
     if hit and kind_topic != "alert":  # no alert-on-alert loops
         rule, sev, snippet = hit
         print(f"[hit] {msg.topic} rule={rule} sev={sev}: {snippet}", flush=True)
-        guard.escalate(node, rule, sev, snippet, frame)
+        guard.enqueue_escalate(node, rule, sev, snippet, frame)
 
 
 def on_connect(_c, _u, _f, rc, _p=None):

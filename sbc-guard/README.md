@@ -43,8 +43,15 @@ mosquitto_sub -h 192.168.1.6 -t firment/guard/status -C 1 -W 3000
 | broker_host/port | 127.0.0.1:1883 | local mosquitto |
 | data_dir | ~/sbc-guard-data | full-frame daily JSONL sink |
 | rules_file | rules.toml | pre-filter regexes |
-| [ollama] enabled | false | classify hits with qwen via ollama |
+| [ollama] enabled | false | classify hits via ollama |
+| [ollama] model | qwen2.5:0.5b | NON-thinking classifier (see note) |
 | [guard] standby_minutes | 10 | heartbeat cadence |
 
-Turning `[ollama] enabled = true` routes every hit through the 0.8B model for
+**Model note**: the classifier should be a NON-thinking instruct model
+(qwen2.5:0.5b works well). qwen3.5:0.8b always emits long `<think>` streams
+that starve content tokens on this CPU-only SBC and make classification take
+minutes; keep it for async `task` subagent work from the big model instead.
+
+Turning `[ollama] enabled = true` routes every hit through the classifier for
 sev/summary; schema-invalid replies retry once then fall back to the raw hit.
+Classification runs on a worker thread so the MQTT loop never blocks.

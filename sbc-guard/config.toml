@@ -4,10 +4,12 @@ data_dir = "~/sbc-guard-data"
 rules_file = "rules.toml"
 
 [ollama]
-# Flip to true once you want hits classified by qwen3.5:0.8b (~10 tok/s CPU).
-enabled = false
+# Classifier model: qwen2.5:0.5b (NON-thinking, JSON-reliable, fast on CPU).
+# qwen3.5:0.8b always emits long <think> streams that starve content tokens
+# on this CPU-only box — keep it for async task-subagent work instead.
+enabled = true
 url = "http://127.0.0.1:11434/v1/chat/completions"
-model = "qwen3.5:0.8b"
+model = "qwen2.5:0.5b"
 
 [guard]
 standby_minutes = 10
