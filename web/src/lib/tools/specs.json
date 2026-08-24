@@ -129,6 +129,39 @@
     }
   },
   {
+    "name": "decision",
+    "description": "Project decision log (ADR-lite, .firment/workbench.toml [[decision]]). Record every choice a future session would need to know: chip/peripheral selection, protocol formats, pin assignments rationale, library picks. Actions: list (all decisions), add (title+body; new branches whose title matches automatically inherit it), remove (by 1-based list index). Keep bodies short and factual — they are injected verbatim.",
+    "input_schema": {
+      "properties": {
+        "action": {
+          "description": "What to do",
+          "enum": [
+            "list",
+            "add",
+            "remove"
+          ],
+          "type": "string"
+        },
+        "body": {
+          "description": "add: rationale/constraints, e.g. \"sensor max clock 400k; PA9/PA10 reserved\"",
+          "type": "string"
+        },
+        "index": {
+          "description": "remove: 1-based index from list",
+          "type": "integer"
+        },
+        "title": {
+          "description": "add: short decision headline, e.g. \"I2C bus uses 400k\"",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "name": "edit_file",
     "description": "Edit a file by exact old_text anchor (must match exactly once) or by 1-based line range.",
     "input_schema": {

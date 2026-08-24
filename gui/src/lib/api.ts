@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type {
   AskRequest,
   ContextUsageDto,
+  DecisionEntryDto,
   ElfCardDto,
   FrontendEvent,
   HardwareExit,
@@ -38,6 +39,11 @@ export const api = {
     invoke<PinEntryDto[]>('workbench_pinmap_set', { cwd, pin, func, owner }),
   workbenchPinmapRemove: (cwd: string, pin: string) =>
     invoke<PinEntryDto[]>('workbench_pinmap_remove', { cwd, pin }),
+  workbenchDecisionList: (cwd: string) => invoke<DecisionEntryDto[]>('workbench_decision_list', { cwd }),
+  workbenchDecisionAdd: (cwd: string, title: string, body: string) =>
+    invoke<DecisionEntryDto[]>('workbench_decision_add', { cwd, title, body }),
+  workbenchDecisionRemove: (cwd: string, index: number) =>
+    invoke<DecisionEntryDto[]>('workbench_decision_remove', { cwd, index }),
   workbenchSetMainline: (cwd: string, sessionId: string) =>
     invoke('workbench_set_mainline', { cwd, sessionId }),
   workbenchBranchCreate: (parentId: string, title: string) =>

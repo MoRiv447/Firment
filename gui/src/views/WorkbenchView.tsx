@@ -16,6 +16,7 @@ import { ReloadOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import { api, notifySessionsChanged } from '../lib/api';
 import type {
+  DecisionEntryDto,
   ElfCardDto,
   PinEntryDto,
   QualityItemDto,
@@ -49,6 +50,11 @@ export function WorkbenchView() {
   const [pinmap, setPinmap] = useState<PinEntryDto[]>([]);
   const [newPin, setNewPin] = useState('');
   const [newFunc, setNewFunc] = useState('');
+  // ADR-lite decision log ([[decision]]); branches whose title matches a
+  // decision inherit it automatically at creation.
+  const [decisions, setDecisions] = useState<DecisionEntryDto[]>([]);
+  const [newTitle, setNewTitle] = useState('');
+  const [newBody, setNewBody] = useState('');
 
   const rememberProject = (dir: string) => {
     localStorage.setItem('workbench-last-cwd', dir);
@@ -130,6 +136,11 @@ export function WorkbenchView() {
     } catch {
       setPinmap([]);
     }
+    try {
+      setDecisions(await api.workbenchDecisionList(cwd.trim()));
+    } catch {
+      setDecisions([]);
+    }
     if (wb?.config.mainline_session) {
       await refreshInsights(cwd.trim(), wb.config.mainline_session);
     } else {
@@ -163,6 +174,34 @@ export function WorkbenchView() {
     setBusy(true);
     try {
       setPinmap(await api.workbenchPinmapRemove(cwd.trim(), pin));
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const addDecision = async () => {
+    if (!cwd.trim() || !newTitle.trim()) return;
+    setBusy(true);
+    try {
+      setDecisions(await api.workbenchDecisionAdd(cwd.trim(), newTitle, newBody));
+      setNewTitle('');
+      setNewBody('');
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeDecision = async (index: number) => {
+    if (!cwd.trim()) return;
+    setBusy(true);
+    try {
+      // Card renders decisions in list order; backend expects the same
+      // 1-based indexing.
+      setDecisions(await api.workbenchDecisionRemove(cwd.trim(), index + 1));
     } catch (err) {
       setError(String(err));
     } finally {
@@ -384,6 +423,74 @@ export function WorkbenchView() {
                   />
                   <Button size="small" type="dashed" disabled={busy} onClick={addPin}>
                     claim
+                  </Button>
+                </Space.Compact>
+              </Card>
+
+              <Card
+                type="inner"
+                title="Decisions (ADR-lite)"
+                size="small"
+                extra={
+                  <Tooltip title="Branches whose title matches a decision automatically inherit it at creation">
+                    <Text type="secondary" style={{ fontSize: 11 }}>
+                      inherited by matching branches
+                    </Text>
+                  </Tooltip>
+                }
+              >
+                {decisions.length === 0 && (
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    No decisions recorded. Log chip/peripheral/protocol choices here — the agent's
+                    decision tool writes the same list.
+                  </Text>
+                )}
+                {decisions.map((d, i) => (
+                  <div
+                    key={`${d.date}-${i}`}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: 8,
+                      padding: '4px 6px',
+                      borderBottom: '1px solid #f0f0f0',
+                    }}
+                  >
+                    <Tag style={{ borderRadius: 0, fontSize: 10, minWidth: 76, textAlign: 'center' }}>
+                      {d.date || '—'}
+                    </Tag>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={{ fontSize: 12, fontWeight: 600 }}>{d.title}</Text>
+                      {d.body && (
+                        <div>
+                          <Text type="secondary" style={{ fontSize: 11 }}>
+                            {d.body}
+                          </Text>
+                        </div>
+                      )}
+                    </div>
+                    <Button size="small" type="text" danger disabled={busy} onClick={() => removeDecision(i)}>
+                      ✕
+                    </Button>
+                  </div>
+                ))}
+                <Space.Compact style={{ width: '100%', marginTop: 8 }}>
+                  <Input
+                    size="small"
+                    placeholder="decision headline (I2C bus at 400k)"
+                    value={newTitle}
+                    onChange={(e) => setNewTitle(e.target.value)}
+                    style={{ maxWidth: 260 }}
+                  />
+                  <Input
+                    size="small"
+                    placeholder="rationale / constraints (optional)"
+                    value={newBody}
+                    onChange={(e) => setNewBody(e.target.value)}
+                    onPressEnter={addDecision}
+                  />
+                  <Button size="small" type="dashed" disabled={busy || !newTitle.trim()} onClick={addDecision}>
+                    record
                   </Button>
                 </Space.Compact>
               </Card>

@@ -1,6 +1,7 @@
 mod ask_user;
 mod build;
 mod debug;
+mod decision;
 mod edit_file;
 pub(crate) mod elf_analyze;
 pub(crate) mod flash;
@@ -37,6 +38,7 @@ pub fn all() -> Vec<Arc<dyn Tool>> {
         Arc::new(hil::Hil),
         Arc::new(periph_init::PeriphInit),
         Arc::new(pinmap::Pinmap),
+        Arc::new(decision::Decision),
         Arc::new(write_file::WriteFile),
         Arc::new(flash::Flash),
         Arc::new(debug::Debug),

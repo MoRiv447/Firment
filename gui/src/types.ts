@@ -40,6 +40,12 @@ export interface PinEntryDto {
   owner: string;
 }
 
+export interface DecisionEntryDto {
+  title: string;
+  body: string;
+  date: string;
+}
+
 export interface SessionSummaryDto {
   id: string;
   updated_at: number;

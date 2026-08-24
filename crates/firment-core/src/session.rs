@@ -317,6 +317,12 @@ impl SessionStore {
     /// parent via `parent_session`. The branch starts with a synthetic user
     /// note carrying `title` so the transcript preview is meaningful.
     ///
+    /// ADR-lite inheritance (per docs/gui-workbench.md §已决 1): decisions
+    /// whose title overlaps the branch title get injected as context, so an
+    /// "i2c driver" branch automatically learns about the recorded "I2C
+    /// pull-up" decision. Token-overlap matching, capped at 3 entries — the
+    /// full registry stays one `decision` tool call away.
+    ///
     /// Deleting a parent does NOT cascade: orphaned branches keep running
     /// and render as roots in the tree view.
     pub fn create_branch(&self, parent_id: &str, title: &str) -> Result<Session, SessionError> {
@@ -332,6 +338,32 @@ impl SessionStore {
             child.push(ChatMessage::User {
                 content: format!("[branch] {t}"),
             });
+            // Relevant-decision injection. Best-effort: a project without a
+            // workbench file simply inherits nothing.
+            if let Ok(cfg) = crate::workbench::WorkbenchConfig::load(&parent.cwd) {
+                let injected = relevant_decisions(&cfg.decision, title);
+                if !injected.is_empty() {
+                    let mut text =
+                        String::from("[inherited project decisions relevant to this branch]\n");
+                    for d in &injected {
+                        text.push_str(&format!(
+                            "- {}{}{}\n",
+                            d.title,
+                            if d.date.is_empty() { "" } else { " (" },
+                            if d.date.is_empty() {
+                                String::new()
+                            } else {
+                                format!("{})", d.date)
+                            }
+                        ));
+                        if !d.body.is_empty() {
+                            let body: String = d.body.chars().take(300).collect();
+                            text.push_str(&format!("  {body}\n"));
+                        }
+                    }
+                    child.push(ChatMessage::User { content: text });
+                }
+            }
         }
         self.save(&child)?;
         Ok(child)
@@ -523,6 +555,39 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// Token-overlap relevance between a branch title and decision records:
+/// split both into lowercase alphanumeric tokens (>=2 chars), score each
+/// decision by how many of its title tokens appear in the branch title
+/// (and vice versa), keep the hits, newest first, capped at 3.
+fn relevant_decisions(
+    decisions: &[crate::workbench::DecisionEntry],
+    branch_title: &str,
+) -> Vec<crate::workbench::DecisionEntry> {
+    const STOP: [&str; 4] = ["the", "and", "for", "with"];
+    let tokenize = |s: &str| -> Vec<String> {
+        s.to_lowercase()
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|t| t.len() >= 2 && !STOP.contains(t))
+            .map(str::to_string)
+            .collect()
+    };
+    let title_tokens = tokenize(branch_title);
+    if title_tokens.is_empty() {
+        return Vec::new();
+    }
+    let mut scored: Vec<(usize, &crate::workbench::DecisionEntry)> = decisions
+        .iter()
+        .map(|d| {
+            let dt = tokenize(&d.title);
+            let hit = dt.iter().filter(|t| title_tokens.contains(t)).count();
+            (hit, d)
+        })
+        .filter(|(hit, _)| *hit > 0)
+        .collect();
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.date.cmp(&a.1.date)));
+    scored.into_iter().take(3).map(|(_, d)| d.clone()).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -563,5 +628,63 @@ mod tests {
         let raw = fs::read_to_string(&path).unwrap();
         assert!(raw.contains("\"session_kind\":\"normal\""));
         assert!(!raw.contains("\"session_kind\":\"main\""));
+    }
+
+    /// ADR-lite inheritance: creating a branch whose title overlaps a
+    /// recorded decision's title injects that decision as context; unrelated
+    /// branches inherit nothing.
+    #[test]
+    fn branch_creation_injects_relevant_decisions() {
+        let dir = tempfile::tempdir().unwrap();
+        let store_dir = dir.path().join("sessions");
+        fs::create_dir_all(&store_dir).unwrap();
+
+        let mut cfg = crate::workbench::WorkbenchConfig::default();
+        cfg.decision.push(crate::workbench::DecisionEntry {
+            title: "I2C bus runs at 400k".into(),
+            body: "sensor max clock; PA9/PA10 reserved".into(),
+            date: "2026-08-24".into(),
+        });
+        cfg.decision.push(crate::workbench::DecisionEntry {
+            title: "UART bootloader stays at 115200".into(),
+            body: String::new(),
+            date: "2026-08-20".into(),
+        });
+        cfg.save(dir.path()).unwrap();
+
+        let store = SessionStore::new(store_dir);
+        let main = store.create_branch("nonexistent", "");
+        // create_branch needs a real parent: save one directly.
+        drop(main);
+        let mut parent = Session::new(dir.path().to_path_buf(), "p", "m");
+        parent.id = "parent-1".into();
+        store.save(&parent).unwrap();
+
+        // Related title -> inherits the I2C decision, not the UART one.
+        let child = store
+            .create_branch("parent-1", "rewrite i2c sensor driver")
+            .unwrap();
+        let text: String = child
+            .messages
+            .iter()
+            .filter_map(|m| match m {
+                ChatMessage::User { content } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(text.contains("inherited project decisions"), "got: {text}");
+        assert!(text.contains("I2C bus runs at 400k"), "got: {text}");
+        assert!(
+            !text.contains("bootloader"),
+            "unrelated decision must not leak: {text}"
+        );
+
+        // Unrelated title -> no injection.
+        let child2 = store.create_branch("parent-1", "led blinking").unwrap();
+        let has_inherit = child2
+            .messages
+            .iter()
+            .any(|m| matches!(m, ChatMessage::User { content } if content.contains("inherited")));
+        assert!(!has_inherit, "no relevant decisions for 'led blinking'");
     }
 }

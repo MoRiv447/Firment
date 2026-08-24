@@ -171,6 +171,87 @@ pub async fn workbench_pinmap_remove(cwd: String, pin: String) -> Result<Vec<Pin
     workbench_pinmap_list(cwd).await
 }
 
+// ---------- ADR-lite decision log ([[decision]] in workbench.toml) -------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DecisionEntryDto {
+    pub title: String,
+    pub body: String,
+    pub date: String,
+}
+
+#[tauri::command]
+pub async fn workbench_decision_list(cwd: String) -> Result<Vec<DecisionEntryDto>, String> {
+    let cfg = WorkbenchConfig::load(Path::new(&cwd))?;
+    Ok(cfg
+        .decision
+        .iter()
+        .map(|d| DecisionEntryDto {
+            title: d.title.clone(),
+            body: d.body.clone(),
+            date: d.date.clone(),
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn workbench_decision_add(
+    cwd: String,
+    title: String,
+    body: String,
+) -> Result<Vec<DecisionEntryDto>, String> {
+    if title.trim().is_empty() {
+        return Err("title is required".into());
+    }
+    let root = PathBuf::from(&cwd);
+    let mut cfg = WorkbenchConfig::load(&root)?;
+    cfg.decision.push(firment_core::DecisionEntry {
+        title: title.trim().to_string(),
+        body: body.trim().to_string(),
+        // Same stamp the agent-side `decision` tool uses.
+        date: chrono_like_today(),
+    });
+    cfg.save(&root)?;
+    workbench_decision_list(cwd).await
+}
+
+#[tauri::command]
+pub async fn workbench_decision_remove(
+    cwd: String,
+    index: u64,
+) -> Result<Vec<DecisionEntryDto>, String> {
+    let root = PathBuf::from(&cwd);
+    let mut cfg = WorkbenchConfig::load(&root)?;
+    let idx = index as usize;
+    if idx == 0 || idx > cfg.decision.len() {
+        return Err(format!("index {index} out of range (1..={})", cfg.decision.len()));
+    }
+    cfg.decision.remove(idx - 1);
+    cfg.save(&root)?;
+    workbench_decision_list(cwd).await
+}
+
+/// YYYY-MM-DD for GUI-added entries; mirrors the tool's civil-from-days
+/// conversion without pulling a date crate into the GUI layer.
+fn chrono_like_today() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+        / 86_400;
+    let z = secs as i64 + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
 /// Create a workbench branch session under `parent_id`. Returns the new
 /// session id (also linked via parent in the session store).
 #[tauri::command]
