@@ -140,6 +140,21 @@ export function ChatView({
             {toolList.map((t) => (
               <ToolCard key={t.seq} tool={t} />
             ))}
+            {turn && turn.thinking && !turn.text && (
+              <div
+                style={{
+                  marginTop: 10,
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  color: '#8b7bd8',
+                  fontStyle: 'italic',
+                  fontSize: 13,
+                  lineHeight: 1.6,
+                }}
+              >
+                💭 {turn.thinking.slice(-400)}
+              </div>
+            )}
             {turn && turn.text && (
               <div
                 style={{

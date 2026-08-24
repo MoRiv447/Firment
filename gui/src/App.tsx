@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
-import { Button, ConfigProvider, Dropdown, Layout, Menu, Tag, theme, Tooltip } from 'antd';
+import { ConfigProvider, Dropdown, Layout, Menu, Tag, theme, Tooltip } from 'antd';
 import {
   ApiOutlined,
   MessageOutlined,
@@ -57,6 +57,9 @@ export default function App() {
   // Rough context usage for the OPEN session (header chip); refreshed when
   // the session changes and after every transcript refresh.
   const [usage, setUsage] = useState<ContextUsageDto | null>(null);
+  // While the budget menu is open the ctx tooltip stays hidden — otherwise
+  // hovering pops the info box and clicking pops two boxes at once.
+  const [ctxMenuOpen, setCtxMenuOpen] = useState(false);
   const [view, setView] = useState<ViewKey>('chat');
   // Permission requests arrive concurrently (tool waves run in parallel), so
   // they must be queued — a single overwriting state would leave the first
@@ -478,27 +481,29 @@ export default function App() {
               </Dropdown>
             )}
             {session && (
-              <Tooltip
-                title={
-                  usage
-                    ? `context ~${Math.round(usage.total_chars / 1024)}k of ${Math.round(usage.budget / 1024)}k chars (${usage.pct.toFixed(0)}%) — click chip to change budget`
-                    : 'context usage'
-                }
+              <Dropdown
+                menu={{
+                  items: [
+                    { key: '65536', label: '64k chars' },
+                    { key: '131072', label: '128k chars' },
+                    { key: '262144', label: '256k chars (default)' },
+                    { key: '524288', label: '512k chars' },
+                    { key: '1048576', label: '1M chars' },
+                  ],
+                  onClick: ({ key }) =>
+                    void handleSetSessionProp(api.setSessionBudget(session.id, Number(key))),
+                  selectedKeys: [String(session.context_budget_chars || 262144)],
+                }}
+                onOpenChange={setCtxMenuOpen}
+                disabled={running}
               >
-                <Dropdown
-                  menu={{
-                    items: [
-                      { key: '65536', label: '64k chars' },
-                      { key: '131072', label: '128k chars' },
-                      { key: '262144', label: '256k chars (default)' },
-                      { key: '524288', label: '512k chars' },
-                      { key: '1048576', label: '1M chars' },
-                    ],
-                    onClick: ({ key }) =>
-                      void handleSetSessionProp(api.setSessionBudget(session.id, Number(key))),
-                    selectedKeys: [String(session.context_budget_chars || 262144)],
-                  }}
-                  disabled={running}
+                <Tooltip
+                  open={ctxMenuOpen ? false : undefined}
+                  title={
+                    usage
+                      ? `context ~${Math.round(usage.total_chars / 1024)}k of ${Math.round(usage.budget / 1024)}k chars (${usage.pct.toFixed(0)}%) — click chip to change budget`
+                      : 'context usage'
+                  }
                 >
                   <Tag
                     color={
@@ -514,32 +519,9 @@ export default function App() {
                   >
                     ctx {usage ? `${usage.pct.toFixed(0)}%` : '…'} ▾
                   </Tag>
-                </Dropdown>
-              </Tooltip>
+                </Tooltip>
+              </Dropdown>
             )}
-            <Button
-              size="small"
-              onClick={() => setView('chat')}
-              title={
-                session
-                  ? `${session.model}`
-                  : 'No session'
-              }
-              style={{
-                borderRadius: 0,
-                border: '2px solid #000000',
-                background: '#f2f4f8',
-                color: '#000000',
-                fontWeight: 700,
-                boxShadow: '2px 2px 0 #000000',
-                maxWidth: 200,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {session?.model ?? '—'}
-            </Button>
           </Header>
           <Content
             style={{

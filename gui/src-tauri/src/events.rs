@@ -22,6 +22,11 @@ pub enum FrontendEvent {
         session_id: Option<String>,
         text: String,
     },
+    /// Live extended-thinking snippet from the provider.
+    Thinking {
+        session_id: Option<String>,
+        text: String,
+    },
     ToolStart {
         session_id: Option<String>,
         name: String,
@@ -72,6 +77,8 @@ pub struct SessionDto {
     pub model: String,
     pub mode: String,
     pub thinking: String,
+    /// Per-session compaction budget in chars; 0 = agent default.
+    pub context_budget_chars: usize,
     pub created_at: u64,
     pub updated_at: u64,
     pub messages: Vec<ChatMessage>,
@@ -97,6 +104,7 @@ pub fn session_dto(s: &Session) -> SessionDto {
         model: s.model.clone(),
         mode: s.mode.label().to_string(),
         thinking: s.thinking.label().to_string(),
+        context_budget_chars: s.context_budget_chars,
         created_at: s.created_at,
         updated_at: s.updated_at,
         messages: s.messages.clone(),
@@ -120,6 +128,10 @@ pub fn frontend_event(e: &AgentEvent, session_id: Option<&str>) -> FrontendEvent
     match e {
         AgentEvent::TurnStart => FrontendEvent::TurnStart { session_id: sid },
         AgentEvent::TextDelta(text) => FrontendEvent::TextDelta {
+            session_id: sid,
+            text: text.clone(),
+        },
+        AgentEvent::Thinking(text) => FrontendEvent::Thinking {
             session_id: sid,
             text: text.clone(),
         },

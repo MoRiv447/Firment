@@ -46,6 +46,7 @@ async fn anthropic_stream_parses_text_and_tool_use() {
     while let Some(event) = stream.next().await {
         match event.unwrap() {
             ProviderEvent::Text(t) => texts.push(t),
+            ProviderEvent::Thinking(_) => {}
             ProviderEvent::ToolCall(call) => calls.push(call),
             ProviderEvent::Stop(reason) => stop = Some(reason),
         }
@@ -97,10 +98,61 @@ async fn anthropic_stream_tolerates_openrouter_trailers() {
     while let Some(event) = stream.next().await {
         match event.unwrap() {
             ProviderEvent::Text(t) => texts.push(t),
+            ProviderEvent::Thinking(_) => {}
             ProviderEvent::ToolCall(_) => panic!("no tool calls expected"),
             ProviderEvent::Stop(reason) => stop = Some(reason),
         }
     }
     assert_eq!(texts, vec!["Hi"]);
     assert_eq!(stop, Some(StopReason::EndTurn));
+}
+
+/// Extended thinking must surface as ProviderEvent::Thinking deltas and
+/// NEVER leak into the text transcript — before the dedicated handler,
+/// `thinking_delta` fell into a catch-all arm and reasoning was silently
+/// invisible (making off vs max look byte-identical in every UI).
+#[tokio::test]
+async fn anthropic_stream_parses_thinking_blocks() {
+    let server = MockServer::start().await;
+    let body = sse(&[
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"9.8 is larger"}}"#,
+        r#"{"type":"content_block_stop","index":0}"#,
+        r#"{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}"#,
+        r#"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"9.8"}}"#,
+        r#"{"type":"content_block_stop","index":1}"#,
+        r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#,
+        r#"{"type":"message_stop"}"#,
+    ]);
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body, "text/event-stream"))
+        .mount(&server)
+        .await;
+
+    let provider = AnthropicProvider::new(server.uri(), "test-key", "anthropic-test", None, None);
+    let request = ChatRequest {
+        model: "anthropic-test".to_string(),
+        messages: vec![ChatMessage::User {
+            content: "hi".to_string(),
+        }],
+        tools: Vec::new(),
+        max_tokens: None,
+        temperature: None,
+        thinking: Some(firment_core::ThinkingLevel::High),
+    };
+    let mut stream = provider.stream(request).await.unwrap();
+    let mut texts = Vec::new();
+    let mut thoughts = Vec::new();
+    while let Some(event) = stream.next().await {
+        match event.unwrap() {
+            ProviderEvent::Text(t) => texts.push(t),
+            ProviderEvent::Thinking(t) => thoughts.push(t),
+            ProviderEvent::ToolCall(_) => panic!("no tool calls expected"),
+            ProviderEvent::Stop(_) => {}
+        }
+    }
+    assert_eq!(thoughts, vec!["9.8 is larger"]);
+    // The thinking block must not bleed into assistant text.
+    assert_eq!(texts, vec!["9.8"]);
 }

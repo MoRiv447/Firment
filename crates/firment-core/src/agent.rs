@@ -20,6 +20,9 @@ use tokio::sync::watch;
 pub enum AgentEvent {
     TurnStart,
     TextDelta(String),
+    /// Live extended-thinking snippet. UI-only: never persisted and never
+    /// fed back into the transcript.
+    Thinking(String),
     ToolStart {
         name: String,
         args: Value,
@@ -924,6 +927,9 @@ impl Agent {
                     ProviderEvent::Text(text) => {
                         content.push_str(&text);
                         self.sink.event(AgentEvent::TextDelta(text.clone())).await;
+                    }
+                    ProviderEvent::Thinking(text) => {
+                        self.sink.event(AgentEvent::Thinking(text)).await;
                     }
                     ProviderEvent::ToolCall(call) => tool_calls.push(call),
                     ProviderEvent::Stop { .. } => {}

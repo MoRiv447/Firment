@@ -112,3 +112,22 @@ describe('turnsReducer (multi-session routing)', () => {
     expect(turnsReducer({}, orphan)).toEqual({});
   });
 });
+
+describe('turnReducer thinking phase', () => {
+  it('accumulates thinking then clears it when text starts', () => {
+    let s = turnReducer(initialTurnState(), { type: 'turn_start' });
+    s = turnReducer(s, { type: 'thinking', text: 'pondering…', session_id: 'x' });
+    expect(s.turn?.thinking).toBe('pondering…');
+    s = turnReducer(s, { type: 'thinking', text: ' more', session_id: 'x' });
+    expect(s.turn?.thinking).toBe('pondering… more');
+    s = turnReducer(s, { type: 'text_delta', text: 'answer', session_id: 'x' });
+    // Reasoning done: the snippet must not linger under the reply.
+    expect(s.turn?.text).toBe('answer');
+    expect(s.turn?.thinking).toBe('');
+  });
+
+  it('ignores thinking deltas when no turn is running', () => {
+    const s = turnReducer(initialTurnState(), { type: 'thinking', text: '?', session_id: 'x' });
+    expect(s.turn).toBeNull();
+  });
+});

@@ -212,6 +212,13 @@ impl App {
                     self.items.push(Item::Assistant(text));
                 }
             },
+            // Real reasoning deltas from extended thinking: keep the
+            // "thinking…" indicator up (it previously flipped off only when
+            // text started, which made enabled-thinking look identical to
+            // off while the model was actually reasoning).
+            AgentEvent::Thinking(_) => {
+                self.ai_thinking = true;
+            }
             AgentEvent::ToolStart { name, args, seq } => {
                 self.ai_thinking = false;
                 self.active_tools

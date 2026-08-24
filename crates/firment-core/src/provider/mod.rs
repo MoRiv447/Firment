@@ -15,6 +15,10 @@ pub type ProviderStream = BoxStream<'static, Result<ProviderEvent, ProviderError
 #[derive(Debug, Clone)]
 pub enum ProviderEvent {
     Text(String),
+    /// Extended-thinking delta (anthropic `thinking` / OpenRouter
+    /// `reasoning` blocks). Never persisted into the transcript — surfaced
+    /// to the UI so "the model is reasoning" is observable.
+    Thinking(String),
     ToolCall(ToolCall),
     Stop(StopReason),
 }

@@ -23,12 +23,27 @@ export function initialTurnState(): TurnState {
 export function turnReducer(state: TurnState, e: FrontendEvent): TurnState {
   switch (e.type) {
     case 'turn_start':
-      return { running: true, turn: { text: '', tools: {}, startedAt: Date.now() } };
+      return { running: true, turn: { text: '', thinking: '', tools: {}, startedAt: Date.now() } };
+
+    case 'thinking': {
+      if (!state.turn) return state;
+      return {
+        ...state,
+        turn: { ...state.turn, thinking: state.turn.thinking + (e as { text: string }).text },
+      };
+    }
 
     case 'text_delta':
-      return state.turn
-        ? { ...state, turn: { ...state.turn, text: state.turn.text + e.text } }
-        : state;
+      if (!state.turn) return state;
+      return {
+        ...state,
+        turn: {
+          ...state.turn,
+          // First real text ends the visible reasoning phase.
+          thinking: '',
+          text: state.turn.text + e.text,
+        },
+      };
 
     case 'tool_start':
       if (!state.turn) return state;
@@ -72,7 +87,7 @@ export function turnReducer(state: TurnState, e: FrontendEvent): TurnState {
         running: false,
         turn: state.turn
           ? { ...state.turn, text: `${state.turn.text}\n⚠ ${e.message}` }
-          : { text: `⚠ ${e.message}`, tools: {}, startedAt: Date.now() },
+          : { text: `⚠ ${e.message}`, thinking: '', tools: {}, startedAt: Date.now() },
       };
 
     default:

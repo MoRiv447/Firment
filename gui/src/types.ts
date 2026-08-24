@@ -97,6 +97,7 @@ export interface TimelineEntryDto {
 export type FrontendEvent =
   | { type: 'turn_start'; session_id?: string | null }
   | { type: 'text_delta'; session_id?: string | null; text: string }
+  | { type: 'thinking'; session_id?: string | null; text: string }
   | { type: 'tool_start'; session_id?: string | null; name: string; args: unknown; seq: number }
   | { type: 'tool_end'; session_id?: string | null; name: string; ok: boolean; summary: string; seq: number }
   | { type: 'turn_end'; session_id?: string | null; text: string }
@@ -158,6 +159,8 @@ export interface ToolCardState {
 
 export interface RunningTurn {
   text: string;
+  /** Live extended-thinking snippet; cleared once real text starts. */
+  thinking: string;
   tools: Record<number, ToolCardState>;
   startedAt: number;
 }

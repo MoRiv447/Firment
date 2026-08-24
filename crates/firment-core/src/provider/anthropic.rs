@@ -177,6 +177,18 @@ impl AnthropicProvider {
             };
             body["max_tokens"] = json!(self.max_tokens.max(budget + 2048));
             body["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
+            // OpenRouter's unified reasoning parameter is honoured by more
+            // models than the anthropic-style `thinking` block (which their
+            // compat layer passes through only for claude-family models).
+            // Send both; upstreams ignore the one they don't know.
+            if self.base_url.contains("openrouter.ai") {
+                let effort = match level {
+                    ThinkingLevel::Low => "low",
+                    ThinkingLevel::Medium => "medium",
+                    _ => "high",
+                };
+                body["reasoning"] = json!({"effort": effort});
+            }
             body.as_object_mut().unwrap().remove("temperature");
         }
         body
@@ -261,13 +273,19 @@ impl Provider for AnthropicProvider {
                         "content_block_start" => {
                             let idx = payload.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
                             let block = payload.get("content_block").cloned().unwrap_or(Value::Null);
+                            let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
                             let entry = blocks.entry(idx).or_insert_with(|| Block::Text(String::new()));
-                            if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+                            if block_type == "tool_use" {
                                 *entry = Block::ToolUse {
                                     id: block.get("id").and_then(|i| i.as_str()).unwrap_or_default().to_string(),
                                     name: block.get("name").and_then(|n| n.as_str()).unwrap_or_default().to_string(),
                                     arguments: String::new(),
                                 };
+                            } else if block_type == "thinking" || block_type == "redacted_thinking" {
+                                // Extended thinking: tracked separately from
+                                // text so reasoning never leaks into the
+                                // transcript as assistant content.
+                                *entry = Block::Thinking(String::new());
                             }
                         }
                         "content_block_delta" => {
@@ -287,9 +305,19 @@ impl Provider for AnthropicProvider {
                                             None => {
                                                 blocks.insert(idx, Block::Text(text.to_string()));
                                             }
-                                            Some(Block::ToolUse { .. }) => {}
+                                            Some(Block::ToolUse { .. }) | Some(Block::Thinking(_)) => {}
                                         }
                                         yield Ok(ProviderEvent::Text(text.to_string()));
+                                    }
+                                }
+                                Some("thinking_delta") => {
+                                    if let Some(text) =
+                                        delta.get("thinking").and_then(|t| t.as_str())
+                                    {
+                                        if let Some(Block::Thinking(buf)) = blocks.get_mut(&idx) {
+                                            buf.push_str(text);
+                                        }
+                                        yield Ok(ProviderEvent::Thinking(text.to_string()));
                                     }
                                 }
                                 Some("input_json_delta") => {
@@ -357,6 +385,7 @@ impl Provider for AnthropicProvider {
 
 enum Block {
     Text(String),
+    Thinking(String),
     ToolUse {
         id: String,
         name: String,
