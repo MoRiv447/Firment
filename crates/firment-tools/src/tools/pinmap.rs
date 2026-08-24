@@ -13,6 +13,12 @@ fn normalize_pin(raw: &str) -> String {
     raw.trim().to_uppercase()
 }
 
+/// Display form for an unset owner. Kept as a helper (not an inline
+/// if/else inside format! args) so rustfmt versions agree on the layout.
+fn owner_display(owner: &str) -> &str {
+    if owner.is_empty() { "?" } else { owner }
+}
+
 fn parse_pins(raw: &str) -> Vec<String> {
     raw.split([',', '/', ';', ' '])
         .map(normalize_pin)
@@ -90,11 +96,7 @@ impl Tool for Pinmap {
                                 conflicts.push(format!(
                                     "{pin}: already claimed as '{}' (owner: {})",
                                     entry.func,
-                                    if entry.owner.is_empty() {
-                                        "?"
-                                    } else {
-                                        &entry.owner
-                                    }
+                                    owner_display(&entry.owner)
                                 ));
                             }
                         }
@@ -137,7 +139,7 @@ impl Tool for Pinmap {
                         conflicts.push(format!(
                             "{pin} is already '{}' (owner: {}); pass force=true to overwrite",
                             entry.func,
-                            if entry.owner.is_empty() { "?" } else { &entry.owner }
+                            owner_display(&entry.owner)
                         ));
                     }
                 }
