@@ -4,6 +4,7 @@ import type {
   AskRequest,
   ContextUsageDto,
   DecisionEntryDto,
+  KbEntryDto,
   ElfCardDto,
   FrontendEvent,
   HardwareExit,
@@ -44,6 +45,10 @@ export const api = {
     invoke<DecisionEntryDto[]>('workbench_decision_add', { cwd, title, body }),
   workbenchDecisionRemove: (cwd: string, index: number) =>
     invoke<DecisionEntryDto[]>('workbench_decision_remove', { cwd, index }),
+  workbenchKbList: (cwd: string) => invoke<KbEntryDto[]>('workbench_kb_list', { cwd }),
+  workbenchKbSave: (cwd: string, key: string, content: string) =>
+    invoke<void>('workbench_kb_save', { cwd, key, content }),
+  workbenchKbDelete: (cwd: string, key: string) => invoke<void>('workbench_kb_delete', { cwd, key }),
   workbenchSetMainline: (cwd: string, sessionId: string) =>
     invoke('workbench_set_mainline', { cwd, sessionId }),
   workbenchBranchCreate: (parentId: string, title: string) =>

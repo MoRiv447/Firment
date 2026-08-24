@@ -46,6 +46,13 @@ export interface DecisionEntryDto {
   date: string;
 }
 
+export interface KbEntryDto {
+  /** Whitelist key: AGENTS.md | docs/vendor-index.toml | cheatsheet:<name>.toml */
+  key: string;
+  exists: boolean;
+  content: string;
+}
+
 export interface SessionSummaryDto {
   id: string;
   updated_at: number;

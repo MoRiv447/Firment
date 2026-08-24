@@ -224,7 +224,10 @@ pub async fn workbench_decision_remove(
     let mut cfg = WorkbenchConfig::load(&root)?;
     let idx = index as usize;
     if idx == 0 || idx > cfg.decision.len() {
-        return Err(format!("index {index} out of range (1..={})", cfg.decision.len()));
+        return Err(format!(
+            "index {index} out of range (1..={})",
+            cfg.decision.len()
+        ));
     }
     cfg.decision.remove(idx - 1);
     cfg.save(&root)?;
@@ -250,6 +253,124 @@ fn chrono_like_today() -> String {
     let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     let y = if m <= 2 { y + 1 } else { y };
     format!("{y:04}-{m:02}-{d:02}")
+}
+
+// ---------- project knowledge base entry (W2-3) ---------------------------
+//
+// The agent already reads three knowledge sources per project: AGENTS.md
+// (project memory), vendor-index.toml (hardware KB index, root or docs/),
+// and any files that index points at. This section exposes them to the GUI
+// through a strict whitelist — no arbitrary path reads/writes.
+
+const KB_AGENTS: &str = "AGENTS.md";
+const KB_VENDOR: &str = "vendor-index.toml";
+
+/// Resolve a whitelisted KB key to an absolute path. Anything not in the
+/// whitelist (or containing path separators beyond the known shapes) is
+/// rejected, so the frontend can never touch unrelated files.
+fn kb_path(cwd: &Path, key: &str) -> Option<PathBuf> {
+    match key {
+        KB_AGENTS => Some(cwd.join(KB_AGENTS)),
+        KB_VENDOR => {
+            let docs = cwd.join("docs").join(KB_VENDOR);
+            if docs.is_file() {
+                Some(docs)
+            } else {
+                Some(cwd.join("docs").join(KB_VENDOR))
+            }
+        }
+        other => {
+            // Project-private cheatsheet: "cheatsheet:<name>.toml".
+            let name = other.strip_prefix("cheatsheet:")?;
+            if name.contains(['/', '\\'])
+                || name.contains("..")
+                || !name.ends_with(".toml")
+                || name.len() > 80
+            {
+                return None;
+            }
+            Some(cwd.join(".firment").join("cheatsheets").join(name))
+        }
+    }
+}
+
+fn read_or_empty(p: &Path) -> String {
+    std::fs::read_to_string(p).unwrap_or_default()
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct KbEntryDto {
+    /// Whitelist key ("AGENTS.md", "vendor-index.toml", "cheatsheet:x.toml").
+    pub key: String,
+    pub exists: bool,
+    pub content: String,
+}
+
+#[tauri::command]
+pub async fn workbench_kb_list(cwd: String) -> Result<Vec<KbEntryDto>, String> {
+    let root = PathBuf::from(&cwd);
+    if !root.is_dir() {
+        return Err(format!("cwd does not exist: {}", root.display()));
+    }
+    let mut entries = vec![
+        KbEntryDto {
+            key: KB_AGENTS.into(),
+            exists: root.join(KB_AGENTS).is_file(),
+            content: read_or_empty(&root.join(KB_AGENTS)),
+        },
+        KbEntryDto {
+            key: format!("docs/{KB_VENDOR}"),
+            exists: root.join("docs").join(KB_VENDOR).is_file(),
+            content: read_or_empty(&root.join("docs").join(KB_VENDOR)),
+        },
+    ];
+    let cheat_dir = root.join(".firment").join("cheatsheets");
+    if let Ok(read) = std::fs::read_dir(&cheat_dir) {
+        let mut names: Vec<String> = read
+            .flatten()
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("toml"))
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        for name in names {
+            let p = cheat_dir.join(&name);
+            entries.push(KbEntryDto {
+                key: format!("cheatsheet:{name}"),
+                exists: true,
+                content: read_or_empty(&p),
+            });
+        }
+    }
+    Ok(entries)
+}
+
+#[tauri::command]
+pub async fn workbench_kb_save(cwd: String, key: String, content: String) -> Result<(), String> {
+    let root = PathBuf::from(&cwd);
+    let path = kb_path(&root, &key)
+        .ok_or_else(|| format!("unknown or disallowed knowledge file '{key}'"))?;
+    // The vendor-index key always writes under docs/ (the location the
+    // auto-detector checks first).
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&path, content).map_err(|e| format!("write {}: {e}", path.display()))
+}
+
+#[tauri::command]
+pub async fn workbench_kb_delete(cwd: String, key: String) -> Result<(), String> {
+    let root = PathBuf::from(&cwd);
+    // Only project-private cheatsheets are deletable; AGENTS.md and the
+    // vendor index are cleared by saving empty content instead.
+    if !key.starts_with("cheatsheet:") {
+        return Err("only cheatsheet:* entries can be deleted".into());
+    }
+    let path = kb_path(&root, &key)
+        .ok_or_else(|| format!("unknown or disallowed knowledge file '{key}'"))?;
+    if path.is_file() {
+        std::fs::remove_file(&path).map_err(|e| format!("delete {}: {e}", path.display()))?;
+    }
+    Ok(())
 }
 
 /// Create a workbench branch session under `parent_id`. Returns the new
