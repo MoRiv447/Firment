@@ -92,6 +92,82 @@ pub struct PinEntry {
     pub owner: String,
 }
 
+/// Per-board device registration ([devices] in workbench.toml). The key is
+/// the node/board name and SHOULD match the MQTT node name so the devices
+/// card, the pin registry and the physical board all cross-reference.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct DeviceEntry {
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub note: String,
+    /// Optional command-prefix whitelist for `device_cmd` (e.g. ["rgb:"]).
+    /// Empty = all commands allowed (still logged).
+    #[serde(default)]
+    pub allow: Vec<String>,
+}
+
+/// Board-scoped pin map: board -> pin -> entry. Serialized as
+/// `[pinmap.<board>]` tables; legacy flat `[pinmap]` files (pin -> entry
+/// directly) migrate to the board "default" on load and are rewritten in
+/// the nested shape on the next save.
+pub type Pinmap = std::collections::BTreeMap<String, std::collections::BTreeMap<String, PinEntry>>;
+
+/// Board that owns pre-hierarchy flat pinmap entries.
+pub const DEFAULT_BOARD: &str = "default";
+
+mod pinmap_serde {
+    use super::PinEntry;
+    use serde::Deserialize;
+
+    pub type Map = std::collections::BTreeMap<String, std::collections::BTreeMap<String, PinEntry>>;
+
+    /// Accept BOTH the nested `[pinmap.<board>]` shape and the legacy flat
+    /// `[pinmap]` shape (pin -> {func, owner}); legacy entries land on the
+    /// "default" board.
+    pub fn deserialize<'de, D>(d: D) -> Result<Map, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = toml::Value::deserialize(d)?;
+        let Some(table) = value.as_table() else {
+            return Err(serde::de::Error::custom("pinmap must be a table"));
+        };
+        let mut out: Map = Default::default();
+        for (key, value) in table {
+            let is_board = value
+                .as_table()
+                .map(|t| {
+                    t.values()
+                        .all(|v| v.as_table().and_then(|v| v.get("func")).is_some())
+                        && !t.is_empty()
+                })
+                .unwrap_or(false);
+            if is_board {
+                let board: std::collections::BTreeMap<String, PinEntry> =
+                    value.clone().try_into().map_err(serde::de::Error::custom)?;
+                out.insert(key.clone(), board);
+            } else {
+                // Legacy flat entry (or empty table) -> default board.
+                let entry: PinEntry = value.clone().try_into().map_err(serde::de::Error::custom)?;
+                out.entry(super::DEFAULT_BOARD.to_string())
+                    .or_default()
+                    .insert(key.clone(), entry);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Always write the nested (board-scoped) shape — legacy files are
+    /// migrated on load and rewritten in the new spelling.
+    pub fn serialize<S>(map: &Map, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serde::Serialize::serialize(map, s)
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct DecisionEntry {
     pub title: String,
@@ -114,9 +190,15 @@ pub struct WorkbenchConfig {
     pub branch: std::collections::BTreeMap<String, BranchEntry>,
     #[serde(default)]
     pub quickcmd: std::collections::BTreeMap<String, QuickCommand>,
-    /// Pin/resource map keyed by pin name (e.g. "PA5").
+    /// Pin/resource map, scoped per board: `[pinmap.<board>]` with the board
+    /// name matching the MQTT node name. Legacy flat files migrate to the
+    /// "default" board on load.
+    #[serde(default, with = "pinmap_serde")]
+    pub pinmap: Pinmap,
+    /// Per-project device/board registry: `[devices.<node>]`. The agent's
+    /// `device_cmd` tool refuses nodes that are not registered here.
     #[serde(default)]
-    pub pinmap: std::collections::BTreeMap<String, PinEntry>,
+    pub devices: std::collections::BTreeMap<String, DeviceEntry>,
     #[serde(default)]
     pub decision: Vec<DecisionEntry>,
 }
@@ -212,6 +294,14 @@ vars = { port = "COM14" }
 func = "LED status"
 owner = "alice"
 
+[pinmap.s3-node-1]
+GPIO48 = { func = "WS2812 RGB", owner = "agent" }
+
+[devices.s3-node-1]
+role = "main mcu"
+note = "RGB experiment"
+allow = ["rgb:"]
+
 [[decision]]
 title = "传感器总线选 CAN 而非 RS485"
 body = "节点数可能扩到 16"
@@ -227,9 +317,15 @@ date = "2026-08-22"
         assert!(cfg.workbench.guard.enabled);
         assert_eq!(cfg.branch["a1b2c3d4"].git_branch, "exp/drift-hunt");
         assert_eq!(cfg.quickcmd["flash-usb0"].steps, vec!["flash", "monitor"]);
-        assert_eq!(cfg.pinmap["PA5"].func, "LED status");
+        // Legacy flat [pinmap.PA5] migrates to the "default" board; the
+        // nested board keeps its own table.
+        assert_eq!(cfg.pinmap["default"]["PA5"].func, "LED status");
+        assert_eq!(cfg.pinmap["s3-node-1"]["GPIO48"].func, "WS2812 RGB");
+        assert_eq!(cfg.devices["s3-node-1"].role, "main mcu");
+        assert_eq!(cfg.devices["s3-node-1"].allow, vec!["rgb:".to_string()]);
         assert_eq!(cfg.decision.len(), 1);
-        // Round-trip: save -> load keeps the same data.
+        // Round-trip: save -> load keeps the same data (legacy entry is
+        // rewritten nested under "default").
         cfg.save(&root).unwrap();
         let reloaded = WorkbenchConfig::load(&root).unwrap();
         assert_eq!(cfg, reloaded);

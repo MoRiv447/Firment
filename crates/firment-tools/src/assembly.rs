@@ -78,6 +78,18 @@ pub fn assemble_agent(
     agent.set_allow_dangerous(allow_dangerous);
     agent.set_verify_command(merged.tools.verify_command.clone());
     agent.set_context_budget_chars(merged.context_budget_chars);
+    // Device-log location for the device_log tool: the desktop MQTT link
+    // writes next to config.toml.
+    agent.set_device_log_dir(Some(firment_core::config::config_dir()));
+    // Delegation guidance: surface every configured provider (name + model)
+    // so the model knows which cheap backends it can dispatch subtasks to.
+    agent.set_providers(
+        merged
+            .providers
+            .iter()
+            .map(|(name, p)| (name.clone(), p.model.clone()))
+            .collect(),
+    );
     agent.set_compaction_strategy(merged.compaction_strategy);
     agent.set_symbols_backend(merged.tools.symbols_backend.clone());
     agent.set_build_command(merged.tools.build_command.clone());

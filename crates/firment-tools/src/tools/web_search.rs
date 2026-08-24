@@ -692,6 +692,7 @@ mod tests {
             subagent_depth: 0,
             max_subagent_depth: 2,
             asker: None,
+            device_log_dir: None,
             web_search_provider: provider.map(|s| s.to_string()),
             web_search_api_key: key.map(|s| s.to_string()),
             session_dir: None,

@@ -34,6 +34,7 @@ impl Tool for PeriphInit {
                 "peripheral": {"type": "string", "enum": ["uart", "gpio", "i2c", "spi", "tim", "adc", "dma"], "description": "Peripheral to initialize"},
                 "baudrate": {"type": "integer", "description": "UART baud rate (default 115200)"},
                 "pins": {"type": "string", "description": "Pin names, e.g. PA9/PA10"},
+                "board": {"type": "string", "description": "Optional board name (= pinmap board / MQTT node). Limits the pin-conflict check and table to this board"},
                 "dma": {"type": "boolean", "default": false, "description": "Enable DMA on the peripheral (uart only for now)"},
                 "interrupt": {"type": "boolean", "default": false, "description": "Enable the peripheral interrupt (uart only for now)"}
             },
@@ -136,9 +137,10 @@ impl Tool for PeriphInit {
         if let Some(hal_note) = project_hal_note(&ctx.cwd) {
             text.push_str(&format!("\n## 工程注意\n{hal_note}"));
         }
-        // Pin-registry linkage: show the project's claims and flag any of
-        // the requested pins that are taken by a different function, so the
-        // skeleton's TODO(fill) never silently double-allocates a pin.
+        // Pin-registry linkage: show the project's claims per board and
+        // flag any of the requested pins that are registered for an
+        // unrelated function, so the skeleton's TODO(fill) never silently
+        // double-allocates a pin.
         if let Ok(cfg) = firment_core::WorkbenchConfig::load(&ctx.cwd) {
             let requested: Vec<String> = pins
                 .as_deref()
@@ -149,27 +151,53 @@ impl Tool for PeriphInit {
                         .collect()
                 })
                 .unwrap_or_default();
+            let board_filter = args
+                .get("board")
+                .and_then(|b| b.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+
+            if !cfg.pinmap.is_empty() {
+                text.push_str("\n## 引脚分配表（.firment/workbench.toml，按板）\n");
+                for (board, board_pins) in &cfg.pinmap {
+                    if board_filter.as_deref().is_some_and(|f| board != f) {
+                        continue;
+                    }
+                    text.push_str(&format!(
+                        "### board: {board}\n| 引脚 | 功能 | 登记人 |\n|---|---|---|\n"
+                    ));
+                    for (pin, entry) in board_pins {
+                        text.push_str(&format!("| {pin} | {} | {} |\n", entry.func, entry.owner));
+                    }
+                }
+            }
             let conflicts: Vec<String> = requested
                 .iter()
                 .filter_map(|pin| {
-                    cfg.pinmap.get(pin).and_then(|entry| {
-                        let f = entry.func.to_lowercase();
-                        // Same-peripheral claim (e.g. "USART1_TX" vs the
-                        // uart skeleton) is a confirmation, not a conflict.
-                        let related = peripheral == "uart" && f.contains("usart")
-                            || peripheral == "i2c" && f.contains("i2c")
-                            || peripheral == "spi" && f.contains("spi")
-                            || peripheral == "gpio";
-                        (!related).then(|| format!("{pin}: registered as '{}'", entry.func))
-                    })
+                    for (board, board_pins) in &cfg.pinmap {
+                        if board_filter.as_deref().is_some_and(|f| board != f) {
+                            continue;
+                        }
+                        if let Some(entry) = board_pins.get(pin) {
+                            let f = entry.func.to_lowercase();
+                            // Same-peripheral claim (e.g. "USART1_TX" vs the
+                            // uart skeleton) is a confirmation, not a conflict.
+                            let related = peripheral == "uart" && f.contains("usart")
+                                || peripheral == "i2c" && f.contains("i2c")
+                                || peripheral == "spi" && f.contains("spi")
+                                || peripheral == "gpio";
+                            if !related {
+                                return Some(format!(
+                                    "{pin}: board '{board}' 已登记为 '{}'",
+                                    entry.func
+                                ));
+                            }
+                        }
+                    }
+                    None
                 })
                 .collect();
-            if !cfg.pinmap.is_empty() {
-                text.push_str("\n## 引脚分配表（.firment/workbench.toml）\n| 引脚 | 功能 | 登记人 |\n|---|---|---|\n");
-                for (pin, entry) in &cfg.pinmap {
-                    text.push_str(&format!("| {pin} | {} | {} |\n", entry.func, entry.owner));
-                }
-            }
             if !conflicts.is_empty() {
                 text.push_str(&format!(
                     "\n## ⚠ 引脚冲突（先和用户确认，或用 pinmap 工具查看/协调）\n - {}\n",

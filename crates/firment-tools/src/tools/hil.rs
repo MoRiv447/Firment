@@ -1379,6 +1379,7 @@ async fn run_elf_step(
         web_search_provider: None,
         web_search_api_key: None,
         session_dir: ctx.session_dir.clone(),
+        device_log_dir: ctx.device_log_dir.clone(),
         cancel: ctx.cancel.clone(),
     };
     match tool.run(args, &child_ctx).await {

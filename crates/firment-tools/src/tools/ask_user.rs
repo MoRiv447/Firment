@@ -84,6 +84,7 @@ mod tests {
             subagent_depth: 0,
             max_subagent_depth: 2,
             asker: None,
+            device_log_dir: None,
             web_search_provider: None,
             web_search_api_key: None,
             session_dir: None,

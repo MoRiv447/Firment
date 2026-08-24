@@ -52,6 +52,10 @@ pub struct ToolContext {
     /// Turn-level cooperative cancellation signal. Long-running tools poll
     /// `cancelled()` and terminate child processes when it fires.
     pub cancel: Cancellable,
+    /// Directory holding the desktop MQTT link's device-log files
+    /// (device-log-<date>.jsonl). `None` falls back to the global config
+    /// dir; tests inject a temp dir.
+    pub device_log_dir: Option<PathBuf>,
 }
 
 impl ToolContext {
@@ -82,6 +86,7 @@ impl ToolContext {
             web_search_api_key: None,
             session_dir: None,
             cancel: Cancellable::new(),
+            device_log_dir: None,
         }
     }
 }

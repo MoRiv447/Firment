@@ -702,6 +702,7 @@ async fn run_direct_tool(
     let cwd = cwd.unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     let ctx = firment_core::ToolContext {
         cwd: cwd.clone(),
+        device_log_dir: Some(firment_core::config::config_dir()),
         permission: Arc::new(firment_core::AutoApprove::everything()),
         allow_dangerous: true,
         journal: Arc::new(Mutex::new(firment_core::EditJournal::new(

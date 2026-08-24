@@ -133,6 +133,7 @@ mod tests {
             subagent_depth: depth,
             max_subagent_depth: max_depth,
             asker: None,
+            device_log_dir: None,
             web_search_provider: None,
             web_search_api_key: None,
             session_dir: None,

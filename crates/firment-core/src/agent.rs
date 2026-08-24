@@ -172,6 +172,13 @@ pub struct Agent {
     allow_dangerous: bool,
     verify_command: Option<String>,
     context_budget_chars: usize,
+    /// Configured (name, model) pairs for the system prompt's delegation
+    /// guidance — the model may dispatch mechanical subtasks to a cheaper
+    /// provider via the task tool.
+    providers: Vec<(String, String)>,
+    /// Directory holding the desktop MQTT link's device-log files; exposed
+    /// to tools via ToolContext. `None` falls back to the global config dir.
+    device_log_dir: Option<std::path::PathBuf>,
     /// Highest ledger sequence already merged into the conversation.
     ledger_seq_appended: u64,
     compaction_strategy: CompactionStrategy,
@@ -249,6 +256,8 @@ impl Agent {
             allow_dangerous: false,
             verify_command: None,
             context_budget_chars: 256 * 1024,
+            providers: Vec::new(),
+            device_log_dir: None,
             ledger_seq_appended: 0,
             compaction_strategy: CompactionStrategy::default(),
             symbols_backend: None,
@@ -374,13 +383,30 @@ impl Agent {
         self.context_budget_chars = budget;
     }
 
+    /// Provider list surfaced in the delegation guidance (see
+    /// `context::delegation_section`). Set by the assembly from the merged
+    /// config.
+    pub fn set_providers(&mut self, providers: Vec<(String, String)>) {
+        self.providers = providers;
+    }
+
+    /// Where the desktop MQTT link drops its device-log files (see
+    /// `ToolContext::device_log_dir`).
+    pub fn set_device_log_dir(&mut self, dir: Option<std::path::PathBuf>) {
+        self.device_log_dir = dir;
+    }
+
     /// Rough per-part context usage (char counts) for the `/context`
     /// command: system prompt, tool schemas, and message history, against
     /// the current budget.
     pub fn context_usage(&self) -> String {
-        let system_chars = crate::context::system_prompt_for(&self.session.cwd, self.session.mode)
-            .chars()
-            .count();
+        let system_chars = format!(
+            "{}{}",
+            crate::context::system_prompt_for(&self.session.cwd, self.session.mode),
+            crate::context::delegation_section(&self.providers)
+        )
+        .chars()
+        .count();
         let tools_chars = serde_json::to_string(&self.registry.specs())
             .map(|s| s.chars().count())
             .unwrap_or(0);
@@ -731,7 +757,11 @@ impl Agent {
         // Keep the system prompt byte-stable so provider prefix caching keeps
         // hitting; dynamic state (change ledger) is merged into user messages.
         let mut messages = vec![ChatMessage::System {
-            content: system_prompt_for(&self.session.cwd, self.session.mode),
+            content: format!(
+                "{}{}",
+                system_prompt_for(&self.session.cwd, self.session.mode),
+                crate::context::delegation_section(&self.providers)
+            ),
         }];
         messages.extend(self.session.messages.clone());
         ChatRequest {
@@ -806,6 +836,7 @@ impl Agent {
             web_search_api_key: self.web_search_api_key.clone(),
             session_dir: self.session_dir.clone(),
             cancel: self.cancel.clone(),
+            device_log_dir: self.device_log_dir.clone(),
         };
 
         self.seed_elf_baseline(&ctx).await;

@@ -18,6 +18,8 @@ serialport.workspace = true
 sha2.workspace = true
 tokio.workspace = true
 toml.workspace = true
+chrono.workspace = true
+rumqttc = "0.24"
 uuid = { workspace = true }
 
 [dev-dependencies]

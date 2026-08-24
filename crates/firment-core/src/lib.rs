@@ -22,7 +22,7 @@ pub use config::{
     AuthMap, CompactionStrategy, Config, ConfigError, ElfConfig, ProviderConfig, auth_path,
     config_dir, config_path, load_auth, save_auth,
 };
-pub use context::{default_system_prompt, system_prompt_for};
+pub use context::{default_system_prompt, delegation_section, system_prompt_for};
 pub use journal::{EditJournal, Ledger, LedgerChange, UndoSummary};
 pub use permission::{AutoApprove, PermissionChecker, PermissionError, PlanModePermission};
 pub use provider::{
@@ -34,5 +34,6 @@ pub use subagent::{NullSink, SubagentFactory, SubagentRunner};
 pub use tool::{Tool, ToolContext, ToolError, ToolOutput, ToolRegistry};
 pub use types::{ChatMessage, SessionMode, ThinkingLevel, ToolCall, ToolSpec};
 pub use workbench::DecisionEntry;
+pub use workbench::DeviceEntry;
 pub use workbench::PinEntry;
 pub use workbench::WorkbenchConfig;

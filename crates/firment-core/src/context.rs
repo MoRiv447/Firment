@@ -152,10 +152,14 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          - Build loop: when build fails ([CompileError]), read the failing lines (read_file with \
          the reported path:line), fix with edit_file (the returned diff confirms the change), \
          and rebuild — iterate until the build passes or the error is genuinely unrelated.\n\
-         - Research: web_search finds sources (datasheets, errata, vendor docs) and web_fetch \
-         reads them; task runs a read-only research subagent that returns a report; ask_user \
-         asks the user only for decisions or information that only they have; todo keeps a \
-         session-scoped task list for multi-step work.\n\
+          - Research: web_search finds sources (datasheets, errata, vendor docs) and web_fetch \
+          reads them; task runs a read-only research subagent that returns a report; ask_user \
+          asks the user only for decisions or information that only they have; todo keeps a \
+          session-scoped task list for multi-step work.\n\
+          - Device I/O: device_cmd sends downlink commands to nodes registered in the \
+          project's [devices] table (subject to per-node allow prefixes); device_log reads \
+          recent captured frames (telemetry/state/alert) — check it before claiming a device \
+          is misbehaving.\n\
          - After building firmware, call elf_analyze on the ELF and compare with the previous \
          build (baseline is cached automatically) to catch flash/RAM growth, function size \
          changes, and stack depth increases that still compile fine. If it reports no stack \
@@ -263,6 +267,33 @@ pub fn system_prompt_for(cwd: &Path, mode: SessionMode) -> String {
         );
     }
     prompt
+}
+
+/// Guidance for dispatching mechanical subtasks to cheaper configured
+/// providers (e.g. a small model on the SBC via Ollama). Appended to the
+/// system prompt by the agent; the provider list comes from the merged
+/// config so the model only ever sees real, usable names.
+pub fn delegation_section(providers: &[(String, String)]) -> String {
+    if providers.is_empty() {
+        return String::new();
+    }
+    let list: Vec<String> = providers
+        .iter()
+        .map(|(name, model)| format!("  - {name} (model: {model})"))
+        .collect();
+    format!(
+        "\n\n# Small-model delegation\n\
+         Configured providers:\n{}\n\
+         For high-volume MECHANICAL subtasks — log normalization, summarization, format \
+         translation, bulk classification, first-pass research — dispatch a `task` subagent \
+         with provider/model overrides pointing at a small/cheap provider instead of doing \
+         it in the main loop. Rules:\n\
+         - Subagents are read-only investigators: they return text, never act.\n\
+         - Validate their structured output before relying on it; re-run once on invalid.\n\
+         - Anything requiring judgement about actions, safety, or code changes stays with \
+         you (the main model).\n",
+        list.join("\n")
+    )
 }
 
 fn shell_name() -> &'static str {

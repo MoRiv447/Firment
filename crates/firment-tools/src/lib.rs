@@ -40,6 +40,8 @@ pub fn plan_registry() -> Arc<ToolRegistry> {
                 | "ask_user"
                 | "elf_analyze"
                 | "periph_init"
+                | "pinmap"
+                | "device_log"
         ) {
             registry.register(tool);
         }
