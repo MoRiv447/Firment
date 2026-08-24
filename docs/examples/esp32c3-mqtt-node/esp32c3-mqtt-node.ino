@@ -19,14 +19,15 @@
 //
 // Flash from the SBC itself (after arduino-cli is installed there) or from
 // any desktop with the board plugged in:
-//   arduino-cli upload -p <PORT> --input-dir . --fqbn esp32:esp32:esp32c3 main.ino
+//   arduino-cli compile --fqbn "esp32:esp32:esp32s3:CDCOnBoot=cdc" docs\examples\esp32c3-mqtt-node
+//   arduino-cli upload  -p <PORT> --fqbn "esp32:esp32:esp32s3:CDCOnBoot=cdc" docs\examples\esp32c3-mqtt-node
 
 #include <WiFi.h>
 #include <PubSubClient.h>
 
 // ---- fill in per deployment (or use your own wifi-manager) --------------
-const char* WIFI_SSID = "YOUR_WIFI_SSID";
-const char* WIFI_PASS = "YOUR_WIFI_PASS";
+const char* WIFI_SSID = "CMCC-666";
+const char* WIFI_PASS = "66666666";
 // SBC broker (see docs/sbc-agent.md §3.1)
 const char* MQTT_HOST = "192.168.1.6";
 const uint16_t MQTT_PORT = 1883;
