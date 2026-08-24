@@ -481,6 +481,41 @@
     }
   },
   {
+    "name": "pinmap",
+    "description": "Project pin/resource allocation registry (.firment/workbench.toml [pinmap]). ALWAYS check here before wiring up any peripheral, and claim the pins you take so other branches (and humans) don't double-allocate them. Actions: list (show every claim), check (pins+func -> free / taken-by), claim (register pins for a function; refuses on conflict unless force), release (free pins). `pins` accepts comma/slash separated names like PA9,PA10.",
+    "input_schema": {
+      "properties": {
+        "action": {
+          "description": "What to do",
+          "enum": [
+            "list",
+            "check",
+            "claim",
+            "release"
+          ],
+          "type": "string"
+        },
+        "force": {
+          "default": false,
+          "description": "claim: overwrite an existing different-func claim instead of refusing",
+          "type": "boolean"
+        },
+        "func": {
+          "description": "Intended function, e.g. \"USART1_TX\" or \"user LED\" (required for check/claim)",
+          "type": "string"
+        },
+        "pins": {
+          "description": "Pin names for check/claim/release, e.g. \"PA9/PA10\" or \"PB6,PB7\"",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "name": "read_file",
     "description": "Read a text file. Output lines carry a line-number prefix (\"  123 | content\") so edit_file can target exact ranges; without offset/limit at most the first 1000 lines are returned and a [truncated] hint tells you how to read on.",
     "input_schema": {
