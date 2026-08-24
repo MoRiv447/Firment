@@ -6,9 +6,16 @@ fn main() {
     let dir = firment_core::config::config_dir();
     println!("config dir : {}", dir.display());
     println!("  (override with FIRMENT_CONFIG_DIR env var)");
-    println!("FIRMENT_CONFIG_DIR env = {:?}", std::env::var("FIRMENT_CONFIG_DIR"));
+    println!(
+        "FIRMENT_CONFIG_DIR env = {:?}",
+        std::env::var("FIRMENT_CONFIG_DIR")
+    );
     let path = firment_core::config::config_path();
-    println!("config file: {} (exists: {})", path.display(), path.exists());
+    println!(
+        "config file: {} (exists: {})",
+        path.display(),
+        path.exists()
+    );
     match firment_core::Config::load_or_create(&path) {
         Ok(cfg) => {
             println!("parsed mqtt.broker = {:?}", cfg.mqtt.broker);

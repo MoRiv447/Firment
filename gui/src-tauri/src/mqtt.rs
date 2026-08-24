@@ -30,8 +30,7 @@ pub fn spawn_if_configured(shared: Arc<Shared>) {
             "agent-event",
             FrontendEvent::Info {
                 session_id: None,
-                message: "[mqtt] no [mqtt] broker configured — data-plane link off"
-                    .to_string(),
+                message: "[mqtt] no [mqtt] broker configured — data-plane link off".to_string(),
             },
         );
         return;

@@ -83,6 +83,17 @@ export default function App() {
 
   useEffect(() => {
     void api.listSessions().then(setSessions).catch(console.error);
+    // Restore the most recent session on startup: the backend no longer
+    // preloads one, and several UI regions (chat infos included) only
+    // render with a session attached.
+    void api
+      .listSessions()
+      .then(async (list) => {
+        if (!sessionRef.current && list.length > 0) {
+          setSession(await api.loadSession(list[0].id));
+        }
+      })
+      .catch(console.error);
   }, []);
 
   // Context usage follows the open session and its message count.

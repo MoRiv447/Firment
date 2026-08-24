@@ -14,11 +14,12 @@ async fn main() {
         None => (broker.clone(), 1883),
     };
     println!("[probe] connecting to {host}:{port} ...");
-    let (client, mut eventloop) = rumqttc::AsyncClient::new(
-        rumqttc::MqttOptions::new("firment-probe", &host, port),
-        16,
-    );
-    if let Err(e) = client.subscribe("firment/#", rumqttc::QoS::AtMostOnce).await {
+    let (client, mut eventloop) =
+        rumqttc::AsyncClient::new(rumqttc::MqttOptions::new("firment-probe", &host, port), 16);
+    if let Err(e) = client
+        .subscribe("firment/#", rumqttc::QoS::AtMostOnce)
+        .await
+    {
         println!("[probe] subscribe ERR: {e}");
         return;
     }

@@ -15,7 +15,7 @@ import {
 } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
-import { api, notifySessionsChanged } from '../lib/api';
+import { api, notifySessionsChanged, onAgentEvent } from '../lib/api';
 import type {
   AlertEntry,
   DecisionEntryDto,
@@ -37,14 +37,59 @@ const { Text, Title } = Typography;
  * small-model guard land in W2/W3 (docs/gui-workbench.md).
  */
 export function WorkbenchView({
-  devices = [],
-  alerts = [],
-  guardFrame,
+  devices: _devicesProp,
+  alerts,
+  guardFrame: _guardFrameProp,
 }: {
   devices?: DeviceEntry[];
   alerts?: AlertEntry[];
   guardFrame?: string | null;
 }) {
+  // The Devices & guard card SUBSCRIBES ITSELF to the raw event stream:
+  // it must work with no project open and no session loaded, independent
+  // of App-level routing.
+  const [liveDevices, setLiveDevices] = useState<Record<string, DeviceEntry>>({});
+  const [liveAlerts, setLiveAlerts] = useState<AlertEntry[]>([]);
+  const [liveGuard, setLiveGuard] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void onAgentEvent((e) => {
+      if (cancelled) return;
+      if (e.type === 'device_frame') {
+        const ts = Date.now();
+        setLiveDevices((prev) => ({
+          ...prev,
+          [e.node]: {
+            node: e.node,
+            lastKind: e.kind,
+            lastFrame: e.frame.slice(0, 200),
+            ts,
+            count: (prev[e.node]?.count ?? 0) + 1,
+          },
+        }));
+        if (e.kind === 'alert') {
+          setLiveAlerts((prev) =>
+            [{ node: e.node, frame: e.frame.slice(0, 300), ts }, ...prev].slice(0, 30),
+          );
+        }
+      } else if (e.type === 'guard_status') {
+        setLiveGuard(e.frame);
+      }
+    }).then((u) => {
+      if (cancelled) u();
+      else unlisten = u;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+  void alerts;
+  void _devicesProp;
+  void _guardFrameProp;
+  const devices = Object.values(liveDevices).sort((a, b) => b.ts - a.ts);
+  const guardFrame = liveGuard;
   const [cwd, setCwd] = useState('');
   const [state, setState] = useState<WorkbenchStateDto | null>(null);
   const [sessions, setSessions] = useState<SessionSummaryDto[]>([]);
@@ -403,7 +448,7 @@ export function WorkbenchView({
             })()
           }
         >
-          {devices.length === 0 && alerts.length === 0 ? (
+          {devices.length === 0 && liveAlerts.length === 0 ? (
             <Text type="secondary" style={{ fontSize: 12 }}>
               No device traffic yet. Configure [mqtt] broker in config.toml (e.g.
               "192.168.1.6:1883") and restart; nodes publish to firment/device/#.
@@ -433,12 +478,12 @@ export function WorkbenchView({
                   </Text>
                 </div>
               ))}
-              {alerts.length > 0 && (
+              {liveAlerts.length > 0 && (
                 <div style={{ marginTop: 8 }}>
                   <Text type="warning" style={{ fontSize: 11, fontWeight: 700 }}>
-                    ⚠ recent alerts ({alerts.length})
+                    ⚠ recent alerts ({liveAlerts.length})
                   </Text>
-                  {alerts.slice(0, 5).map((a, i) => (
+                  {liveAlerts.slice(0, 5).map((a, i) => (
                     <div key={i} style={{ fontSize: 11, padding: '2px 0' }}>
                       <Tag color="red" style={{ borderRadius: 0, fontSize: 10 }}>{a.node}</Tag>
                       <Text type="secondary" style={{ fontSize: 11 }}>{a.frame}</Text>
