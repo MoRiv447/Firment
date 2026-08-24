@@ -167,27 +167,70 @@ async fn run(shared: Arc<Shared>, broker: String) {
     }
 }
 
-/// Route one publish to its frontend event by topic shape:
-///   firment/device/<node>/<kind>  -> DeviceFrame
-///   firment/guard/status          -> GuardStatus
+/// Topic routing: `firment/device/<node>/<kind>` and `firment/guard/status`.
+/// Everything else (collab/presence, foreign namespaces) routes nowhere.
+enum Route {
+    Device { node: String, kind: String },
+    GuardStatus,
+}
+
+fn route_topic(topic: &str) -> Option<Route> {
+    let mut parts = topic.split('/');
+    match (
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+    ) {
+        (Some("firment"), Some("device"), Some(node), Some(kind), None) => Some(Route::Device {
+            node: node.to_string(),
+            kind: kind.to_string(),
+        }),
+        (Some("firment"), Some("guard"), Some("status"), None, None) => Some(Route::GuardStatus),
+        _ => None,
+    }
+}
+
 fn forward(shared: &Arc<Shared>, topic: &str, payload: &[u8]) {
     let frame = String::from_utf8_lossy(payload).into_owned();
-    let mut parts = topic.split('/');
-    match (parts.next(), parts.next(), parts.next(), parts.next()) {
-        (Some("device"), Some(node), Some(kind), None) => {
-            emit(
-                shared,
-                FrontendEvent::DeviceFrame {
-                    node: node.to_string(),
-                    kind: kind.to_string(),
-                    frame,
-                },
-            );
+    match route_topic(topic) {
+        Some(Route::Device { node, kind }) => {
+            emit(shared, FrontendEvent::DeviceFrame { node, kind, frame });
         }
-        (Some("guard"), Some("status"), None, None) => {
+        Some(Route::GuardStatus) => {
             emit(shared, FrontendEvent::GuardStatus { frame });
         }
-        _ => {} // collab/presence etc. land in M4
+        None => {} // collab/presence etc. land in M4
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn routes_device_and_guard_topics() {
+        match route_topic("firment/device/s3-node-1/telemetry") {
+            Some(Route::Device { node, kind }) => {
+                assert_eq!(node, "s3-node-1");
+                assert_eq!(kind, "telemetry");
+            }
+            _ => panic!("device topic must route"),
+        }
+        assert!(matches!(
+            route_topic("firment/guard/status"),
+            Some(Route::GuardStatus)
+        ));
+        // Regression: the namespace segment is "firment" — the old matcher
+        // compared the WRONG segment and silently dropped every frame.
+        assert!(matches!(
+            route_topic("firment/device/x/state"),
+            Some(Route::Device { .. })
+        ));
+        assert!(route_topic("firment/collab/presence").is_none());
+        assert!(route_topic("other/device/x/telemetry").is_none());
+        assert!(route_topic("firment/device/x/telemetry/extra").is_none());
     }
 }
 
