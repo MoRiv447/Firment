@@ -53,6 +53,16 @@ export interface DeviceBindingDto {
   allow: string[];
 }
 
+export interface EscalationEntry {
+  id: string;
+  ts: number;
+  node: string;
+  sev: string;
+  rule: string;
+  summary: string;
+  payload: string;
+}
+
 export interface DecisionEntryDto {
   title: string;
   body: string;
@@ -99,6 +109,8 @@ export interface GitStatusDto {
 export interface WorkbenchConfigDto {
   project_name: string;
   mainline_session: string;
+  /** Guard escalation threshold from [workbench.guard] (warn default). */
+  guard_escalate_sev: string;
   toml_raw: string;
 }
 

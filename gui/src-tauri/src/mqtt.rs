@@ -89,16 +89,16 @@ async fn run(shared: Arc<Shared>, broker: String) {
         // connect/disconnect war (the "flickering status" bug).
         // Connection timeout defaults to 5s (NetworkOptions) — failures
         // surface quickly.
-        let opts = rumqttc::MqttOptions::new(
-            &format!("firment-gui-{}", std::process::id()),
-            &host,
-            port,
-        );
+        let opts =
+            rumqttc::MqttOptions::new(&format!("firment-gui-{}", std::process::id()), &host, port);
         let (client, mut eventloop) = {
             let (c, el) = AsyncClient::new(opts, 64);
             (c, el)
         };
-        if let Err(e) = client.subscribe("firment/#", rumqttc::QoS::AtMostOnce).await {
+        if let Err(e) = client
+            .subscribe("firment/#", rumqttc::QoS::AtMostOnce)
+            .await
+        {
             trace(&shared, &format!("subscribe failed: {e}"));
             emit(
                 &shared,
@@ -133,9 +133,12 @@ async fn run(shared: Arc<Shared>, broker: String) {
                     // session — "subscribe queued" used to flip the card to
                     // green before the handshake, then errors flipped it
                     // back: the flickering-status bug.
-                    emit(&shared, FrontendEvent::GuardStatus {
-                        frame: format!("{{\"connected\":true,\"broker\":\"{broker}\"}}"),
-                    });
+                    emit(
+                        &shared,
+                        FrontendEvent::GuardStatus {
+                            frame: format!("{{\"connected\":true,\"broker\":\"{broker}\"}}"),
+                        },
+                    );
                 }
                 Ok(_) => {
                     if connacked && last_status.elapsed() >= Duration::from_secs(10) {

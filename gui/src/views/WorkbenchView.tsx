@@ -9,12 +9,13 @@ import {
   Select,
   Space,
   Statistic,
+  Switch,
   Tag,
   Tooltip,
   Typography,
 } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, notifySessionsChanged, onAgentEvent } from '../lib/api';
 import type {
   AlertEntry,
@@ -23,6 +24,7 @@ import type {
   DeviceBindingDto,
   DeviceEntry,
   ElfCardDto,
+  EscalationEntry,
   KbEntryDto,
   QualityItemDto,
   SessionSummaryDto,
@@ -73,6 +75,44 @@ export function WorkbenchView({
           setLiveAlerts((prev) =>
             [{ node: e.node, frame: e.frame.slice(0, 300), ts }, ...prev].slice(0, 30),
           );
+          // Escalation detection: bound node + sev >= project threshold.
+          const c = escalationCtxRef.current;
+          let parsed: Record<string, unknown> = {};
+          try {
+            parsed = JSON.parse(e.frame);
+          } catch {
+            /* raw frame — still escalatable with defaults */
+          }
+          const rank = (s: unknown) =>
+            ({ debug: 0, info: 1, warn: 2, error: 3 })[String(s)] ?? 1;
+          const node = String(parsed.node ?? e.node);
+          if (!c.bindings.some((b) => b.node === node)) return;
+          if (rank(parsed.sev) < rank(c.sev)) return;
+          const entry: EscalationEntry = {
+            id: `${String(parsed.ts ?? ts)}-${node}-${String(parsed.rule ?? '')}`,
+            ts,
+            node,
+            sev: String(parsed.sev ?? 'warn'),
+            rule: String(parsed.rule ?? ''),
+            summary: String(parsed.summary ?? ''),
+            payload: String(parsed.payload ?? e.frame).slice(0, 300),
+          };
+          if (escalRef.current.some((x) => x.id === entry.id)) return;
+          const next = [entry, ...escalRef.current].slice(0, 20);
+          escalRef.current = next;
+          setEscalations(next);
+          try {
+            localStorage.setItem(`guard-pending-${c.cwd}`, JSON.stringify(next));
+          } catch {
+            /* storage full — pending list just won't survive restarts */
+          }
+          if (autoRunRef.current) {
+            window.dispatchEvent(
+              new CustomEvent('firment:run-escalation', {
+                detail: { cwd: c.cwd, entry },
+              }),
+            );
+          }
         }
       } else if (e.type === 'guard_status') {
         setLiveGuard(e.frame);
@@ -115,6 +155,26 @@ export function WorkbenchView({
   const [bindings, setBindings] = useState<DeviceBindingDto[]>([]);
   const [bindNode, setBindNode] = useState('');
   const [bindRole, setBindRole] = useState('');
+  // Guard escalations: alerts at/above the project's escalate_sev for BOUND
+  // nodes. Persisted per project so switching tabs doesn't drop them.
+  const [escalations, setEscalations] = useState<EscalationEntry[]>([]);
+  const [autoRun, setAutoRun] = useState(
+    () => localStorage.getItem('escalation-auto-run') === '1',
+  );
+  // Mirrors for the [] -deps event subscriber (stale-closure-proof).
+  const escalRef = useRef<EscalationEntry[]>([]);
+  const autoRunRef = useRef(autoRun);
+  autoRunRef.current = autoRun;
+  const escalationCtxRef = useRef({
+    bindings: [] as DeviceBindingDto[],
+    sev: 'warn',
+    cwd: '',
+  });
+  escalationCtxRef.current = {
+    bindings,
+    sev: state?.config.guard_escalate_sev ?? 'warn',
+    cwd,
+  };
   // ADR-lite decision log ([[decision]]); branches whose title matches a
   // decision inherit it automatically at creation.
   const [decisions, setDecisions] = useState<DecisionEntryDto[]>([]);
@@ -223,6 +283,15 @@ export function WorkbenchView({
       setBindings([]);
     }
     try {
+      const saved = JSON.parse(
+        localStorage.getItem(`guard-pending-${cwd.trim()}`) || '[]',
+      ) as EscalationEntry[];
+      setEscalations(saved);
+      escalRef.current = saved;
+    } catch {
+      setEscalations([]);
+    }
+    try {
       const files = await api.workbenchKbList(cwd.trim());
       setKbFiles(files);
       // Keep the current selection if it still exists; else default to
@@ -306,6 +375,42 @@ export function WorkbenchView({
     } finally {
       setBusy(false);
     }
+  };
+
+  const dropEscalation = (id: string) => {
+    const next = escalRef.current.filter((x) => x.id !== id);
+    escalRef.current = next;
+    setEscalations(next);
+    try {
+      localStorage.setItem(`guard-pending-${cwd.trim()}`, JSON.stringify(next));
+    } catch {
+      /* ignore */
+    }
+  };
+
+  /** Hand an escalation to the project's mainline session: synthesized
+   * diagnosis prompt, turn started via the App-level event listener. */
+  const runEscalation = (entry: EscalationEntry) => {
+    const mainline = state?.config.mainline_session;
+    if (!mainline) return;
+    const prompt = [
+      `[guard escalation] node ${entry.node} sev=${entry.sev} rule=${entry.rule}`,
+      `summary: ${entry.summary}`,
+      `payload: ${entry.payload}`,
+      '请诊断该设备告警：先用 device_log 查看最近帧判断根因；',
+      '如需操作设备用 device_cmd 并说明理由；最后给出结论与后续建议。',
+    ].join('\n');
+    window.dispatchEvent(
+      new CustomEvent('firment:run-escalation', {
+        detail: { cwd: cwd.trim(), sessionId: mainline, prompt },
+      }),
+    );
+    dropEscalation(entry.id);
+  };
+
+  const toggleAutoRun = (on: boolean) => {
+    setAutoRun(on);
+    localStorage.setItem('escalation-auto-run', on ? '1' : '0');
   };
 
   const addDecision = async () => {
@@ -740,6 +845,79 @@ export function WorkbenchView({
                     bind
                   </Button>
                 </Space.Compact>
+              </Card>
+
+              <Card
+                type="inner"
+                title="Escalations (guard)"
+                size="small"
+                extra={
+                  <Space size={8}>
+                    <Text type="secondary" style={{ fontSize: 11 }}>
+                      sev ≥ {state.config.guard_escalate_sev}
+                    </Text>
+                    <Tooltip title="Automatically hand new escalations to the mainline session">
+                      <Space size={4}>
+                        <Text style={{ fontSize: 11 }}>auto</Text>
+                        <Switch size="small" checked={autoRun} onChange={toggleAutoRun} />
+                      </Space>
+                    </Tooltip>
+                  </Space>
+                }
+              >
+                {escalations.length === 0 ? (
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    No pending escalations. Alerts from bound nodes at or above the severity
+                    threshold land here for one-click diagnosis.
+                  </Text>
+                ) : (
+                  <>
+                    {state.config.mainline_session ? null : (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        style={{ marginBottom: 6, borderRadius: 0 }}
+                        message="No mainline session registered — set one first to enable diagnosis."
+                      />
+                    )}
+                    {escalations.map((e) => (
+                      <div
+                        key={e.id}
+                        style={{
+                          padding: '5px 6px',
+                          borderBottom: '1px solid #f0f0f0',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <Tag
+                            color={e.sev === 'error' ? 'red' : 'orange'}
+                            style={{ borderRadius: 0, fontSize: 10, fontWeight: 700 }}
+                          >
+                            {e.sev}
+                          </Tag>
+                          <Tag style={{ borderRadius: 0, fontSize: 10 }}>{e.node}</Tag>
+                          <Text style={{ fontSize: 12, flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                            {e.summary || e.payload}
+                          </Text>
+                          <Button
+                            size="small"
+                            type="primary"
+                            disabled={busy || !state.config.mainline_session}
+                            onClick={() => runEscalation(e)}
+                          >
+                            diagnose
+                          </Button>
+                          <Button size="small" type="text" disabled={busy} onClick={() => dropEscalation(e.id)}>
+                            ✕
+                          </Button>
+                        </div>
+                        <Text type="secondary" style={{ fontSize: 10 }}>
+                          {new Date(e.ts).toLocaleTimeString()} · {e.rule || 'no rule'} · {e.payload.slice(0, 120)}
+                        </Text>
+                      </div>
+                    ))}
+                  </>
+                )}
               </Card>
 
               <Card

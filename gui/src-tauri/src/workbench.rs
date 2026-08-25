@@ -19,6 +19,9 @@ pub struct GitStatusDto {
 pub struct WorkbenchConfigDto {
     pub project_name: String,
     pub mainline_session: String,
+    /// Guard escalation threshold from [workbench.guard] ("warn" default):
+    /// alerts at or above this severity become escalations in the UI.
+    pub guard_escalate_sev: String,
     pub toml_raw: String,
 }
 
@@ -60,6 +63,7 @@ fn load_config(cwd: &Path) -> WorkbenchConfigDto {
     WorkbenchConfigDto {
         project_name: cfg.project.name.clone(),
         mainline_session: cfg.workbench.mainline_session.clone(),
+        guard_escalate_sev: cfg.workbench.guard.escalate_sev.clone(),
         toml_raw,
     }
 }

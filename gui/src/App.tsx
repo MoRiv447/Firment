@@ -248,6 +248,49 @@ export default function App() {
     [],
   );
 
+  // Guard escalation → mainline-session diagnosis. The workbench card
+  // synthesizes the prompt; here we load the session, switch to chat and
+  // start the turn (refusing politely if that chat is already streaming).
+  useEffect(() => {
+    const handler = (ev: Event) => {
+      const detail = (ev as CustomEvent).detail as {
+        sessionId: string;
+        prompt: string;
+      };
+      if (turnsById[detail.sessionId]?.running) {
+        setInfos((prev) => [
+          ...prev.slice(-8),
+          {
+            id: Date.now(),
+            sid: detail.sessionId,
+            text: 'escalation skipped: mainline chat already has a turn running',
+          },
+        ]);
+        return;
+      }
+      void api
+        .loadSession(detail.sessionId)
+        .then((s) => {
+          setSession(s);
+          setView('chat');
+          void api.startTurn(detail.sessionId, detail.prompt).catch((err) => {
+            console.error(err);
+            setInfos((prev) => [
+              ...prev.slice(-8),
+              {
+                id: Date.now(),
+                sid: detail.sessionId,
+                text: `escalation turn failed: ${err}`,
+              },
+            ]);
+          });
+        })
+        .catch(console.error);
+    };
+    window.addEventListener('firment:run-escalation', handler);
+    return () => window.removeEventListener('firment:run-escalation', handler);
+  }, [turnsById]);
+
   const handleNewSession = (mode: 'agent' | 'plan') => {
     // Creating a chat never disturbs turns running in other chats.
     void api
