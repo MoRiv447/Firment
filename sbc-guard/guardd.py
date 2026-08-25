@@ -129,7 +129,7 @@ class Guard:
                 resp = requests.post(
                     self.o["url"],
                     json={
-                        "model": self.o.get("model", "qwen3.5:0.8b"),
+                        "model": self.o.get("model", "qwen2.5:0.5b"),
                         "messages": [{"role": "user", "content": prompt}],
                         "temperature": 0,
                         "max_tokens": 800,
@@ -144,31 +144,42 @@ class Guard:
                 obj = json.loads(content[start : end + 1])
                 if {"sev", "summary"} <= set(obj) and obj["sev"] in ("debug", "info", "warn", "error"):
                     return obj
-            except Exception:
-                pass
+                print(f"[llm] attempt {_attempt + 1}: schema miss: {content[:120]!r}", flush=True)
+            except Exception as e:
+                print(f"[llm] attempt {_attempt + 1} failed: {e}", flush=True)
             self.counters["llm_fail"] += 1
         return None
 
     def enqueue_escalate(self, node: str, rule: str, sev: str, hit: str, full: str):
-        """Classification takes minutes on the CPU-only SBC — never run it
-        inside the paho callback or the broker keepalive expires and we
-        disconnect/reconnect mid-stream. Hits go to a worker thread."""
+        """Two-phase publish: the RAW alert goes out immediately (latency
+        beats polish), then the worker classifies and publishes a REVISED
+        alert. Classification never runs on the paho callback thread — the
+        broker keepalive would expire mid-call."""
+        self.publish_alert(node, rule, sev, hit, full, revised=False)
         self.work_queue.put((node, rule, sev, hit, full))
 
     def _worker(self):
         while True:
             node, rule, sev, hit, full = self.work_queue.get()
             try:
-                self.escalate(node, rule, sev, hit, full)
+                llm = self.classify(full)
+                if llm:
+                    self.publish_alert(
+                        node,
+                        rule,
+                        llm.get("sev", sev),
+                        llm.get("summary") or hit,
+                        full,
+                        revised=True,
+                    )
             except Exception as e:
-                print(f"[worker] escalate failed: {e}", flush=True)
+                print(f"[worker] classify failed: {e}", flush=True)
             finally:
                 self.work_queue.task_done()
 
-    def escalate(self, node: str, rule: str, sev: str, hit: str, full: str):
-        llm = self.classify(full)
-        sev = (llm or {}).get("sev", sev)
-        summary = (llm or {}).get("summary") or hit
+    def publish_alert(
+        self, node: str, rule: str, sev: str, summary: str, full: str, revised: bool
+    ):
         alert = {
             "node": node,
             "ts": int(time.time()),
@@ -178,9 +189,9 @@ class Guard:
             "summary": summary,
             "payload": full[:400],
         }
-        mqtt_client.publish(
-            f"firment/device/{node}/alert", json.dumps(alert), qos=1
-        )
+        if revised:
+            alert["revised"] = True
+        mqtt_client.publish(f"firment/device/{node}/alert", json.dumps(alert), qos=1)
         self.counters["matches"] += 1
 
     def heartbeat(self):

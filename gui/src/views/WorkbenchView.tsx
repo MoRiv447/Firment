@@ -863,7 +863,7 @@ export function WorkbenchView({
                 extra={
                   <Space size={8}>
                     <Text type="secondary" style={{ fontSize: 11 }}>
-                      sev ≥ {state.config.guard_escalate_sev}
+                      sev ≥ {state.config.guard_escalate_sev || 'warn'}
                     </Text>
                     <Tooltip title="Automatically hand new escalations to the mainline session">
                       <Space size={4}>

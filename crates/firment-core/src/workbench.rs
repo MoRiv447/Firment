@@ -22,20 +22,37 @@ pub struct ProjectMeta {
     pub created_at: u64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GuardConfig {
     #[serde(default)]
     pub enabled: bool,
     /// Standby-watch cadence in minutes (small-model guard rounds).
-    #[serde(default)]
+    #[serde(default = "default_standby_minutes")]
     pub standby_minutes: u32,
     /// Severity at which the guard escalates to the big model.
     #[serde(default = "default_escalate_sev")]
     pub escalate_sev: String,
 }
 
+fn default_standby_minutes() -> u32 {
+    30
+}
+
 fn default_escalate_sev() -> String {
     "warn".to_string()
+}
+
+impl Default for GuardConfig {
+    /// Manual impl: the derived Default would give an EMPTY escalate_sev
+    /// (String's default), and one GUI save with that value permanently
+    /// overrode the serde field-default — the threshold then read as "".
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            standby_minutes: default_standby_minutes(),
+            escalate_sev: default_escalate_sev(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -219,7 +236,14 @@ impl WorkbenchConfig {
         }
         let text = std::fs::read_to_string(&path)
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-        toml::from_str(&text).map_err(|e| format!("corrupt {}: {e}", path.display()))
+        let mut cfg: WorkbenchConfig =
+            toml::from_str(&text).map_err(|e| format!("corrupt {}: {e}", path.display()))?;
+        // Heal files written before the GuardConfig default fix: an empty
+        // escalate_sev would make the escalation threshold rank as "info".
+        if cfg.workbench.guard.escalate_sev.trim().is_empty() {
+            cfg.workbench.guard.escalate_sev = default_escalate_sev();
+        }
+        Ok(cfg)
     }
 
     /// Persist atomically to the repo root (tmp + rename), creating
