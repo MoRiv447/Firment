@@ -31,9 +31,13 @@ impl Tool for DeviceCmd {
          (firment/device/<node>/cmd). ONLY nodes declared in this project's \
          workbench.toml [devices] table are addressable; if the node has an \
          `allow` prefix list, the command must start with one of them. \
-         The device's reply/state arrives as a retained frame on \
-         firment/device/<node>/state — read it back with device_log. \
-         Example: node=s3-node-1 command=\"rgb:#ff8800\"."
+         PROTOCOL v1 (JSON envelope): send {\"cmd\":\"rgb.set\",\"args\":{\"hex\":\"ff0000\"}} \
+         style payloads; the node acknowledges on firment/device/<node>/state with \
+         {\"ack\":{\"cmd\":...,\"ok\":true|false}} — read it back with device_log \
+         (kind=state). For an UNKNOWN node, first read its retained `caps` frame \
+         (device_log kind=caps) to discover the supported command grammar. \
+         Legacy plain-text commands (e.g. \"rgb:#ff0000\") are accepted by some \
+         firmwares but are deprecated."
     }
 
     fn input_schema(&self) -> Value {
@@ -166,8 +170,17 @@ impl Tool for DeviceCmd {
             .map_err(|e| ToolError::new(format!("[DeviceCmd] join: {e}")))?;
         publish_result?;
         let _ = ctx; // cwd already used for the registry lookup
+        // Surface the node's declared note (if any) so the model learns the
+        // command grammar on first use instead of guessing.
+        let hint = cfg
+            .devices
+            .get(&node)
+            .map(|d| d.note.trim())
+            .filter(|n| !n.is_empty())
+            .map(|n| format!("\nnode note: {n}"))
+            .unwrap_or_default();
         Ok(ToolOutput {
-            text: format!("sent to {node}: {command:?}{sent_note}"),
+            text: format!("sent to {node}: {command:?}{sent_note}{hint}"),
         })
     }
 }

@@ -159,7 +159,11 @@ pub fn default_system_prompt(cwd: &Path) -> String {
           - Device I/O: device_cmd sends downlink commands to nodes registered in the \
           project's [devices] table (subject to per-node allow prefixes); device_log reads \
           recent captured frames (telemetry/state/alert) — check it before claiming a device \
-          is misbehaving.\n\
+          is misbehaving. Command protocol v1 is a JSON envelope \
+          ({{\"cmd\":\"rgb.set\",\"args\":{{\"hex\":\"ff0000\"}}}}); every command is acked on the \
+          node's state topic. Before commanding an unfamiliar node, read its retained `caps` \
+          frame (device_log with kind=caps) to learn the supported commands; unknown \
+          commands are acked with ok:false, never silent.\n\
          - After building firmware, call elf_analyze on the ELF and compare with the previous \
          build (baseline is cached automatically) to catch flash/RAM growth, function size \
          changes, and stack depth increases that still compile fine. If it reports no stack \

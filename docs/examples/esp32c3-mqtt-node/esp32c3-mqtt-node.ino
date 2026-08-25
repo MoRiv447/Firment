@@ -1,22 +1,24 @@
-// ESP32-C3/S3 SuperMini — MQTT telemetry node (P0-4 of docs/sbc-agent.md §5)
+// ESP32-C3/S3 SuperMini — MQTT telemetry + command node
+// (docs/sbc-agent.md §3; command protocol v1 = JSON envelope)
 //
-// Publishes a heartbeat + a fake sensor metric to the SBC broker every 5 s,
-// subscribes to its command topic and echoes payloads back as telemetry.
-//
-// RGB experiment (WS2812 onboard LED):
-//   S3 SuperMini: GPIO48. C3 SuperMini boards typically wire it to GPIO8.
-//   publish to firment/device/<node>/cmd :
-//     rgb:on          -> last color at full brightness
-//     rgb:off         -> black
-//     rgb:#ff8800     -> set color (hex)
-//   Every change is republished RETAINED on .../<node>/state as
-//   {"rgb":{"state":"on","hex":"#ff8800"}} so the SBC guard / small model /
-//   firm always see the CURRENT light state without asking.
+// Telemetry: heartbeat + fake sensor metric every 5 s on
+//            firment/device/<node>/telemetry.
+// Commands : JSON envelopes on firment/device/<node>/cmd —
+//            {"cmd":"ping"}
+//            {"cmd":"rgb.on"}  /  {"cmd":"rgb.off"}
+//            {"cmd":"rgb.set","args":{"hex":"ff0000"}}
+//            EVERY command is acknowledged on .../<node>/state (retained):
+//            {"kind":"state","ack":{"cmd":...,"ok":true|false},"rgb":{...}}
+//            Unknown/invalid commands ack with ok:false — never silent.
+// Caps     : on boot publishes RETAINED .../<node>/caps advertising the
+//            supported commands so agents can discover the grammar:
+//            {"kind":"caps","cmds":[...],"args":{"rgb.set":["hex"]}}
+// Legacy   : plain-text rgb:on|off|#RRGGBB still accepted (deprecated).
 //
 // Build (Arduino IDE or arduino-cli):
 //   board: "ESP32C3 Dev Module"   (S3: "ESP32S3 Dev Module")
-//   libs : PubSubClient (Nick O'Leary)
-//   note : neopixelWrite() is builtin to arduino-esp32 >= 2.0.9 (no lib needed)
+//   libs : PubSubClient (Nick O'Leary), ArduinoJson (Benoit Blanchon)
+//   note : neopixelWrite() is builtin to arduino-esp32 >= 2.0.9
 //
 // Flash from the SBC itself (after arduino-cli is installed there) or from
 // any desktop with the board plugged in:
@@ -25,6 +27,7 @@
 
 #include <WiFi.h>
 #include <PubSubClient.h>
+#include <ArduinoJson.h>
 
 // ---- fill in per deployment (or use your own wifi-manager) --------------
 const char* WIFI_SSID = "CMCC-666";
@@ -72,38 +75,115 @@ void rgb_hex_to_parts(const char* hex) {
   snprintf(rgb_hex, sizeof(rgb_hex), "#%02x%02x%02x", rgb_r, rgb_g, rgb_b);
 }
 
-void publish_state() {
+void publish_state(const char* ack_cmd = nullptr, bool ack_ok = true,
+                   const char* ack_err = nullptr) {
   char topic[64];
   snprintf(topic, sizeof(topic), "firment/device/%s/state", NODE_NAME);
-  char msg[160];
-  snprintf(msg, sizeof(msg),
-           "{\"node\":\"%s\",\"kind\":\"state\",\"rgb\":{\"state\":\"%s\",\"hex\":\"%s\",\"r\":%u,\"g\":%u,\"b\":%u}}",
-           NODE_NAME, rgb_on ? "on" : "off", rgb_hex, rgb_r, rgb_g, rgb_b);
-  mqtt.publish(topic, msg, true);  // retained: late joiners see current state
+  // ack is optional: command responses carry it, plain state publishes
+  // don't. Retained either way — late joiners see current state + last ack.
+  char msg[256];
+  if (ack_cmd) {
+    if (ack_ok) {
+      snprintf(msg, sizeof(msg),
+               "{\"node\":\"%s\",\"kind\":\"state\",\"ack\":{\"cmd\":\"%s\",\"ok\":true},"
+               "\"rgb\":{\"state\":\"%s\",\"hex\":\"%s\",\"r\":%u,\"g\":%u,\"b\":%u}}",
+               NODE_NAME, ack_cmd, rgb_on ? "on" : "off", rgb_hex, rgb_r, rgb_g, rgb_b);
+    } else {
+      snprintf(msg, sizeof(msg),
+               "{\"node\":\"%s\",\"kind\":\"state\",\"ack\":{\"cmd\":\"%s\",\"ok\":false,\"error\":\"%s\"}}",
+               NODE_NAME, ack_cmd, ack_err ? ack_err : "unknown-cmd");
+    }
+  } else {
+    snprintf(msg, sizeof(msg),
+             "{\"node\":\"%s\",\"kind\":\"state\",\"rgb\":{\"state\":\"%s\",\"hex\":\"%s\",\"r\":%u,\"g\":%u,\"b\":%u}}",
+             NODE_NAME, rgb_on ? "on" : "off", rgb_hex, rgb_r, rgb_g, rgb_b);
+  }
+  mqtt.publish(topic, msg, true);
+}
+
+// Apply a hex color ("ff0000" or "#ff0000"). Returns false on malformed hex.
+bool rgb_apply_hex(const char* hex) {
+  if (hex[0] == '#') hex++;
+  if (strlen(hex) != 6) return false;
+  for (int i = 0; i < 6; i++) {
+    if (!isxdigit((unsigned char)hex[i])) return false;
+  }
+  rgb_hex_to_parts(hex);
+  rgb_on = true;
+  apply_rgb();
+  return true;
+}
+
+// Legacy text protocol: rgb:on | rgb:off | rgb:#RRGGBB (deprecated).
+// Returns true if the payload was a legacy rgb command.
+bool handle_legacy_rgb(const char* cmd) {
+  if (strncmp(cmd, "rgb:", 4) != 0) return false;
+  const char* arg = cmd + 4;
+  if (strcasecmp(arg, "on") == 0) {
+    rgb_on = true;
+  } else if (strcasecmp(arg, "off") == 0) {
+    rgb_on = false;
+  } else if (arg[0] == '#' && strlen(arg) == 7 && rgb_apply_hex(arg)) {
+    // applied
+  } else {
+    publish_state("rgb", false, "bad-legacy-arg");
+    return true;
+  }
+  apply_rgb();
+  publish_state("rgb", true);
+  return true;
+}
+
+void publish_caps() {
+  char topic[64];
+  snprintf(topic, sizeof(topic), "firment/device/%s/caps", NODE_NAME);
+  const char* caps =
+      "{\"node\":\"%s\",\"kind\":\"caps\","
+      "\"cmds\":[\"ping\",\"rgb.on\",\"rgb.off\",\"rgb.set\"],"
+      "\"args\":{\"rgb.set\":[\"hex\"]},"
+      "\"note\":\"rgb.set hex=RRGGBB (no #); WS2812@GPIO48\"}";
+  char msg[256];
+  snprintf(msg, sizeof(msg), caps, NODE_NAME);
+  mqtt.publish(topic, msg, true);  // retained: grammar discoverable anytime
 }
 
 void handle_cmd(const char* cmd) {
-  if (strncmp(cmd, "rgb:", 4) == 0) {
-    const char* arg = cmd + 4;
-    if (strcasecmp(arg, "on") == 0) {
-      rgb_on = true;
-    } else if (strcasecmp(arg, "off") == 0) {
-      rgb_on = false;
-    } else if (arg[0] == '#' && strlen(arg) == 7) {
-      rgb_hex_to_parts(arg);
-      rgb_on = true;
-    } else {
-      return;  // unknown rgb arg — ignore silently
-    }
-    apply_rgb();
-    publish_state();
+  // Legacy text protocol first (deprecated but accepted).
+  if (handle_legacy_rgb(cmd)) return;
+
+  // JSON envelope: {"cmd":"...","args":{...}}
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, cmd);
+  if (err) {
+    // Not JSON at all — ack unknown so commands are never silent.
+    publish_state(cmd, false, "unknown-cmd");
     return;
   }
-  // Echo with escaping + cap: raw payloads with quotes would otherwise
-  // produce invalid JSON frames.
-  char safe[96];
-  json_escape(cmd, safe, sizeof(safe));
-  publish("echo", safe);
+  const char* name = doc["cmd"] | "";
+  JsonObject args = doc["args"].as<JsonObject>();
+
+  if (strcmp(name, "ping") == 0) {
+    publish_state("ping", true);
+  } else if (strcmp(name, "rgb.on") == 0) {
+    rgb_on = true;
+    apply_rgb();
+    publish_state(name, true);
+  } else if (strcmp(name, "rgb.off") == 0) {
+    rgb_on = false;
+    apply_rgb();
+    publish_state(name, true);
+  } else if (strcmp(name, "rgb.set") == 0) {
+    const char* hex = args["hex"] | "";
+    char with_hash[8];
+    snprintf(with_hash, sizeof(with_hash), "#%s", hex);
+    if (rgb_apply_hex(with_hash)) {
+      publish_state(name, true);
+    } else {
+      publish_state(name, false, "bad-hex");
+    }
+  } else {
+    publish_state(name, false, "unknown-cmd");
+  }
 }
 
 void publish(const char* kind, const char* payload) {
@@ -122,19 +202,6 @@ void on_message(char* topic, byte* body, unsigned int len) {
   memcpy(cmd, body, n);
   cmd[n] = 0;
   handle_cmd(cmd);
-}
-
-// Escape `"` and `\` so an arbitrary echoed payload cannot produce invalid
-// JSON; cap length to keep the publish buffer headroom for long node names.
-void json_escape(const char* in, char* out, size_t outsz) {
-  size_t o = 0;
-  for (size_t i = 0; in[i] != '\0' && o + 2 < outsz; i++) {
-    if (in[i] == '"' || in[i] == '\\') {
-      out[o++] = '\\';
-    }
-    out[o++] = in[i];
-  }
-  out[o] = '\0';
 }
 
 void connect_wifi() {
@@ -186,6 +253,7 @@ void setup() {
   mqtt.setCallback(on_message);
   connect_mqtt();
   apply_rgb();
+  publish_caps();   // retained: advertise the command grammar
   publish_state();  // retained: announce current rgb on (re)connect
   Serial.println("[node] ready");
 }

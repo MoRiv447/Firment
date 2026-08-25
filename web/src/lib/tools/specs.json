@@ -163,7 +163,7 @@
   },
   {
     "name": "device_cmd",
-    "description": "Send a downlink command to a registered device node over MQTT (firment/device/<node>/cmd). ONLY nodes declared in this project's workbench.toml [devices] table are addressable; if the node has an `allow` prefix list, the command must start with one of them. The device's reply/state arrives as a retained frame on firment/device/<node>/state — read it back with device_log. Example: node=s3-node-1 command=\"rgb:#ff8800\".",
+    "description": "Send a downlink command to a registered device node over MQTT (firment/device/<node>/cmd). ONLY nodes declared in this project's workbench.toml [devices] table are addressable; if the node has an `allow` prefix list, the command must start with one of them. PROTOCOL v1 (JSON envelope): send {\"cmd\":\"rgb.set\",\"args\":{\"hex\":\"ff0000\"}} style payloads; the node acknowledges on firment/device/<node>/state with {\"ack\":{\"cmd\":...,\"ok\":true|false}} — read it back with device_log (kind=state). For an UNKNOWN node, first read its retained `caps` frame (device_log kind=caps) to discover the supported command grammar. Legacy plain-text commands (e.g. \"rgb:#ff0000\") are accepted by some firmwares but are deprecated.",
     "input_schema": {
       "properties": {
         "command": {
