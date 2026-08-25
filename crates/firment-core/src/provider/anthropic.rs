@@ -199,11 +199,12 @@ impl AnthropicProvider {
                 ThinkingLevel::Off => 1024,
             };
             body["max_tokens"] = json!(self.max_tokens.max(budget + 2048));
-            body["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
-            // OpenRouter's unified reasoning parameter is honoured by more
-            // models than the anthropic-style `thinking` block (which their
-            // compat layer passes through only for claude-family models).
-            // Send both; upstreams ignore the one they don't know.
+            // OpenRouter's compat endpoint (verified empirically against
+            // stealth/ox-alpha): the anthropic-style thinking block
+            // SUPPRESSES this model family's native reasoning, and sending
+            // both params yields ZERO thinking. The unified `reasoning`
+            // param is the only lever that actually controls reasoning
+            // there — so on OpenRouter we send reasoning ONLY.
             if self.base_url.contains("openrouter.ai") {
                 let effort = match level {
                     ThinkingLevel::Low => "low",
@@ -211,6 +212,8 @@ impl AnthropicProvider {
                     _ => "high",
                 };
                 body["reasoning"] = json!({"effort": effort});
+            } else {
+                body["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
             }
             body.as_object_mut().unwrap().remove("temperature");
         }
