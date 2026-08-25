@@ -96,9 +96,11 @@ export function WorkbenchView({
             ({ debug: 0, info: 1, warn: 2, error: 3 })[String(s)] ?? 1;
           const node = String(parsed.node ?? e.node);
           if (!c.bindings.some((b) => b.node === node)) return;
-          if (rank(parsed.sev) < rank(c.sev)) return;
+          const revised = parsed.revised === true;
           const entry: EscalationEntry = {
-            id: `${String(parsed.ts ?? ts)}-${node}-${String(parsed.rule ?? '')}`,
+            // One pending per node+rule: the revised alert UPDATES the raw
+            // one instead of duplicating it.
+            id: `${node}-${String(parsed.rule ?? '')}`,
             ts,
             node,
             sev: String(parsed.sev ?? 'warn'),
@@ -106,7 +108,22 @@ export function WorkbenchView({
             summary: String(parsed.summary ?? ''),
             payload: String(parsed.payload ?? e.frame).slice(0, 300),
           };
-          if (escalRef.current.some((x) => x.id === entry.id)) return;
+          const existingIdx = escalRef.current.findIndex((x) => x.id === entry.id);
+          if (revised) {
+            if (existingIdx === -1) return; // raw was dismissed — respect that
+            const next = [...escalRef.current];
+            next[existingIdx] = { ...next[existingIdx], ...entry, ts: next[existingIdx].ts };
+            escalRef.current = next;
+            setEscalations(next);
+            try {
+              localStorage.setItem(`guard-pending-${c.cwd}`, JSON.stringify(next));
+            } catch {
+              /* ignore */
+            }
+            return;
+          }
+          if (existingIdx !== -1) return;
+          if (rank(parsed.sev) < rank(c.sev)) return;
           const next = [entry, ...escalRef.current].slice(0, 20);
           escalRef.current = next;
           setEscalations(next);
