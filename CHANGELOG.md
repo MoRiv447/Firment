@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.6.0-rc (2026-08-25) — workbench, parallel chats, SBC small-model data plane
+
+- **GUI project workbench** (W1+W2): project hub bound to
+  `.firment/workbench.toml` — mainline/branch session tree with
+  NORMAL/MAINLINE/BRANCH kinds, board-scoped pin registry (GUI + agent
+  share one table), ADR-lite decisions with branch inheritance,
+  per-project device bindings, knowledge-file editor (AGENTS.md /
+  vendor index / cheatsheets), repo status + ELF budget + verification
+  + change-timeline insight cards, guard escalation card with
+  one-click diagnosis and an auto-run switch.
+- **Parallel multi-session chats**: per-session agent slots — background
+  turns keep streaming while you chat elsewhere (⚡ badges, running
+  counter); per-session thinking / plan-agent mode / context-budget
+  knobs applied from the very next turn; live thinking channel with an
+  italic reasoning preview; collapsible tool cards; GFM tables in chat.
+- **SBC small-model data plane** (M1–M3): desktop MQTT link with a
+  Devices & guard card; `sbc-guard` systemd daemon (full-frame daily
+  sink → deterministic pre-filter → qwen classifier → two-phase
+  alerts, LWT, GC); `firm guard --watch` headless escalation loop;
+  `device_cmd` / `device_log` tools; JSON command protocol v1 with
+  per-command acks and retained capability advertisement.
+- **Agent capability**: Anthropic thinking-block round-trip (official
+  API tool turns with thinking no longer 400) + OpenRouter
+  unified-reasoning mapping (empirically verified A/B); reasoning_effort
+  clamped to low|medium|high for OpenAI-style servers; small-model
+  delegation guidance listing real configured providers; per-session
+  context budgets persisted in the session file.
+- **Six-way audit hardening**: guard turns run in plan-mode registry
+  with untrusted-data delimiting (prompt-injection proofed); knowledge
+  path whitelist (drive-prefix bypass closed); slot panic guards +
+  reservation-before-build (TOCTOU); legacy session/pinmap data
+  migrations with regression tests; tool-spec snapshot discipline in CI.
+
 ## v0.5.14 (2026-08-22) — audit hardening release
 
 - **Comprehensive five-agent bug audit** (core loop, providers/session/config,

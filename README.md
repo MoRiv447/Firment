@@ -12,11 +12,15 @@
   <img src="docs/screenshots/cli.png" alt="Firment TUI: ask_user dialog + tool call stack + status bar with git branch, thinking level and Esc×2 interrupt hint" width="900">
 </p>
 
-> ⚠️ **Status: v0.5.14.** Layer 1 (general coding agent) is
+> ⚠️ **Status: v0.6.0-rc.** Layer 1 (general coding agent) is
 > production-usable and CI-green; Layer 2 (embedded toolchain loop) is
 > shipped — build/flash/run, serial monitor, ELF analysis and on-target
 > debugging via probe-rs all work — with deeper debugger features
-> (backtrace, SWO trace) on the roadmap.
+> (backtrace, SWO trace) on the roadmap. Layer 3 (project workbench +
+> SBC small-model data plane) is now in rc: GUI project hub with
+> session tree / pin registry / ADR decisions / device bindings, guard
+> escalation loop (GUI + headless CLI), and MQTT command/telemetry to
+> ESP32 nodes.
 
 **Firmware + Agent = Firment** — a general-purpose coding agent for firmware
 and embedded development, named after *firmament* (the sky above every

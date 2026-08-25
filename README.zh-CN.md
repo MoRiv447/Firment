@@ -12,10 +12,12 @@
   <img src="docs/screenshots/cli.png" alt="Firment TUI：ask_user 弹窗 + 工具调用栈 + 底部状态栏（git 分支 / 思考级别 / Esc×2 中断提示）" width="900">
 </p>
 
-> ⚠️ **状态：v0.5.14。** 第一层（通用编码 Agent）已可日常使用、
+> ⚠️ **状态：v0.6.0-rc。** 第一层（通用编码 Agent）已可日常使用、
 > CI 全绿；第二层（嵌入式工具链闭环）已落地——构建/烧录/运行、串口监控、
-> ELF 分析、probe-rs 片内调试均可用——调试器纵深（栈回溯、SWO trace）
-> 在路线图中。接口与 TUI 仍在演进。
+> ELF 分析、probe-rs 片内调试均可用；第三层（项目工作台 + SBC 小模型
+> 数据面）进入 rc：GUI 项目中枢（会话树/引脚登记/ADR 决策/设备绑定）、
+> 守卫升级闭环（GUI + 无头 CLI）、ESP32 节点的 MQTT 命令/遥测。
+> 调试器纵深（栈回溯、SWO trace）在路线图中。
 
 **Firmware + Agent = Firment**——一个面向固件与嵌入式开发的通用编码
 Agent。名字取自 *firmament*（苍穹，每个嵌入式工程师头上的那片天），故意
