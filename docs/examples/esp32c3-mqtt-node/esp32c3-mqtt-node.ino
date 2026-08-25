@@ -3,7 +3,8 @@
 // Publishes a heartbeat + a fake sensor metric to the SBC broker every 5 s,
 // subscribes to its command topic and echoes payloads back as telemetry.
 //
-// RGB experiment (GPIO48 WS2812, S3 SuperMini onboard LED):
+// RGB experiment (WS2812 onboard LED):
+//   S3 SuperMini: GPIO48. C3 SuperMini boards typically wire it to GPIO8.
 //   publish to firment/device/<node>/cmd :
 //     rgb:on          -> last color at full brightness
 //     rgb:off         -> black
@@ -34,7 +35,11 @@ const uint16_t MQTT_PORT = 1883;
 const char* NODE_NAME = "s3-node-1";
 // -------------------------------------------------------------------------
 
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
 #define RGB_PIN 48  // WS2812 on S3 SuperMini boards
+#else
+#define RGB_PIN 8   // typical C3 SuperMini WS2812
+#endif
 
 WiFiClient wifi;
 PubSubClient mqtt(wifi);
@@ -94,7 +99,11 @@ void handle_cmd(const char* cmd) {
     publish_state();
     return;
   }
-  publish("echo", cmd);  // prove downlink works for everything else
+  // Echo with escaping + cap: raw payloads with quotes would otherwise
+  // produce invalid JSON frames.
+  char safe[96];
+  json_escape(cmd, safe, sizeof(safe));
+  publish("echo", safe);
 }
 
 void publish(const char* kind, const char* payload) {
@@ -113,6 +122,19 @@ void on_message(char* topic, byte* body, unsigned int len) {
   memcpy(cmd, body, n);
   cmd[n] = 0;
   handle_cmd(cmd);
+}
+
+// Escape `"` and `\` so an arbitrary echoed payload cannot produce invalid
+// JSON; cap length to keep the publish buffer headroom for long node names.
+void json_escape(const char* in, char* out, size_t outsz) {
+  size_t o = 0;
+  for (size_t i = 0; in[i] != '\0' && o + 2 < outsz; i++) {
+    if (in[i] == '"' || in[i] == '\\') {
+      out[o++] = '\\';
+    }
+    out[o++] = in[i];
+  }
+  out[o] = '\0';
 }
 
 void connect_wifi() {
@@ -144,6 +166,11 @@ void connect_mqtt() {
       Serial.println("[mqtt] connected");
     } else {
       Serial.printf("[mqtt] failed rc=%d, retry in 1.5s\n", mqtt.state());
+      // Broker down AND wifi down would otherwise loop doomed TCP attempts
+      // forever — re-run the wifi join when the link dropped mid-retry.
+      if (WiFi.status() != WL_CONNECTED) {
+        connect_wifi();
+      }
       delay(1500);
     }
   }

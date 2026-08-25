@@ -10,6 +10,9 @@ WorkingDirectory=/home/radxa/sbc-guard
 ExecStart=/usr/bin/python3 /home/radxa/sbc-guard/guardd.py /home/radxa/sbc-guard/config.toml
 Restart=always
 RestartSec=5
+# Contain runaway sinks / ollama storms.
+MemoryMax=256M
+Nice=10
 
 [Install]
 WantedBy=multi-user.target

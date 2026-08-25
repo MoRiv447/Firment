@@ -42,18 +42,27 @@ rules_file = "rules.toml"
 [ollama]
 enabled = false
 url = "http://127.0.0.1:11434/v1/chat/completions"
-model = "qwen3.5:0.8b"
+model = "qwen2.5:0.5b"
 
 [guard]
 standby_minutes = 10
 escalate_sev = "warn"
 """
 
+# Sections merged one level deep: a user [ollama] block omitting `enabled`
+# must not wipe the rest of the defaults (raw dict.update clobbered tables).
+SECTION_KEYS = ("ollama", "guard")
+
 
 def load_config() -> dict:
     raw = tomllib.loads(DEFAULT_CONFIG)
     if CFG_PATH.is_file():
-        raw.update(tomllib.loads(CFG_PATH.read_text()))
+        user = tomllib.loads(CFG_PATH.read_text())
+        for key, value in user.items():
+            if key in SECTION_KEYS and isinstance(value, dict) and isinstance(raw.get(key), dict):
+                raw[key].update(value)
+            else:
+                raw[key] = value
     return raw
 
 
@@ -89,9 +98,28 @@ class Guard:
             rules_path = CFG_PATH.parent / rules_path
         self.rules = compile_rules(load_rules(rules_path))
         self.o = cfg.get("ollama", {})
+        self.escalate_sev = self.g.get("escalate_sev", "warn")
+
+    _SEV_RANK = {"debug": 0, "info": 1, "warn": 2, "error": 3}
+
+    def rank(self, sev: str) -> int:
+        return self._SEV_RANK.get(sev, 1)
+
         self.g = cfg.get("guard", {})
         self.started = time.time()
+        self.g = cfg.get("guard", {})
+        self.counters_lock = threading.Lock()
         self.counters = {"frames": 0, "matches": 0, "llm_calls": 0, "llm_fail": 0}
+
+    def bump(self, key: str, n: int = 1):
+        # counters are touched from the callback thread, the worker thread
+        # and the heartbeat loop — plain += loses increments.
+        with self.counters_lock:
+            self.counters[key] += n
+
+    def snapshot(self) -> dict:
+        with self.counters_lock:
+            return dict(self.counters)
         self.work_queue: "queue.Queue" = queue.Queue()
         threading.Thread(target=self._worker, daemon=True).start()
 
@@ -100,7 +128,7 @@ class Guard:
         day = time.strftime("%Y%m%d")
         with (self.data_dir / f"events-{day}.jsonl").open("a", encoding="utf-8") as f:
             f.write(frame.replace("\n", " ") + "\n")
-        self.counters["frames"] += 1
+        self.bump("frames")
         _ = node  # node already inside frame
 
     # ---- pre-filter ------------------------------------------------------
@@ -124,7 +152,7 @@ class Guard:
         # before any content appears (P0 notes). Budget generously or
         # content comes back empty every time.
         for _attempt in range(2):  # one retry on invalid JSON
-            self.counters["llm_calls"] += 1
+            self.bump("llm_calls")
             try:
                 resp = requests.post(
                     self.o["url"],
@@ -147,7 +175,7 @@ class Guard:
                 print(f"[llm] attempt {_attempt + 1}: schema miss: {content[:120]!r}", flush=True)
             except Exception as e:
                 print(f"[llm] attempt {_attempt + 1} failed: {e}", flush=True)
-            self.counters["llm_fail"] += 1
+            self.bump("llm_fail")
         return None
 
     def enqueue_escalate(self, node: str, rule: str, sev: str, hit: str, full: str):
@@ -192,22 +220,33 @@ class Guard:
         if revised:
             alert["revised"] = True
         mqtt_client.publish(f"firment/device/{node}/alert", json.dumps(alert), qos=1)
-        self.counters["matches"] += 1
+        self.bump("matches")
 
     def heartbeat(self):
         status = {
             "service": "sbc-guard",
+            "online": True,
             "ts": int(time.time()),
             "uptime_s": int(time.time() - self.started),
             "standby_minutes": self.g.get("standby_minutes", 10),
-            "escalate_sev": self.g.get("escalate_sev", "warn"),
+            "escalate_sev": self.escalate_sev,
             "rules": len(self.rules),
-            "counters": self.counters,
+            "counters": self.snapshot(),
         }
         mqtt_client.publish("firment/guard/status", json.dumps(status), retain=True)
 
 
 def on_message(_c, _u, msg: mqtt.MQTTMessage):
+    # One bad frame (or a failing sink) must NEVER kill the paho network
+    # thread: the process would keep heartbeating while deaf to all traffic,
+    # and systemd would never restart it.
+    try:
+        handle_message(msg)
+    except Exception as e:
+        print(f"[on_message] dropped frame due to error: {e}", flush=True)
+
+
+def handle_message(msg: mqtt.MQTTMessage):
     try:
         # Strip CR/LF: file-based publishers (-f) and serial bridges often
         # append newlines that would otherwise leak into stored/classified
@@ -229,9 +268,15 @@ def on_message(_c, _u, msg: mqtt.MQTTMessage):
     kind_topic = msg.topic.rsplit("/", 1)[-1]
     if kind_topic in ("state", "presence"):
         return
-    hit = guard.match(frame)
+    # Bound regex work: frames are broker-capped (~256KB) and a pathological
+    # user pattern could otherwise hang the network thread.
+    hit = guard.match(frame[:4096])
     if hit and kind_topic != "alert":  # no alert-on-alert loops
         rule, sev, snippet = hit
+        # escalate_sev gate: the pre-filter catches everything at/above the
+        # configured floor; quieter hits are sunk to disk only.
+        if guard.rank(sev) < guard.rank(guard.escalate_sev):
+            return
         print(f"[hit] {msg.topic} rule={rule} sev={sev}: {snippet}", flush=True)
         guard.enqueue_escalate(node, rule, sev, snippet, frame)
 
@@ -244,9 +289,19 @@ def on_connect(_c, _u, _f, rc, _p=None):
 if __name__ == "__main__":
     cfg = load_config()
     guard = Guard(cfg)
-    mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    # clean_session=False: a broker with persistence queues QoS1 frames
+    # across disconnects — "never drop" extends to outages, per the docstring.
+    mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, clean_session=False)
     mqtt_client.on_connect = on_connect
     mqtt_client.on_message = on_message
+    # LWT: a crashed daemon flips the retained status to online=false, so
+    # consumers can tell "dead since ts" from "alive".
+    mqtt_client.will_set(
+        "firment/guard/status",
+        json.dumps({"service": "sbc-guard", "online": False}),
+        qos=1,
+        retain=True,
+    )
     mqtt_client.connect(cfg["broker_host"], int(cfg["broker_port"]), keepalive=30)
     beat = int(cfg.get("guard", {}).get("standby_minutes", 10)) * 60
 
@@ -262,3 +317,12 @@ if __name__ == "__main__":
         if time.time() - last_beat >= beat:
             guard.heartbeat()
             last_beat = time.time()
+            # GC: daily sinks older than 7 days are deleted on the heartbeat.
+            cutoff = time.time() - 7 * 86_400
+            for old in guard.data_dir.glob("events-*.jsonl"):
+                try:
+                    if old.stat().st_mtime < cutoff:
+                        old.unlink()
+                        print(f"[gc] removed {old.name}", flush=True)
+                except OSError:
+                    pass

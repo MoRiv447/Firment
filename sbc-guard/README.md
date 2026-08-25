@@ -8,7 +8,8 @@ two deps, no build step.
 ```bash
 ssh radxa@192.168.1.6
 sudo apt install -y python3-pip
-pip3 install --user paho-mqtt requests   # the only two imports
+# paho>=2.0 (v1 lacks CallbackAPIVersion); tomli only on Python < 3.11
+pip3 install --user "paho-mqtt>=2.0" requests "tomli; python_version < '3.11'"
 mkdir -p ~/sbc-guard
 # from the PC:
 scp sbc-guard/{guardd.py,rules.toml,config.toml} radxa@192.168.1.6:sbc-guard/
@@ -27,7 +28,7 @@ journalctl -u sbc-guard -f          # watch it work
 ```powershell
 # 1) inject a fake error log line as if it came from a node
 mosquitto_pub -h 192.168.1.6 -t firment/device/s3-node-1/telemetry `
-  -m '{\"node\":\"s3-node-1\",\"kind\":\"telemetry\",\"payload\":\"E (123) wifi: reconnect failed\"}'
+  -m '{"node":"s3-node-1","kind":"telemetry","payload":"E (123) wifi: reconnect failed"}'
 # 2) expect an alert back within seconds
 mosquitto_sub -h 192.168.1.6 -t 'firment/device/+/alert' -C 1 -W 10000
 # 3) guard heartbeat (retained — arrives immediately)
