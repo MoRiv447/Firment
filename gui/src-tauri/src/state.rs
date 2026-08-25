@@ -47,9 +47,13 @@ pub struct Shared {
     pub store: Arc<Mutex<SessionStore>>,
     #[allow(dead_code)] // reserved for the M4 tool-schema pane
     pub registry: Arc<ToolRegistry>,
-    /// One turn slot per session id — parallel conversations each get their
-    /// own agent, cancel handles and running flag.
+    /// One turn slot per session id — parallel conversations each get
+    /// their own agent, cancel handles and running flag.
     pub agents: Arc<Mutex<HashMap<String, AgentSlot>>>,
+    /// Last known MQTT link status frame (the GuardStatus JSON). The
+    /// frontend pulls this on mount — events emitted before its listeners
+    /// attach are gone forever.
+    pub mqtt_status: Arc<Mutex<String>>,
     pub perm_waiters: Arc<Mutex<HashMap<u64, oneshot::Sender<bool>>>>,
     pub ask_waiters: Arc<Mutex<HashMap<u64, oneshot::Sender<Option<String>>>>>,
     #[allow(dead_code)] // reserved for the M4 collaboration panel

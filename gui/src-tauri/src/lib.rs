@@ -36,6 +36,7 @@ pub fn run() {
                 // agent on demand (parallel chats), so startup has nothing
                 // to pre-build.
                 agents: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+                mqtt_status: Arc::new(std::sync::Mutex::new(String::new())),
                 perm_waiters: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
                 ask_waiters: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
                 collab,
@@ -61,6 +62,7 @@ pub fn run() {
             commands::set_session_mode,
             commands::set_session_budget,
             commands::session_context_usage,
+            commands::mqtt_status,
             commands::respond_permission,
             commands::respond_ask,
             commands::fetch_models,

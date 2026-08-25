@@ -34,6 +34,7 @@ export const api = {
     invoke<SessionDto>('set_session_budget', { sessionId, chars }),
   sessionContextUsage: (sessionId: string) =>
     invoke<ContextUsageDto>('session_context_usage', { sessionId }),
+  mqttStatus: () => invoke<string>('mqtt_status'),
   listSessions: () => invoke<SessionSummaryDto[]>('list_sessions'),
   workbenchState: (cwd: string) => invoke<WorkbenchStateDto>('workbench_state', { cwd }),
   workbenchPinmapList: (cwd: string) => invoke<BoardPinmapDto[]>('workbench_pinmap_list', { cwd }),

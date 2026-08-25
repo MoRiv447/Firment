@@ -193,7 +193,6 @@ pub async fn session_transcript(
 }
 
 // ---------- per-session chat knobs (thinking / mode / context budget) ----
-//
 // The GUI rebuilds the agent from the saved session on every start_turn,
 // so persisting these to the session file is all it takes for the change
 // to apply from the next message onwards.
@@ -259,6 +258,14 @@ pub struct ContextUsageDto {
     pub budget: u64,
     pub total_chars: u64,
     pub pct: f64,
+}
+
+/// Last known MQTT link status (the GuardStatus JSON the card renders).
+/// Pull-on-mount companion to the push events: anything emitted before the
+/// webview attached its listeners is recoverable here.
+#[tauri::command]
+pub async fn mqtt_status(shared: tauri::State<'_, Arc<Shared>>) -> Result<String, String> {
+    Ok(shared.mqtt_status.lock().unwrap().clone())
 }
 
 /// Rough context usage matching the TUI's `/context` estimate: system

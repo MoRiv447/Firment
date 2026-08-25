@@ -42,6 +42,10 @@ pub fn spawn_if_configured(shared: Arc<Shared>) {
         cfg.mqtt.broker.trim().to_string()
     };
     trace(&shared, &format!("spawn: broker read as {broker:?}"));
+    set_status(
+        &shared,
+        format!("{{\"connected\":false,\"error\":\"link starting\"}}"),
+    );
     if broker.is_empty() {
         use tauri::Emitter as _;
         let _ = shared.app.emit(
@@ -133,6 +137,10 @@ async fn run(shared: Arc<Shared>, broker: String) {
                     // session — "subscribe queued" used to flip the card to
                     // green before the handshake, then errors flipped it
                     // back: the flickering-status bug.
+                    set_status(
+                        &shared,
+                        format!("{{\"connected\":true,\"broker\":\"{broker}\"}}"),
+                    );
                     emit(
                         &shared,
                         FrontendEvent::GuardStatus {
@@ -144,6 +152,10 @@ async fn run(shared: Arc<Shared>, broker: String) {
                     if connacked && last_status.elapsed() >= Duration::from_secs(10) {
                         last_status = std::time::Instant::now();
                         trace(&shared, &format!("status heartbeat (frames={frames})"));
+                        set_status(
+                            &shared,
+                            format!("{{\"connected\":true,\"broker\":\"{broker}\",\"frames\":{frames}}}"),
+                        );
                         emit(&shared, FrontendEvent::GuardStatus {
                             frame: format!("{{\"connected\":true,\"broker\":\"{broker}\",\"frames\":{frames}}}"),
                         });
@@ -153,6 +165,10 @@ async fn run(shared: Arc<Shared>, broker: String) {
                     trace(
                         &shared,
                         &format!("eventloop error (connacked={connacked}, frames={frames}): {e}"),
+                    );
+                    set_status(
+                        &shared,
+                        format!("{{\"connected\":false,\"error\":\"{e}\"}}"),
                     );
                     emit(
                         &shared,
@@ -269,4 +285,11 @@ mod tests {
 fn emit(shared: &Arc<Shared>, ev: FrontendEvent) {
     use tauri::Emitter as _;
     let _ = shared.app.emit("agent-event", ev);
+}
+
+/// Persist the last link status so a freshly attached frontend (or a card
+/// remount) can pull the truth via the mqtt_status command instead of
+/// waiting for the next event.
+fn set_status(shared: &Arc<Shared>, frame: String) {
+    *shared.mqtt_status.lock().unwrap() = frame;
 }

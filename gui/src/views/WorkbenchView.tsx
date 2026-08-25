@@ -57,6 +57,15 @@ export function WorkbenchView({
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
+    // Pull the backend's last known status FIRST: events emitted before
+    // this listener attached are gone, and without the pull the card would
+    // sit on "unknown" until the next heartbeat.
+    void api
+      .mqttStatus()
+      .then((frame) => {
+        if (!cancelled && frame) setLiveGuard(frame);
+      })
+      .catch(() => {});
     void onAgentEvent((e) => {
       if (cancelled) return;
       if (e.type === 'device_frame') {
