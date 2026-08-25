@@ -176,6 +176,9 @@ pub struct Agent {
     /// guidance — the model may dispatch mechanical subtasks to a cheaper
     /// provider via the task tool.
     providers: Vec<(String, String)>,
+    /// Request-only prefix for the newest user message (change-ledger
+    /// delta). Never stored in the transcript — the UI shows raw input.
+    ledger_prefix: String,
     /// Directory holding the desktop MQTT link's device-log files; exposed
     /// to tools via ToolContext. `None` falls back to the global config dir.
     device_log_dir: Option<std::path::PathBuf>,
@@ -257,6 +260,7 @@ impl Agent {
             verify_command: None,
             context_budget_chars: 256 * 1024,
             providers: Vec::new(),
+            ledger_prefix: String::new(),
             device_log_dir: None,
             ledger_seq_appended: 0,
             compaction_strategy: CompactionStrategy::default(),
@@ -756,7 +760,14 @@ impl Agent {
 
     fn build_request(&self) -> ChatRequest {
         // Keep the system prompt byte-stable so provider prefix caching keeps
-        // hitting; dynamic state (change ledger) is merged into user messages.
+        // hitting; the change-ledger delta is merged into the NEWEST user
+        // message at request time only — the transcript stores raw input so
+        // the UI never shows bookkeeping inside the user's bubble.
+        let last_user = self
+            .session
+            .messages
+            .iter()
+            .rposition(|m| matches!(m, ChatMessage::User { .. }));
         let mut messages = vec![ChatMessage::System {
             content: format!(
                 "{}{}",
@@ -764,7 +775,18 @@ impl Agent {
                 crate::context::delegation_section(&self.providers)
             ),
         }];
-        messages.extend(self.session.messages.clone());
+        for (i, m) in self.session.messages.iter().enumerate() {
+            if Some(i) == last_user
+                && !self.ledger_prefix.is_empty()
+                && let ChatMessage::User { content } = m
+            {
+                messages.push(ChatMessage::User {
+                    content: format!("{}{}", self.ledger_prefix, content),
+                });
+                continue;
+            }
+            messages.push(m.clone());
+        }
         ChatRequest {
             model: self.session.model.clone(),
             messages,
@@ -799,13 +821,17 @@ impl Agent {
         }
         let (delta, last_seq) = Ledger::new(self.store.ledger_path(&self.session.id))
             .delta_text(self.ledger_seq_appended, 5);
-        let input = if delta.is_empty() {
-            input.to_string()
-        } else {
+        // The ledger prefix is REQUEST-ONLY: the transcript stores the raw
+        // user input (that is what the UI shows); build_request() prepends
+        // the prefix to the newest user message when talking to the model.
+        self.ledger_prefix.clear();
+        if !delta.is_empty() {
             self.ledger_seq_appended = last_seq;
-            format!("[change ledger]\n{delta}\n\n{input}")
-        };
-        self.session.push(ChatMessage::User { content: input });
+            self.ledger_prefix = format!("[change ledger]\n{delta}\n\n");
+        }
+        self.session.push(ChatMessage::User {
+            content: input.to_string(),
+        });
         self.sink.event(AgentEvent::TurnStart).await;
 
         let journal = Arc::new(Mutex::new(EditJournal::new(

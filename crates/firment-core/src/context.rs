@@ -22,10 +22,16 @@ pub fn default_system_prompt(cwd: &Path) -> String {
           unless the task explicitly requires external paths.\n\
           \n\
           # Pin registry\n\
-          - Before configuring any MCU pin/peripheral, run the `pinmap` tool (list/check); \
-          after wiring a pin into generated or hand-written init code, `claim` it so other \
-          sessions and humans see the allocation. On conflict, stop and ask — never \
-          silently re-purpose a claimed pin.\n\
+          - The project's pin assignments live in .firment/workbench.toml [pinmap.<board>] \
+          and may ALREADY contain boards/pins created from the GUI or by earlier sessions — \
+          whenever pins, peripherals, wiring, or hardware questions come up, run the `pinmap` \
+          tool (boards/list) instead of answering from memory.\n\
+          - Before configuring any MCU pin/peripheral, run `pinmap check`; after wiring a \
+          pin into generated or hand-written init code, `claim` it so other sessions and \
+          humans see the allocation. On conflict, stop and ask — never silently re-purpose \
+          a claimed pin.\n\
+          - In plan mode (read-only) the mutating pinmap actions are unavailable: read \
+          .firment/workbench.toml directly to see the registry.\n\
           \n\
          # Communication\n\
          - Be concise and direct; your output is rendered in a monospace terminal, so prefer \
