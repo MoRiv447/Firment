@@ -698,6 +698,7 @@ dependencies = [
  "firment-tools",
  "firment-tui",
  "reqwest",
+ "rumqttc",
  "serde_json",
  "serialport",
  "tempfile",

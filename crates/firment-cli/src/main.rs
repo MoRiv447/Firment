@@ -153,6 +153,17 @@ enum Command {
     },
     /// Print the tool registry specs as JSON — the single source of truth
     /// for tool names/descriptions/schemas (consumed by web/IDE surfaces).
+    /// Headless guard: subscribe to device alerts on the SBC broker and
+    /// hand escalations to the project's mainline session (unattended).
+    Guard {
+        /// Project root whose workbench.toml declares devices + mainline
+        /// (defaults to --cwd / current dir).
+        #[arg(long)]
+        project: Option<PathBuf>,
+        /// Exit after the first escalation turn completes (testing).
+        #[arg(long, default_value_t = false)]
+        once: bool,
+    },
     Tools,
     /// Hardware-in-the-loop suite: build → flash → monitor with expectations → elf_analyze, with replay.
     Hil {
@@ -275,6 +286,13 @@ async fn main() -> anyhow::Result<()> {
                     config.tools.monitor_baud
                 };
                 run_monitor(&port, baud, elf.clone(), *timeout)?;
+            }
+            Command::Guard { project, once } => {
+                let cwd = project
+                    .clone()
+                    .or(cli.cwd.clone())
+                    .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                guard_watch(&cli, cwd, *once).await?;
             }
             Command::Tools => {
                 let registry = firment_tools::default_registry();
@@ -466,6 +484,159 @@ async fn run_once(
     }
     let text = assembly.agent.run_turn(prompt).await?;
     println!("{text}");
+    Ok(())
+}
+
+/// Headless guard (M3b): subscribe to device alerts and hand escalations to
+/// the project mainline session. Unattended counterpart of the workbench
+/// escalation card.
+async fn guard_watch(cli: &Cli, cwd: PathBuf, once: bool) -> anyhow::Result<()> {
+    use firment_core::WorkbenchConfig;
+
+    let wb = WorkbenchConfig::load(&cwd).map_err(|e| anyhow::anyhow!(e))?;
+    let mainline = wb.workbench.mainline_session.trim().to_string();
+    anyhow::ensure!(
+        !mainline.is_empty(),
+        "guard: no mainline session in {}/.firment/workbench.toml — open the workbench once to register it",
+        cwd.display()
+    );
+    anyhow::ensure!(
+        !wb.devices.is_empty(),
+        "guard: no nodes in [devices] — nothing to watch"
+    );
+    let threshold = {
+        let t = wb.workbench.guard.escalate_sev.trim().to_string();
+        if t.is_empty() { "warn".to_string() } else { t }
+    };
+
+    let global = load_config(cli)?;
+    let broker = global.mqtt.broker.trim().to_string();
+    anyhow::ensure!(
+        !broker.is_empty(),
+        "guard: no [mqtt] broker in config.toml — the data plane is off"
+    );
+    let (host, port) = match broker.rsplit_once(':') {
+        Some((h, p)) => (h.to_string(), p.parse().unwrap_or(1883)),
+        None => (broker.clone(), 1883),
+    };
+
+    let store = SessionStore::default();
+    store
+        .load(&mainline)
+        .map_err(|e| anyhow::anyhow!("guard: mainline session {mainline} not loadable: {e}"))?;
+
+    let rank = |s: &str| match s {
+        "error" => 3,
+        "warn" => 2,
+        "info" => 1,
+        _ => 0,
+    };
+
+    // clean_session=false: the broker queues QoS1 alerts while a diagnosis
+    // turn is running (the MQTT connection is not polled during run_turn).
+    let mut opts =
+        rumqttc::MqttOptions::new(format!("firm-guard-{}", std::process::id()), &host, port);
+    opts.set_clean_session(false);
+    opts.set_keep_alive(Duration::from_secs(60));
+    let (client, mut conn) = rumqttc::Client::new(opts, 64);
+    client.subscribe("firment/device/+/alert", rumqttc::QoS::AtLeastOnce)?;
+
+    let nodes: Vec<String> = wb.devices.keys().cloned().collect();
+    println!(
+        "[guard-watch] project={} mainline={} threshold>={} nodes={}",
+        cwd.display(),
+        &mainline[..8.min(mainline.len())],
+        threshold,
+        nodes.join(",")
+    );
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(32);
+    std::thread::spawn(move || {
+        loop {
+            match conn.recv() {
+                Ok(Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(p)))) => {
+                    if tx
+                        .blocking_send(String::from_utf8_lossy(&p.payload).into_owned())
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => {
+                    eprintln!("[guard-watch] mqtt: {e} — retrying");
+                    std::thread::sleep(Duration::from_secs(3));
+                }
+                Err(_) => {} // channel closed — loop until deadline
+            }
+        }
+    });
+
+    let mut handled = 0usize;
+    while let Some(frame) = rx.recv().await {
+        let parsed: serde_json::Value = match serde_json::from_str(&frame) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        // Revised alerts only polish the GUI card — the raw one already
+        // triggered (or was below threshold); never run twice.
+        if parsed.get("revised").and_then(|v| v.as_bool()) == Some(true) {
+            continue;
+        }
+        let node = parsed
+            .get("node")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        if !wb.devices.contains_key(&node) {
+            continue;
+        }
+        let sev = parsed
+            .get("sev")
+            .and_then(|v| v.as_str())
+            .unwrap_or("warn")
+            .to_string();
+        if rank(&sev) < rank(&threshold) {
+            continue;
+        }
+        let rule = parsed
+            .get("rule")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let summary = parsed
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let payload = parsed
+            .get("payload")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&frame)
+            .to_string();
+
+        println!(
+            "[guard-watch] escalation: node={node} sev={sev} rule={rule} — starting diagnosis turn"
+        );
+        let session = store.load(&mainline)?;
+        let prompt = format!(
+            "[guard escalation] node {node} sev={sev} rule={rule}\nsummary: {summary}\npayload: {}\n\
+             请诊断该设备告警：先用 device_log 查看最近帧判断根因；如需操作设备用 device_cmd \
+             并说明理由；最后给出结论与后续建议。",
+            payload
+        );
+        match run_once(&global, session, &prompt, true, false).await {
+            Ok(_) => {
+                handled += 1;
+                println!("[guard-watch] diagnosis turn complete ({handled} handled)");
+            }
+            Err(e) => eprintln!("[guard-watch] turn failed: {e}"),
+        }
+        if once {
+            println!("[guard-watch] --once set, exiting");
+            break;
+        }
+    }
     Ok(())
 }
 

@@ -15,6 +15,7 @@ anyhow.workspace = true
 serialport.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
+rumqttc = "0.24"
 clap.workspace = true
 clap_complete.workspace = true
 reqwest.workspace = true
