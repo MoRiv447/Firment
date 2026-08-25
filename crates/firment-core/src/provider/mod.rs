@@ -19,6 +19,11 @@ pub enum ProviderEvent {
     /// `reasoning` blocks). Never persisted into the transcript — surfaced
     /// to the UI so "the model is reasoning" is observable.
     Thinking(String),
+    /// A COMPLETE thinking block (text + signature, or redacted), captured
+    /// at content_block_stop. Persisted on the assistant message and
+    /// replayed first in the next request — the Anthropic API rejects
+    /// thinking-enabled tool turns whose assistant messages lost them.
+    ThinkingBlock(serde_json::Value),
     ToolCall(ToolCall),
     Stop(StopReason),
 }

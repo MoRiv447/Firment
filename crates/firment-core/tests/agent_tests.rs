@@ -354,6 +354,7 @@ async fn session_roundtrip() {
             name: "echo".to_string(),
             arguments: json!({"message": "hi"}),
         }],
+        thinking_blocks: Vec::new(),
     });
     store.save(&session).unwrap();
 

@@ -152,21 +152,35 @@ mod pinmap_serde {
         };
         let mut out: Map = Default::default();
         for (key, value) in table {
-            let is_board = value
-                .as_table()
-                .map(|t| {
-                    t.values()
-                        .all(|v| v.as_table().and_then(|v| v.get("func")).is_some())
-                        && !t.is_empty()
-                })
-                .unwrap_or(false);
+            let Some(t) = value.as_table() else {
+                return Err(serde::de::Error::custom(format!(
+                    "pinmap entry '{key}' must be a table"
+                )));
+            };
+            if t.is_empty() {
+                // Declared-but-empty board: keep it so a freshly created
+                // board does not brick the whole file.
+                out.insert(key.clone(), Default::default());
+                continue;
+            }
+            let is_board = t
+                .values()
+                .all(|v| v.as_table().and_then(|v| v.get("func")).is_some());
             if is_board {
                 let board: std::collections::BTreeMap<String, PinEntry> =
                     value.clone().try_into().map_err(serde::de::Error::custom)?;
-                out.insert(key.clone(), board);
+                // MERGE into the board: a file may legally mix legacy flat
+                // pins with an explicit board of the same name (e.g. both
+                // `[pinmap.PA5]` and `[pinmap.default]`) — insert() here
+                // silently amputated the migrated entries.
+                out.entry(key.clone()).or_default().extend(board);
             } else {
-                // Legacy flat entry (or empty table) -> default board.
-                let entry: PinEntry = value.clone().try_into().map_err(serde::de::Error::custom)?;
+                // Legacy flat entry -> default board.
+                let entry: PinEntry = value.clone().try_into().map_err(|_| {
+                    serde::de::Error::custom(format!(
+                        "pinmap entry '{key}' is neither a board nor a valid pin (missing 'func')"
+                    ))
+                })?;
                 out.entry(super::DEFAULT_BOARD.to_string())
                     .or_default()
                     .insert(key.clone(), entry);

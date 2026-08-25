@@ -13,6 +13,17 @@ use crate::state::{AgentSlot, Shared};
 
 // ---------- session lifecycle ----------
 
+/// Clears a slot's running flag when the owning task is dropped — including
+/// on panic. Without this, one panic inside the turn task leaves running=true
+/// forever and the session refuses every future turn until app restart.
+struct RunningGuard(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for RunningGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
 #[tauri::command]
 pub async fn start_turn(
     shared: tauri::State<'_, Arc<Shared>>,
@@ -20,47 +31,57 @@ pub async fn start_turn(
     input: String,
 ) -> Result<(), String> {
     let shared = shared.inner().clone();
-    // Fast reject while a turn is already in flight for THIS session (other
-    // sessions may run freely in parallel).
-    {
-        let map = shared.agents.lock().unwrap();
-        if let Some(slot) = map.get(&session_id) {
-            if slot.running.load(Ordering::SeqCst) {
-                return Err("this session already has a turn running - cancel it first".to_string());
-            }
-        }
-    }
-    // Build the agent fresh from the CURRENT session snapshot and config:
-    // settings/provider changes therefore apply on the very next turn
-    // without any explicit reload step.
-    let store = shared.store.lock().unwrap().clone();
-    let session = store.load(&session_id).map_err(|e| e.to_string())?;
-    let budget = session.context_budget_chars;
-    let (mut agent, handles) = build_agent(&shared, session).map_err(|e| e.to_string())?;
-    if budget > 0 {
-        agent.set_context_budget_chars(budget);
-    }
-
-    // Reserve the slot AFTER building (build can fail cheaply) but re-check
-    // running under the map lock so two concurrent start_turns cannot both
-    // slip through.
+    // Reserve the slot FIRST (under the map lock) so a concurrent
+    // start_turn AND a concurrent delete_session both observe the
+    // reservation atomically; the agent is built after the reservation and
+    // the slot released if the build fails.
     let slot = {
         let mut map = shared.agents.lock().unwrap();
         let slot = map.entry(session_id.clone()).or_insert_with(AgentSlot::new);
         if slot.running.swap(true, Ordering::SeqCst) {
             return Err("this session already has a turn running - cancel it first".to_string());
         }
-        *slot.cancel.lock().unwrap() = Some(handles);
         slot.clone()
     };
+    let _reservation = RunningGuard(slot.running.clone());
+
+    // Build the agent fresh from the CURRENT session snapshot and config:
+    // settings/provider changes therefore apply on the very next turn
+    // without any explicit reload step.
+    let build = (|| -> Result<(firment_core::Agent, crate::state::CancelHandles), String> {
+        let store = shared
+            .store
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let session = store.load(&session_id).map_err(|e| e.to_string())?;
+        let budget = session.context_budget_chars;
+        let (mut agent, handles) =
+            build_agent(&shared, session).map_err(|e| e.to_string())?;
+        if budget > 0 {
+            agent.set_context_budget_chars(budget);
+        }
+        Ok((agent, handles))
+    })();
+    let (mut agent, handles) = match build {
+        Ok(v) => v,
+        Err(e) => {
+            drop(_reservation); // release before returning
+            return Err(e);
+        }
+    };
+
+    {
+        let map = shared.agents.lock().unwrap();
+        if let Some(s) = map.get(&session_id) {
+            *s.cancel.lock().unwrap() = Some(handles);
+        }
+    }
     tauri::async_runtime::spawn(async move {
-        // A previous cancel leaves the watch channel armed (true), which
-        // would make this new turn abort instantly at the first checkpoint.
-        // Clear it before every turn.
         let mut agent = agent;
-        agent.reset_cancel();
         let result = agent.run_turn(&input).await;
-        slot.running.store(false, Ordering::SeqCst);
+        drop(agent);
+        drop(_reservation); // clears running on success AND on panic unwind
         if let Err(e) = result {
             let _ = shared.app.emit(
                 "agent-event",
@@ -198,11 +219,27 @@ pub async fn session_transcript(
 // to apply from the next message onwards.
 
 #[tauri::command]
+/// Guard shared by the per-session knob commands: a running turn holds its
+/// own session snapshot and saves it on EVERY exit path, so a knob written
+/// mid-turn would be silently reverted when the turn finishes. Refuse
+/// instead — the UI disables the chips, this is the backend backstop.
+fn ensure_not_running(shared: &Shared, session_id: &str) -> Result<(), String> {
+    let map = shared.agents.lock().unwrap();
+    if let Some(slot) = map.get(session_id) {
+        if slot.running.load(Ordering::SeqCst) {
+            return Err("a turn is running in this session — the change would be overwritten; try again after it finishes".to_string());
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn set_session_thinking(
     shared: tauri::State<'_, Arc<Shared>>,
     session_id: String,
     level: String,
 ) -> Result<crate::events::SessionDto, String> {
+    ensure_not_running(&shared, &session_id)?;
     let level = level
         .parse::<firment_core::ThinkingLevel>()
         .map_err(|e: std::io::Error| e.to_string())?;
@@ -220,6 +257,7 @@ pub async fn set_session_mode(
     session_id: String,
     mode: String,
 ) -> Result<crate::events::SessionDto, String> {
+    ensure_not_running(&shared, &session_id)?;
     let mode = match mode.to_ascii_lowercase().as_str() {
         "agent" => SessionMode::Agent,
         "plan" => SessionMode::Plan,
@@ -239,6 +277,7 @@ pub async fn set_session_budget(
     session_id: String,
     chars: usize,
 ) -> Result<crate::events::SessionDto, String> {
+    ensure_not_running(&shared, &session_id)?;
     if chars != 0 && !(16_384..=4_194_304).contains(&chars) {
         return Err("budget must be 0 (default) or between 16384 and 4194304 chars".to_string());
     }

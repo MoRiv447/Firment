@@ -47,6 +47,7 @@ async fn anthropic_stream_parses_text_and_tool_use() {
         match event.unwrap() {
             ProviderEvent::Text(t) => texts.push(t),
             ProviderEvent::Thinking(_) => {}
+            ProviderEvent::ThinkingBlock(_) => {}
             ProviderEvent::ToolCall(call) => calls.push(call),
             ProviderEvent::Stop(reason) => stop = Some(reason),
         }
@@ -99,6 +100,7 @@ async fn anthropic_stream_tolerates_openrouter_trailers() {
         match event.unwrap() {
             ProviderEvent::Text(t) => texts.push(t),
             ProviderEvent::Thinking(_) => {}
+            ProviderEvent::ThinkingBlock(_) => {}
             ProviderEvent::ToolCall(_) => panic!("no tool calls expected"),
             ProviderEvent::Stop(reason) => stop = Some(reason),
         }
@@ -117,6 +119,7 @@ async fn anthropic_stream_parses_thinking_blocks() {
     let body = sse(&[
         r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#,
         r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"9.8 is larger"}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig9.8"}}"#,
         r#"{"type":"content_block_stop","index":0}"#,
         r#"{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}"#,
         r#"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"9.8"}}"#,
@@ -144,10 +147,12 @@ async fn anthropic_stream_parses_thinking_blocks() {
     let mut stream = provider.stream(request).await.unwrap();
     let mut texts = Vec::new();
     let mut thoughts = Vec::new();
+    let mut thinking_blocks = Vec::new();
     while let Some(event) = stream.next().await {
         match event.unwrap() {
             ProviderEvent::Text(t) => texts.push(t),
             ProviderEvent::Thinking(t) => thoughts.push(t),
+            ProviderEvent::ThinkingBlock(b) => thinking_blocks.push(b),
             ProviderEvent::ToolCall(_) => panic!("no tool calls expected"),
             ProviderEvent::Stop(_) => {}
         }
@@ -155,4 +160,14 @@ async fn anthropic_stream_parses_thinking_blocks() {
     assert_eq!(thoughts, vec!["9.8 is larger"]);
     // The thinking block must not bleed into assistant text.
     assert_eq!(texts, vec!["9.8"]);
+    // The COMPLETE block (with signature) must be delivered for persistence.
+    assert_eq!(thinking_blocks.len(), 1);
+    assert_eq!(thinking_blocks[0]["type"], "thinking");
+    assert!(
+        !thinking_blocks[0]["signature"]
+            .as_str()
+            .unwrap_or("")
+            .is_empty(),
+        "signature must be captured for round-trip"
+    );
 }

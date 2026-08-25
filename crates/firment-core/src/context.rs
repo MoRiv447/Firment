@@ -254,7 +254,8 @@ pub fn system_prompt_for(cwd: &Path, mode: SessionMode) -> String {
              - You MUST NOT write, edit, delete, or rename files, and you MUST NOT run shell \
              commands or any state-changing tool.\n\
              - Available tools are limited to: read_file, list_dir, glob, grep, symbols, \
-             web_search, web_fetch, task, todo, ask_user.\n\
+             web_search, web_fetch, task, todo, ask_user, elf_analyze, periph_init, \
+             device_log.\n\
              - Ground every claim in what you actually read: inspect files before stating facts, \
              and mark anything you could not verify as \"unverified\".\n\
              - Ask the user only about preferences and tradeoffs that exploration cannot answer; \

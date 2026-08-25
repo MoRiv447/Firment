@@ -1163,6 +1163,7 @@ mod tests {
         session.push(ChatMessage::Assistant {
             content: "reply".to_string(),
             tool_calls: Vec::new(),
+            thinking_blocks: Vec::new(),
         });
         session.push(ChatMessage::Tool {
             tool_call_id: "c1".to_string(),

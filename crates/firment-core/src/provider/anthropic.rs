@@ -33,7 +33,11 @@ impl AnthropicProvider {
         }
     }
 
-    fn convert(&self, messages: &[ChatMessage]) -> (Option<String>, Vec<Value>) {
+    fn convert(
+        &self,
+        messages: &[ChatMessage],
+        include_thinking: bool,
+    ) -> (Option<String>, Vec<Value>) {
         let mut system = String::new();
         let mut out = Vec::new();
         for m in messages {
@@ -55,8 +59,27 @@ impl AnthropicProvider {
                 ChatMessage::Assistant {
                     content,
                     tool_calls,
+                    thinking_blocks,
                 } => {
                     let mut blocks = Vec::new();
+                    // Replay captured thinking blocks FIRST — the API rejects
+                    // a thinking-enabled turn whose assistant message starts
+                    // with text/tool_use instead of its thinking block.
+                    // Signature-less blocks (never completed) are dropped:
+                    // they would be rejected as invalid.
+                    if include_thinking {
+                        for tb in thinking_blocks {
+                            let complete = tb.get("type") == Some(&json!("redacted_thinking"))
+                                || (tb.get("thinking").is_some()
+                                    && tb
+                                        .get("signature")
+                                        .and_then(|s| s.as_str())
+                                        .is_some_and(|s| !s.is_empty()));
+                            if complete {
+                                blocks.push(tb.clone());
+                            }
+                        }
+                    }
                     if !content.is_empty() {
                         blocks.push(json!({"type": "text", "text": content}));
                     }
@@ -137,7 +160,7 @@ impl AnthropicProvider {
     }
 
     fn body(&self, request: &ChatRequest) -> Value {
-        let (system, messages) = self.convert(&request.messages);
+        let (system, messages) = self.convert(&request.messages, request.thinking.is_some());
         // Per-request max_tokens (e.g. the summarization cap) wins over the
         // session default so callers can bound token output independently.
         let max_tokens = request.max_tokens.unwrap_or(self.max_tokens);
@@ -281,11 +304,24 @@ impl Provider for AnthropicProvider {
                                     name: block.get("name").and_then(|n| n.as_str()).unwrap_or_default().to_string(),
                                     arguments: String::new(),
                                 };
-                            } else if block_type == "thinking" || block_type == "redacted_thinking" {
-                                // Extended thinking: tracked separately from
-                                // text so reasoning never leaks into the
-                                // transcript as assistant content.
-                                *entry = Block::Thinking(String::new());
+                            } else if block_type == "thinking" {
+                                *entry = Block::Thinking {
+                                    text: String::new(),
+                                    signature: String::new(),
+                                    redacted: false,
+                                };
+                            } else if block_type == "redacted_thinking" {
+                                // Redacted blocks arrive complete (data field,
+                                // no deltas) — capture now, no UI deltas.
+                                *entry = Block::Thinking {
+                                    text: block
+                                        .get("data")
+                                        .and_then(|d| d.as_str())
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                    signature: String::new(),
+                                    redacted: true,
+                                };
                             }
                         }
                         "content_block_delta" => {
@@ -305,7 +341,7 @@ impl Provider for AnthropicProvider {
                                             None => {
                                                 blocks.insert(idx, Block::Text(text.to_string()));
                                             }
-                                            Some(Block::ToolUse { .. }) | Some(Block::Thinking(_)) => {}
+                                            Some(Block::ToolUse { .. }) | Some(Block::Thinking { .. }) => {}
                                         }
                                         yield Ok(ProviderEvent::Text(text.to_string()));
                                     }
@@ -314,10 +350,20 @@ impl Provider for AnthropicProvider {
                                     if let Some(text) =
                                         delta.get("thinking").and_then(|t| t.as_str())
                                     {
-                                        if let Some(Block::Thinking(buf)) = blocks.get_mut(&idx) {
+                                        if let Some(Block::Thinking { text: buf, .. }) =
+                                            blocks.get_mut(&idx)
+                                        {
                                             buf.push_str(text);
                                         }
                                         yield Ok(ProviderEvent::Thinking(text.to_string()));
+                                    }
+                                }
+                                Some("signature_delta") => {
+                                    if let Some(sig) = delta.get("signature").and_then(|t| t.as_str())
+                                        && let Some(Block::Thinking { signature, .. }) =
+                                            blocks.get_mut(&idx)
+                                    {
+                                        signature.push_str(sig);
                                     }
                                 }
                                 Some("input_json_delta") => {
@@ -332,22 +378,40 @@ impl Provider for AnthropicProvider {
                         }
                         "content_block_stop" => {
                             let idx = payload.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
-                            if let Some(Block::ToolUse { id, name, arguments }) = blocks.remove(&idx)
-                                && !name.is_empty()
-                            {
-                                // A gateway omitting the id would round-trip
-                                // empty tool_use/tool_result ids, which strict
-                                // APIs reject — synthesize a stable one.
-                                let id = if id.is_empty() {
-                                    format!("toolu_synthesized_{idx}")
-                                } else {
-                                    id
-                                };
-                                yield Ok(ProviderEvent::ToolCall(ToolCall {
-                                    id,
-                                    name,
-                                    arguments: super::collect_tool_arguments(&arguments),
-                                }));
+                            // Remove ONCE and match: a second remove() here
+                            // would find None (the first already took the
+                            // value) and silently drop thinking blocks.
+                            match blocks.remove(&idx) {
+                                Some(Block::ToolUse { id, name, arguments }) if !name.is_empty() => {
+                                    // A gateway omitting the id would round-trip
+                                    // empty tool_use/tool_result ids, which strict
+                                    // APIs reject — synthesize a stable one.
+                                    let id = if id.is_empty() {
+                                        format!("toolu_synthesized_{idx}")
+                                    } else {
+                                        id
+                                    };
+                                    yield Ok(ProviderEvent::ToolCall(ToolCall {
+                                        id,
+                                        name,
+                                        arguments: super::collect_tool_arguments(&arguments),
+                                    }));
+                                }
+                                Some(Block::Thinking { text, signature, redacted }) => {
+                                    // Complete block: persisted on the assistant
+                                    // message and replayed on the next request.
+                                    let block = if redacted {
+                                        json!({"type": "redacted_thinking", "data": text})
+                                    } else {
+                                        json!({
+                                            "type": "thinking",
+                                            "thinking": text,
+                                            "signature": signature,
+                                        })
+                                    };
+                                    yield Ok(ProviderEvent::ThinkingBlock(block));
+                                }
+                                _ => {}
                             }
                         }
                         "message_delta" => {
@@ -385,7 +449,11 @@ impl Provider for AnthropicProvider {
 
 enum Block {
     Text(String),
-    Thinking(String),
+    Thinking {
+        text: String,
+        signature: String,
+        redacted: bool,
+    },
     ToolUse {
         id: String,
         name: String,
@@ -409,6 +477,7 @@ mod tests {
             ChatMessage::Assistant {
                 content: String::new(),
                 tool_calls: vec![],
+                thinking_blocks: Vec::new(),
             },
             ChatMessage::Tool {
                 tool_call_id: "call_00".to_string(),
@@ -416,7 +485,7 @@ mod tests {
                 content: String::new(),
             },
         ];
-        let (_, out) = p.convert(&messages);
+        let (_, out) = p.convert(&messages, false);
         assert!(
             out.iter().all(|m| {
                 m["content"]
@@ -452,6 +521,7 @@ mod tests {
                         arguments: json!({}),
                     },
                 ],
+                thinking_blocks: Vec::new(),
             },
             ChatMessage::Tool {
                 tool_call_id: "call_00".to_string(),
@@ -464,7 +534,7 @@ mod tests {
                 content: "answer".to_string(),
             },
         ];
-        let (_, out) = p.convert(&messages);
+        let (_, out) = p.convert(&messages, false);
         assert_eq!(
             out.len(),
             3,
@@ -495,7 +565,7 @@ mod tests {
                 content: "[]".to_string(),
             },
         ];
-        let (_, out) = p.convert(&messages);
+        let (_, out) = p.convert(&messages, false);
         assert_eq!(
             out.len(),
             2,

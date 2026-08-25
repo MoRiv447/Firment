@@ -361,21 +361,21 @@ const KB_VENDOR: &str = "vendor-index.toml";
 fn kb_path(cwd: &Path, key: &str) -> Option<PathBuf> {
     match key {
         KB_AGENTS => Some(cwd.join(KB_AGENTS)),
-        KB_VENDOR => {
-            let docs = cwd.join("docs").join(KB_VENDOR);
-            if docs.is_file() {
-                Some(docs)
-            } else {
-                Some(cwd.join("docs").join(KB_VENDOR))
-            }
-        }
+        // Accept both spellings of the vendor index; always resolve to docs/
+        // (the location the system-prompt auto-detector checks first).
+        KB_VENDOR | "docs/vendor-index.toml" => Some(cwd.join("docs").join(KB_VENDOR)),
         other => {
             // Project-private cheatsheet: "cheatsheet:<name>.toml".
             let name = other.strip_prefix("cheatsheet:")?;
-            if name.contains(['/', '\\'])
-                || name.contains("..")
-                || !name.ends_with(".toml")
+            // Strict charset: rejects path separators, '..' AND Windows
+            // drive prefixes ("c:evil.toml" would otherwise truncate the
+            // whole base via PathBuf::push).
+            if name.is_empty()
                 || name.len() > 80
+                || !name.ends_with(".toml")
+                || !name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
             {
                 return None;
             }

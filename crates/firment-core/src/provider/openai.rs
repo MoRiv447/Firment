@@ -87,6 +87,7 @@ impl OpenAIProvider {
                 ChatMessage::Assistant {
                     content,
                     tool_calls,
+                    thinking_blocks: _,
                 } => {
                     let mut v = json!({
                         "role": "assistant",

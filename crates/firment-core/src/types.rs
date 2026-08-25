@@ -29,6 +29,13 @@ pub enum ChatMessage {
         content: String,
         #[serde(default)]
         tool_calls: Vec<ToolCall>,
+        /// Anthropic extended-thinking blocks (thinking / redacted_thinking,
+        /// signatures included) captured from the stream and replayed FIRST
+        /// in the next request — the official API rejects a thinking-enabled
+        /// tool turn whose assistant message lost its thinking blocks.
+        /// Empty for non-Anthropic providers and thinking=off.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        thinking_blocks: Vec<serde_json::Value>,
     },
     Tool {
         tool_call_id: String,

@@ -561,6 +561,7 @@ impl Agent {
         self.session.push(ChatMessage::Assistant {
             content: content.to_string(),
             tool_calls: vec![gate_call.clone()],
+            thinking_blocks: Vec::new(),
         });
         self.session.push(ChatMessage::Tool {
             tool_call_id: gate_call.id,
@@ -920,6 +921,7 @@ impl Agent {
             };
             let mut content = String::new();
             let mut tool_calls: Vec<ToolCall> = Vec::new();
+            let mut thinking_blocks: Vec<serde_json::Value> = Vec::new();
             let mut cancelled = false;
             let mut stalled = false;
 
@@ -962,6 +964,9 @@ impl Agent {
                     ProviderEvent::Thinking(text) => {
                         self.sink.event(AgentEvent::Thinking(text)).await;
                     }
+                    ProviderEvent::ThinkingBlock(block) => {
+                        thinking_blocks.push(block);
+                    }
                     ProviderEvent::ToolCall(call) => tool_calls.push(call),
                     ProviderEvent::Stop { .. } => {}
                 }
@@ -978,6 +983,7 @@ impl Agent {
             self.session.push(ChatMessage::Assistant {
                 content: content.clone(),
                 tool_calls: saved_calls,
+                thinking_blocks,
             });
 
             if cancelled {
@@ -1029,6 +1035,7 @@ impl Agent {
                     self.session.push(ChatMessage::Assistant {
                         content: content.clone(),
                         tool_calls: vec![gate_call.clone()],
+                        thinking_blocks: Vec::new(),
                     });
                     self.sink
                         .event(AgentEvent::ToolStart {
@@ -1116,6 +1123,7 @@ impl Agent {
                                     self.session.push(ChatMessage::Assistant {
                                         content: content.clone(),
                                         tool_calls: vec![],
+                                        thinking_blocks: Vec::new(),
                                     });
                                     self.sink
                                         .event(AgentEvent::Info(
@@ -2379,6 +2387,7 @@ mod tests {
         agent.session.push(ChatMessage::Assistant {
             content: "let me edit".to_string(),
             tool_calls: calls.clone(),
+            thinking_blocks: Vec::new(),
         });
         let stats = execute_tool_calls(&mut agent, &calls, &ctx, &journal).await;
         assert_eq!(
@@ -2489,6 +2498,7 @@ mod tests {
         agent.session.push(ChatMessage::Assistant {
             content: "let me edit".to_string(),
             tool_calls: calls.clone(),
+            thinking_blocks: Vec::new(),
         });
         let stats = execute_tool_calls(&mut agent, &calls, &ctx, &journal).await;
         // The successful write is still counted; nothing was rolled back.
@@ -2594,8 +2604,9 @@ mod tests {
             },
         ];
         agent.session.push(ChatMessage::Assistant {
-            content: "edit and write".to_string(),
+            content: "let me edit".to_string(),
             tool_calls: calls.clone(),
+            thinking_blocks: Vec::new(),
         });
         let stats = execute_tool_calls(&mut agent, &calls, &ctx, &journal).await;
         assert_eq!(stats.mutations, 1, "the good edit must still count");

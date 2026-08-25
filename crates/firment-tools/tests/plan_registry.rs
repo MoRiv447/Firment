@@ -16,8 +16,14 @@ fn plan_registry_exposes_only_read_only_tools() {
     assert!(names.contains(&"ask_user"));
     assert!(names.contains(&"elf_analyze"));
     assert!(names.contains(&"periph_init"));
+    assert!(names.contains(&"device_log"));
     assert!(!names.contains(&"write_file"));
     assert!(!names.contains(&"edit_file"));
     assert!(!names.contains(&"shell"));
-    assert_eq!(names.len(), 12);
+    // Mutating registries must never leak into plan mode: pinmap's
+    // claim/release write workbench.toml.
+    assert!(!names.contains(&"pinmap"));
+    assert!(!names.contains(&"device_cmd"));
+    assert!(!names.contains(&"decision"));
+    assert_eq!(names.len(), 13);
 }
