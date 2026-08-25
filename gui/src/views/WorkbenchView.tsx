@@ -39,18 +39,11 @@ const { Text, Title } = Typography;
  * .firment/workbench.toml, quick repo status. Multi-user scopes and the
  * small-model guard land in W2/W3 (docs/gui-workbench.md).
  */
-export function WorkbenchView({
-  devices: _devicesProp,
-  alerts,
-  guardFrame: _guardFrameProp,
-}: {
-  devices?: DeviceEntry[];
-  alerts?: AlertEntry[];
-  guardFrame?: string | null;
-}) {
+export function WorkbenchView() {
   // The Devices & guard card SUBSCRIBES ITSELF to the raw event stream:
   // it must work with no project open and no session loaded, independent
-  // of App-level routing.
+  // of App-level routing. (The component stays mounted on every tab —
+  // hidden via display — so escalation detection never goes blind.)
   const [liveDevices, setLiveDevices] = useState<Record<string, DeviceEntry>>({});
   const [liveAlerts, setLiveAlerts] = useState<AlertEntry[]>([]);
   const [liveGuard, setLiveGuard] = useState<string | null>(null);
@@ -133,11 +126,9 @@ export function WorkbenchView({
             /* storage full — pending list just won't survive restarts */
           }
           if (autoRunRef.current) {
-            window.dispatchEvent(
-              new CustomEvent('firment:run-escalation', {
-                detail: { cwd: c.cwd, entry },
-              }),
-            );
+            // Same path as the manual button (builds the mainline prompt
+            // and dispatches the correctly-shaped event).
+            runEscalationRef.current(entry);
           }
         }
       } else if (e.type === 'guard_status') {
@@ -152,9 +143,6 @@ export function WorkbenchView({
       unlisten?.();
     };
   }, []);
-  void alerts;
-  void _devicesProp;
-  void _guardFrameProp;
   const devices = Object.values(liveDevices).sort((a, b) => b.ts - a.ts);
   const guardFrame = liveGuard;
   const [cwd, setCwd] = useState('');
@@ -190,6 +178,10 @@ export function WorkbenchView({
   // Mirrors for the [] -deps event subscriber (stale-closure-proof).
   const escalRef = useRef<EscalationEntry[]>([]);
   const autoRunRef = useRef(autoRun);
+  autoRunRef.current = autoRun;
+  // Bridged: the [] -deps subscriber calls the LATEST handler through this
+  // ref (runEscalation is defined further down, closing over fresh state).
+  const runEscalationRef = useRef<(entry: EscalationEntry) => void>(() => {});
   autoRunRef.current = autoRun;
   const escalationCtxRef = useRef({
     bindings: [] as DeviceBindingDto[],
@@ -258,7 +250,9 @@ export function WorkbenchView({
     const last = localStorage.getItem('workbench-last-cwd');
     if (last) {
       setCwd(last);
-      void refresh(last);
+      // load() (not refresh()): restores the CARDS too — bindings, pinmap,
+      // decisions, knowledge files and the persisted escalation list.
+      void load(last);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -284,12 +278,15 @@ export function WorkbenchView({
     }
   };
 
-  const load = async () => {
-    if (!cwd.trim()) return;
+  /** dir override: the startup-restore path passes the persisted path
+   * directly because the `cwd` state it just set is not visible yet. */
+  const load = async (dir?: string) => {
+    const target = (dir ?? cwd).trim();
+    if (!target) return;
     setBusy(true);
-    const wb = await refresh(cwd.trim());
+    const wb = await refresh(target);
     try {
-      const boards = await api.workbenchPinmapList(cwd.trim());
+      const boards = await api.workbenchPinmapList(target);
       setPinmap(boards);
       setPinBoard((prev) => {
         if (prev && boards.some((b) => b.board === prev)) return prev;
@@ -299,18 +296,18 @@ export function WorkbenchView({
       setPinmap([]);
     }
     try {
-      setDecisions(await api.workbenchDecisionList(cwd.trim()));
+      setDecisions(await api.workbenchDecisionList(target));
     } catch {
       setDecisions([]);
     }
     try {
-      setBindings(await api.workbenchDevicesList(cwd.trim()));
+      setBindings(await api.workbenchDevicesList(target));
     } catch {
       setBindings([]);
     }
     try {
       const saved = JSON.parse(
-        localStorage.getItem(`guard-pending-${cwd.trim()}`) || '[]',
+        localStorage.getItem(`guard-pending-${target}`) || '[]',
       ) as EscalationEntry[];
       setEscalations(saved);
       escalRef.current = saved;
@@ -318,7 +315,7 @@ export function WorkbenchView({
       setEscalations([]);
     }
     try {
-      const files = await api.workbenchKbList(cwd.trim());
+      const files = await api.workbenchKbList(target);
       setKbFiles(files);
       // Keep the current selection if it still exists; else default to
       // AGENTS.md so the editor is never stuck on a deleted file.
@@ -330,7 +327,7 @@ export function WorkbenchView({
       setKbFiles([]);
     }
     if (wb?.config.mainline_session) {
-      await refreshInsights(cwd.trim(), wb.config.mainline_session);
+      await refreshInsights(target, wb.config.mainline_session);
     } else {
       setElf(null);
       setElfError(null);
@@ -433,6 +430,7 @@ export function WorkbenchView({
     );
     dropEscalation(entry.id);
   };
+  runEscalationRef.current = runEscalation;
 
   const toggleAutoRun = (on: boolean) => {
     setAutoRun(on);
@@ -715,9 +713,9 @@ export function WorkbenchView({
               style={{ width: 380 }}
               value={cwd}
               onChange={(e) => setCwd(e.target.value)}
-              onPressEnter={load}
+              onPressEnter={() => void load()}
             />
-            <Button type="primary" loading={busy} onClick={load}>
+            <Button type="primary" loading={busy} onClick={() => void load()}>
               Open project
             </Button>
           </Space>
@@ -734,7 +732,7 @@ export function WorkbenchView({
                   color={p === cwd ? 'blue' : 'default'}
                   onClick={() => {
                     setCwd(p);
-                    void load();
+                    void load(p);
                   }}
                 >
                   {p}
@@ -1291,7 +1289,7 @@ export function WorkbenchView({
                       </Tag.CheckableTag>
                     ))}
                     <Tooltip title="Reload sessions from disk">
-                      <Button size="small" type="text" loading={busy} onClick={load} icon={<ReloadOutlined />} />
+                      <Button size="small" type="text" loading={busy} onClick={() => void load()} icon={<ReloadOutlined />} />
                     </Tooltip>
                   </Space>
                 }

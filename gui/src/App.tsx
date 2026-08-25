@@ -18,10 +18,8 @@ import {
   onSessionsChanged,
 } from './lib/api';
 import type {
-  AlertEntry,
   AskRequest,
   ContextUsageDto,
-  DeviceEntry,
   MonitorLine,
   PermissionRequest,
   SessionDto,
@@ -62,11 +60,6 @@ export default function App() {
   // While the budget menu is open the ctx tooltip stays hidden — otherwise
   // hovering pops the info box and clicking pops two boxes at once.
   const [ctxMenuOpen, setCtxMenuOpen] = useState(false);
-  // SBC data plane (MQTT link): per-node rolling view, alert ring, guard
-  // heartbeat. Global (not project-scoped) — the broker is machine-level.
-  const [devices, setDevices] = useState<Record<string, DeviceEntry>>({});
-  const [alerts, setAlerts] = useState<AlertEntry[]>([]);
-  const [guardFrame, setGuardFrame] = useState<string | null>(null);
   const [view, setView] = useState<ViewKey>('chat');
   // Permission requests arrive concurrently (tool waves run in parallel), so
   // they must be queued — a single overwriting state would leave the first
@@ -82,16 +75,15 @@ export default function App() {
   sessionRef.current = session;
 
   useEffect(() => {
+    // Single fetch on mount; the restore below re-checks after its await so
+    // a fast user selection is never clobbered.
     void api.listSessions().then(setSessions).catch(console.error);
-    // Restore the most recent session on startup: the backend no longer
-    // preloads one, and several UI regions (chat infos included) only
-    // render with a session attached.
     void api
       .listSessions()
       .then(async (list) => {
-        if (!sessionRef.current && list.length > 0) {
-          setSession(await api.loadSession(list[0].id));
-        }
+        if (list.length === 0 || sessionRef.current) return;
+        const s = await api.loadSession(list[0].id);
+        if (!sessionRef.current) setSession(s);
       })
       .catch(console.error);
   }, []);
@@ -131,20 +123,18 @@ export default function App() {
             break;
           case 'error':
             // Error ends the turn WITHOUT a turn_end (start_turn emits only
-            // Error on failure). Drop stale dialogs ONLY when the failing
-            // chat is the one on screen — another session's crash must not
-            // close our permission dialog.
+            // Error on failure). Drop stale dialogs ONLY the ones belonging
+            // to the finished chat — parallel sessions' pending dialogs must
+            // survive.
             dispatchTurn(e);
-            if (!sid || sid === sessionRef.current?.id) {
-              setPermQueue([]);
-              setAskReq(null);
-            }
+            setPermQueue((q) => q.filter((r) => r.session_id !== sid));
+            setAskReq((a) => (a && a.session_id === sid ? null : a));
             break;
           case 'turn_end':
             dispatchTurn(e);
+            setPermQueue((q) => q.filter((r) => r.session_id !== sid));
+            setAskReq((a) => (a && a.session_id === sid ? null : a));
             if (!sid || sid === sessionRef.current?.id) {
-              setPermQueue([]);
-              setAskReq(null);
               // Clear the streaming turn so the transcript (refreshed below)
               // is the single source of truth — otherwise the same reply
               // shows twice (once in turn.text, once in session.messages).
@@ -177,31 +167,9 @@ export default function App() {
               { id: Date.now(), sid, text: e.message },
             ]);
             break;
-          case 'device_frame': {
-            const ts = Date.now();
-            setDevices((prev) => {
-              const old = prev[e.node];
-              return {
-                ...prev,
-                [e.node]: {
-                  node: e.node,
-                  lastKind: e.kind,
-                  lastFrame: e.frame.slice(0, 200),
-                  ts,
-                  count: (old?.count ?? 0) + 1,
-                },
-              };
-            });
-            if (e.kind === 'alert') {
-              setAlerts((prev) =>
-                [{ node: e.node, frame: e.frame.slice(0, 300), ts }, ...prev].slice(0, 30),
-              );
-            }
-            break;
-          }
-          case 'guard_status':
-            setGuardFrame(e.frame);
-            break;
+          // device_frame / guard_status are consumed by the WorkbenchView's
+          // own subscriber (the card is self-contained and stays mounted);
+          // App-level aggregation was dead weight.
           default:
             break;
         }
@@ -251,13 +219,17 @@ export default function App() {
   // Guard escalation → mainline-session diagnosis. The workbench card
   // synthesizes the prompt; here we load the session, switch to chat and
   // start the turn (refusing politely if that chat is already streaming).
+  // Registered ONCE: the running map is read through a ref, so streaming
+  // updates don't tear down/re-add the listener.
+  const turnsRef = useRef(turnsById);
+  turnsRef.current = turnsById;
   useEffect(() => {
     const handler = (ev: Event) => {
       const detail = (ev as CustomEvent).detail as {
         sessionId: string;
         prompt: string;
       };
-      if (turnsById[detail.sessionId]?.running) {
+      if (turnsRef.current[detail.sessionId]?.running) {
         setInfos((prev) => [
           ...prev.slice(-8),
           {
@@ -289,7 +261,7 @@ export default function App() {
     };
     window.addEventListener('firment:run-escalation', handler);
     return () => window.removeEventListener('firment:run-escalation', handler);
-  }, [turnsById]);
+  }, []);
 
   const handleNewSession = (mode: 'agent' | 'plan') => {
     // Creating a chat never disturbs turns running in other chats.
@@ -315,11 +287,19 @@ export default function App() {
       .catch(console.error);
   };
 
-  const handleDeleteSession = async (id: string) => {
-    const run = () =>
+  const handleDeleteSession = (id: string) => {
+    // Bounded retry: the backend refuses while that session's turn is
+    // winding down, so cancel + retry covers the window — but a hard IO
+    // error must not spin forever.
+    let attempts = 0;
+    const run = () => {
+      attempts += 1;
       void api
         .deleteSession(id)
         .then(async () => {
+          // Drop the dead session's turn slot (it would otherwise keep its
+          // error text/tools alive in memory forever).
+          dispatchTurn({ type: 'turn_end', session_id: id, text: '' });
           const list = await api.listSessions();
           setSessions(list);
           // If the current session was deleted, switch to the newest remaining
@@ -334,13 +314,19 @@ export default function App() {
           }
         })
         .catch((err: unknown) => {
-          // Backend refuses while that session's turn is still winding down;
-          // cancel + retry covers the window between flag flip and disk save.
           console.error(err);
+          if (attempts >= 5) {
+            setInfos((prev) => [
+              ...prev.slice(-8),
+              { id: Date.now(), sid: id, text: `delete failed after retries: ${err}` },
+            ]);
+            return;
+          }
           void api.cancelTurn(id).catch(console.error);
           setTimeout(() => void run(), 600);
         });
-    if ((turnsById[id] ?? initialTurnState).running) {
+    };
+    if ((turnsById[id] ?? initialTurnState()).running) {
       void api.cancelTurn(id).catch(console.error);
     }
     void run();
@@ -637,13 +623,19 @@ export default function App() {
             {view === 'settings' && <SettingsView />}
             {view === 'serial' && <SerialView lines={monitorLines} />}
             {view === 'flash' && <FlashView />}
-            {view === 'collab' && (
-              <WorkbenchView
-                devices={Object.values(devices).sort((a, b) => b.ts - a.ts)}
-                alerts={alerts}
-                guardFrame={guardFrame}
-              />
-            )}
+            {/* Workbench stays MOUNTED on every tab (hidden, not unmounted):
+                its escalation detection + device subscription must keep
+                running while the user is in Chat/Serial/etc. */}
+            <div
+              style={{
+                display: view === 'collab' ? 'flex' : 'none',
+                flexDirection: 'column',
+                flex: 1,
+                minHeight: 0,
+              }}
+            >
+              <WorkbenchView />
+            </div>
           </Content>
         </Layout>
       </Layout>

@@ -29,7 +29,12 @@ export function turnReducer(state: TurnState, e: FrontendEvent): TurnState {
       if (!state.turn) return state;
       return {
         ...state,
-        turn: { ...state.turn, thinking: state.turn.thinking + (e as { text: string }).text },
+        turn: {
+          ...state.turn,
+          // Cap the buffer: a long reasoning phase must not grow memory
+          // unbounded — the UI only shows the tail anyway.
+          thinking: (state.turn.thinking + (e as { text: string }).text).slice(-2000),
+        },
       };
     }
 
@@ -110,5 +115,13 @@ export function turnsReducer(state: TurnMap, e: FrontendEvent): TurnMap {
   const current = state[sid] ?? initialTurnState();
   const next = turnReducer(current, e);
   if (next === current) return state;
+  // Prune finished-clean slots: a null turn with no error text carries no
+  // information and would accumulate over a long-lived app. Error turns are
+  // kept (their text is the only record until the next transcript refresh).
+  if (!next.running && next.turn === null) {
+    if (!(sid in state)) return state;
+    const { [sid]: _removed, ...rest } = state;
+    return rest;
+  }
   return { ...state, [sid]: next };
 }

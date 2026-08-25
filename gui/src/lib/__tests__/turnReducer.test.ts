@@ -103,7 +103,8 @@ describe('turnsReducer (multi-session routing)', () => {
     let state = turnsReducer({}, start);
     state = turnsReducer(state, startB);
     state = turnsReducer(state, endA);
-    expect(state.a.running).toBe(false);
+    // Finished-clean slots are PRUNED (no information retained).
+    expect(state.a).toBeUndefined();
     expect(state.b.running).toBe(true);
   });
 

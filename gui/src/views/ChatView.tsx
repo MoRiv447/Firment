@@ -43,7 +43,9 @@ export function ChatView({
   // shows a banner telling the user to hit Stop instead of waiting forever.
   const lastChangeRef = useRef<number>(Date.now());
   const [stuck, setStuck] = useState(false);
-  const turnKey = `${turn?.text.length}:${turn?.tools ? Object.keys(turn.tools).length : 0}`;
+  const turnKey = `${turn?.text.length}:${
+    turn?.thinking.length ?? 0
+  }:${turn?.tools ? Object.keys(turn.tools).length : 0}`;
   useEffect(() => {
     lastChangeRef.current = Date.now();
     setStuck(false);
