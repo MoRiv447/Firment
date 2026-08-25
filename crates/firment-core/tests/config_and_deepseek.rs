@@ -257,7 +257,10 @@ async fn generic_openai_reasoning_effort_passes_through() {
         }
     }
     let body = captured.lock().unwrap()[0].clone();
-    assert_eq!(body["reasoning_effort"], json!("xhigh"));
+    // xhigh/max are Firment-native levels — OpenAI-style servers only accept
+    // low|medium|high, so they are clamped to "high" (strict servers 400 on
+    // anything else).
+    assert_eq!(body["reasoning_effort"], json!("high"));
     assert!(body.get("thinking").is_none());
 }
 
