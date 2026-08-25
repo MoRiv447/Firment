@@ -153,6 +153,9 @@ export default function App() {
             break;
           case 'session_loaded':
             setSession(e.session);
+            // Any session load lands in the chat (workbench "open" button,
+            // startup restore, escalation handler all route here).
+            setView('chat');
             break;
           case 'sessions':
             setSessions(e.sessions);
