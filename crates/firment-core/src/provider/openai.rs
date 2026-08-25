@@ -175,13 +175,14 @@ impl OpenAIProvider {
                     });
                 }
                 _ => {
+                    // OpenAI-style APIs only accept low|medium|high — xhigh/max
+                    // are Firment-native levels that strict servers 400 on
+                    // (opencode clamps the same way via its model registry).
                     let effort = match level {
                         ThinkingLevel::Off => "high",
                         ThinkingLevel::Low => "low",
                         ThinkingLevel::Medium => "medium",
-                        ThinkingLevel::High => "high",
-                        ThinkingLevel::XHigh => "xhigh",
-                        ThinkingLevel::Max => "max",
+                        ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Max => "high",
                     };
                     body["reasoning_effort"] = json!(effort);
                 }
