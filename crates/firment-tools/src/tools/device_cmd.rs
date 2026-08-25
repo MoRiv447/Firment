@@ -105,7 +105,17 @@ impl Tool for DeviceCmd {
         let command2 = command.clone();
         let (sent_note, publish_result) =
             tokio::task::spawn_blocking(move || -> (String, Result<(), ToolError>) {
-                let opts = rumqttc::MqttOptions::new("firment-device-cmd", &host, port);
+                // Unique per process AND per call: two rapid commands from
+                // the same session must not kick each other off the broker.
+                let client_id = format!(
+                    "firment-cmd-{}-{}",
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.subsec_nanos())
+                        .unwrap_or(0)
+                );
+                let opts = rumqttc::MqttOptions::new(&client_id, &host, port);
                 let (client, mut conn) = rumqttc::Client::new(opts, 8);
                 let topic = format!("firment/device/{node2}/cmd");
                 if let Err(e) = client.publish(

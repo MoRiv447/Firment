@@ -84,15 +84,21 @@ async fn run(shared: Arc<Shared>, broker: String) {
         },
     );
     loop {
+        // Client ID must be unique per process: two GUI instances with the
+        // same id kick each other off the broker in an endless
+        // connect/disconnect war (the "flickering status" bug).
+        // Connection timeout defaults to 5s (NetworkOptions) — failures
+        // surface quickly.
+        let opts = rumqttc::MqttOptions::new(
+            &format!("firment-gui-{}", std::process::id()),
+            &host,
+            port,
+        );
         let (client, mut eventloop) = {
-            let opts = rumqttc::MqttOptions::new("firment-gui", &host, port);
             let (c, el) = AsyncClient::new(opts, 64);
             (c, el)
         };
-        if let Err(e) = client
-            .subscribe("firment/#", rumqttc::QoS::AtMostOnce)
-            .await
-        {
+        if let Err(e) = client.subscribe("firment/#", rumqttc::QoS::AtMostOnce).await {
             trace(&shared, &format!("subscribe failed: {e}"));
             emit(
                 &shared,
@@ -102,13 +108,7 @@ async fn run(shared: Arc<Shared>, broker: String) {
                 },
             );
         } else {
-            trace(&shared, "subscribe ok (queued)");
-            emit(
-                &shared,
-                FrontendEvent::GuardStatus {
-                    frame: format!("{{\"connected\":true,\"broker\":\"{broker}\"}}"),
-                },
-            );
+            trace(&shared, "subscribe ok (queued; online on CONNACK)");
         }
 
         let mut frames: u64 = 0;
@@ -129,9 +129,16 @@ async fn run(shared: Arc<Shared>, broker: String) {
                 Ok(rumqttc::Event::Incoming(rumqttc::Packet::ConnAck(_))) => {
                     connacked = true;
                     trace(&shared, "CONNACK — broker session established");
+                    // Online ONLY after the broker actually acknowledged the
+                    // session — "subscribe queued" used to flip the card to
+                    // green before the handshake, then errors flipped it
+                    // back: the flickering-status bug.
+                    emit(&shared, FrontendEvent::GuardStatus {
+                        frame: format!("{{\"connected\":true,\"broker\":\"{broker}\"}}"),
+                    });
                 }
                 Ok(_) => {
-                    if last_status.elapsed() >= Duration::from_secs(10) {
+                    if connacked && last_status.elapsed() >= Duration::from_secs(10) {
                         last_status = std::time::Instant::now();
                         trace(&shared, &format!("status heartbeat (frames={frames})"));
                         emit(&shared, FrontendEvent::GuardStatus {
