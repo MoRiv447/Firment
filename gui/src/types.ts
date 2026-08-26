@@ -53,6 +53,22 @@ export interface DeviceBindingDto {
   allow: string[];
 }
 
+export interface HardwareInfoDto {
+  serial_ports: string[];
+  probes: string[];
+  probe_rs_available: boolean;
+  default_chip: string;
+}
+
+export interface FlashHistoryDto {
+  ts: number;
+  chip: string;
+  file: string;
+  probe: string | null;
+  ok: boolean;
+  error: string | null;
+}
+
 export interface EscalationEntry {
   id: string;
   ts: number;
@@ -61,6 +77,17 @@ export interface EscalationEntry {
   rule: string;
   summary: string;
   payload: string;
+}
+
+export interface NotificationEntry {
+  id: string;
+  ts: number;
+  /** guard | build-fail | verify-fail | flash-fail | device-offline */
+  kind: string;
+  title: string;
+  body: string;
+  /** Source session for chat-jumping (when applicable). */
+  sid?: string;
 }
 
 export interface DecisionEntryDto {

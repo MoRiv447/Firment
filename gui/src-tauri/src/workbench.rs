@@ -198,6 +198,120 @@ pub async fn workbench_pinmap_remove(
     workbench_pinmap_list(cwd).await
 }
 
+// ---------- hardware inventory (serial ports / probes / chip) -----------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HardwareInfoDto {
+    pub serial_ports: Vec<String>,
+    pub probes: Vec<String>,
+    /// probe-rs CLI present? (false = probes list is meaningless)
+    pub probe_rs_available: bool,
+    /// [tools] default_chip from the merged config.
+    pub default_chip: String,
+}
+
+/// Aggregated hardware inventory for the project's Hardware card. probe-rs
+/// enumeration shells out and takes a second or two — the frontend calls
+/// this behind an explicit refresh button, never on a timer.
+#[tauri::command]
+pub async fn workbench_hardware_list(
+    shared: tauri::State<'_, Arc<Shared>>,
+    cwd: String,
+) -> Result<HardwareInfoDto, String> {
+    let root = PathBuf::from(&cwd);
+    if !root.is_dir() {
+        return Err(format!("cwd does not exist: {}", root.display()));
+    }
+    let serial_ports = crate::hardware::list_serial_ports();
+
+    // probe-rs list: parse the table lines that carry "(VID:" markers.
+    let mut probe_cmd = tokio::process::Command::new("probe-rs");
+    probe_cmd.arg("list").current_dir(&root);
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        probe_cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let probe_out = probe_cmd.output().await;
+    let (probes, probe_rs_available) = match probe_out {
+        Ok(out) if out.status.success() => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            let lines: Vec<String> = text
+                .lines()
+                .filter(|l| l.contains("(VID"))
+                .map(|l| l.trim().to_string())
+                .collect();
+            (lines, true)
+        }
+        _ => (Vec::new(), false),
+    };
+
+    let default_chip = {
+        let config = shared.config.lock().unwrap();
+        let merged = config.merged_for(&root);
+        merged.tools.default_chip.clone().unwrap_or_default()
+    };
+
+    Ok(HardwareInfoDto {
+        serial_ports,
+        probes,
+        probe_rs_available,
+        default_chip,
+    })
+}
+
+// ---------- burn history (.firment/work/flash-history.jsonl) ------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FlashHistoryDto {
+    pub ts: u64,
+    pub chip: String,
+    pub file: String,
+    pub probe: Option<String>,
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn workbench_flash_history(
+    cwd: String,
+    tail: Option<u64>,
+) -> Result<Vec<FlashHistoryDto>, String> {
+    let path = PathBuf::from(&cwd)
+        .join(".firment")
+        .join("work")
+        .join("flash-history.jsonl");
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let mut entries: Vec<FlashHistoryDto> = text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .map(|v| FlashHistoryDto {
+            ts: v.get("ts").and_then(|t| t.as_u64()).unwrap_or(0),
+            chip: v
+                .get("chip")
+                .and_then(|c| c.as_str())
+                .unwrap_or("?")
+                .to_string(),
+            file: v
+                .get("file")
+                .and_then(|f| f.as_str())
+                .unwrap_or("?")
+                .to_string(),
+            probe: v.get("probe").and_then(|p| p.as_str()).map(String::from),
+            ok: v.get("ok").and_then(|o| o.as_bool()).unwrap_or(false),
+            error: v.get("error").and_then(|e| e.as_str()).map(String::from),
+        })
+        .collect();
+    entries.sort_by_key(|e| std::cmp::Reverse(e.ts));
+    let tail = tail.unwrap_or(20).clamp(1, 200) as usize;
+    entries.truncate(tail);
+    Ok(entries)
+}
+
 // ---------- per-project device registry ([devices] in workbench.toml) ----
 
 #[derive(Debug, Clone, Serialize)]

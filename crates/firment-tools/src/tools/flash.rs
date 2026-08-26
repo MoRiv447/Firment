@@ -2,6 +2,45 @@ use super::util::{probe_rs_err, resolve_within, run_probe_rs, shell_quote, token
 use async_trait::async_trait;
 use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
+use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Append one flash outcome to `<cwd>/.firment/work/flash-history.jsonl`
+/// (the project's burn history). Best-effort: a logging failure never
+/// breaks the flash itself.
+fn record_flash_history(
+    cwd: &Path,
+    chip: &str,
+    file: &str,
+    probe: Option<&str>,
+    ok: bool,
+    error: Option<&str>,
+) {
+    use std::io::Write as _;
+    let dir = cwd.join(".firment").join("work");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let record = json!({
+        "ts": ts,
+        "chip": chip,
+        "file": file,
+        "probe": probe,
+        "ok": ok,
+        "error": error,
+    });
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("flash-history.jsonl"))
+    {
+        let _ = writeln!(f, "{record}");
+    }
+}
 
 pub struct Flash;
 
@@ -129,9 +168,14 @@ impl Tool for Flash {
         }
         dl_args.push(resolved.to_string_lossy().to_string());
 
+        // Clones for the burn-history record (the match arms move chip/probe).
+        let hist_chip = chip.clone();
+        let hist_file = resolved.to_string_lossy().into_owned();
+        let hist_probe = probe.clone();
+
         let result =
             run_probe_rs(dl_args, &ctx.cwd, timeout_ms, Some(ctx.cancel.clone()), &[]).await;
-        match result {
+        let outcome: Result<ToolOutput, ToolError> = match result {
             Ok((text, Some(0))) if !reset => Ok(ToolOutput {
                 text: format!("flash passed (exit 0)\n{text}"),
             }),
@@ -172,7 +216,18 @@ impl Tool for Flash {
                 "[Timeout] flash timed out\n{text}"
             )))),
             Err(e) => Err(probe_rs_err(esp_hint(e))),
-        }
+        };
+        // Burn history: one JSONL line per attempt (success or failure) so
+        // the workbench can show 何日向哪块板烧了哪个镜像.
+        record_flash_history(
+            &ctx.cwd,
+            &hist_chip,
+            &hist_file,
+            hist_probe.as_deref(),
+            outcome.is_ok(),
+            outcome.as_ref().err().map(|e| e.message.as_str()),
+        );
+        outcome
     }
 }
 

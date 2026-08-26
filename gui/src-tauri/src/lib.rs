@@ -85,6 +85,8 @@ pub fn run() {
             workbench::workbench_devices_list,
             workbench::workbench_devices_set,
             workbench::workbench_devices_remove,
+            workbench::workbench_hardware_list,
+            workbench::workbench_flash_history,
             workbench::workbench_decision_list,
             workbench::workbench_decision_add,
             workbench::workbench_decision_remove,

@@ -1,7 +1,23 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
-import { ConfigProvider, Dropdown, Layout, Menu, Tag, theme, Tooltip } from 'antd';
+import {
+  Badge,
+  Button,
+  ConfigProvider,
+  Dropdown,
+  Layout,
+  Menu,
+  Popover,
+  Space,
+  Tag,
+  theme,
+  Tooltip,
+  Typography,
+} from 'antd';
+
+const { Text } = Typography;
 import {
   ApiOutlined,
+  BellOutlined,
   MessageOutlined,
   RocketOutlined,
   ProjectOutlined,
@@ -21,6 +37,7 @@ import type {
   AskRequest,
   ContextUsageDto,
   MonitorLine,
+  NotificationEntry,
   PermissionRequest,
   SessionDto,
   SessionSummaryDto,
@@ -61,6 +78,54 @@ export default function App() {
   // hovering pops the info box and clicking pops two boxes at once.
   const [ctxMenuOpen, setCtxMenuOpen] = useState(false);
   const [view, setView] = useState<ViewKey>('chat');
+  // Notification center: guard alerts + build/verify/flash failures + device
+  // offline events, aggregated across sessions. Persisted (last 50) so a
+  // restart doesn't drop history; unread = entries newer than lastRead.
+  const [notifications, setNotifications] = useState<NotificationEntry[]>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('notifications') || '[]');
+      return Array.isArray(saved) ? saved : [];
+    } catch {
+      return [];
+    }
+  });
+  const [notifLastRead, setNotifLastRead] = useState<number>(
+    () => Number(localStorage.getItem('notif-last-read') || 0),
+  );
+  const notifUnread = notifications.filter((n) => n.ts > notifLastRead).length;
+  const pushNotification = (n: Omit<NotificationEntry, 'ts'>) => {
+    setNotifications((prev) => {
+      if (prev.some((x) => x.id === n.id)) return prev; // dedupe
+      const next = [{ ...n, ts: Date.now() }, ...prev].slice(0, 50);
+      try {
+        localStorage.setItem('notifications', JSON.stringify(next));
+      } catch {
+        /* quota — history just won't survive restarts */
+      }
+      return next;
+    });
+  };
+  // Device liveness: last frame timestamp per node + nodes already reported
+  // offline (re-armed when traffic resumes). Feeds the offline checker below.
+  const deviceLastSeen = useRef(new Map<string, number>());
+  const offlineNotified = useRef(new Set<string>());
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const now = Date.now();
+      deviceLastSeen.current.forEach((last, node) => {
+        if (now - last > 60_000 && !offlineNotified.current.has(node)) {
+          offlineNotified.current.add(node);
+          pushNotification({
+            id: `offline-${node}-${Math.floor(now / 60_000)}`,
+            kind: 'device-offline',
+            title: `节点离线 ${node}`,
+            body: '超过 60 秒没有收到任何帧（板子断电/掉线？）',
+          });
+        }
+      });
+    }, 15_000);
+    return () => clearInterval(timer);
+  }, []);
   // Permission requests arrive concurrently (tool waves run in parallel), so
   // they must be queued — a single overwriting state would leave the first
   // request unanswered forever and wedge its tool (and the whole wave).
@@ -120,6 +185,17 @@ export default function App() {
             // Pure state transitions live in turnReducer (unit-tested);
             // dispatch keeps App.tsx free of the accumulation logic.
             dispatchTurn(e);
+            // Notification center: build/verify/flash failures are
+            // project-level events worth surfacing even in another chat.
+            if (e.type === 'tool_end' && !e.ok && ['build', 'verify', 'flash'].includes(e.name)) {
+              pushNotification({
+                id: `fail-${sid}-${e.seq}`,
+                kind: `${e.name}-fail`,
+                title: `${e.name} 失败${sid ? ` · ${sid.slice(0, 8)}` : ''}`,
+                body: e.summary.slice(0, 200),
+                sid: sid ?? undefined,
+              });
+            }
             break;
           case 'error':
             // Error ends the turn WITHOUT a turn_end (start_turn emits only
@@ -160,6 +236,28 @@ export default function App() {
           case 'sessions':
             setSessions(e.sessions);
             break;
+          case 'device_frame': {
+            // Notification center source: guard alerts from any node.
+            if (e.kind === 'alert') {
+              let parsed: Record<string, unknown> = {};
+              try {
+                parsed = JSON.parse(e.frame);
+              } catch {
+                /* raw frame */
+              }
+              const node = String(parsed.node ?? e.node);
+              pushNotification({
+                id: `alert-${String(parsed.ts ?? Date.now())}-${node}-${String(parsed.rule ?? '')}`,
+                kind: 'guard',
+                title: `告警 ${node} · ${String(parsed.sev ?? '?')}`,
+                body: String(parsed.summary ?? e.frame).slice(0, 200),
+              });
+            }
+            // Device liveness tracking for offline notifications.
+            deviceLastSeen.current.set(e.node, Date.now());
+            offlineNotified.current.delete(e.node);
+            break;
+          }
           case 'info':
             console.info('[firm]', e.message);
             // Surface timeouts/stalls in the chat they belong to (sticky,
@@ -502,6 +600,101 @@ export default function App() {
                 ⚡ {Object.values(turnsById).filter((t) => t.running).length} running
               </Tag>
             )}
+            <Popover
+              trigger="click"
+              placement="bottomRight"
+              content={
+                <div style={{ width: 380, maxHeight: 420, overflowY: 'auto', padding: 8 }}>
+                  <Space style={{ marginBottom: 6, width: '100%', justifyContent: 'space-between' }}>
+                    <Button
+                      size="small"
+                      type="dashed"
+                      disabled={notifUnread === 0}
+                      onClick={() => {
+                        const ts = Date.now();
+                        setNotifLastRead(ts);
+                        localStorage.setItem('notif-last-read', String(ts));
+                      }}
+                    >
+                      全部已读
+                    </Button>
+                    <Button
+                      size="small"
+                      type="text"
+                      onClick={() => {
+                        setNotifications([]);
+                        localStorage.setItem('notifications', '[]');
+                      }}
+                    >
+                      清空
+                    </Button>
+                  </Space>
+                  {notifications.length === 0 ? (
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      暂无通知：守卫告警、构建/验证/烧录失败、节点离线会出现在这里。
+                    </Text>
+                  ) : (
+                    notifications.map((n) => (
+                      <div
+                        key={n.id}
+                        onClick={() => {
+                          if (n.sid) {
+                            void api.loadSession(n.sid).then((s) => {
+                              setSession(s);
+                              setView('chat');
+                            });
+                          }
+                        }}
+                        style={{
+                          padding: '5px 6px',
+                          borderBottom: '1px solid #f0f0f0',
+                          cursor: n.sid ? 'pointer' : 'default',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <Tag
+                            color={
+                              n.kind === 'guard'
+                                ? 'red'
+                                : n.kind.includes('fail')
+                                  ? 'orange'
+                                  : n.kind === 'device-offline'
+                                    ? 'default'
+                                    : 'blue'
+                            }
+                            style={{ borderRadius: 0, fontSize: 10, fontWeight: 700 }}
+                          >
+                            {n.kind}
+                          </Tag>
+                          <Text style={{ fontSize: 12, flex: 1, fontWeight: 600 }}>{n.title}</Text>
+                          <Text type="secondary" style={{ fontSize: 10 }}>
+                            {new Date(n.ts).toLocaleTimeString()}
+                          </Text>
+                        </div>
+                        {n.body && (
+                          <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
+                            {n.body}
+                          </Text>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              }
+            >
+              <Tooltip title="通知中心（守卫告警 / 构建·烧录失败 / 节点离线）">
+                <Badge count={notifUnread} size="small" offset={[-2, 2]}>
+                  <Button
+                    icon={<BellOutlined />}
+                    style={{
+                      borderRadius: 0,
+                      border: '2px solid #000000',
+                      boxShadow: '2px 2px 0 #000000',
+                    }}
+                  />
+                </Badge>
+              </Tooltip>
+            </Popover>
             {session && (
               <Dropdown
                 menu={{

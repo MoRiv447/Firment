@@ -25,6 +25,8 @@ import type {
   DeviceEntry,
   ElfCardDto,
   EscalationEntry,
+  FlashHistoryDto,
+  HardwareInfoDto,
   KbEntryDto,
   QualityItemDto,
   SessionSummaryDto,
@@ -169,6 +171,11 @@ export function WorkbenchView() {
   const [bindings, setBindings] = useState<DeviceBindingDto[]>([]);
   const [bindNode, setBindNode] = useState('');
   const [bindRole, setBindRole] = useState('');
+  // Hardware inventory: serial ports + probe-rs probes + default chip.
+  // Refreshed behind an explicit button (probe-rs enumeration takes ~1s).
+  const [hardware, setHardware] = useState<HardwareInfoDto | null>(null);
+  // Burn history (.firment/work/flash-history.jsonl) — 何日向哪块板烧了哪个镜像。
+  const [flashHistory, setFlashHistory] = useState<FlashHistoryDto[]>([]);
   // Guard escalations: alerts at/above the project's escalate_sev for BOUND
   // nodes. Persisted per project so switching tabs doesn't drop them.
   const [escalations, setEscalations] = useState<EscalationEntry[]>([]);
@@ -304,6 +311,16 @@ export function WorkbenchView() {
       setBindings(await api.workbenchDevicesList(target));
     } catch {
       setBindings([]);
+    }
+    try {
+      setHardware(await api.workbenchHardwareList(target));
+    } catch {
+      setHardware(null);
+    }
+    try {
+      setFlashHistory(await api.workbenchFlashHistory(target, 20));
+    } catch {
+      setFlashHistory([]);
     }
     try {
       const saved = JSON.parse(
@@ -948,7 +965,125 @@ export function WorkbenchView() {
 
               <Card
                 type="inner"
-                title="Pin assignments"
+                title="Hardware"
+                size="small"
+                extra={
+                  <Button
+                    size="small"
+                    icon={<ReloadOutlined />}
+                    disabled={busy}
+                    onClick={async () => {
+                      if (!cwd.trim()) return;
+                      setBusy(true);
+                      try {
+                        setHardware(await api.workbenchHardwareList(cwd.trim()));
+                      } catch (err) {
+                        setError(String(err));
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                  >
+                    refresh
+                  </Button>
+                }
+              >
+                {!hardware ? (
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    未加载。点 refresh 枚举串口与 probe-rs 探针。
+                  </Text>
+                ) : (
+                  <>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+                      <Tag style={{ borderRadius: 0, fontSize: 11 }}>
+                        默认芯片: {hardware.default_chip || '(未配置)'}
+                      </Tag>
+                      <Tag
+                        color={hardware.probe_rs_available ? 'green' : 'default'}
+                        style={{ borderRadius: 0, fontSize: 11 }}
+                      >
+                        probe-rs {hardware.probe_rs_available ? '可用' : '未安装'}
+                      </Tag>
+                    </div>
+                    {hardware.serial_ports.length === 0 ? (
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        没有串口。
+                      </Text>
+                    ) : (
+                      <div style={{ marginBottom: 6 }}>
+                        {hardware.serial_ports.map((p) => (
+                          <Tag
+                            key={p}
+                            color="blue"
+                            style={{ borderRadius: 0, fontFamily: 'Consolas, monospace', fontSize: 11 }}
+                          >
+                            {p}
+                          </Tag>
+                        ))}
+                      </div>
+                    )}
+                    {hardware.probes.length > 0 && (
+                      <>
+                        <Text type="secondary" style={{ fontSize: 11 }}>
+                          probe-rs 探针:
+                        </Text>
+                        <div>
+                          {hardware.probes.map((p, i) => (
+                            <div key={i} style={{ fontSize: 11, fontFamily: 'Consolas, monospace' }}>
+                              {p}
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                     )}
+                   </>
+                 )}
+               </Card>
+
+               <Card
+                 type="inner"
+                 title="Flash history"
+                 size="small"
+                 extra={
+                   <Text type="secondary" style={{ fontSize: 11 }}>
+                     .firment/work/flash-history.jsonl
+                   </Text>
+                 }
+               >
+                 {flashHistory.length === 0 ? (
+                   <Text type="secondary" style={{ fontSize: 12 }}>
+                     暂无烧录记录。agent 的 flash 工具每次执行（成功或失败）都会记录在这里。
+                   </Text>
+                 ) : (
+                   flashHistory.map((f, i) => (
+                     <div
+                       key={`${f.ts}-${i}`}
+                       style={{
+                         display: 'flex',
+                         alignItems: 'center',
+                         gap: 8,
+                         padding: '3px 6px',
+                         borderBottom: '1px solid #f0f0f0',
+                       }}
+                     >
+                       <Tag color={f.ok ? 'green' : 'red'} style={{ borderRadius: 0, fontSize: 10, fontWeight: 700 }}>
+                         {f.ok ? '✓' : '✗'}
+                       </Tag>
+                       <Text style={{ fontSize: 11, fontFamily: 'Consolas, monospace' }}>{f.chip}</Text>
+                       <Text type="secondary" style={{ fontSize: 11, flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                         {f.file}
+                       </Text>
+                       <Text type="secondary" style={{ fontSize: 10 }}>
+                         {new Date(f.ts * 1000).toLocaleString()}
+                       </Text>
+                     </div>
+                   ))
+                 )}
+               </Card>
+
+               <Card
+                 type="inner"
+                 title="Pin assignments"
                 size="small"
                 extra={
                   <Text type="secondary" style={{ fontSize: 11 }}>

@@ -12,6 +12,8 @@ import type {
   PermissionRequest,
   BoardPinmapDto,
   DeviceBindingDto,
+  FlashHistoryDto,
+  HardwareInfoDto,
   QualityItemDto,
   SessionDto,
   SessionSummaryDto,
@@ -61,6 +63,9 @@ export const api = {
     }),
   workbenchDevicesRemove: (cwd: string, node: string) =>
     invoke<DeviceBindingDto[]>('workbench_devices_remove', { cwd, node }),
+  workbenchHardwareList: (cwd: string) => invoke<HardwareInfoDto>('workbench_hardware_list', { cwd }),
+  workbenchFlashHistory: (cwd: string, tail?: number) =>
+    invoke<FlashHistoryDto[]>('workbench_flash_history', { cwd, tail }),
   workbenchDecisionList: (cwd: string) => invoke<DecisionEntryDto[]>('workbench_decision_list', { cwd }),
   workbenchDecisionAdd: (cwd: string, title: string, body: string) =>
     invoke<DecisionEntryDto[]>('workbench_decision_add', { cwd, title, body }),
