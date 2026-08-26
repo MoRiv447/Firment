@@ -56,14 +56,13 @@ pub async fn start_turn(
             .clone();
         let session = store.load(&session_id).map_err(|e| e.to_string())?;
         let budget = session.context_budget_chars;
-        let (mut agent, handles) =
-            build_agent(&shared, session).map_err(|e| e.to_string())?;
+        let (mut agent, handles) = build_agent(&shared, session).map_err(|e| e.to_string())?;
         if budget > 0 {
             agent.set_context_budget_chars(budget);
         }
         Ok((agent, handles))
     })();
-    let (mut agent, handles) = match build {
+    let (agent, handles) = match build {
         Ok(v) => v,
         Err(e) => {
             drop(_reservation); // release before returning

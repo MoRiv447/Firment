@@ -44,7 +44,7 @@ pub fn spawn_if_configured(shared: Arc<Shared>) {
     trace(&shared, &format!("spawn: broker read as {broker:?}"));
     set_status(
         &shared,
-        format!("{{\"connected\":false,\"error\":\"link starting\"}}"),
+        "{\"connected\":false,\"error\":\"link starting\"}".to_string(),
     );
     if broker.is_empty() {
         use tauri::Emitter as _;
@@ -87,14 +87,20 @@ async fn run(shared: Arc<Shared>, broker: String) {
             message: format!("[mqtt] link starting -> {host}:{port}"),
         },
     );
+    // Link state persists ACROSS reconnects: frames stays cumulative,
+    // error_announced stays latched until a CONNACK clears it.
+    let mut frames: u64 = 0;
+    let mut error_announced = false;
+    let mut connacked = false;
+    let mut last_status = std::time::Instant::now() - Duration::from_secs(60);
     loop {
         // Client ID must be unique per process: two GUI instances with the
         // same id kick each other off the broker in an endless
         // connect/disconnect war (the "flickering status" bug).
         // Connection timeout defaults to 5s (NetworkOptions) — failures
         // surface quickly.
-        let opts =
-            rumqttc::MqttOptions::new(&format!("firment-gui-{}", std::process::id()), &host, port);
+        let client_id = format!("firment-gui-{}", std::process::id());
+        let opts = rumqttc::MqttOptions::new(&client_id, &host, port);
         let (client, mut eventloop) = {
             let (c, el) = AsyncClient::new(opts, 64);
             (c, el)
@@ -115,15 +121,6 @@ async fn run(shared: Arc<Shared>, broker: String) {
             trace(&shared, "subscribe ok (queued; online on CONNACK)");
         }
 
-        let mut frames: u64 = 0;
-        // Edge-triggered error announcement: true while the outage has been
-        // reported, cleared on the next successful CONNACK.
-        let mut error_announced = false;
-        let mut connacked = false;
-        // The webview attaches its listeners AFTER setup() emits the initial
-        // status — early events are lost. Re-announce periodically so the
-        // frontend always converges on the true link state.
-        let mut last_status = std::time::Instant::now() - Duration::from_secs(60);
         loop {
             match eventloop.poll().await {
                 Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(p))) => {
@@ -266,6 +263,18 @@ fn sink_frame(frame: &str) {
     }
 }
 
+fn emit(shared: &Arc<Shared>, ev: FrontendEvent) {
+    use tauri::Emitter as _;
+    let _ = shared.app.emit("agent-event", ev);
+}
+
+/// Persist the last link status so a freshly attached frontend (or a card
+/// remount) can pull the truth via the mqtt_status command instead of
+/// waiting for the next event.
+fn set_status(shared: &Arc<Shared>, frame: String) {
+    *shared.mqtt_status.lock().unwrap() = frame;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,16 +302,4 @@ mod tests {
         assert!(route_topic("other/device/x/telemetry").is_none());
         assert!(route_topic("firment/device/x/telemetry/extra").is_none());
     }
-}
-
-fn emit(shared: &Arc<Shared>, ev: FrontendEvent) {
-    use tauri::Emitter as _;
-    let _ = shared.app.emit("agent-event", ev);
-}
-
-/// Persist the last link status so a freshly attached frontend (or a card
-/// remount) can pull the truth via the mqtt_status command instead of
-/// waiting for the next event.
-fn set_status(shared: &Arc<Shared>, frame: String) {
-    *shared.mqtt_status.lock().unwrap() = frame;
 }

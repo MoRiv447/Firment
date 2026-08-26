@@ -33,7 +33,7 @@
 const char* WIFI_SSID = "CMCC-666";
 const char* WIFI_PASS = "66666666";
 // SBC broker (see docs/sbc-agent.md §3.1)
-const char* MQTT_HOST = "192.168.1.6";
+const char* MQTT_HOST = "192.168.1.8";
 const uint16_t MQTT_PORT = 1883;
 const char* NODE_NAME = "s3-node-1";
 // -------------------------------------------------------------------------
@@ -141,7 +141,7 @@ void publish_caps() {
       "{\"node\":\"%s\",\"kind\":\"caps\","
       "\"cmds\":[\"ping\",\"rgb.on\",\"rgb.off\",\"rgb.set\"],"
       "\"args\":{\"rgb.set\":[\"hex\"]},"
-      "\"note\":\"rgb.set hex=RRGGBB (no #); WS2812@GPIO48\"}";
+      "\"note\":\"JSON: rgb.set args.hex=RRGGBB(no #); legacy text: rgb:on|rgb:off|rgb:#RRGGBB; WS2812@GPIO48\"}";
   char msg[256];
   snprintf(msg, sizeof(msg), caps, NODE_NAME);
   mqtt.publish(topic, msg, true);  // retained: grammar discoverable anytime
@@ -206,39 +206,59 @@ void on_message(char* topic, byte* body, unsigned int len) {
 
 void connect_wifi() {
   WiFi.mode(WIFI_STA);
+  // Bus-powered boards brown out during WiFi TX bursts (random restarts);
+  // trimming TX power costs range but stabilizes boot.
+  WiFi.setTxPower(WIFI_POWER_11dBm);
   Serial.printf("[wifi] connecting to %s", WIFI_SSID);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   int waited = 0;
+  bool blink = false;
   while (WiFi.status() != WL_CONNECTED) {
     delay(300);
     waited += 300;
+    // Blink dim yellow while joining — "stuck on dim blue" used to mean an
+    // infinite wait with no visible difference from early boot.
+    blink = !blink;
+    neopixelWrite(RGB_PIN, blink ? 40 : 0, blink ? 40 : 0, 0);
     Serial.print(WiFi.status());
-    if (waited > 15000) {
-      Serial.println();
-      Serial.printf("[wifi] FAILED status=%d — check SSID/band (ESP32 is 2.4GHz only)\n",
-                    WiFi.status());
-      waited = 0;  // keep retrying so a later fix lands without re-flash
+    if (waited > 30000) {
+      // 30s without a link: a fresh boot usually fixes flaky radio init —
+      // hanging here forever (old behavior) made the node unreachable with
+      // no signal except the frozen LED.
+      Serial.println("\n[wifi] 30s without link — restarting");
+      ESP.restart();
     }
   }
+  neopixelWrite(RGB_PIN, 0, 0, 0);
   Serial.printf("\n[wifi] connected, IP: %s\n", WiFi.localIP().toString().c_str());
 }
 
 void connect_mqtt() {
+  int waited = 0;
   while (!mqtt.connected()) {
     Serial.printf("[mqtt] connecting to %s:%u ...\n", MQTT_HOST, MQTT_PORT);
+    if (WiFi.status() != WL_CONNECTED) {
+      connect_wifi();
+    }
     if (mqtt.connect(NODE_NAME)) {
       char topic[64];
       snprintf(topic, sizeof(topic), "firment/device/%s/cmd", NODE_NAME);
       mqtt.subscribe(topic);
       Serial.println("[mqtt] connected");
+      waited = 0;
     } else {
-      Serial.printf("[mqtt] failed rc=%d, retry in 1.5s\n", mqtt.state());
-      // Broker down AND wifi down would otherwise loop doomed TCP attempts
-      // forever — re-run the wifi join when the link dropped mid-retry.
-      if (WiFi.status() != WL_CONNECTED) {
-        connect_wifi();
+      Serial.printf("[mqtt] failed rc=%d, retry\n", mqtt.state());
+      // Blink dim red while the broker is unreachable; re-run the wifi join
+      // when the link dropped mid-retry; 30s of failures -> fresh boot.
+      neopixelWrite(RGB_PIN, 40, 0, 0);
+      delay(250);
+      neopixelWrite(RGB_PIN, 0, 0, 0);
+      delay(250);
+      waited += 500;
+      if (waited > 30000) {
+        Serial.println("[mqtt] 30s without broker — restarting");
+        ESP.restart();
       }
-      delay(1500);
     }
   }
 }

@@ -228,8 +228,8 @@ pub async fn workbench_devices_set(
     cwd: String,
     node: String,
     role: String,
-    note: String,
-    allow: Vec<String>,
+    note: Option<String>,
+    allow: Option<Vec<String>>,
 ) -> Result<Vec<DeviceBindingDto>, String> {
     let node = node.trim().to_string();
     if node.is_empty() {
@@ -237,12 +237,24 @@ pub async fn workbench_devices_set(
     }
     let root = PathBuf::from(&cwd);
     let mut cfg = WorkbenchConfig::load(&root)?;
+    // Partial-update semantics: note/allow omitted (None) PRESERVE the
+    // existing values — otherwise a GUI rebind would silently wipe an
+    // allow-prefix whitelist the agent or a hand edit had configured.
+    let existing = cfg.devices.get(&node);
+    let note = match note {
+        Some(n) => n.trim().to_string(),
+        None => existing.map(|e| e.note.clone()).unwrap_or_default(),
+    };
+    let allow = match allow {
+        Some(a) => a.into_iter().map(|x| x.trim().to_string()).collect(),
+        None => existing.map(|e| e.allow.clone()).unwrap_or_default(),
+    };
     cfg.devices.insert(
         node,
         firment_core::DeviceEntry {
             role: role.trim().to_string(),
-            note: note.trim().to_string(),
-            allow: allow.into_iter().map(|a| a.trim().to_string()).collect(),
+            note,
+            allow,
         },
     );
     cfg.save(&root)?;

@@ -43,8 +43,22 @@ export const api = {
   workbenchPinmapRemove: (cwd: string, board: string, pin: string) =>
     invoke<BoardPinmapDto[]>('workbench_pinmap_remove', { cwd, board, pin }),
   workbenchDevicesList: (cwd: string) => invoke<DeviceBindingDto[]>('workbench_devices_list', { cwd }),
-  workbenchDevicesSet: (cwd: string, node: string, role: string, note: string, allow: string[]) =>
-    invoke<DeviceBindingDto[]>('workbench_devices_set', { cwd, node, role, note, allow }),
+  workbenchDevicesSet: (
+    cwd: string,
+    node: string,
+    role: string,
+    note?: string,
+    allow?: string[],
+  ) =>
+    invoke<DeviceBindingDto[]>('workbench_devices_set', {
+      cwd,
+      node,
+      role,
+      // Omitted fields PRESERVE existing values (backend Option semantics) —
+      // a role-only rebind must not wipe an allow whitelist.
+      ...(note !== undefined && { note }),
+      ...(allow !== undefined && { allow }),
+    }),
   workbenchDevicesRemove: (cwd: string, node: string) =>
     invoke<DeviceBindingDto[]>('workbench_devices_remove', { cwd, node }),
   workbenchDecisionList: (cwd: string) => invoke<DecisionEntryDto[]>('workbench_decision_list', { cwd }),

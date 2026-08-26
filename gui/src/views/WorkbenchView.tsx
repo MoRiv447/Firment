@@ -376,8 +376,10 @@ export function WorkbenchView() {
     if (!cwd.trim() || !bindNode.trim()) return;
     setBusy(true);
     try {
+      // note/allow omitted → backend PRESERVES existing values (an allow
+      // whitelist is never wiped by a role-only rebind).
       setBindings(
-        await api.workbenchDevicesSet(cwd.trim(), bindNode.trim(), bindRole.trim(), '', []),
+        await api.workbenchDevicesSet(cwd.trim(), bindNode.trim(), bindRole.trim()),
       );
       setBindNode('');
       setBindRole('');
