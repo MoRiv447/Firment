@@ -90,6 +90,9 @@ pub fn assemble_agent(
             .map(|(name, p)| (name.clone(), p.model.clone()))
             .collect(),
     );
+    // Model discovery for the `models` tool: base_url defaulted by provider
+    // type, API key resolved inline → env → auth.json (shared helper).
+    agent.set_provider_endpoints(firment_core::config::provider_endpoints(merged));
     agent.set_compaction_strategy(merged.compaction_strategy);
     agent.set_symbols_backend(merged.tools.symbols_backend.clone());
     agent.set_build_command(merged.tools.build_command.clone());

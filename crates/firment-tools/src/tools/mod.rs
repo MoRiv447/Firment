@@ -12,6 +12,7 @@ mod grep;
 mod hil;
 mod html;
 mod list_dir;
+pub mod models;
 pub mod monitor;
 mod periph_init;
 mod pinmap;
@@ -49,6 +50,7 @@ pub fn all() -> Vec<Arc<dyn Tool>> {
         Arc::new(edit_file::EditFile),
         Arc::new(elf_analyze::ElfAnalyze),
         Arc::new(list_dir::ListDir),
+        Arc::new(models::Models),
         Arc::new(glob::Glob),
         Arc::new(grep::Grep),
         Arc::new(shell::Shell),

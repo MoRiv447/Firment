@@ -195,6 +195,7 @@ mod tests {
             web_search_provider: None,
             web_search_api_key: None,
             session_dir: Some(dir.join("session")),
+            providers: Vec::new(),
             allowed_roots: Vec::new(),
             cancel: firment_core::Cancellable::new(),
         }

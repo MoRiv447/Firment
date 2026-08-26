@@ -56,6 +56,18 @@ pub struct ToolContext {
     /// (device-log-<date>.jsonl). `None` falls back to the global config
     /// dir; tests inject a temp dir.
     pub device_log_dir: Option<PathBuf>,
+    /// OpenAI-compatible endpoints from config.toml [providers], with keys
+    /// already resolved (inline → env → auth.json). Backs the `models`
+    /// discovery tool so the agent can see what each backend serves.
+    pub providers: Vec<ProviderEndpoint>,
+}
+
+/// One callable model endpoint for the `models` discovery tool.
+#[derive(Clone, Debug)]
+pub struct ProviderEndpoint {
+    pub name: String,
+    pub base_url: String,
+    pub api_key: Option<String>,
 }
 
 impl ToolContext {
@@ -87,6 +99,7 @@ impl ToolContext {
             session_dir: None,
             cancel: Cancellable::new(),
             device_log_dir: None,
+            providers: Vec::new(),
         }
     }
 }

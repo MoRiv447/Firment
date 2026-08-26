@@ -696,6 +696,7 @@ mod tests {
             web_search_provider: provider.map(|s| s.to_string()),
             web_search_api_key: key.map(|s| s.to_string()),
             session_dir: None,
+            providers: Vec::new(),
             allowed_roots: Vec::new(),
             cancel: firment_core::Cancellable::new(),
         }

@@ -9,6 +9,7 @@ fn plan_registry_exposes_only_read_only_tools() {
     assert!(names.contains(&"glob"));
     assert!(names.contains(&"grep"));
     assert!(names.contains(&"symbols"));
+    assert!(names.contains(&"models"));
     assert!(names.contains(&"web_search"));
     assert!(names.contains(&"web_fetch"));
     assert!(names.contains(&"task"));
@@ -25,5 +26,5 @@ fn plan_registry_exposes_only_read_only_tools() {
     assert!(!names.contains(&"pinmap"));
     assert!(!names.contains(&"device_cmd"));
     assert!(!names.contains(&"decision"));
-    assert_eq!(names.len(), 13);
+    assert_eq!(names.len(), 14);
 }

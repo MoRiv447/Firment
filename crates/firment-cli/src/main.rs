@@ -1238,6 +1238,7 @@ async fn run_direct_tool(
         web_search_provider: config.tools.web_search.clone(),
         web_search_api_key: config.tools.resolved_web_search_api_key(),
         session_dir: None,
+        providers: firment_core::config::provider_endpoints(config),
         allowed_roots: Vec::new(),
         cancel: firment_core::Cancellable::new(),
     };

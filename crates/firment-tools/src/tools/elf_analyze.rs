@@ -687,6 +687,7 @@ mod tests {
             } else {
                 None
             },
+            providers: Vec::new(),
             allowed_roots: Vec::new(),
             cancel: firment_core::Cancellable::new(),
         }

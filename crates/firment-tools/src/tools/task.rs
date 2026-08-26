@@ -21,7 +21,7 @@ impl Tool for Task {
             "properties": {
                 "prompt": {"type": "string", "description": "What the subagent should investigate and what to report back. Be specific about the expected output format."},
                 "model": {"type": "string", "description": "Optional model override for the subagent (defaults to the session model)"},
-                "provider": {"type": "string", "description": "Optional provider name override (a provider configured in config.toml, e.g. an Ollama endpoint added via add-provider). Defaults to the session provider. Combine with model to run cheap subagents on a local/small backend."},
+                "provider": {"type": "string", "description": "Optional provider name override (a provider configured in config.toml, e.g. an Ollama endpoint added via add-provider). Defaults to the session provider. Combine with model to run cheap subagents on a local/small backend. Discover available models first with the models tool."},
                 "cwd": {"type": "string", "description": "Optional subdirectory of the workspace to focus the subagent on"}
             },
             "required": ["prompt"]
@@ -137,6 +137,7 @@ mod tests {
             web_search_provider: None,
             web_search_api_key: None,
             session_dir: None,
+            providers: Vec::new(),
             cancel: firment_core::Cancellable::new(),
             allowed_roots: Vec::new(),
         }

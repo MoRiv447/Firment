@@ -182,6 +182,8 @@ pub struct Agent {
     /// Directory holding the desktop MQTT link's device-log files; exposed
     /// to tools via ToolContext. `None` falls back to the global config dir.
     device_log_dir: Option<std::path::PathBuf>,
+    /// OpenAI-compatible endpoints (name/base_url/key) for the `models` tool.
+    provider_endpoints: Vec<crate::tool::ProviderEndpoint>,
     /// Highest ledger sequence already merged into the conversation.
     ledger_seq_appended: u64,
     compaction_strategy: CompactionStrategy,
@@ -262,6 +264,7 @@ impl Agent {
             providers: Vec::new(),
             ledger_prefix: String::new(),
             device_log_dir: None,
+            provider_endpoints: Vec::new(),
             ledger_seq_appended: 0,
             compaction_strategy: CompactionStrategy::default(),
             symbols_backend: None,
@@ -398,6 +401,11 @@ impl Agent {
     /// `ToolContext::device_log_dir`).
     pub fn set_device_log_dir(&mut self, dir: Option<std::path::PathBuf>) {
         self.device_log_dir = dir;
+    }
+
+    /// Model endpoints exposed to the `models` discovery tool.
+    pub fn set_provider_endpoints(&mut self, endpoints: Vec<crate::tool::ProviderEndpoint>) {
+        self.provider_endpoints = endpoints;
     }
 
     /// Rough per-part context usage (char counts) for the `/context`
@@ -864,6 +872,7 @@ impl Agent {
             session_dir: self.session_dir.clone(),
             cancel: self.cancel.clone(),
             device_log_dir: self.device_log_dir.clone(),
+            providers: self.provider_endpoints.clone(),
         };
 
         self.seed_elf_baseline(&ctx).await;

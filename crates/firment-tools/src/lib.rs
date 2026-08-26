@@ -33,6 +33,7 @@ pub fn plan_registry() -> Arc<ToolRegistry> {
                 | "glob"
                 | "grep"
                 | "symbols"
+                | "models"
                 | "web_search"
                 | "web_fetch"
                 | "task"

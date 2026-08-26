@@ -228,6 +228,35 @@ impl ToolsConfig {
     }
 }
 
+/// Resolved model endpoints for the `models` discovery tool: base_url
+/// defaulted by provider type, API key resolved inline → env → auth.json.
+pub fn provider_endpoints(config: &Config) -> Vec<crate::tool::ProviderEndpoint> {
+    let auth = crate::load_auth();
+    config
+        .providers
+        .iter()
+        .map(|(name, p)| {
+            let default_base = if p.r#type == "anthropic" {
+                "https://api.anthropic.com"
+            } else {
+                "https://api.openai.com/v1"
+            };
+            crate::tool::ProviderEndpoint {
+                name: name.clone(),
+                base_url: p
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| default_base.to_string()),
+                api_key: p
+                    .api_key
+                    .clone()
+                    .or_else(|| p.api_key_env.as_ref().and_then(|e| std::env::var(e).ok()))
+                    .or_else(|| auth.get(name).cloned()),
+            }
+        })
+        .collect()
+}
+
 /// Auto-compaction strategy: `summarize` (default) summarizes all old rounds;
 /// `drop` also discards the oldest rounds entirely; `off` disables auto-compaction.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
