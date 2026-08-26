@@ -206,7 +206,7 @@ impl Provider for OpenAIProvider {
 
         let status = response.status();
         if !status.is_success() {
-            let message = response.text().await.unwrap_or_default();
+            let message = super::sanitize_error_body(&response.text().await.unwrap_or_default());
             return Err(ProviderError::Api {
                 status: status.as_u16(),
                 message,

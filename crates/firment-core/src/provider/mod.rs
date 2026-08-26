@@ -49,6 +49,35 @@ pub enum ProviderError {
     StreamEnded,
 }
 
+/// Compact an HTTP error body for display. Error payloads occasionally come
+/// back as entire HTML pages (proxies, wrong paths) — collapse whitespace,
+/// reduce markup-only bodies to a one-line note, and hard-cap the length so
+/// a single failure can't flood the transcript with hundreds of lines.
+pub fn sanitize_error_body(body: &str) -> String {
+    let one_line = body.split_whitespace().collect::<Vec<&str>>().join(" ");
+    let trimmed = one_line.trim();
+    if trimmed.starts_with('<') {
+        let lower = trimmed.to_ascii_lowercase();
+        if let Some(pos) = lower.find("<title>") {
+            let rest = &trimmed[pos + "<title>".len()..];
+            if let Some(end) = rest.to_ascii_lowercase().find("</title>") {
+                let title = rest[..end].trim();
+                return format!("non-JSON HTML response ({title})");
+            }
+        }
+        return format!("non-JSON HTML response ({} bytes)", trimmed.len());
+    }
+    const CAP: usize = 400;
+    if trimmed.chars().count() <= CAP {
+        return trimmed.to_string();
+    }
+    let cut: String = trimmed.chars().take(CAP).collect();
+    format!(
+        "{cut}… [truncated, {} chars total]",
+        trimmed.chars().count()
+    )
+}
+
 #[async_trait]
 pub trait Provider: Send + Sync {
     async fn stream(&self, request: ChatRequest) -> Result<ProviderStream, ProviderError>;
@@ -125,6 +154,36 @@ pub(crate) fn collect_tool_arguments(raw: &str) -> serde_json::Value {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn error_body_html_collapses_to_one_line() {
+        let html =
+            "<!DOCTYPE html><html>\n  <head> <title>404 Not Found</title> </head>\n".repeat(50);
+        let out = sanitize_error_body(&html);
+        assert_eq!(out, "non-JSON HTML response (404 Not Found)");
+        assert!(!out.contains('\n'));
+    }
+
+    #[test]
+    fn error_body_html_without_title_reports_size() {
+        let out = sanitize_error_body("<div><br></div><div>x</div>");
+        assert!(out.starts_with("non-JSON HTML response ("));
+        assert!(out.ends_with("bytes)"));
+    }
+
+    #[test]
+    fn error_body_long_json_is_capped() {
+        let body = format!("{{\"error\":{{\"message\":\"{}\"}}}}", "x".repeat(5000));
+        let out = sanitize_error_body(&body);
+        assert!(out.contains("… [truncated"));
+        assert!(out.chars().count() < 460);
+    }
+
+    #[test]
+    fn error_body_short_json_passes_through() {
+        let out = sanitize_error_body("{\"error\":{\"type\":\"invalid_model\"}}");
+        assert_eq!(out, "{\"error\":{\"type\":\"invalid_model\"}}");
+    }
 
     #[test]
     fn collect_accepts_clean_object() {
