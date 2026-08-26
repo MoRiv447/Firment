@@ -565,11 +565,29 @@ fn relevant_decisions(
 ) -> Vec<crate::workbench::DecisionEntry> {
     const STOP: [&str; 4] = ["the", "and", "for", "with"];
     let tokenize = |s: &str| -> Vec<String> {
-        s.to_lowercase()
-            .split(|c: char| !c.is_ascii_alphanumeric())
-            .filter(|t| t.len() >= 2 && !STOP.contains(t))
-            .map(str::to_string)
-            .collect()
+        let mut out = Vec::new();
+        // Unicode runs (is_alphanumeric keeps CJK); ASCII runs become whole
+        // tokens, CJK runs additionally become 2-char sliding windows —
+        // Chinese has no spaces, so whole-run tokens would never overlap
+        // and decision inheritance silently no-opped for Chinese titles.
+        for run in s.to_lowercase().split(|c: char| !c.is_alphanumeric()) {
+            if run.is_empty() {
+                continue;
+            }
+            let has_cjk = !run.is_ascii();
+            if has_cjk {
+                let chars: Vec<char> = run.chars().collect();
+                if chars.len() < 2 {
+                    continue;
+                }
+                for w in chars.windows(2) {
+                    out.push(w.iter().collect::<String>());
+                }
+            } else if run.len() >= 2 && !STOP.contains(&run) {
+                out.push(run.to_string());
+            }
+        }
+        out
     };
     let title_tokens = tokenize(branch_title);
     if title_tokens.is_empty() {
@@ -686,5 +704,20 @@ mod tests {
             .iter()
             .any(|m| matches!(m, ChatMessage::User { content } if content.contains("inherited")));
         assert!(!has_inherit, "no relevant decisions for 'led blinking'");
+
+        // CJK titles: bigram matching must work for Chinese decision +
+        // Chinese branch titles (the tokenizer used to be ASCII-only, which
+        // silently no-opped inheritance for the primary user language).
+        cfg.decision.push(crate::workbench::DecisionEntry {
+            title: "传感器总线选 CAN 而非 RS485".into(),
+            body: "节点数可能扩到 16".into(),
+            date: "2026-08-25".into(),
+        });
+        cfg.save(dir.path()).unwrap();
+        let child3 = store.create_branch("parent-1", "重写传感器驱动").unwrap();
+        let has_cjk_inherit = child3.messages.iter().any(
+            |m| matches!(m, ChatMessage::User { content } if content.contains("传感器总线选")),
+        );
+        assert!(has_cjk_inherit, "CJK decision inheritance failed");
     }
 }

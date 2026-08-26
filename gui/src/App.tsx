@@ -4,7 +4,7 @@ import {
   ApiOutlined,
   MessageOutlined,
   RocketOutlined,
-  TeamOutlined,
+  ProjectOutlined,
   UsbOutlined,
 } from '@ant-design/icons';
 import {
@@ -163,12 +163,15 @@ export default function App() {
           case 'info':
             console.info('[firm]', e.message);
             // Surface timeouts/stalls in the chat they belong to (sticky,
-            // newest last) so the user can tell a slow model from a wedged
-            // turn.
-            setInfos((prev) => [
-              ...prev.slice(-8),
-              { id: Date.now(), sid, text: e.message },
-            ]);
+            // newest last) — and DEDUPE identical consecutive lines (the
+            // mqtt retry loop would otherwise spam the same error).
+            setInfos((prev) => {
+              const last = prev[prev.length - 1];
+              if (last && last.text === e.message && last.sid === sid) {
+                return prev;
+              }
+              return [...prev.slice(-8), { id: Date.now(), sid, text: e.message }];
+            });
             break;
           // device_frame / guard_status are consumed by the WorkbenchView's
           // own subscriber (the card is self-contained and stays mounted);
@@ -483,7 +486,7 @@ export default function App() {
                 { key: 'serial', icon: <UsbOutlined />, label: 'Serial monitor' },
                 { key: 'flash', icon: <RocketOutlined />, label: 'Flash / Run' },
                 { key: 'settings', icon: <ApiOutlined />, label: 'Settings' },
-                { key: 'collab', icon: <TeamOutlined />, label: 'Workbench' },
+                { key: 'collab', icon: <ProjectOutlined />, label: 'Workbench' },
               ]}
             />
             {anyRunning && (

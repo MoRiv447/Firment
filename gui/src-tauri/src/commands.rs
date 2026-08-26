@@ -316,7 +316,6 @@ pub async fn session_context_usage(
     shared: tauri::State<'_, Arc<Shared>>,
     session_id: String,
 ) -> Result<ContextUsageDto, String> {
-    const DEFAULT_BUDGET: u64 = 256 * 1024;
     let shared = shared.inner().clone();
     let store = shared.store.lock().unwrap().clone();
     let session = store.load(&session_id).map_err(|e| e.to_string())?;
@@ -336,7 +335,11 @@ pub async fn session_context_usage(
     let budget = if session.context_budget_chars > 0 {
         session.context_budget_chars as u64
     } else {
-        DEFAULT_BUDGET
+        // No per-session override: the effective default is the MERGED
+        // config budget (global [context_budget_chars] + project
+        // .firment.toml overrides) — not a hardcoded constant.
+        let config = shared.config.lock().unwrap();
+        config.merged_for(&session.cwd).context_budget_chars as u64
     };
     let total_chars = system_chars + messages_chars;
     Ok(ContextUsageDto {

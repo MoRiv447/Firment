@@ -116,6 +116,9 @@ async fn run(shared: Arc<Shared>, broker: String) {
         }
 
         let mut frames: u64 = 0;
+        // Edge-triggered error announcement: true while the outage has been
+        // reported, cleared on the next successful CONNACK.
+        let mut error_announced = false;
         let mut connacked = false;
         // The webview attaches its listeners AFTER setup() emits the initial
         // status — early events are lost. Re-announce periodically so the
@@ -132,6 +135,7 @@ async fn run(shared: Arc<Shared>, broker: String) {
                 }
                 Ok(rumqttc::Event::Incoming(rumqttc::Packet::ConnAck(_))) => {
                     connacked = true;
+                    error_announced = false; // recovered — next outage announces again
                     trace(&shared, "CONNACK — broker session established");
                     // Online ONLY after the broker actually acknowledged the
                     // session — "subscribe queued" used to flip the card to
@@ -176,13 +180,22 @@ async fn run(shared: Arc<Shared>, broker: String) {
                             frame: format!("{{\"connected\":false,\"error\":\"{e}\"}}"),
                         },
                     );
-                    emit(
-                        &shared,
-                        FrontendEvent::Info {
-                            session_id: None,
-                            message: format!("[mqtt] link error: {e} — retrying in 3s"),
-                        },
-                    );
+                    // The Info line fires ONCE per outage (edge-triggered):
+                    // with the SBC off, the 3s retry loop would otherwise
+                    // spam the chat with the same error every cycle.
+                    if !error_announced {
+                        error_announced = true;
+                        emit(
+                            &shared,
+                            FrontendEvent::Info {
+                                session_id: None,
+                                message: format!(
+                                    "[mqtt] link error: {e} — retrying in 3s (will stop \
+                                     announcing until it recovers)"
+                                ),
+                            },
+                        );
+                    }
                     // Backoff then rebuild the whole client: rumqttc event
                     // loops do not recover cleanly from transport errors.
                     tokio::time::sleep(Duration::from_secs(3)).await;
