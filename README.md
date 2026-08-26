@@ -172,6 +172,15 @@ elf = "build/fw.elf"                  # auto-seed elf_analyze baselines
 Project-scoped config (`.firment/config.toml` in a repo) is merged on top;
 the model is told to keep itself honest with `AGENTS.md` / `FIRMENT.md`.
 
+### 🛰️ SBC edge-model setup
+
+Run the coding agent's guard + classification on a local SBC (Debian +
+systemd): mosquitto broker, ollama small models, the sbc-guard daemon,
+and PC-side provider config. From-zero walkthrough with a per-failure
+troubleshooting table: **[docs/sbc-setup.md](docs/sbc-setup.md)**.
+Acceptance is one command: `firm --doctor --sbc` (six checks, fix hints
+on every failure).
+
 ### 📚 Hardware knowledge base (optional)
 
 `periph_init` consults a bundled seed KB materialized into the config dir:

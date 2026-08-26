@@ -3,6 +3,11 @@
 SBC-side collector + deterministic guard (docs/sbc-agent.md §3). Python 3,
 two deps, no build step.
 
+> Full from-zero deployment walkthrough (broker, ollama, PC config,
+> acceptance via `firm --doctor --sbc`, troubleshooting table):
+> **[docs/sbc-setup.md](../docs/sbc-setup.md)**. This file stays as the
+> component-level quick reference.
+
 ## Deploy (on the Cubie A7A)
 
 ```bash

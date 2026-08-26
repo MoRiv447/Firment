@@ -153,6 +153,13 @@ elf = "build/fw.elf"                  # 自动建立 elf_analyze 基线
 项目级配置（仓库内 `.firment/config.toml`）会叠加合并；模型也会被引导
 阅读 `AGENTS.md` / `FIRMENT.md` 保持自律。
 
+### 🛰️ SBC 端侧模型部署
+
+把守卫 + 小模型分类跑在局域网 SBC 上（Debian + systemd）：mosquitto、
+ollama 模型、sbc-guard 守卫与 PC 侧 provider 配置的从零手册：
+**[docs/sbc-setup.md](docs/sbc-setup.md)**（含逐项故障排查表）。
+验收只需一条命令：`firm --doctor --sbc`（六段检查，失败即带修复提示）。
+
 ### 📚 硬件知识库（可选）
 
 `periph_init` 使用随附的种子知识库（物化到配置目录）：`vendor-index.toml`
