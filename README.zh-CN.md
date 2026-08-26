@@ -157,7 +157,8 @@ elf = "build/fw.elf"                  # 自动建立 elf_analyze 基线
 
 把守卫 + 小模型分类跑在局域网 SBC 上（Debian + systemd）：mosquitto、
 ollama 模型、sbc-guard 守卫与 PC 侧 provider 配置的从零手册：
-**[docs/sbc-setup.md](docs/sbc-setup.md)**（含逐项故障排查表）。
+**[docs/sbc-setup.zh-CN.md](docs/sbc-setup.zh-CN.md)**（含逐项故障排查表；
+英文版 [sbc-setup.md](docs/sbc-setup.md)）。
 验收只需一条命令：`firm --doctor --sbc`（六段检查，失败即带修复提示）。
 
 ### 📚 硬件知识库（可选）
