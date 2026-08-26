@@ -195,6 +195,11 @@ firm flash      flash a firmware ELF via probe-rs
 firm run        flash and run the target, streaming RTT logs
 firm monitor    serial monitor with optional ELF symbol decoding
 firm tools      print the tool registry specs as JSON (single source of truth)
+firm --doctor   check config + provider connectivity
+firm --doctor --sbc
+                end-to-end check of the SBC edge-model data plane: broker link,
+                guard heartbeat freshness, model endpoint (verifies the model is
+                actually pulled), bound devices. Each failing stage prints a fix hint.
 ```
 
 ### 🎮 TUI

@@ -81,6 +81,11 @@ struct Cli {
     #[arg(long)]
     doctor: bool,
 
+    /// Check the SBC edge-model data plane (broker link, guard heartbeat,
+    /// model endpoint, bound devices). Combine with --doctor for both.
+    #[arg(long)]
+    sbc: bool,
+
     /// Path to config.toml.
     #[arg(long)]
     config: Option<PathBuf>,
@@ -390,9 +395,14 @@ async fn main() -> anyhow::Result<()> {
         list_sessions()?;
         return Ok(());
     }
-    if cli.doctor {
-        doctor(&config, &config_path).await?;
-        doctor_install();
+    if cli.doctor || cli.sbc {
+        if cli.doctor {
+            doctor(&config, &config_path).await?;
+            doctor_install();
+        }
+        if cli.sbc {
+            doctor_sbc(&config).await;
+        }
         return Ok(());
     }
 
@@ -918,6 +928,279 @@ fn doctor_install() {
             "not created yet"
         }
     );
+}
+
+/// `firm --doctor --sbc`: end-to-end check of the SBC edge-model data plane.
+/// Every failing stage stops the chain with a concrete fix hint — the point
+/// is to answer "is the SBC side actually set up?" without reading logs.
+async fn doctor_sbc(config: &Config) {
+    println!("\nsbc edge-model checks:");
+
+    // Stage 1 — [mqtt] broker must be configured and parseable.
+    let broker = config.mqtt.broker.trim().to_string();
+    let Some((host, port)) = parse_host_port(&broker) else {
+        println!("  ✗ [mqtt] broker missing or invalid (got {broker:?})");
+        println!("    hint: add to {} :", config_path().display());
+        println!("      [mqtt]");
+        println!("      broker = \"<sbc-ip>:1883\"   # mosquitto on the SBC");
+        return;
+    };
+    println!("  ✓ [mqtt] broker = {host}:{port}");
+
+    // Stage 2 — TCP reachability, with distinct refused vs timeout hints.
+    match tokio::time::timeout(
+        Duration::from_secs(4),
+        tokio::net::TcpStream::connect((host.as_str(), port)),
+    )
+    .await
+    {
+        Ok(Ok(_)) => println!("  ✓ tcp {host}:{port} reachable"),
+        Ok(Err(e)) => {
+            if e.kind() == std::io::ErrorKind::ConnectionRefused {
+                println!("  ✗ tcp {host}:{port} connection refused");
+                println!("    hint: mosquitto not running on the SBC:");
+                println!("          ssh <user>@{host} -- sudo systemctl status mosquitto");
+            } else {
+                println!("  ✗ tcp {host}:{port}: {e}");
+                println!(
+                    "    hint: wrong IP or firewall; pin the SBC IP in the router's DHCP reservations"
+                );
+            }
+            return;
+        }
+        Err(_) => {
+            println!("  ✗ tcp {host}:{port} timed out after 4s");
+            println!("    hint: host unreachable (wrong IP? SBC offline? wifi down?)");
+            return;
+        }
+    }
+
+    // Stage 3+4 — one MQTT session: CONNACK, then grab the retained guard
+    // heartbeat from firment/guard/status.
+    let mut opts = rumqttc::MqttOptions::new("firm-doctor", &host, port);
+    opts.set_clean_session(true);
+    opts.set_keep_alive(Duration::from_secs(10));
+    let (client, mut eventloop) = rumqttc::AsyncClient::new(opts, 16);
+    client
+        .subscribe("firment/guard/status", rumqttc::QoS::AtLeastOnce)
+        .await
+        .ok();
+
+    let mut connack = false;
+    let mut mqtt_err: Option<String> = None;
+    let mut guard_status: Option<String> = None;
+    _ = tokio::time::timeout(Duration::from_secs(6), async {
+        loop {
+            match eventloop.poll().await {
+                Ok(rumqttc::Event::Incoming(rumqttc::Packet::ConnAck(_))) => connack = true,
+                Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(p)))
+                    if p.topic == "firment/guard/status" =>
+                {
+                    guard_status = Some(String::from_utf8_lossy(&p.payload).into_owned());
+                    break;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    mqtt_err = Some(e.to_string());
+                    break;
+                }
+            }
+        }
+    })
+    .await;
+    client.disconnect().await.ok();
+
+    if !connack {
+        let detail = mqtt_err.map(|e| format!(" ({e})")).unwrap_or_default();
+        println!("  ✗ mqtt CONNACK failed{detail}");
+        println!("    hint: is that port really mosquitto? check listener + allow_anonymous");
+        return;
+    }
+    println!("  ✓ mqtt CONNACK");
+
+    match guard_status {
+        None => {
+            println!("  ✗ no retained firment/guard/status within 6s");
+            println!(
+                "    hint: guardd not installed/running on the SBC — see sbc-guard/README.md;"
+            );
+            println!(
+                "          quick fix: ssh <user>@{host} -- sudo systemctl enable --now firment-guard"
+            );
+        }
+        Some(json) => match serde_json::from_str::<serde_json::Value>(&json) {
+            Ok(v) => {
+                let ts = v.get("ts").and_then(|x| x.as_i64());
+                let beat_min = v
+                    .get("standby_minutes")
+                    .and_then(|x| x.as_u64())
+                    .unwrap_or(10);
+                let rules = v.get("rules").and_then(|x| x.as_u64());
+                match ts {
+                    Some(ts) => {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs() as i64)
+                            .unwrap_or(0);
+                        let age = (now - ts).max(0);
+                        if age <= (beat_min * 120 + 60) as i64 {
+                            println!("  ✓ guard heartbeat fresh (age {age}s, beat {beat_min}min)");
+                        } else {
+                            println!(
+                                "  ✗ guard heartbeat STALE (age {age}s > 2×beat {beat_min}min)"
+                            );
+                            println!(
+                                "    hint: guardd died after its last beat — journalctl -u firment-guard on the SBC"
+                            );
+                        }
+                    }
+                    None => println!(
+                        "  ⚠ guard status has no ts field (old guardd build); rules={} — upgrade when convenient",
+                        rules.unwrap_or(0)
+                    ),
+                }
+            }
+            Err(_) => {
+                println!("  ⚠ retained guard frame is not valid JSON — unexpected publisher?")
+            }
+        },
+    }
+
+    // Stage 5 — find provider(s) whose base_url points at the broker host:
+    // that is our sbc model endpoint by convention. Verify /models lists the
+    // configured model (catches "ollama up but model never pulled").
+    let matches: Vec<_> = config
+        .providers
+        .iter()
+        .filter(|(_, p)| {
+            p.r#type != "anthropic"
+                && url_host(p.base_url.as_deref().unwrap_or("")) == Some(host.as_str())
+        })
+        .collect();
+    if matches.is_empty() {
+        println!("  ⚠ no openai-compatible provider points at {host}");
+        println!("    hint: add a provider whose base_url is http://{host}:<ollama-port>/v1,");
+        println!("          e.g. [providers.sbc-ollama] with type=\"openai\"");
+    } else {
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(8))
+            .build()
+            .ok();
+        for (name, p) in &matches {
+            let base = p
+                .base_url
+                .clone()
+                .unwrap_or_else(|| "http://localhost:11434/v1".to_string())
+                .trim_end_matches('/')
+                .to_string();
+            let key = provider_key(name, p);
+            let Some(http) = http.clone() else {
+                println!("  ⚠ {name}: could not build HTTP client");
+                continue;
+            };
+            let mut req = http.get(format!("{base}/models"));
+            if let Some(key) = key {
+                req = req.bearer_auth(key);
+            }
+            match tokio::time::timeout(Duration::from_secs(10), req.send()).await {
+                Ok(Ok(resp)) => {
+                    let ids: Vec<String> = resp
+                        .json::<serde_json::Value>()
+                        .await
+                        .ok()
+                        .and_then(|v| {
+                            Some(
+                                v.get("data")?
+                                    .as_array()?
+                                    .iter()
+                                    .filter_map(|m| m.get("id")?.as_str().map(String::from))
+                                    .collect(),
+                            )
+                        })
+                        .unwrap_or_default();
+                    if ids.is_empty() {
+                        println!("  ⚠ {name}: {base}/models answered but listed no models");
+                    } else if ids.iter().any(|id| id == &p.model) {
+                        println!(
+                            "  ✓ {name}: model '{}' ready ({} served)",
+                            p.model,
+                            ids.len()
+                        );
+                    } else {
+                        println!(
+                            "  ✗ {name}: model '{}' NOT pulled (endpoint serves: {})",
+                            p.model,
+                            ids.iter().take(5).cloned().collect::<Vec<_>>().join(", ")
+                        );
+                        println!("    hint: ssh <user>@{host} -- ollama pull {}", p.model);
+                    }
+                }
+                Ok(Err(e)) => {
+                    println!("  ✗ {name}: {base}/models unreachable ({e})");
+                    println!(
+                        "    hint: ollama not running on the SBC: ssh <user>@{host} -- systemctl status ollama"
+                    );
+                }
+                Err(_) => {
+                    println!(
+                        "  ✗ {name}: {base}/models timed out (cold start can take ~70s; retry once)"
+                    );
+                }
+            }
+        }
+    }
+
+    // Stage 6 — bound devices from the project's workbench.toml (if any).
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    match firment_core::WorkbenchConfig::load(&cwd) {
+        Ok(wb) if !wb.devices.is_empty() => {
+            let nodes: Vec<String> = wb.devices.keys().cloned().collect();
+            println!("  ✓ devices bound: {}", nodes.join(", "));
+        }
+        Ok(_) => println!("  · workbench.toml has no [devices] — no nodes bound yet"),
+        Err(_) => {
+            println!("  · no workbench.toml in cwd — device list skipped (run from project root)")
+        }
+    }
+}
+
+/// Split "host:port" (port optional → 1883).
+fn parse_host_port(broker: &str) -> Option<(String, u16)> {
+    let broker = broker.trim();
+    if broker.is_empty() {
+        return None;
+    }
+    match broker.rsplit_once(':') {
+        Some((h, p)) if !h.is_empty() && p.chars().all(|c| c.is_ascii_digit()) && !p.is_empty() => {
+            Some((h.to_string(), p.parse().ok()?))
+        }
+        Some((h, _)) if !h.is_empty() => Some((h.to_string(), 1883)),
+        _ => Some((broker.to_string(), 1883)),
+    }
+}
+
+/// Host component of an http(s) URL (None for empty/unparseable input).
+fn url_host(url: &str) -> Option<&str> {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    rest.split(['/', ':']).next().filter(|h| !h.is_empty())
+}
+
+/// API key for a provider: inline api_key → $API_KEY_ENV → auth.json[name].
+fn provider_key(name: &str, p: &firment_core::config::ProviderConfig) -> Option<String> {
+    if let Some(k) = &p.api_key {
+        return Some(k.clone());
+    }
+    if let Some(v) = p
+        .api_key_env
+        .as_ref()
+        .and_then(|env_name| env::var(env_name).ok())
+    {
+        return Some(v);
+    }
+    load_auth().get(name).cloned()
 }
 
 fn load_config(cli: &Cli) -> anyhow::Result<Config> {

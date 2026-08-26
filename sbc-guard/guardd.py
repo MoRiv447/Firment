@@ -98,18 +98,16 @@ class Guard:
             rules_path = CFG_PATH.parent / rules_path
         self.rules = compile_rules(load_rules(rules_path))
         self.o = cfg.get("ollama", {})
+        self.g = cfg.get("guard", {})
+        self.started = time.time()
+        self.counters_lock = threading.Lock()
+        self.counters = {"frames": 0, "matches": 0, "llm_calls": 0, "llm_fail": 0}
         self.escalate_sev = self.g.get("escalate_sev", "warn")
 
     _SEV_RANK = {"debug": 0, "info": 1, "warn": 2, "error": 3}
 
     def rank(self, sev: str) -> int:
         return self._SEV_RANK.get(sev, 1)
-
-        self.g = cfg.get("guard", {})
-        self.started = time.time()
-        self.g = cfg.get("guard", {})
-        self.counters_lock = threading.Lock()
-        self.counters = {"frames": 0, "matches": 0, "llm_calls": 0, "llm_fail": 0}
 
     def bump(self, key: str, n: int = 1):
         # counters are touched from the callback thread, the worker thread
@@ -289,9 +287,12 @@ def on_connect(_c, _u, _f, rc, _p=None):
 if __name__ == "__main__":
     cfg = load_config()
     guard = Guard(cfg)
-    # clean_session=False: a broker with persistence queues QoS1 frames
-    # across disconnects — "never drop" extends to outages, per the docstring.
-    mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, clean_session=False)
+    # clean_session=False + stable client id: a broker with persistence
+    # queues QoS1 frames across disconnects — "never drop" extends to
+    # outages, per the docstring. paho requires an explicit id for that.
+    mqtt_client = mqtt.Client(
+        mqtt.CallbackAPIVersion.VERSION2, client_id="sbc-guard", clean_session=False
+    )
     mqtt_client.on_connect = on_connect
     mqtt_client.on_message = on_message
     # LWT: a crashed daemon flips the retained status to online=false, so
