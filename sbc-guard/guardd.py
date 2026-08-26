@@ -189,6 +189,10 @@ class Guard:
             node, rule, sev, hit, full = self.work_queue.get()
             try:
                 llm = self.classify(full)
+                # The RULE severity is authoritative; the LLM only refines.
+                # Record every classification for the fine-tuning corpus
+                # BEFORE publishing so pairs/ captures what actually shipped.
+                self.record_pair(node, rule, sev, hit, full, llm)
                 if llm:
                     self.publish_alert(
                         node,
@@ -202,6 +206,38 @@ class Guard:
                 print(f"[worker] classify failed: {e}", flush=True)
             finally:
                 self.work_queue.task_done()
+
+    def record_pair(self, node, rule, sev, hit, full, llm):
+        """Append one fine-tuning sample to data_dir/pairs/<YYYYMMDD>.jsonl.
+
+        Shape: rule identity + authoritative rule_sev, the raw line, and the
+        small-model's opinion (llm_*) when it produced one. Training later
+        weighs these against rule_sev; review scripts can diff llm_sev vs
+        rule_sev to mine corrections.
+        """
+        try:
+            pdir = self.data_dir / "pairs"
+            pdir.mkdir(parents=True, exist_ok=True)
+            rec = {
+                "ts": int(time.time()),
+                "node": node,
+                "rule": rule,
+                "rule_sev": sev,
+                "hit": hit,
+                "line": full[:400],
+                "published_sev": (llm or {}).get("sev", sev) if llm else sev,
+            }
+            if llm:
+                rec["llm_sev"] = llm.get("sev")
+                rec["llm_summary"] = (llm.get("summary") or "")[:120]
+                rec["llm_category"] = llm.get("category")
+            with open(
+                pdir / f"{time.strftime('%Y%m%d')}.jsonl", "a", encoding="utf-8"
+            ) as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except Exception as e:
+            # Corpus failure must never break alerting.
+            print(f"[pairs] record failed: {e}", flush=True)
 
     def publish_alert(
         self, node: str, rule: str, sev: str, summary: str, full: str, revised: bool

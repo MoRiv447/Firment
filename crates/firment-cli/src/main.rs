@@ -718,13 +718,29 @@ struct CliSink;
 #[async_trait]
 impl EventSink for CliSink {
     async fn event(&self, event: AgentEvent) {
+        // The CLI has no live-thinking panel; show a one-line indicator per
+        // thinking BURST instead of spamming every streamed delta.
+        static THINKING_SHOWN: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
         match event {
-            AgentEvent::ToolStart { name, .. } => eprintln!("▶ {name}"),
+            AgentEvent::Thinking(_) => {
+                use std::sync::atomic::Ordering;
+                if !THINKING_SHOWN.swap(true, Ordering::Relaxed) {
+                    eprintln!("◌ thinking…");
+                }
+            }
+            AgentEvent::ToolStart { name, .. } => {
+                THINKING_SHOWN.store(false, std::sync::atomic::Ordering::Relaxed);
+                eprintln!("▶ {name}");
+            }
             AgentEvent::ToolEnd {
                 name, ok, summary, ..
             } => {
                 let mark = if ok { "✓" } else { "✗" };
                 eprintln!("  {mark} {name}: {summary}");
+            }
+            AgentEvent::TextDelta(_) => {
+                THINKING_SHOWN.store(false, std::sync::atomic::Ordering::Relaxed);
             }
             AgentEvent::Error(message) => eprintln!("⚠ {message}"),
             _ => {}
