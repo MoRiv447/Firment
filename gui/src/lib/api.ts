@@ -37,6 +37,7 @@ export const api = {
   sessionContextUsage: (sessionId: string) =>
     invoke<ContextUsageDto>('session_context_usage', { sessionId }),
   mqttStatus: () => invoke<string>('mqtt_status'),
+  setDefaultChip: (chip: string) => invoke<string>('set_default_chip', { chip }),
   listSessions: () => invoke<SessionSummaryDto[]>('list_sessions'),
   workbenchState: (cwd: string) => invoke<WorkbenchStateDto>('workbench_state', { cwd }),
   workbenchPinmapList: (cwd: string) => invoke<BoardPinmapDto[]>('workbench_pinmap_list', { cwd }),

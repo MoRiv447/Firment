@@ -174,6 +174,9 @@ export function WorkbenchView() {
   // Hardware inventory: serial ports + probe-rs probes + default chip.
   // Refreshed behind an explicit button (probe-rs enumeration takes ~1s).
   const [hardware, setHardware] = useState<HardwareInfoDto | null>(null);
+  // Inline editor state for the default chip (Hardware card).
+  const [chipEditing, setChipEditing] = useState(false);
+  const [chipDraft, setChipDraft] = useState('');
   // Burn history (.firment/work/flash-history.jsonl) — 何日向哪块板烧了哪个镜像。
   const [flashHistory, setFlashHistory] = useState<FlashHistoryDto[]>([]);
   // Guard escalations: alerts at/above the project's escalate_sev for BOUND
@@ -990,24 +993,77 @@ export function WorkbenchView() {
               >
                 {!hardware ? (
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    未加载。点 refresh 枚举串口与 probe-rs 探针。
+                    Not loaded yet — hit refresh to enumerate serial ports and probe-rs probes.
                   </Text>
                 ) : (
                   <>
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
-                      <Tag style={{ borderRadius: 0, fontSize: 11 }}>
-                        默认芯片: {hardware.default_chip || '(未配置)'}
-                      </Tag>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 6, alignItems: 'center' }}>
+                      <Tooltip title="Used by the flash tool when no chip parameter is passed. Saved to global config.">
+                        <Tag
+                          style={{ borderRadius: 0, fontSize: 11, cursor: chipEditing ? 'default' : 'pointer' }}
+                          onClick={() => {
+                            setChipDraft(String(hardware.default_chip));
+                            setChipEditing(true);
+                          }}
+                        >
+                          chip: {hardware.default_chip || '(unset)'} ✎
+                        </Tag>
+                      </Tooltip>
                       <Tag
                         color={hardware.probe_rs_available ? 'green' : 'default'}
                         style={{ borderRadius: 0, fontSize: 11 }}
                       >
-                        probe-rs {hardware.probe_rs_available ? '可用' : '未安装'}
+                        probe-rs {hardware.probe_rs_available ? 'available' : 'not installed'}
                       </Tag>
                     </div>
+                    {chipEditing && (
+                      <Space.Compact style={{ width: '100%', marginBottom: 6 }}>
+                        <Input
+                          size="small"
+                          placeholder="default chip (e.g. stm32g431rb — empty to unset)"
+                          value={chipDraft}
+                          onChange={(e) => setChipDraft(e.target.value)}
+                          onPressEnter={async () => {
+                            setBusy(true);
+                            try {
+                              const saved = await api.setDefaultChip(chipDraft.trim());
+                              setHardware({ ...hardware, default_chip: saved });
+                              setChipEditing(false);
+                            } catch (err) {
+                              setError(String(err));
+                            } finally {
+                              setBusy(false);
+                            }
+                          }}
+                          style={{ fontFamily: 'Consolas, monospace', fontSize: 11 }}
+                        />
+                        <Button
+                          size="small"
+                          type="primary"
+                          disabled={busy}
+                          onClick={async () => {
+                            setBusy(true);
+                            try {
+                              const saved = await api.setDefaultChip(chipDraft.trim());
+                              setHardware({ ...hardware, default_chip: saved });
+                              setChipEditing(false);
+                            } catch (err) {
+                              setError(String(err));
+                            } finally {
+                              setBusy(false);
+                            }
+                          }}
+                        >
+                          save
+                        </Button>
+                        <Button size="small" onClick={() => setChipEditing(false)}>
+                          cancel
+                        </Button>
+                      </Space.Compact>
+                    )}
                     {hardware.serial_ports.length === 0 ? (
                       <Text type="secondary" style={{ fontSize: 12 }}>
-                        没有串口。
+                        No serial ports found.
                       </Text>
                     ) : (
                       <div style={{ marginBottom: 6 }}>
@@ -1025,7 +1081,7 @@ export function WorkbenchView() {
                     {hardware.probes.length > 0 && (
                       <>
                         <Text type="secondary" style={{ fontSize: 11 }}>
-                          probe-rs 探针:
+                          probe-rs probes:
                         </Text>
                         <div>
                           {hardware.probes.map((p, i) => (

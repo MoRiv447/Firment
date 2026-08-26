@@ -63,6 +63,7 @@ pub fn run() {
             commands::set_session_budget,
             commands::session_context_usage,
             commands::mqtt_status,
+            commands::set_default_chip,
             commands::respond_permission,
             commands::respond_ask,
             commands::fetch_models,

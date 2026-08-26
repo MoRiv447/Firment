@@ -306,6 +306,25 @@ pub async fn mqtt_status(shared: tauri::State<'_, Arc<Shared>>) -> Result<String
     Ok(shared.mqtt_status.lock().unwrap().clone())
 }
 
+/// Set [tools] default_chip in the GLOBAL config: the flash tool falls back
+/// to it when no chip parameter is passed. Per-project overrides remain
+/// possible via a project .firment.toml ([tools] default_chip).
+#[tauri::command]
+pub async fn set_default_chip(
+    shared: tauri::State<'_, Arc<Shared>>,
+    chip: String,
+) -> Result<String, String> {
+    let chip = chip.trim().to_string();
+    {
+        let mut config = shared.config.lock().unwrap();
+        config.tools.default_chip = if chip.is_empty() { None } else { Some(chip.clone()) };
+        config
+            .save(&shared.config_path)
+            .map_err(|e| format!("save config: {e}"))?;
+    }
+    Ok(chip)
+}
+
 /// Rough context usage matching the TUI's `/context` estimate: system
 /// prompt + transcript chars against the compaction budget. Tool-schema
 /// chars are omitted (registry-dependent); treat the number as a lower

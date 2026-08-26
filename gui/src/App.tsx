@@ -77,6 +77,8 @@ export default function App() {
   // While the budget menu is open the ctx tooltip stays hidden — otherwise
   // hovering pops the info box and clicking pops two boxes at once.
   const [ctxMenuOpen, setCtxMenuOpen] = useState(false);
+  // While the notification panel is open its hover tooltip stays hidden.
+  const [notifOpen, setNotifOpen] = useState(false);
   const [view, setView] = useState<ViewKey>('chat');
   // Notification center: guard alerts + build/verify/flash failures + device
   // offline events, aggregated across sessions. Persisted (last 50) so a
@@ -118,8 +120,8 @@ export default function App() {
           pushNotification({
             id: `offline-${node}-${Math.floor(now / 60_000)}`,
             kind: 'device-offline',
-            title: `节点离线 ${node}`,
-            body: '超过 60 秒没有收到任何帧（板子断电/掉线？）',
+            title: `Node offline: ${node}`,
+            body: 'No frames received for over 60s (power loss / dropped WiFi?)',
           });
         }
       });
@@ -603,6 +605,8 @@ export default function App() {
             <Popover
               trigger="click"
               placement="bottomRight"
+              open={notifOpen}
+              onOpenChange={setNotifOpen}
               content={
                 <div style={{ width: 380, maxHeight: 420, overflowY: 'auto', padding: 8 }}>
                   <Space style={{ marginBottom: 6, width: '100%', justifyContent: 'space-between' }}>
@@ -616,7 +620,7 @@ export default function App() {
                         localStorage.setItem('notif-last-read', String(ts));
                       }}
                     >
-                      全部已读
+                      Mark all read
                     </Button>
                     <Button
                       size="small"
@@ -626,12 +630,12 @@ export default function App() {
                         localStorage.setItem('notifications', '[]');
                       }}
                     >
-                      清空
+                      Clear
                     </Button>
                   </Space>
                   {notifications.length === 0 ? (
                     <Text type="secondary" style={{ fontSize: 12 }}>
-                      暂无通知：守卫告警、构建/验证/烧录失败、节点离线会出现在这里。
+                      No notifications yet. Guard alerts, build/verify/flash failures and node offline events land here.
                     </Text>
                   ) : (
                     notifications.map((n) => (
@@ -682,7 +686,10 @@ export default function App() {
                 </div>
               }
             >
-              <Tooltip title="通知中心（守卫告警 / 构建·烧录失败 / 节点离线）">
+              <Tooltip
+                open={notifOpen ? false : undefined}
+                title="Notification center (guard alerts / build & flash failures / node offline)"
+              >
                 <Badge count={notifUnread} size="small" offset={[-2, 2]}>
                   <Button
                     icon={<BellOutlined />}
