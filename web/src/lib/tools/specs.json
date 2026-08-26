@@ -472,6 +472,19 @@
     }
   },
   {
+    "name": "models",
+    "description": "List the models served by configured OpenAI-compatible provider endpoints (GET /models). Use before delegating with the task tool's provider/model overrides: it shows which models actually exist on each backend — an SBC ollama may serve several small models, cloud APIs several tiers. Without arguments every configured provider is probed; pass provider to query just one.",
+    "input_schema": {
+      "properties": {
+        "provider": {
+          "description": "Provider name from config.toml [providers]. Omit to list all.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
     "name": "monitor",
     "description": "Open a serial port (UART) for a bounded time and return the captured log lines, each prefixed with its arrival time [SS.mmm]. Optionally decode hex code addresses (e.g. panic backtraces) using an ELF. With autodetect=true, tries common baud rates (9600..921600) and reports the first one that yields valid data. Use after flash/run when the target logs over a physical UART. If no port is passed or configured, the tool reports the serial ports it detected on this host.",
     "input_schema": {
@@ -740,7 +753,7 @@
           "type": "string"
         },
         "provider": {
-          "description": "Optional provider name override (a provider configured in config.toml, e.g. an Ollama endpoint added via add-provider). Defaults to the session provider. Combine with model to run cheap subagents on a local/small backend.",
+          "description": "Optional provider name override (a provider configured in config.toml, e.g. an Ollama endpoint added via add-provider). Defaults to the session provider. Combine with model to run cheap subagents on a local/small backend. Discover available models first with the models tool.",
           "type": "string"
         }
       },
