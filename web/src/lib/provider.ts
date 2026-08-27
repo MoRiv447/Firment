@@ -18,6 +18,8 @@ export interface ChatRequest {
   maxTokens?: number;
   temperature?: number;
   thinking?: string;
+  /** Abort signal for client disconnects / turn cancellation. */
+  signal?: AbortSignal;
 }
 
 export interface StreamResult {
@@ -71,7 +73,9 @@ export class FirmentProvider {
     const thinkingParams = this.buildThinkingParams(request.thinking);
     if (thinkingParams) Object.assign(params, thinkingParams);
 
-    const response = await this.client.chat.completions.create(params);
+    const response = await this.client.chat.completions.create(params, {
+      signal: request.signal ?? undefined,
+    });
 
     let fullText = '';
     let toolChunks: Array<{ index: number; id?: string; name?: string; args?: string }> = [];
@@ -112,7 +116,9 @@ export class FirmentProvider {
    * - DeepSeek V4 requires thinking to be explicitly enabled and only
    *   accepts reasoning_effort high/max (low/medium/high -> high,
    *   xhigh/max -> max).
-   * - Other OpenAI-compatible endpoints get reasoning_effort passed through.
+   * - Other OpenAI-compatible endpoints only accept low|medium|high:
+   *   xhigh/max are Firment-native levels that strict servers 400 on,
+   *   so they clamp to high exactly like the CLI openai provider does.
    * `off` sends nothing.
    */
   private buildThinkingParams(thinking: string | undefined): Record<string, any> | null {
@@ -124,7 +130,9 @@ export class FirmentProvider {
         reasoning_effort: ['low', 'medium', 'high'].includes(thinking) ? 'high' : 'max',
       };
     }
-    return { reasoning_effort: thinking };
+    const effort =
+      thinking === 'low' ? 'low' : thinking === 'medium' ? 'medium' : 'high';
+    return { reasoning_effort: effort };
   }
 
   private convertMessages(messages: ChatMessage[]): any[] {

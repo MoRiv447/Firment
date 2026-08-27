@@ -59,11 +59,25 @@ export async function POST(request: NextRequest) {
     }
 
     const encoder = new TextEncoder();
+    // Client disconnects must stop the whole agent loop (LLM streaming +
+    // further tool executions), not let it burn tokens against a dead pipe.
+    const abort = new AbortController();
+    if (request.signal.aborted) {
+      abort.abort();
+    } else {
+      request.signal.addEventListener('abort', () => abort.abort(), { once: true });
+    }
 
     const stream = new ReadableStream({
       async start(controller) {
+        // After a disconnect every enqueue throws; abort instead of letting
+        // the TypeError unwind through the agent loop.
         const send = (obj: any) => {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+          try {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+          } catch {
+            abort.abort();
+          }
         };
 
         try {
@@ -71,15 +85,25 @@ export async function POST(request: NextRequest) {
             messages,
             userInput,
             config || {},
-            (event) => send(event)
+            (event) => send(event),
+            abort.signal
           );
           send({ type: 'done', finalText: result.finalText, newMessages: result.newMessages });
         } catch (error: any) {
-          console.error('Chat error:', error);
-          send({ type: 'error', error: error?.message || 'Internal server error' });
+          if (!abort.signal.aborted) {
+            console.error('Chat error:', error);
+            send({ type: 'error', error: error?.message || 'Internal server error' });
+          }
         } finally {
-          controller.close();
+          try {
+            controller.close();
+          } catch {
+            // already cancelled by the disconnect
+          }
         }
+      },
+      cancel() {
+        abort.abort();
       },
     });
 

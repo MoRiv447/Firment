@@ -16,11 +16,16 @@ export function FlashView() {
   const [result, setResult] = useState<HardwareExit | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     let unlisten: (() => void) | null = null;
     void onHardwareExit((e) => setResult(e)).then((u) => {
-      unlisten = u;
+      // Unmounted before the listen() IPC resolved → drop it immediately,
+      // otherwise this view leaks one listener per fast tab switch.
+      if (cancelled) u();
+      else unlisten = u;
     });
     return () => {
+      cancelled = true;
       unlisten?.();
     };
   }, []);

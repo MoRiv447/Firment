@@ -217,17 +217,24 @@ pub async fn session_transcript(
 // so persisting these to the session file is all it takes for the change
 // to apply from the next message onwards.
 
-#[tauri::command]
-/// Guard shared by the per-session knob commands: a running turn holds its
-/// own session snapshot and saves it on EVERY exit path, so a knob written
-/// mid-turn would be silently reverted when the turn finishes. Refuse
-/// instead — the UI disables the chips, this is the backend backstop.
-fn ensure_not_running(shared: &Shared, session_id: &str) -> Result<(), String> {
+/// Whether a turn is currently running in `session_id` (the agents map holds
+/// one slot per live agent).
+pub(crate) fn is_session_running(shared: &Shared, session_id: &str) -> bool {
     let map = shared.agents.lock().unwrap();
-    if let Some(slot) = map.get(session_id) {
-        if slot.running.load(Ordering::SeqCst) {
-            return Err("a turn is running in this session — the change would be overwritten; try again after it finishes".to_string());
-        }
+    map.get(session_id)
+        .map(|slot| slot.running.load(Ordering::SeqCst))
+        .unwrap_or(false)
+}
+
+/// Guard shared by the per-session knob commands and the workbench mainline
+/// rewrites: a running turn holds its own session snapshot and saves it on
+/// EVERY exit path, so any other load-modify-save of the same transcript file
+/// mid-turn would be silently reverted (or worse, truncate the turn's final
+/// save). Refuse instead — the UI disables the controls, this is the backend
+/// backstop.
+fn ensure_not_running(shared: &Shared, session_id: &str) -> Result<(), String> {
+    if is_session_running(shared, session_id) {
+        return Err("a turn is running in this session — the change would be overwritten; try again after it finishes".to_string());
     }
     Ok(())
 }

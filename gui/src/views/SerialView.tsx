@@ -36,13 +36,18 @@ export function SerialView({ lines }: { lines: Record<string, MonitorLine[]> }) 
   // A monitor can exit on its own (port unplugged, reader error). Refresh the
   // active list so Stop/Send buttons don't keep claiming the port is live.
   useEffect(() => {
+    let cancelled = false;
     let unlisten: (() => void) | null = null;
     void onMonitorExited(() => {
       void api.activeMonitors().then(setActive).catch(console.error);
     }).then((u) => {
-      unlisten = u;
+      // Unmounted before the listen() IPC resolved → drop it immediately,
+      // otherwise this view leaks one listener per fast tab switch.
+      if (cancelled) u();
+      else unlisten = u;
     });
     return () => {
+      cancelled = true;
       unlisten?.();
     };
   }, []);

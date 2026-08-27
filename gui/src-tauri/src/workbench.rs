@@ -82,11 +82,32 @@ pub async fn workbench_state(
     // One-time self-heal for sessions created before the Normal/Mainline/
     // Branch triple existed: the registered mainline gets promoted (and any
     // sibling Mainline in the same project demoted to Normal) so the sidebar
-    // tags are truthful without user action.
+    // tags are truthful without user action. mark_mainline is a full
+    // load-modify-save of transcript files — exactly what a running turn's
+    // own final save races with — so this only fires when some tag is
+    // actually wrong AND no touched session has a live turn (the knob
+    // commands guard the same hazard via ensure_not_running).
     let cfg = load_config(&root);
     if !cfg.mainline_session.is_empty() {
         let store = shared.store.lock().unwrap().clone();
-        let _ = store.mark_mainline(&cfg.mainline_session);
+        let mut needs_heal = false;
+        if let Ok(summaries) = store.list() {
+            let target = summaries
+                .iter()
+                .find(|s| s.id == cfg.mainline_session);
+            if let Some(target) = target {
+                let sibling_conflict = summaries.iter().any(|s| {
+                    s.id != target.id
+                        && s.kind == firment_core::SessionKind::Mainline
+                        && s.cwd == target.cwd
+                });
+                needs_heal =
+                    sibling_conflict || target.kind != firment_core::SessionKind::Mainline;
+            }
+        }
+        if needs_heal && !crate::commands::is_session_running(&shared, &cfg.mainline_session) {
+            let _ = store.mark_mainline(&cfg.mainline_session);
+        }
     }
 
     Ok(WorkbenchStateDto {
@@ -105,7 +126,13 @@ pub async fn workbench_set_mainline(
     // The mainline must point at a real session: setting it to a deleted or
     // typo'd id would leave the workbench permanently "(unset)".
     // mark_mainline promotes the target to Mainline and demotes any other
-    // Mainline session sharing its cwd back to Normal.
+    // Mainline session sharing its cwd back to Normal. Both rewrites race a
+    // running turn's own saves, so refuse while that session is live.
+    if crate::commands::is_session_running(&shared, &session_id) {
+        return Err(
+            "a turn is running in this session — set it as mainline after it finishes".to_string(),
+        );
+    }
     shared
         .store
         .lock()

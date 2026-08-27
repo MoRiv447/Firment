@@ -47,6 +47,10 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const streamingSessionRef = useRef<string | null>(null);
+  // Sessions deleted while a turn was still streaming: when the in-flight
+  // stream completes it must NOT resurrect the deleted session via
+  // upsertSession's re-insert branch.
+  const deletedIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     const loaded = loadSessions();
@@ -79,6 +83,7 @@ export default function ChatPage() {
       : displayMessages;
 
   const upsertSession = useCallback((updated: LocalSession) => {
+    if (deletedIdsRef.current.has(updated.id)) return;
     setSessions((prev) => {
       const exists = prev.some((s) => s.id === updated.id);
       const next = exists ? prev.map((s) => (s.id === updated.id ? updated : s)) : [updated, ...prev];
@@ -111,6 +116,7 @@ export default function ChatPage() {
   }
 
   function deleteSession(id: string) {
+    deletedIdsRef.current.add(id);
     const next = sessions.filter((s) => s.id !== id);
     saveSessions(next);
     setSessions(next);

@@ -16,7 +16,7 @@ import {
 } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import { useEffect, useRef, useState } from 'react';
-import { api, notifySessionsChanged, onAgentEvent } from '../lib/api';
+import { api, notifySessionsChanged, onAgentEvent, onWorkbenchOpen } from '../lib/api';
 import type {
   AlertEntry,
   BoardPinmapDto,
@@ -233,10 +233,16 @@ export function WorkbenchView() {
       const wb = await api.workbenchState(dir);
       const all = await api.listSessions();
       setState(wb);
-      // Only show sessions belonging to this project root.
+      // Only show sessions belonging to this project root. Prefix matching
+      // must respect the directory boundary: without it D:\fw\thermo also
+      // swallows every session under D:\fw\thermostat.
       const root = dir.replace(/\\/g, '/').replace(/\/$/, '').toLowerCase();
+      const rootPrefix = root.endsWith(':') ? `${root}/` : `${root}/`;
       setSessions(
-        all.filter((s) => s.cwd.replace(/\\/g, '/').toLowerCase().startsWith(root)),
+        all.filter((s) => {
+          const c = s.cwd.replace(/\\/g, '/').toLowerCase();
+          return c === root || c.startsWith(rootPrefix);
+        }),
       );
       setCurrentSessionId(null);
       // Return the FRESH state so callers can chain insights on the new
@@ -266,6 +272,18 @@ export function WorkbenchView() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // The sidebar's folder button opens a DIFFERENT project. This view stays
+  // mounted across tabs (its startup restore ran long ago), so App bridges
+  // the request here instead of relying on localStorage alone. The []-deps
+  // listener reaches the latest load() through a ref (stale-closure-proof,
+  // same pattern as runEscalationRef below).
+  const reloadRef = useRef<(dir: string) => void>(() => {});
+  useEffect(() => onWorkbenchOpen((dir) => reloadRef.current(dir)), []);
+  reloadRef.current = (dir: string) => {
+    setCwd(dir);
+    void load(dir);
+  };
 
   // W1d cards: ELF stats + verification badges + change timeline, scoped to
   // the project's mainline session. Takes the FRESH workbench state so the

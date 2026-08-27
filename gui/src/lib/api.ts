@@ -126,6 +126,17 @@ export function onAskRequest(cb: (e: AskRequest) => void): Promise<UnlistenFn> {
   return listen<AskRequest>('ask-request', (ev) => cb(ev.payload));
 }
 
+// Backend auto-denied a dialog after its timeout: the frontend must drop the
+// stale entry or a later Allow click would silently no-op while the user
+// believes they approved the tool.
+export function onPermissionExpired(cb: (id: number) => void): Promise<UnlistenFn> {
+  return listen<{ id: number }>('permission-expired', (ev) => cb(ev.payload.id));
+}
+
+export function onAskExpired(cb: (id: number) => void): Promise<UnlistenFn> {
+  return listen<{ id: number }>('ask-expired', (ev) => cb(ev.payload.id));
+}
+
 export function onMonitorOutput(cb: (e: MonitorLine) => void): Promise<UnlistenFn> {
   return listen<MonitorLine>('monitor-output', (ev) => cb(ev.payload));
 }
@@ -152,4 +163,20 @@ export function onSessionsChanged(cb: () => void): () => void {
   const handler = () => cb();
   window.addEventListener(SESSIONS_CHANGED, handler);
   return () => window.removeEventListener(SESSIONS_CHANGED, handler);
+}
+
+// ---- cross-view workbench open ---------------------------------------------
+// The Workbench view stays mounted across tabs; the sidebar's folder button
+// targets a DIFFERENT project, so it dispatches this event to make the view
+// load that project instead of relying on its one-shot startup restore.
+const WORKBENCH_OPEN = 'firment:open-workbench';
+
+export function requestWorkbenchOpen(cwd: string): void {
+  window.dispatchEvent(new CustomEvent(WORKBENCH_OPEN, { detail: { cwd } }));
+}
+
+export function onWorkbenchOpen(cb: (cwd: string) => void): () => void {
+  const handler = (ev: Event) => cb((ev as CustomEvent).detail?.cwd as string);
+  window.addEventListener(WORKBENCH_OPEN, handler);
+  return () => window.removeEventListener(WORKBENCH_OPEN, handler);
 }

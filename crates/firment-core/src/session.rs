@@ -531,15 +531,23 @@ fn atomic_write(path: &Path, content: &str) -> Result<(), SessionError> {
     // On Windows persist fails if another handle holds the target open
     // without FILE_SHARE_DELETE (AV scanner, indexer, a second firm
     // instance) — retry briefly before giving up. PersistError hands the
-    // temp file back so it can be retried.
+    // temp file back so it can be retried. The cap keeps a long-lived
+    // external handle from spinning this loop (and the blocking sleep
+    // inside an async turn) forever; saves are best-effort, so giving up
+    // lets the turn proceed and the next checkpoint retry.
     let mut last_err = None;
     let mut pending = Some(tmp);
-    while pending.is_some() {
-        let file = pending.take().unwrap();
+    let mut attempts = 0u32;
+    while let Some(file) = pending.take() {
         match file.persist(path) {
             Ok(_) => return Ok(()),
             Err(e) => {
                 last_err = Some(SessionError::Io(std::io::Error::other(e.to_string())));
+                attempts += 1;
+                if attempts >= 20 {
+                    // Dropping the NamedTempFile removes it from disk.
+                    break;
+                }
                 std::thread::sleep(std::time::Duration::from_millis(150));
                 pending = Some(e.file);
             }

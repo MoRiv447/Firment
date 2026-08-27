@@ -42,7 +42,8 @@ export async function runAgentTurn(
   history: ChatMessage[],
   userInput: string,
   config: any,
-  onEvent?: (event: AgentEvent) => void
+  onEvent?: (event: AgentEvent) => void,
+  signal?: AbortSignal
 ): Promise<{ events: AgentEvent[]; finalText: string; newMessages: ChatMessage[] }> {
   const providerConfig = resolveProviderConfig(config);
   if (!providerConfig) {
@@ -91,10 +92,19 @@ export async function runAgentTurn(
           '[Context was compacted. Please continue helping with the current task based on the recent messages.]',
       };
       if (newStart > 10) {
-        const tail = messages.slice(newStart - 8, newStart);
-        messages.splice(1, newStart - 9, digest);
-        // After the splice the layout is: system, digest, tail(8), new messages…
-        newStart = 1 + 1 + tail.length;
+        let tailStart = newStart - 8;
+        // Never cut between an assistant(tool_calls) message and its `tool`
+        // results: a retained history that STARTS with a bare `tool` message
+        // is rejected by strict OpenAI-compatible providers ("role 'tool'
+        // must respond to a preceding tool_calls"). Extend the tail back to
+        // include the parent assistant instead.
+        while (tailStart > 1 && messages[tailStart]?.role === 'tool') {
+          tailStart--;
+        }
+        const tail = messages.slice(tailStart, newStart);
+        messages.splice(1, tailStart - 1, digest);
+        // After the splice the layout is: system, digest, tail, new messages…
+        newStart = 2 + tail.length;
       } else {
         // Already compacted (or history too short): merge everything old
         // (digest + tail) into a single digest at index 1.
@@ -110,6 +120,7 @@ export async function runAgentTurn(
         maxTokens: providerConfig.maxTokens,
         temperature: providerConfig.temperature,
         thinking: config?.thinking || 'off',
+        signal,
       },
       async (event) => {
         await emit(event);
@@ -127,6 +138,12 @@ export async function runAgentTurn(
 
     // No tool calls -> we are done for this turn
     if (toolCalls.length === 0) {
+      break;
+    }
+
+    // Client disconnected: stop before running more tools. The LLM stream is
+    // aborted via the request signal; work already done stays in the transcript.
+    if (signal?.aborted) {
       break;
     }
 

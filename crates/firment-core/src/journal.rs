@@ -226,17 +226,23 @@ impl EditJournal {
     pub fn rollback(&mut self) -> Result<Vec<String>, String> {
         let mut restored = Vec::new();
         let mut errors = Vec::new();
+        let mut restored_entries: Vec<EntryRecord> = Vec::new();
         let mut kept: Vec<EntryRecord> = Vec::new();
         for entry in self.entries.drain(..).rev() {
             match restore_entry(&self.dir, &entry) {
-                Ok(()) => restored.push(entry.path.to_string_lossy().into_owned()),
+                Ok(()) => {
+                    restored.push(entry.path.to_string_lossy().into_owned());
+                    restored_entries.push(entry);
+                }
                 Err(e) => {
                     errors.push(e);
                     kept.push(entry);
                 }
             }
         }
-        for entry in &self.entries {
+        // Entries restored successfully no longer need their backups;
+        // failed ones RETAIN theirs so a later rollback/undo can retry.
+        for entry in &restored_entries {
             if !entry.backup.is_empty() {
                 let _ = fs::remove_file(self.dir.join(&entry.backup));
             }

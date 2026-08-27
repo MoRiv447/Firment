@@ -27,11 +27,14 @@ import {
   api,
   notifySessionsChanged,
   onAgentEvent,
+  onAskExpired,
   onAskRequest,
   onMonitorExited,
   onMonitorOutput,
+  onPermissionExpired,
   onPermissionRequest,
   onSessionsChanged,
+  requestWorkbenchOpen,
 } from './lib/api';
 import type {
   AskRequest,
@@ -132,7 +135,8 @@ export default function App() {
   // they must be queued — a single overwriting state would leave the first
   // request unanswered forever and wedge its tool (and the whole wave).
   const [permQueue, setPermQueue] = useState<PermissionRequest[]>([]);
-  const [askReq, setAskReq] = useState<AskRequest | null>(null);
+  // Same for ask_user questions: a tool wave can carry several concurrently.
+  const [askQueue, setAskQueue] = useState<AskRequest[]>([]);
   const [monitorLines, setMonitorLines] = useState<Record<string, MonitorLine[]>>({});
   const [workCwd, setWorkCwd] = useState('C:\\');
   // The event listeners are registered once ([] deps), so the closure would
@@ -206,22 +210,27 @@ export default function App() {
             // survive.
             dispatchTurn(e);
             setPermQueue((q) => q.filter((r) => r.session_id !== sid));
-            setAskReq((a) => (a && a.session_id === sid ? null : a));
+            setAskQueue((q) => q.filter((r) => r.session_id !== sid));
             break;
           case 'turn_end':
             dispatchTurn(e);
             setPermQueue((q) => q.filter((r) => r.session_id !== sid));
-            setAskReq((a) => (a && a.session_id === sid ? null : a));
-            if (!sid || sid === sessionRef.current?.id) {
+            setAskQueue((q) => q.filter((r) => r.session_id !== sid));
+            if (sid && sid === sessionRef.current?.id) {
               // Clear the streaming turn so the transcript (refreshed below)
               // is the single source of truth — otherwise the same reply
               // shows twice (once in turn.text, once in session.messages).
               void api
-                .sessionTranscript(sid!)
+                .sessionTranscript(sid)
                 .then((s) => {
-                  setSession(s);
-                  // Message count changed → refresh the header usage chip.
-                  void api.sessionContextUsage(s.id).then(setUsage).catch(() => {});
+                  // Re-check AFTER the await: switching chats while this
+                  // fetch was in flight must not clobber the newly opened
+                  // session (the send box then follows sessionRef.current).
+                  if (sessionRef.current?.id === s.id) {
+                    setSession(s);
+                    // Message count changed → refresh the header usage chip.
+                    void api.sessionContextUsage(s.id).then(setUsage).catch(() => {});
+                  }
                 })
                 .catch(console.error);
             }
@@ -284,7 +293,16 @@ export default function App() {
 
     unlisteners.push(
       onPermissionRequest((req) => setPermQueue((q) => [...q, req])),
-      onAskRequest((req) => setAskReq(req)),
+      onAskRequest((req) => setAskQueue((q) => [...q, req])),
+      onPermissionExpired((id) => {
+        // The backend auto-denied after its timeout: drop the stale dialog,
+        // otherwise a later Allow click silently no-ops while the user
+        // believes they approved the tool.
+        setPermQueue((q) => q.filter((r) => r.id !== id));
+      }),
+      onAskExpired((id) => {
+        setAskQueue((q) => q.filter((r) => r.id !== id));
+      }),
       onMonitorOutput((line) => {
         setMonitorLines((prev) => ({
           ...prev,
@@ -448,8 +466,10 @@ export default function App() {
     );
     void api.startTurn(sid, input).catch((err) => {
       console.error(err);
-      // 发送失败（如 agent 正忙）：回滚乐观消息，避免界面上出现"幽灵消息"
-      setSession((s) => (s ? { ...s, messages: snapshot } : s));
+      // 发送失败（如 agent 正忙）：回滚乐观消息，避免界面上出现"幽灵消息"。
+      // 只在用户仍停留在同一个会话时回滚——盲目写入快照会把 A 会话的
+      // 历史移植到当前打开的 B 会话上。
+      setSession((s) => (s && s.id === sid ? { ...s, messages: snapshot } : s));
     });
   };
 
@@ -552,8 +572,11 @@ export default function App() {
                 .map(([id]) => id),
             )}
             onOpenWorkbench={(projectCwd) => {
-              // Hand the project path to the Workbench view and switch to it.
+              // Hand the project path to the (always-mounted) Workbench view
+              // via the event bridge: its localStorage restore only ran once
+              // at mount, so just switching tabs shows the WRONG project.
               localStorage.setItem('workbench-last-cwd', projectCwd);
+              requestWorkbenchOpen(projectCwd);
               setView('collab');
             }}
           />
@@ -851,7 +874,9 @@ export default function App() {
           onClose={() => setPermQueue((q) => q.slice(1))}
         />
       )}
-      {askReq && <AskDialog req={askReq} onClose={() => setAskReq(null)} />}
+      {askQueue[0] && (
+        <AskDialog req={askQueue[0]} onClose={() => setAskQueue((q) => q.slice(1))} />
+      )}
     </ConfigProvider>
   );
 }

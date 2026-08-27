@@ -27,19 +27,27 @@ pub fn run_command_line(chip: &str, file: &str, probe: Option<&str>) -> String {
 /// `--chip "STM32G431RB"` to probe-rs, making chip lookup fail. `probe-rs run`
 /// is a long-lived process that streams RTT logs; we capture output until the
 /// timeout elapses and then kill the tree, returning whatever was captured.
+/// A turn cancellation (Esc) also kills the child: an orphaned probe-rs keeps
+/// the debug probe locked and blocks every later flash/debug until it exits on
+/// its own — with timeout_ms = 0, forever. Returns (text, exit code,
+/// cancelled).
 async fn run_probe_rs_run(
     chip: &str,
     file: &Path,
     probe: Option<&str>,
     cwd: &Path,
     timeout_ms: u64,
-) -> Result<(String, Option<i32>), String> {
+    cancel: &firment_core::Cancellable,
+) -> Result<(String, Option<i32>, bool), String> {
     let mut cmd = Command::new("probe-rs");
     cmd.arg("run").arg("--chip").arg(chip);
     if let Some(probe) = probe {
         cmd.arg("--probe").arg(probe);
     }
-    cmd.arg(file)
+    // kill_on_drop is the drop-safety net for outer wave cancellation; the
+    // select branches below cover the awaited paths explicitly.
+    cmd.kill_on_drop(true)
+        .arg(file)
         .current_dir(cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -71,15 +79,32 @@ async fn run_probe_rs_run(
     };
     let mut read_streams = Box::pin(read_streams);
 
-    let status = if timeout_ms == 0 {
-        Some(child.wait().await)
+    enum Outcome {
+        Status(std::io::Result<std::process::ExitStatus>),
+        TimedOut,
+        Cancelled,
+    }
+    let outcome = if timeout_ms == 0 {
+        tokio::select! {
+            status = child.wait() => Outcome::Status(status),
+            _ = cancel.cancelled() => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                Outcome::Cancelled
+            }
+        }
     } else {
         tokio::select! {
-            status = child.wait() => Some(status),
+            status = child.wait() => Outcome::Status(status),
             _ = tokio::time::sleep(Duration::from_millis(timeout_ms)) => {
                 let _ = child.kill().await;
                 let _ = child.wait().await;
-                None
+                Outcome::TimedOut
+            }
+            _ = cancel.cancelled() => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                Outcome::Cancelled
             }
         }
     };
@@ -91,11 +116,14 @@ async fn run_probe_rs_run(
     if drain_timed_out {
         text.push_str("\n[output truncated: still streaming after 15s]");
     }
-    let code = match status {
-        Some(s) => s.map_err(|e| format!("wait failed: {e}"))?.code(),
-        None => None,
-    };
-    Ok((text, code))
+    match outcome {
+        Outcome::Cancelled => Ok((text, None, true)),
+        Outcome::TimedOut => Ok((text, None, false)),
+        Outcome::Status(s) => {
+            let code = s.map_err(|e| format!("wait failed: {e}"))?.code();
+            Ok((text, code, false))
+        }
+    }
 }
 
 #[async_trait]
@@ -170,14 +198,27 @@ impl Tool for Run {
         }
 
         let command = run_command_line(&chip, &resolved.to_string_lossy(), probe.as_deref());
-        match run_probe_rs_run(&chip, &resolved, probe.as_deref(), &ctx.cwd, timeout_ms).await {
-            Ok((text, Some(0))) => Ok(ToolOutput {
+        match run_probe_rs_run(
+            &chip,
+            &resolved,
+            probe.as_deref(),
+            &ctx.cwd,
+            timeout_ms,
+            &ctx.cancel,
+        )
+        .await
+        {
+            Ok((text, Some(0), _)) => Ok(ToolOutput {
                 text: format!("run finished (exit 0)\n{text}"),
             }),
-            Ok((text, Some(code))) => Err(ToolError::new(format!(
+            Ok((text, Some(code), _)) => Err(ToolError::new(format!(
                 "[Io] run failed (exit {code})\ncommand: {command}\n{text}"
             ))),
-            Ok((text, None)) => Ok(ToolOutput {
+            Ok((text, None, true)) => Err(ToolError::new(format!(
+                "[Cancelled] run interrupted by turn cancellation (probe-rs killed so it does \
+                 not hold the debug probe); captured output:\n{text}"
+            ))),
+            Ok((text, None, false)) => Ok(ToolOutput {
                 text: format!("run timed out after {timeout_ms} ms; captured output:\n{text}"),
             }),
             Err(e) => Err(probe_rs_err(e)),

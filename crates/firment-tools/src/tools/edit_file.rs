@@ -72,6 +72,17 @@ impl Tool for EditFile {
         })?;
         let original_bytes = fs::read(&resolved)
             .map_err(|e| ToolError::new(format!("[Io] cannot read {}: {e}", resolved.display())))?;
+        // read_text above decodes lossily, so editing a non-UTF-8 file (GBK,
+        // Latin-1, ...) would rewrite EVERY invalid byte as U+FFFD on save —
+        // whole-file corruption far beyond the edited hunk. Refuse instead.
+        if std::str::from_utf8(&original_bytes).is_err() {
+            return Err(ToolError::new(format!(
+                "[Encoding] {} is not valid UTF-8 — refusing to edit: the text pipeline \
+                 would permanently replace every non-UTF-8 byte with U+FFFD across the \
+                 whole file. Convert it to UTF-8 first.",
+                resolved.display()
+            )));
+        }
         if let Some(expected) = args.get("expected_sha256").and_then(|e| e.as_str()) {
             let current = firment_core::hash::sha256_hex(&original_bytes);
             if current != expected {
@@ -475,6 +486,30 @@ mod tests {
             .await
             .unwrap();
         assert!(ok.text.contains("Edited"));
+    }
+
+    #[tokio::test]
+    async fn non_utf8_file_is_refused_not_corrupted() {
+        // A GBK-encoded file must be refused wholesale: the lossy text
+        // pipeline would otherwise rewrite every invalid byte as U+FFFD.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("gbk.txt");
+        let mut gbk = b"\xc4\xe3\xba\xc3\nworld\n".to_vec(); // "你好" in GBK
+        std::fs::write(&path, &gbk).unwrap();
+        let err = EditFile
+            .run(
+                json!({"path": "gbk.txt", "old_text": "world", "new_text": "WORLD"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap_err();
+        assert!(err.message.contains("[Encoding]"), "got: {}", err.message);
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            gbk,
+            "file bytes must be untouched"
+        );
+        let _ = gbk;
     }
 
     #[tokio::test]

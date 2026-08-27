@@ -82,7 +82,13 @@ def compile_rules(rules: list) -> list:
     out = []
     for r in rules:
         try:
-            out.append((r["name"], re.compile(r["pattern"]), r.get("sev", "warn")))
+            sev = r.get("sev", "warn")
+            if sev not in ("debug", "info", "warn", "error"):
+                print(
+                    f"[rules] {r['name']}: unknown sev {sev!r} — treated as error",
+                    flush=True,
+                )
+            out.append((r["name"], re.compile(r["pattern"]), sev))
         except re.error as e:
             print(f"[rules] skipping {r.get('name')}: {e}", flush=True)
     return out
@@ -103,11 +109,15 @@ class Guard:
         self.counters_lock = threading.Lock()
         self.counters = {"frames": 0, "matches": 0, "llm_calls": 0, "llm_fail": 0}
         self.escalate_sev = self.g.get("escalate_sev", "warn")
+        self.work_queue: "queue.Queue" = queue.Queue()
+        threading.Thread(target=self._worker, daemon=True).start()
 
     _SEV_RANK = {"debug": 0, "info": 1, "warn": 2, "error": 3}
 
     def rank(self, sev: str) -> int:
-        return self._SEV_RANK.get(sev, 1)
+        # Unknown sev strings rank as MOST severe: a custom rules.toml sev
+        # like "critical" must escalate, never silently sink to disk.
+        return self._SEV_RANK.get(sev, 3)
 
     def bump(self, key: str, n: int = 1):
         # counters are touched from the callback thread, the worker thread
@@ -118,8 +128,6 @@ class Guard:
     def snapshot(self) -> dict:
         with self.counters_lock:
             return dict(self.counters)
-        self.work_queue: "queue.Queue" = queue.Queue()
-        threading.Thread(target=self._worker, daemon=True).start()
 
     # ---- data plane ------------------------------------------------------
     def sink(self, node: str, frame: str):

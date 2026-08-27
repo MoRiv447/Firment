@@ -16,17 +16,31 @@ export async function executeTool(
   try {
     switch (toolName) {
       case 'read_file': {
-        const content = await readFileSync(cwd, args.path, args.offset, args.limit);
+        const content = await readFileSync(
+          cwd,
+          args.path,
+          args.offset,
+          args.limit,
+          args.hashlines
+        );
         return { success: true, output: content };
       }
 
       case 'list_dir': {
-        const result = listDir(cwd, args.path, args.depth);
+        // Schema: path, recursive, limit (NOT depth).
+        const result = listDir(cwd, args.path, args.recursive ?? false, args.limit ?? 200);
         return { success: true, output: result };
       }
 
       case 'glob': {
-        const files = globFiles(cwd, args.pattern, args.path);
+        // Schema: pattern, root, limit, include_hidden.
+        const files = globFiles(
+          cwd,
+          args.pattern,
+          args.root,
+          args.limit ?? 200,
+          args.include_hidden ?? false
+        );
         return {
           success: true,
           output: files.length > 0 ? files.join('\n') : 'No files matched',
@@ -34,7 +48,14 @@ export async function executeTool(
       }
 
       case 'grep': {
-        const result = grepFiles(cwd, args.pattern, args.file_pattern, args.max_results);
+        // Schema: pattern, path, glob, case_sensitive, include_hidden, max_results.
+        const result = grepFiles(cwd, args.pattern, {
+          path: args.path,
+          glob: args.glob,
+          caseSensitive: args.case_sensitive ?? false,
+          includeHidden: args.include_hidden ?? false,
+          maxResults: args.max_results ?? 100,
+        });
         return { success: true, output: result };
       }
 

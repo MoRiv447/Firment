@@ -77,6 +77,9 @@ impl PermissionChecker for GuiPermission {
             Ok(Err(_)) => Err(PermissionError::denied("permission dialog closed")),
             Err(_) => {
                 self.shared.perm_waiters.lock().unwrap().remove(&id);
+                // Tell the frontend so it drops the stale dialog: a later
+                // Allow click must not pretend it approved anything.
+                let _ = self.shared.app.emit("permission-expired", json!({ "id": id }));
                 Err(PermissionError::denied(format!(
                     "permission request for tool '{tool}' timed out after {}s",
                     PERMISSION_TIMEOUT.as_secs()
@@ -110,6 +113,7 @@ impl Asker for GuiAsker {
             Ok(Err(e)) => Err(e.to_string()),
             Err(_) => {
                 self.shared.ask_waiters.lock().unwrap().remove(&id);
+                let _ = self.shared.app.emit("ask-expired", json!({ "id": id }));
                 Err(format!(
                     "question timed out after {}s",
                     ASK_TIMEOUT.as_secs()
