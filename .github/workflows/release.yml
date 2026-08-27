@@ -56,10 +56,41 @@ jobs:
           name: asset-${{ matrix.target }}
           path: dist/${{ matrix.asset }}
 
+  # Windows desktop installer (Tauri/NSIS), shipped alongside the CLI on
+  # every tag. `tauri build` runs the frontend build itself
+  # (beforeBuildCommand: npm run build) then bundles src-tauri.
+  gui-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build GUI installer
+        working-directory: gui
+        shell: bash
+        run: |
+          npm ci
+          npm run tauri build
+      - name: Stage installer artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Copy-Item "gui/src-tauri/target/release/bundle/nsis/*-setup.exe" dist/
+          Get-ChildItem dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: asset-gui-windows-setup
+          path: dist/*.exe
+
   release:
-    needs: build
+    needs: [build, gui-windows]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -69,6 +100,20 @@ jobs:
         run: |
           cd artifacts
           sha256sum * > SHA256SUMS
+      - name: Extract the tagged section from CHANGELOG.md as release notes
+        shell: bash
+        run: |
+          # Headings follow "## vX.Y.Z (date) — title"; print everything from
+          # this tag's heading up to the next one. When the tag has no section
+          # yet (renamed late / typo), fall back to a pointer so the release
+          # still publishes.
+          TAG="${GITHUB_REF_NAME}"
+          awk -v pat="^## ${TAG} " '$0 ~ pat {flag=1; next} /^## / {if (flag) exit} flag' \
+            CHANGELOG.md > RELEASE_NOTES.md || true
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "_See [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/main/CHANGELOG.md) for details._" > RELEASE_NOTES.md
+          fi
+          cat RELEASE_NOTES.md
       - name: Remove empty placeholder release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -82,4 +127,5 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
+          body_path: RELEASE_NOTES.md
           generate_release_notes: true
