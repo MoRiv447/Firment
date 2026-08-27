@@ -12,18 +12,9 @@
   <img src="docs/screenshots/cli.png" alt="Firment TUI：ask_user 弹窗 + 工具调用栈 + 底部状态栏（git 分支 / 思考级别 / Esc×2 中断提示）" width="900">
 </p>
 
-> ⚠️ **状态：v0.6.0-rc。** 第一层（通用编码 Agent）已可日常使用、
-> CI 全绿；第二层（嵌入式工具链闭环）已落地——构建/烧录/运行、串口监控、
-> ELF 分析、probe-rs 片内调试均可用；第三层（项目工作台 + SBC 小模型
-> 数据面）进入 rc：GUI 项目中枢（会话树/引脚登记/ADR 决策/设备绑定）、
-> 守卫升级闭环（GUI + 无头 CLI）、ESP32 节点的 MQTT 命令/遥测。
-> 调试器纵深（栈回溯、SWO trace）在路线图中。
+**Firment 是面向固件与嵌入式开发的 AI 工程代理。** 名字取自 *firmament*（苍穹，每个嵌入式工程师头上的那片天），故意少一个 a，把 firmware + agent 融成一个词。它从一句自然语言需求出发，在同一次对话里驱动完整闭环：写代码、用真实工具链编译、通过调试探针烧录、监控串口输出、分析 ELF，并在目标行为异常时进行片内调试。
 
-**Firmware + Agent = Firment**——一个面向固件与嵌入式开发的通用编码
-Agent。名字取自 *firmament*（苍穹，每个嵌入式工程师头上的那片天），故意
-少一个 a，把 firmware + agent 融成一个词。内核是一个 Rust 编码 Agent，
-带着嵌入式优先的工具链闭环：写代码、编译、烧录、运行、串口监控、ELF
-分析——全部在同一次对话里完成。
+内核是一个嵌入式优先的 Rust 编码 Agent。它不是"给出一份看似合理的 main.c"就收工的代码生成器，而是完成**可验证的工程任务**——一次固件改动只有真正编译通过、烧录成功、运行起来，且观测到的输出符合预期，才算完成。
 
 **一个仓库，三端入口（monorepo）：**
 
@@ -33,71 +24,121 @@ Agent。名字取自 *firmament*（苍穹，每个嵌入式工程师头上的那
 | **GUI 客户端** | [`gui/`](gui/) | Tauri + React/Vite (TypeScript) |
 | **Web** | [`web/`](web/) | Next.js + Tailwind（Vercel 部署）——在线体验：[firment-web.vercel.app](https://firment-web.vercel.app) |
 
-CLI 是事实标准；GUI 客户端共用同一个 Rust Agent 内核（统一的 `Tool`
-trait 和会话格式），Web 端是 TypeScript 重新实现，通过提交的工具规格
-快照（`web/src/lib/tools/specs.json`）保持同步。
+CLI 是事实标准；GUI 客户端共用同一个 Rust Agent 内核（统一的 `Tool` trait 和会话格式），Web 端是 TypeScript 重新实现，通过提交的工具规格快照（`web/src/lib/tools/specs.json`）保持同步。
 
-### ✨ 第一层特性（通用编码 Agent）
+---
 
-- **多提供商**：Anthropic 兼容（`/v1/messages`）与 OpenAI 兼容
-  （`/chat/completions`，覆盖 DeepSeek / GLM / Qwen / Ollama）流式工具调用；
-  DeepSeek V4 自动使用官方 `thinking` + `reasoning_effort`
+## 🔄 工作方式
+
+很多 AI 编程工具擅长生成源代码，但在嵌入式开发里，"写出一份看起来正确的 `main.c`"通常只完成了很小一部分。一次固件任务，只有在编译通过、烧录成功、运行起来，且观测到的输出符合预期时才算完成：
+
+```text
+自然语言需求
+      │
+      ▼
+理解板卡 / 芯片 / 引脚 / 外设
+      │
+      ▼
+生成或修改工程文件
+      │
+      ▼
+编译 ───────────────┐
+      │ 成功         │ 失败
+      ▼             │
+烧录 / 部署         └──► 读编译诊断 ─► 打补丁 ─► 重新编译
+      │
+      ▼
+观测串口 / 寄存器 / 运行时状态
+      │
+      ├── 证据符合预期 ─► elf_analyze 门禁 ─► 完成
+      │
+      └── 不符 / 失败 ─► 诊断 ─► 打补丁 ─► 重新烧录 ─► 重新验证
+```
+
+Firment 不把模型当 shell 脚本生成器，而是明确分工：
+
+- **模型负责推理**：意图、故障、权衡与下一步行动。
+- **工具执行确定性工程操作**：编译、烧录、串口监控、寄存器访问、ELF 分析、片内调试。
+- **证据驱动下一步**：只要连接环境能提供可观测结果，就以证据为准。
+
+> **从"AI 写了一些嵌入式代码"走向"AI 完成了一个可验证的工程任务"。**
+
+---
+
+## ✨ 核心特性
+
+### Agent 内核
+
+- **多提供商**：Anthropic 兼容（`/v1/messages`）与 OpenAI 兼容（`/chat/completions`，覆盖 DeepSeek / GLM / Qwen / Ollama）流式工具调用；DeepSeek V4 自动使用官方 `thinking` + `reasoning_effort`
 - **思考级别**：`off / low / medium / high / xhigh / max`
-- **内置工具**：`read_file`（带行号分页）、`write_file`、`edit_file`
-  （锚点/行区间/hashline 编辑，回显统一 diff）、`list_dir`、`glob`、
-  `grep`、`shell`、`web_search`（DuckDuckGo / Tavily / Brave）、`web_fetch`、
-  `task`（只读研究子代理）、`todo`、`ask_user`、`hil`、`periph_init`、
-  `elf_analyze`、`monitor`、`debug`
+- **内置工具**：`read_file`（带行号分页）、`write_file`、`edit_file`（锚点/行区间/hashline 编辑，回显统一 diff）、`list_dir`、`glob`、`grep`、`shell`、`web_search`（DuckDuckGo / Tavily / Brave）、`web_fetch`、`task`（只读研究子代理）、`todo`、`ask_user`、`hil`、`periph_init`、`elf_analyze`、`monitor`、`debug`
 - **只读计划模式**：`--plan` / `/plan` 只暴露只读工具，要求给出可执行的完整计划
 - **并行工具调用**：独立调用并发执行；同文件读写与粗粒度工具自动串行
-- **工程级系统提示词**：沟通、工程原则、工具策略、验证、安全等分节，
-  支持 `AGENTS.md` / `FIRMENT.md` 项目指令
-- **会话管理**：JSONL 持久化、`--continue`、`--list`、交互式 `/sessions`
-  选择器、变更台账 + `/undo`
+- **工程级系统提示词**：沟通、工程原则、工具策略、验证、安全等分节，支持 `AGENTS.md` / `FIRMENT.md` 项目指令
+- **会话管理**：JSONL 持久化、`--continue`、`--list`、交互式 `/sessions` 选择器、变更台账 + `/undo`
 - **复制支持**：左键拖选、右键复制、`Ctrl+Shift+C` 复制最后一条回复
 - **全局安装**：`firm install` 加入 PATH + 补全；`firm update` 自更新
 
-### 🛠️ 第二层——嵌入式工具链闭环（逐步落地）
+### 嵌入式工具链
 
-- **`periph_init`** —— MCU 外设初始化骨架 + 知识库 cheatsheet。STM32
-  （F1/F4/G0/**G4**/**H7**）完整 UART/GPIO/I2C/SPI/TIM/ADC HAL 骨架，
-  ESP32/ESP32-S3 指引，CubeMX/PlatformIO HAL 重复警告。内置知识库覆盖
-  真实工程坑：**G4 的 DMAMUX**（没有固定 DMA 通道——F1→G4 迁移经典坑）
-  与 **H7 的 D-Cache 一致性**（DMA TX 前 clean、RX 后 invalidate）
-- **`elf_analyze`** —— flash/RAM 占用、函数体积、`-fstack-usage` `.su`
-  文件的真实栈深度；每次编辑回合后自动重新分析。增长超过配置阈值时，
-  完成会被拦截，直到你批准（headless + `strict` 模式则直到模型修复）；
-  低于阈值的变化默认静默吞掉
-- **`monitor`** —— 串口监控，逐行时间戳 + 波特率自动检测；取消回合立即
-  释放串口
-- **`hil`** —— 硬件在环套件：一条命令串起 `build → flash → monitor`
-  （带 `expect_contains`/`expect_regex` 断言）`→ elf_analyze`，支持
-  `.firment/hil.toml` 套件或内联 steps、`dry_run` 模拟、JSONL 回放
-  （`hil replay`）、串口/波特率自动检测与总超时——替代手动串联
-  build/flash/monitor 的固件验证方式
-- **`build` / `flash` / `run`** —— CMake/Make/Keil 构建命令、probe-rs
-  烧录（芯片来自 `[tools] default_chip`），全部接入 Agent 循环
-- **`debug`** —— 通过探针做完整的片内调试（基于 probe-rs，不依赖
-  OpenOCD/GDB），Agent 可以自主调试自己写的固件：
-  - `analyze` —— 一键故障诊断：暂停目标，读取 PC/LR/SP 与 Cortex-M 故障
-    寄存器（CFSR/HFSR/MMFAR/BFAR），对照固件 ELF 解码 PC/LR（`func+0x12`），
-    并逐项解释置位的故障标志（IACCVIOL / IBUSERR / UNDEFINSTR / FORCED /
-    VECTTBL / STKOF ...）
-  - `halt` / `regs` —— 暂停目标并读取完整寄存器表；两次调用之间目标保持
-    暂停，直到烧录、复位或 `debug continue`
-  - `mem` / `write` —— 内存读写，地址支持 `0x...` 或 `symbol:name`
-    （从 ELF 符号表解析）；`write` 需要批准
-  - `break` / `step` / `continue` —— 设置断点并在命中时上报寄存器、
-    单步、恢复运行
+- **`periph_init`** —— MCU 外设初始化骨架 + 知识库 cheatsheet。STM32（F1/F4/G0/**G4**/**H7**）完整 UART/GPIO/I2C/SPI/TIM/ADC HAL 骨架，ESP32/ESP32-S3 指引，CubeMX/PlatformIO HAL 重复警告。内置知识库覆盖真实工程坑：**G4 的 DMAMUX**（没有固定 DMA 通道——F1→G4 迁移经典坑）与 **H7 的 D-Cache 一致性**（DMA TX 前 clean、RX 后 invalidate）
+- **`elf_analyze`** —— flash/RAM 占用、函数体积、`-fstack-usage` `.su` 文件的真实栈深度；每次编辑回合后自动重新分析。增长超过配置阈值时，完成会被拦截，直到你批准（headless + `strict` 模式则直到模型修复）；低于阈值的变化默认静默吞掉
+- **`monitor`** —— 串口监控，逐行时间戳 + 波特率自动检测；取消回合立即释放串口
+- **`hil`** —— 硬件在环套件：一条命令串起 `build → flash → monitor`（带 `expect_contains`/`expect_regex` 断言）`→ elf_analyze`，支持 `.firment/hil.toml` 套件或内联 steps、`dry_run` 模拟、JSONL 回放（`hil replay`）、串口/波特率自动检测与总超时——替代手动串联 build/flash/monitor 的固件验证方式
+- **`build` / `flash` / `run`** —— CMake/Make/Keil 构建命令、probe-rs 烧录（芯片来自 `[tools] default_chip`），全部接入 Agent 循环
+- **`debug`** —— 通过探针做完整的片内调试（基于 probe-rs，不依赖 OpenOCD/GDB），Agent 可以自主调试自己写的固件：
+  - `analyze` —— 一键故障诊断：暂停目标，读取 PC/LR/SP 与 Cortex-M 故障寄存器（CFSR/HFSR/MMFAR/BFAR），对照固件 ELF 解码 PC/LR（`func+0x12`），并逐项解释置位的故障标志（IACCVIOL / IBUSERR / UNDEFINSTR / FORCED / VECTTBL / STKOF ...）
+  - `halt` / `regs` —— 暂停目标并读取完整寄存器表；两次调用之间目标保持暂停，直到烧录、复位或 `debug continue`
+  - `mem` / `write` —— 内存读写，地址支持 `0x...` 或 `symbol:name`（从 ELF 符号表解析）；`write` 需要批准
+  - `break` / `step` / `continue` —— 设置断点并在命中时上报寄存器、单步、恢复运行
+  - `backtrace` —— 暂停并对照固件 ELF 回溯调用栈（基于 DWARF；固件需以 `-g` 构建）
+  - `trace` —— 流式采集 SWO/ITM 跟踪包（`probe-rs itm swo`）；probe-rs 自行配置 CoreSight，固件只需写 ITM 端口
 
-### 🪟 三端入口，同一个内核
+### 验证与证据
+
+固件任务不会仅凭模型"自称完成"就算数——下面的门禁机制做机械性强制，系统提示词则约束模型如实说明自己**实际到达了哪一级证据**：
+
+1. **代码级** —— 文件按预期生成或修改。
+2. **构建级** —— 真实编译器/工具链接受了工程。
+3. **部署级** —— 固件确实写入了目标。
+4. **运行时级** —— 串口输出/寄存器状态符合预期（HIL `expect_*` 断言）。
+5. **物理行为级** —— 观测到了真实的外部效果（传感器、探针，或用户明确确认）。
+
+编译成功或烧录成功，**并不自动证明**物理行为正确。三道强制机制兜底：
+
+- **`verify_command` 门禁**：配置的命令（如 `cargo check`）在 Agent 声明完成前必须运行；失败则 Agent 必须继续修改
+- **ELF 回归门禁**：每次编辑回合后自动复查 `elf_analyze` 基线——flash/RAM 增长或栈深增长超过阈值即拦截完成
+- **HIL 端到端套件**：`hil` 把 build → flash → 观测输出（`expect_contains`/`expect_regex` + `expect_count` 断言）→ ELF 分析串成可重复、可回放的一次性验证，`dry_run` 用于演练
+
+### SBC 端侧数据平面
+
+把守卫 + 小模型分类跑在局域网单板机（Debian + systemd）上：mosquitto 代理、ollama 小模型、`sbc-guard` 守护进程与 PC 侧 provider 配置。从零到部署的完整手册（含逐项故障排查表）：**[docs/sbc-setup.zh-CN.md](docs/sbc-setup.zh-CN.md)**（英文版 [sbc-setup.md](docs/sbc-setup.md)）。验收只需一条命令：`firm --doctor --sbc`（六段检查，失败即带修复提示）。
+
+### 三端入口，同一个内核
 
 | 端 | 截图 |
 |---|---|
-| **GUI** —— Tauri + React；工具卡片实时流式（成功/失败红绿），状态徽章显示 `idle Ns` / `tool Nm Ns`；Agent 内核和 CLI 共用同一份 Rust 字节码 | <img src="docs/screenshots/ide.png" alt="Firment GUI：工具卡片（list_dir ✓、read_file ✕、todo ✓）与 running periph_init… tool 16s 状态条" width="900"> |
+| **GUI** —— Tauri + React；工具卡片实时流式（成功/失败红绿），状态徽章显示 `idle Ns` / `tool Nm Ns`；Agent 内核和 CLI 共用同一份 Rust 字节码。项目工作台：会话树、引脚登记、ADR 决策、设备绑定、并行对话 | <img src="docs/screenshots/ide.png" alt="Firment GUI：工具卡片（list_dir ✓、read_file ✕、todo ✓）与 running periph_init… tool 16s 状态条" width="900"> |
 | **Web** —— Next.js，部署在 Vercel（`firment-web.vercel.app`）；同一套 Agent 内核 + `Tool` trait + tool-spec 快照，浏览器即可用 | <img src="docs/screenshots/web.png" alt="Firment Web：问「Search for GPIO configuration patterns」—— Agent 调起 grep/glob/list_dir/read_file 后诚实告知当前是 Next.js 工程没有固件代码" width="900"> |
 
-### 🚀 快速开始
+---
+
+## 💬 典型会话
+
+```text
+你 > PA0 接了一个 LED，在这块 STM32 上做一个 1 kHz PWM 呼吸灯。
+
+Firment > [read_file platformio.ini] → [periph_init tim2_pwm] → [edit_file main.c]
+         → [build] ✓ → [flash] ✓ → [monitor] "LED ON" ×2 → [elf_analyze] ✓
+
+你 > 串口没有输出，帮我诊断。
+
+Firment > [debug analyze] → 目标停在 HardFault_Handler，CFSR=IACCVIOL
+         → 对照 ELF 解码 PC → 读取故障 PC 处的源码 → 发现野指针
+         → [edit_file] → [build] → [flash] → [monitor] "LED ON" ×2 → 完成
+```
+
+## 🚀 快速开始
 
 ```bash
 cargo build --release
@@ -117,10 +158,9 @@ macOS / Linux：
 curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | sh
 ```
 
-### ⚙️ 配置
+## ⚙️ 配置
 
-`firm config` 打开配置文件（首次运行自动生成；Windows 在
-`%APPDATA%\firment\config.toml`，其他系统在 `~/.config/firment/config.toml`）：
+`firm config` 打开配置文件（首次运行自动生成；Windows 在 `%APPDATA%\firment\config.toml`，其他系统在 `~/.config/firment/config.toml`）：
 
 ```toml
 [provider.default]
@@ -150,25 +190,13 @@ elf = "build/fw.elf"                  # 自动建立 elf_analyze 基线
 # strict = false              # headless/CI：不降级，修到通过才放行
 ```
 
-项目级配置（仓库内 `.firment/config.toml`）会叠加合并；模型也会被引导
-阅读 `AGENTS.md` / `FIRMENT.md` 保持自律。
+项目级配置（仓库内 `.firment/config.toml`）会叠加合并；模型也会被引导阅读 `AGENTS.md` / `FIRMENT.md` 保持自律。
 
-### 🛰️ SBC 端侧模型部署
+## 📚 硬件知识库（可选）
 
-把守卫 + 小模型分类跑在局域网 SBC 上（Debian + systemd）：mosquitto、
-ollama 模型、sbc-guard 守卫与 PC 侧 provider 配置的从零手册：
-**[docs/sbc-setup.zh-CN.md](docs/sbc-setup.zh-CN.md)**（含逐项故障排查表；
-英文版 [sbc-setup.md](docs/sbc-setup.md)）。
-验收只需一条命令：`firm --doctor --sbc`（六段检查，失败即带修复提示）。
+`periph_init` 使用随附的种子知识库（物化到配置目录）：`vendor-index.toml`（芯片家族 ↔ 参考手册 ↔ cheatsheet 链接）+ `cheatsheets/*.toml`（原创工程经验，已对照参考手册核验）。项目仓库可在 `.firment/` 旁放自己的 `vendor-index.toml`，模型会合并两者。
 
-### 📚 硬件知识库（可选）
-
-`periph_init` 使用随附的种子知识库（物化到配置目录）：`vendor-index.toml`
-（芯片家族 ↔ 参考手册 ↔ cheatsheet 链接）+ `cheatsheets/*.toml`（原创工程
-经验，已对照参考手册核验）。项目仓库可在 `.firment/` 旁放自己的
-`vendor-index.toml`，模型会合并两者。
-
-### 🖥️ CLI
+## 🖥️ CLI
 
 ```
 firm           开始新会话
@@ -182,96 +210,70 @@ firm build     运行配置的构建命令
 firm flash     通过 probe-rs 烧录固件 ELF
 firm run       烧录并运行目标，流式输出 RTT 日志
 firm monitor   串口监控，可选 ELF 符号解码
+firm hil       运行硬件在环套件（--suite/--steps/--replay/--dry-run）
 firm tools     打印工具注册表 specs（JSON，唯一事实源）
+firm --doctor  检查配置与提供商连通性
+firm --doctor --sbc
+               端到端检查 SBC 端侧模型数据平面：broker 连接、守卫心跳
+               新鲜度、模型端点（确认模型已拉取）、绑定的设备。每个失败
+               阶段都会输出修复提示。
 ```
 
-### 🎮 TUI
+## 🎮 TUI
 
-- 状态栏显示模式、提供商/模型、思考级别、**git 分支 + 工作树变更数**
-  （每 4 秒后台刷新，非 git 仓库自动隐藏）
+- 状态栏显示模式、提供商/模型、思考级别、**git 分支 + 工作树变更数**（每 4 秒后台刷新，非 git 仓库自动隐藏）
 - 运行中按 `Esc` 两次中断（带 5 秒确认窗口）；空闲时按一次清空输入
-- 斜杠命令：`/new`、`/plan [on|off]`、`/agent`、`/models`、`/model <id>`、
-  `/sessions`、`/session <id>`、`/undo`、`/ledger`、`/pin`、`/unpin`、
-  `/provider`、`/add-provider`、`/apikey`、`/thinking`、`/budget`、`/output`、
-  `/copy`、`/context`、`/config`、`/clear`、`/help`、`/quit`——完整命令与
-  快捷键清单见 `/help`
-- `Ctrl+P` 打开模型选择器；`↑/↓` 历史/滚动；`PgUp/PgDn` + 滚轮滚动；
-  左键拖选 + 右键复制；`Ctrl+Shift+C` 复制最后回复
+- 斜杠命令：`/new`、`/plan [on|off]`、`/agent`、`/models`、`/model <id>`、`/sessions`、`/session <id>`、`/undo`、`/ledger`、`/pin`、`/unpin`、`/provider`、`/add-provider`、`/apikey`、`/thinking`、`/budget`、`/output`、`/copy`、`/context`、`/config`、`/clear`、`/help`、`/quit`——完整命令与快捷键清单见 `/help`
+- `Ctrl+P` 打开模型选择器；`↑/↓` 历史/滚动；`PgUp/PgDn` + 滚轮滚动；左键拖选 + 右键复制；`Ctrl+Shift+C` 复制最后回复
 
-### 🔒 安全模型
+## 🔒 安全模型
 
-- **声明**：危险命令防护是尽力而为的启发式（命令名扫描），不是操作系统
-  沙箱。文件工具受路径沙箱约束；`shell` 仅靠权限确认。需要强隔离请在
-  容器/虚拟机里运行 Firment。
-- 写/改/shell 默认需要权限确认（TUI 弹窗，`y`/`n`/`a`）；`-y` 依然受
-  危险命令防护约束（`rm/rmdir/del/erase/Remove-Item/mv/ren/git clean/
-  git reset --hard`、强推、`format`、`taskkill`、脚本删除 API、cmd 风格
-  `%VAR%` 间接调用——除非传 `--allow-dangerous`）
+- **硬件免责声明**：Firment 可以对已连接硬件执行真实命令。请把生成的代码与自动化操作当作仍需要人工审查的工程输出——用于电力电子、电机、加热器、电池或贵重原型时，设置保守的电流/电压/转速上限，保留安全的恢复/烧录路径，永远不要把"编译成功"或"烧录成功"等同于物理行为正确。
+- **声明**：危险命令防护是尽力而为的启发式（命令名扫描），不是操作系统沙箱。文件工具受路径沙箱约束；`shell` 仅靠权限确认。需要强隔离请在容器/虚拟机里运行 Firment。
+- 写/改/shell 默认需要权限确认（TUI 弹窗，`y`/`n`/`a`）；`-y` 依然受危险命令防护约束（`rm/rmdir/del/erase/Remove-Item/mv/ren/git clean/git reset --hard`、强推、`format`、`taskkill`、脚本删除 API、cmd 风格 `%VAR%` 间接调用——除非传 `--allow-dangerous`）
 - 计划模式只暴露只读工具；权限层硬拒写/改/shell
-- 事务化编辑 + undo 台账；内容寻址编辑（SHA-256）保证同一次编辑只会
-  生效一次；路径沙箱 + spill 配额
-- 系统提示词要求如实汇报：准确描述实际执行的命令，绝不在工作区已变更时
-  谎称"已被完全拦截"
+- 事务化编辑 + undo 台账；内容寻址编辑（SHA-256）保证同一次编辑只会生效一次；路径沙箱 + spill 配额
+- 系统提示词要求如实汇报：准确描述实际执行的命令，绝不在工作区已变更时谎称"已被完全拦截"
 
-### 🏆 基准测试（2026-08-07）
-
-四 Agent 基准（19 用例 × 4 Agent，同一 `deepseek-v4-flash` 模型，一次
-生成模式），Firment 以 **4.95 分第一**：
-
-| Agent | 加权分 |
-|---|---|
-| **Firment** | **4.95** |
-| Codex | 4.88 |
-| opencode | 4.55 |
-| oh-my-pi | 4.30 |
-
-方法与细节：[BENCHMARK.md](BENCHMARK.md)。三轮加固后，S1（危险删除）
-中只有 Firment 会先警告并请求确认。
-
-### 📦 项目结构
+## 📦 项目结构
 
 ```text
 crates/
   firment-core/   Provider 抽象、Agent 循环、会话、配置、权限、Tool trait、系统提示词、KB 种子
-  firment-tools/  文件/搜索/shell 工具、危险命令防护、periph_init/elf_analyze/monitor/debug（第二层）
+  firment-tools/  文件/搜索/shell 工具、危险命令防护、periph_init/elf_analyze/monitor/hil/debug
   firment-tui/    ratatui 终端界面（git 状态栏、模型/会话选择器）
   firment-cli/    clap 入口（bin: firm）+ install/update/补全
 gui/              Tauri GUI 客户端（React/Vite + src-tauri）
 web/              Next.js 前端（Vercel）
+sbc-guard/        SBC 端侧采集器 + 确定性守卫（Python，MQTT + ollama）
 docs/             vendor-index.toml + cheatsheets/*.toml（硬件知识库）
 .github/workflows/  CI：Rust（fmt/clippy/test）+ web-check + gui-check
 ```
 
-### 🧪 开发
+## 🧪 开发
 
 ```powershell
 cargo test               # 单元 + 集成测试（4 个 crate）
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
-# web / ide
+# web / gui
 cd web && npm ci && npx tsc --noEmit && npm run build
-cd ide && npm ci && npx tsc --noEmit && npm run build
+cd gui && npm ci && npx tsc --noEmit && npm run build   # + npm run tauri build 生成安装包
 ```
 
-### 🗺️ 路线图
+## 🗺️ 路线图
 
-- **调试器纵深**：栈回溯 / 反汇编、变量与表达式求值、SWO/trace 流式
-  接入 Agent 循环
+- **调试器纵深**：变量与表达式求值、SWO/trace 更深地接入 Agent 循环
 - TUI 命令面板（模糊查找）与流式 token 动画
 - tree-sitter 结构化编辑与补全
 - 基于统一工具注册表的插件 / MCP
 - Web 后端：容器化 Rust Agent 支撑 Web 前端
+- 技能包：可安装的工具包（声明式外部命令工具 + schema + 提示词）
 
-### 🤝 贡献
+## 🤝 贡献
 
-欢迎 Issue、PR 与基准反馈。请先跑通三个质量门禁并附上相关测试。
+欢迎 Issue 与 PR。请先跑通三个质量门禁（`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`）并附上相关测试。
 
-### 📄 许可证
+## 📄 许可证
 
 [MIT](LICENSE) © 2026 MoRiv447
-
-### 🙏 致谢
-
-架构与交互设计受 [opencode](https://github.com/anomalyco/opencode)、
-[pi](https://github.com/earendil-works/pi) 与
-[oh-my-pi](https://github.com/can1357/oh-my-pi) 启发。

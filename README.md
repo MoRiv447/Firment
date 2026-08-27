@@ -12,22 +12,9 @@
   <img src="docs/screenshots/cli.png" alt="Firment TUI: ask_user dialog + tool call stack + status bar with git branch, thinking level and Esc×2 interrupt hint" width="900">
 </p>
 
-> ⚠️ **Status: v0.6.0-rc.** Layer 1 (general coding agent) is
-> production-usable and CI-green; Layer 2 (embedded toolchain loop) is
-> shipped — build/flash/run, serial monitor, ELF analysis and on-target
-> debugging via probe-rs all work — with deeper debugger features
-> (backtrace, SWO trace) on the roadmap. Layer 3 (project workbench +
-> SBC small-model data plane) is now in rc: GUI project hub with
-> session tree / pin registry / ADR decisions / device bindings, guard
-> escalation loop (GUI + headless CLI), and MQTT command/telemetry to
-> ESP32 nodes.
+**Firment is an AI engineering agent for firmware and embedded development.** Named after *firmament* — the sky above every embedded engineer — with the second **a** dropped to fuse *firmware + agent*. It takes a natural-language requirement and drives the whole loop from the same conversation: write code, build with the real toolchain, flash over the debug probe, monitor serial output, analyze the ELF, and debug the target on-chip when it misbehaves.
 
-**Firmware + Agent = Firment** — a general-purpose coding agent for firmware
-and embedded development, named after *firmament* (the sky above every
-embedded engineer), with the second **a** dropped to fuse *firmware + agent*.
-The kernel is a Rust coding agent with an embedded-first toolchain loop:
-write code, build, flash, run, monitor serial, analyze the ELF — all from the
-same conversation.
+The kernel is a Rust coding agent with an embedded-first toolchain. It is not a code generator that stops at "here is a plausible `main.c`" — it completes *verifiable engineering tasks*: a firmware change is only done when it builds, flashes, runs, and the observable output matches the expectation.
 
 **One repo, three surfaces (monorepo):**
 
@@ -37,86 +24,122 @@ same conversation.
 | **GUI client** | [`gui/`](gui/) | Tauri + React/Vite (TypeScript) |
 | **Web** | [`web/`](web/) | Next.js + Tailwind (deployed on Vercel) — try it at [firment-web.vercel.app](https://firment-web.vercel.app) |
 
-The CLI is the source of truth; the GUI client shares the same Rust agent
-kernel through the unified `Tool` trait and session format, while the Web
-surface is a TypeScript reimplementation kept in sync via a committed tool-spec
-snapshot (`web/src/lib/tools/specs.json`).
+The CLI is the source of truth; the GUI client shares the same Rust agent kernel through the unified `Tool` trait and session format, while the Web surface is a TypeScript reimplementation kept in sync via a committed tool-spec snapshot (`web/src/lib/tools/specs.json`).
 
-### ✨ Features — Layer 1 (general coding agent)
+---
 
-- **Multi-provider**: Anthropic-compatible (`/v1/messages`) and
-  OpenAI-compatible (`/chat/completions`, covering DeepSeek / GLM / Qwen /
-  Ollama) streaming tool calls; DeepSeek V4 automatically uses official
-  `thinking` + `reasoning_effort`
+## 🔄 How it works
+
+AI coding tools are very good at producing source code — but in embedded development, a plausible `main.c` is only the beginning. A firmware task is done when it builds, flashes, runs, and the observable output matches the expectation:
+
+```text
+Natural-language requirement
+      │
+      ▼
+Understand board / chip / pins / peripherals
+      │
+      ▼
+Generate or modify project files
+      │
+      ▼
+Compile ───────────────┐
+      │ success        │ failure
+      ▼                │
+Flash / deploy         └──► Read diagnostics ─► Patch ─► Rebuild
+      │
+      ▼
+Observe serial / registers / runtime state
+      │
+      ├── expected evidence ─► elf_analyze gate ─► Done
+      │
+      └── mismatch / failure ─► Diagnose ─► Patch ─► Reflash ─► Re-check
+```
+
+Firment separates responsibilities instead of treating the model as a shell script generator:
+
+- **The model reasons** about intent, failures, tradeoffs, and next actions.
+- **Tools execute deterministic engineering operations**: compilation, flashing, serial monitoring, register access, ELF analysis, on-target debugging.
+- **Evidence drives the next step** whenever the connected environment can provide it.
+
+> **Move from "AI wrote some embedded code" toward "AI completed a verifiable engineering task."**
+
+---
+
+## ✨ Key Features
+
+### Agent core
+
+- **Multi-provider**: Anthropic-compatible (`/v1/messages`) and OpenAI-compatible (`/chat/completions`, covering DeepSeek / GLM / Qwen / Ollama) streaming tool calls; DeepSeek V4 automatically uses official `thinking` + `reasoning_effort`
 - **Thinking levels**: `off / low / medium / high / xhigh / max`
-- **Built-in tools**: `read_file` (line-numbered pages), `write_file`,
-  `edit_file` (anchor / line-range / hashline edits, unified diff echo),
-  `list_dir`, `glob`, `grep`, `shell`, `web_search` (DuckDuckGo / Tavily /
-  Brave), `web_fetch`, `task` (read-only research subagent), `todo`,
-  `ask_user`, `hil`, `periph_init`, `elf_analyze`, `monitor`, `debug`
-- **Read-only plan mode**: `--plan` / `/plan` exposes only read tools and
-  requires a decision-complete plan
-- **Parallel tool calls**: independent calls run concurrently; same-file
-  reads/writes and broad tools are ordered automatically
-- **Engineering-grade system prompt**: communication, engineering
-  principles, tool policy, verification, and safety sections, plus
-  `AGENTS.md` / `FIRMENT.md` project instructions
-- **Session management**: JSONL persistence, `--continue`, `--list`,
-  interactive `/sessions` picker, change-ledger + `/undo`
-- **Copy support**: left-drag select, right-click copy, `Ctrl+Shift+C`
-  copies the last reply
-- **Global install**: `firm install` adds PATH + completions; `firm update`
-  self-updates
+- **Built-in tools**: `read_file` (line-numbered pages), `write_file`, `edit_file` (anchor / line-range / hashline edits, unified diff echo), `list_dir`, `glob`, `grep`, `shell`, `web_search` (DuckDuckGo / Tavily / Brave), `web_fetch`, `task` (read-only research subagent), `todo`, `ask_user`, `hil`, `periph_init`, `elf_analyze`, `monitor`, `debug`
+- **Read-only plan mode**: `--plan` / `/plan` exposes only read tools and requires a decision-complete plan
+- **Parallel tool calls**: independent calls run concurrently; same-file reads/writes and broad tools are ordered automatically
+- **Engineering-grade system prompt**: communication, engineering principles, tool policy, verification, and safety sections, plus `AGENTS.md` / `FIRMENT.md` project instructions
+- **Session management**: JSONL persistence, `--continue`, `--list`, interactive `/sessions` picker, change-ledger + `/undo`
+- **Copy support**: left-drag select, right-click copy, `Ctrl+Shift+C` copies the last reply
+- **Global install**: `firm install` adds PATH + completions; `firm update` self-updates
 
-### 🛠️ Layer 2 — embedded toolchain loop (shipping incrementally)
+### Embedded toolchain
 
-- **`periph_init`** — MCU peripheral init skeletons + knowledge-base
-  cheatsheets. Full UART/GPIO/I2C/SPI/TIM/ADC HAL skeletons on STM32
-  (F1/F4/G0/**G4**/**H7**), ESP32/ESP32-S3 guidance, CubeMX/PlatformIO
-  HAL-duplication warnings. The bundled KB covers real engineering traps:
-  **G4's DMAMUX** (no fixed DMA channels — the classic F1→G4 migration
-  trap) and **H7's D-Cache coherency** (clean before DMA TX, invalidate
-  after DMA RX)
-- **`elf_analyze`** — flash/RAM usage, function sizes, and real stack depth
-  from `-fstack-usage` `.su` files; Firment auto-seeds a baseline and
-  re-analyzes after each edited turn. Growth above the configured thresholds
-  blocks completion until you approve it (or, headless + `strict`, until the
-  model fixes it); below-threshold noise is swallowed by default
-- **`monitor`** — serial monitor with per-line timestamps and baud-rate
-  autodetect; cancelling a turn releases the port immediately
-- **`hil`** — hardware-in-the-loop suite: one-shot `build → flash → monitor
-  (with `expect_contains`/`expect_regex` assertions) → elf_analyze` via
-  `.firment/hil.toml` suites or inline steps, with `dry_run` simulation,
-  replayable JSONL logs (`hil replay`), auto serial port/baud, and total
-  timeout — replaces manual build/flash/monitor chaining for firmware
-  verification
-- **`build` / `flash` / `run`** — CMake/Make/Keil build commands, probe-rs
-  flashing (chip from `[tools] default_chip`), all wired into the agent loop
-- **`debug`** — full on-target debugging over the probe via probe-rs
-  (no OpenOCD/GDB dependency), so the agent can debug its own firmware:
-  - `analyze` — one-shot fault diagnosis: halts the target, reads PC/LR/SP
-    and the Cortex-M fault registers (CFSR/HFSR/MMFAR/BFAR), decodes PC/LR
-    against the firmware ELF (`func+0x12`) and explains each set fault flag
-    (IACCVIOL / IBUSERR / UNDEFINSTR / FORCED / VECTTBL / STKOF, ...)
-  - `halt` / `regs` — pause the target and read the full register table; the
-    target stays paused between calls until flashed, reset or `debug continue`
-  - `mem` / `write` — read/write memory with `0x...` or `symbol:name`
-    addresses (resolved from the ELF symbol table); `write` requires approval
-  - `break` / `step` / `continue` — set a breakpoint and report registers when
-    it hits, single-step, resume
-  - `backtrace` — halt and unwind the call stack against the firmware ELF
-    (DWARF-based; the firmware must be built with `-g`)
-  - `trace` — stream SWO/ITM trace packets (`probe-rs itm swo`); probe-rs
-    configures CoreSight itself, the firmware just writes ITM ports
+- **`periph_init`** — MCU peripheral init skeletons + knowledge-base cheatsheets. Full UART/GPIO/I2C/SPI/TIM/ADC HAL skeletons on STM32 (F1/F4/G0/**G4**/**H7**), ESP32/ESP32-S3 guidance, CubeMX/PlatformIO HAL-duplication warnings. The bundled KB covers real engineering traps: **G4's DMAMUX** (no fixed DMA channels — the classic F1→G4 migration trap) and **H7's D-Cache coherency** (clean before DMA TX, invalidate after DMA RX)
+- **`elf_analyze`** — flash/RAM usage, function sizes, and real stack depth from `-fstack-usage` `.su` files; Firment auto-seeds a baseline and re-analyzes after each edited turn. Growth above the configured thresholds blocks completion until you approve it (or, headless + `strict`, until the model fixes it); below-threshold noise is swallowed by default
+- **`monitor`** — serial monitor with per-line timestamps and baud-rate autodetect; cancelling a turn releases the port immediately
+- **`hil`** — hardware-in-the-loop suite: one-shot `build → flash → monitor (with `expect_contains`/`expect_regex` assertions) → elf_analyze` via `.firment/hil.toml` suites or inline steps, with `dry_run` simulation, replayable JSONL logs (`hil replay`), auto serial port/baud, and total timeout — replaces manual build/flash/monitor chaining for firmware verification
+- **`build` / `flash` / `run`** — CMake/Make/Keil build commands, probe-rs flashing (chip from `[tools] default_chip`), all wired into the agent loop
+- **`debug`** — full on-target debugging over the probe via probe-rs (no OpenOCD/GDB dependency), so the agent can debug its own firmware:
+  - `analyze` — one-shot fault diagnosis: halts the target, reads PC/LR/SP and the Cortex-M fault registers (CFSR/HFSR/MMFAR/BFAR), decodes PC/LR against the firmware ELF (`func+0x12`) and explains each set fault flag (IACCVIOL / IBUSERR / UNDEFINSTR / FORCED / VECTTBL / STKOF, ...)
+  - `halt` / `regs` — pause the target and read the full register table; the target stays paused between calls until flashed, reset or `debug continue`
+  - `mem` / `write` — read/write memory with `0x...` or `symbol:name` addresses (resolved from the ELF symbol table); `write` requires approval
+  - `break` / `step` / `continue` — set a breakpoint and report registers when it hits, single-step, resume
+  - `backtrace` — halt and unwind the call stack against the firmware ELF (DWARF-based; the firmware must be built with `-g`)
+  - `trace` — stream SWO/ITM trace packets (`probe-rs itm swo`); probe-rs configures CoreSight itself, the firmware just writes ITM ports
 
-### 🪟 Three surfaces, one kernel
+### Verification & evidence
+
+A firmware task is not done on the model's say-so — the gates below enforce verification mechanically, and the system prompt keeps the model honest about *which* level of evidence it actually reached:
+
+1. **Code-level** — files were generated or modified as intended.
+2. **Build-level** — the real compiler/toolchain accepted the project.
+3. **Deployment-level** — firmware was written to the target.
+4. **Runtime-level** — serial output / registers match expectations (HIL `expect_*` assertions).
+5. **Physical-behavior-level** — a real external effect was observed (sensor, probe, or explicit user confirmation).
+
+A successful compile or flash does **not** automatically prove the physical task is correct. Three enforcement layers back this up:
+
+- **`verify_command` gate**: a configured command (e.g. `cargo check`) runs before the agent may declare completion; if it fails, the agent must keep working
+- **ELF regression gate**: `elf_analyze` baselines are re-checked after every edited turn — flash/RAM growth or stack-depth growth above threshold blocks completion
+- **HIL end-to-end suites**: `hil` ties build → flash → monitored output (with `expect_contains`/`expect_regex` + `expect_count` assertions) → ELF analysis into one repeatable, replayable verification run, with `dry_run` for rehearsal
+
+### SBC edge data plane
+
+Run the guard + small-model classification on a local single-board computer (Debian + systemd): mosquitto broker, ollama small models, the `sbc-guard` daemon, and PC-side provider config. From-zero walkthrough with a per-failure troubleshooting table: **[docs/sbc-setup.md](docs/sbc-setup.md)**. Acceptance is one command: `firm --doctor --sbc` (six checks, fix hints on every failure).
+
+### Three surfaces, one kernel
 
 | Surface | Screenshot |
 |---|---|
-| **GUI** — Tauri + React; tool cards stream live with success/failure, status pill tracks `idle Ns` / `tool Nm Ns`; the agent kernel lives in the same Rust binary as the CLI | <img src="docs/screenshots/ide.png" alt="Firment GUI: tool cards (list_dir ✓, read_file ✕, todo ✓) with the running periph_init… tool 16s counter" width="900"> |
+| **GUI** — Tauri + React; tool cards stream live with success/failure, status pill tracks `idle Ns` / `tool Nm Ns`; the agent kernel lives in the same Rust binary as the CLI. Project workbench: session tree, pin registry, ADR decisions, device bindings, parallel chats | <img src="docs/screenshots/ide.png" alt="Firment GUI: tool cards (list_dir ✓, read_file ✕, todo ✓) with the running periph_init… tool 16s counter" width="900"> |
 | **Web** — Next.js on Vercel (`firment-web.vercel.app`); the same agent kernel reachable from any browser, with the same `Tool` trait and tool-spec snapshot | <img src="docs/screenshots/web.png" alt="Firment Web: ask 'Search for GPIO configuration patterns' — agent invokes grep/glob/list_dir/read_file and answers that the workspace is Next.js, not firmware" width="900"> |
 
-### 🚀 Quick Start
+---
+
+## 💬 Typical session
+
+```text
+You > PA0 has an LED. Make a 1 kHz PWM breathing-light demo on this STM32.
+
+Firment > [read_file platformio.ini] → [periph_init tim2_pwm] → [edit_file main.c]
+         → [build] ✓ → [flash] ✓ → [monitor] "LED ON" ×2 → [elf_analyze] ✓
+
+You > The serial port is silent. Diagnose it.
+
+Firment > [debug analyze] → target halted at HardFault_Handler, CFSR=IACCVIOL
+         → decodes PC against the ELF → reads the source at the fault PC
+         → finds a bad pointer → [edit_file] → [build] → [flash]
+         → [monitor] "LED ON" ×2 → done
+```
+
+## 🚀 Quick Start
 
 ```bash
 # Build and run the CLI agent
@@ -137,7 +160,7 @@ macOS / Linux:
 curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | sh
 ```
 
-### ⚙️ Configuration
+## ⚙️ Configuration
 
 `firm config` opens the config file (created on first run, `%APPDATA%\firment\config.toml` on Windows, `~/.config/firment/config.toml` elsewhere):
 
@@ -169,27 +192,13 @@ elf = "build/fw.elf"                  # auto-seed elf_analyze baselines
 # strict = false              # headless/CI: block until fixed, no soft downgrade
 ```
 
-Project-scoped config (`.firment/config.toml` in a repo) is merged on top;
-the model is told to keep itself honest with `AGENTS.md` / `FIRMENT.md`.
+Project-scoped config (`.firment/config.toml` in a repo) is merged on top; the model is told to keep itself honest with `AGENTS.md` / `FIRMENT.md`.
 
-### 🛰️ SBC edge-model setup
+## 📚 Hardware Knowledge Base (optional)
 
-Run the coding agent's guard + classification on a local SBC (Debian +
-systemd): mosquitto broker, ollama small models, the sbc-guard daemon,
-and PC-side provider config. From-zero walkthrough with a per-failure
-troubleshooting table: **[docs/sbc-setup.md](docs/sbc-setup.md)**.
-Acceptance is one command: `firm --doctor --sbc` (six checks, fix hints
-on every failure).
+`periph_init` consults a bundled seed KB materialized into the config dir: `vendor-index.toml` (family ↔ reference-manual ↔ cheatsheet links) + `cheatsheets/*.toml` (original engineering experience, cross-checked against the reference manuals). Project repos can ship their own `vendor-index.toml` next to `.firment/` and the model merges both.
 
-### 📚 Hardware knowledge base (optional)
-
-`periph_init` consults a bundled seed KB materialized into the config dir:
-`vendor-index.toml` (family ↔ reference-manual ↔ cheatsheet links) +
-`cheatsheets/*.toml` (original engineering experience, cross-checked against
-the reference manuals). Project repos can ship their own `vendor-index.toml`
-next to `.firment/` and the model merges both.
-
-### 🖥️ CLI
+## 🖥️ CLI
 
 ```
 firm            start a new session
@@ -203,6 +212,7 @@ firm build      run the configured build command
 firm flash      flash a firmware ELF via probe-rs
 firm run        flash and run the target, streaming RTT logs
 firm monitor    serial monitor with optional ELF symbol decoding
+firm hil        run a hardware-in-the-loop suite (--suite/--steps/--replay/--dry-run)
 firm tools      print the tool registry specs as JSON (single source of truth)
 firm --doctor   check config + provider connectivity
 firm --doctor --sbc
@@ -211,68 +221,38 @@ firm --doctor --sbc
                 actually pulled), bound devices. Each failing stage prints a fix hint.
 ```
 
-### 🎮 TUI
+## 🎮 TUI
 
-- Status bar shows mode, provider/model, thinking level, **git branch +
-  working-tree change count** (refreshed every 4s, hidden outside a repo)
-- `Esc` twice while a turn is running interrupts it (with a 5s confirmation
-  window); a single `Esc` clears the draft input when idle
-- Slash commands: `/new`, `/plan [on|off]`, `/agent`, `/models`, `/model <id>`,
-  `/sessions`, `/session <id>`, `/undo`, `/ledger`, `/pin`, `/unpin`,
-  `/provider`, `/add-provider`, `/apikey`, `/thinking`, `/budget`, `/output`,
-  `/copy`, `/context`, `/config`, `/clear`, `/help`, `/quit` — run `/help`
-  for the full command + key reference
-- `Ctrl+P` opens the model picker; `↑/↓` history/scroll; `PgUp/PgDn` + wheel
-  scroll; left-drag select + right-click copy; `Ctrl+Shift+C` copy last reply
+- Status bar shows mode, provider/model, thinking level, **git branch + working-tree change count** (refreshed every 4s, hidden outside a repo)
+- `Esc` twice while a turn is running interrupts it (with a 5s confirmation window); a single `Esc` clears the draft input when idle
+- Slash commands: `/new`, `/plan [on|off]`, `/agent`, `/models`, `/model <id>`, `/sessions`, `/session <id>`, `/undo`, `/ledger`, `/pin`, `/unpin`, `/provider`, `/add-provider`, `/apikey`, `/thinking`, `/budget`, `/output`, `/copy`, `/context`, `/config`, `/clear`, `/help`, `/quit` — run `/help` for the full command + key reference
+- `Ctrl+P` opens the model picker; `↑/↓` history/scroll; `PgUp/PgDn` + wheel scroll; left-drag select + right-click copy; `Ctrl+Shift+C` copy last reply
 
-### 🔒 Security Model
+## 🔒 Security Model
 
-- **Disclaimer**: the dangerous command guard is a best-effort heuristic, not
-  an OS sandbox. File tools are confined by the path sandbox; `shell` remains
-  permission-gated. For strong isolation, run Firment inside a container/VM.
-- Write/edit/shell require permission confirmation by default (TUI popup,
-  `y`/`n`/`a`); `-y` still respects the dangerous command guard
-  (`rm/rmdir/del/erase/Remove-Item/mv/ren/git clean/git reset --hard`, force
-  push, `format`, `taskkill`, scripting deletion APIs, cmd-style `%VAR%`
-  indirection — blocked unless `--allow-dangerous`)
-- Plan mode exposes only read-only tools; the permission layer hard-rejects
-  write/edit/shell
-- Transactional edits + undo journal; content-addressed edits (SHA-256) so an
-  edit can only be applied exactly once; path sandbox + spill quota
-- The system prompt enforces honest reporting: describe exactly what ran,
-  never claim an action was "fully blocked" when the workspace changed
+- **Hardware disclaimer**: Firment can execute real commands against connected hardware. Treat generated code and automated actions as engineering output that still requires review — on power electronics, motors, heaters, batteries or valuable prototypes, set conservative current/voltage/speed limits, keep a safe recovery/flashing path, and never equate "build succeeded" or "flash succeeded" with physical correctness.
+- **Disclaimer**: the dangerous command guard is a best-effort heuristic, not an OS sandbox. File tools are confined by the path sandbox; `shell` remains permission-gated. For strong isolation, run Firment inside a container/VM.
+- Write/edit/shell require permission confirmation by default (TUI popup, `y`/`n`/`a`); `-y` still respects the dangerous command guard (`rm/rmdir/del/erase/Remove-Item/mv/ren/git clean/git reset --hard`, force push, `format`, `taskkill`, scripting deletion APIs, cmd-style `%VAR%` indirection — blocked unless `--allow-dangerous`)
+- Plan mode exposes only read-only tools; the permission layer hard-rejects write/edit/shell
+- Transactional edits + undo journal; content-addressed edits (SHA-256) so an edit can only be applied exactly once; path sandbox + spill quota
+- The system prompt enforces honest reporting: describe exactly what ran, never claim an action was "fully blocked" when the workspace changed
 
-### 🏆 Benchmark (2026-08-07)
-
-In a four-agent benchmark (19 cases × 4 agents, same `deepseek-v4-flash`
-model, one-shot mode), Firment ranks **#1 with 4.95**:
-
-| Agent | Weighted score |
-|---|---|
-| **Firment** | **4.95** |
-| Codex | 4.88 |
-| opencode | 4.55 |
-| oh-my-pi | 4.30 |
-
-Methodology: [BENCHMARK.md](BENCHMARK.md). After three rounds of hardening,
-Firment was the only agent in S1 (dangerous deletion) that warned first and
-asked for confirmation.
-
-### 📦 Project Layout
+## 📦 Project Layout
 
 ```text
 crates/
   firment-core/   Provider abstraction, agent loop, sessions, config, permissions, Tool trait, system prompt, KB seeder
-  firment-tools/  File/search/shell tools, dangerous command guard, periph_init/elf_analyze/monitor/debug (Layer 2)
+  firment-tools/  File/search/shell tools, dangerous command guard, periph_init/elf_analyze/monitor/hil/debug
   firment-tui/    ratatui terminal UI (git status bar, model/session pickers)
   firment-cli/    clap entry point (bin: firm) + install/update/completions
 gui/              Tauri GUI client (React/Vite + src-tauri)
 web/              Next.js marketing/docs frontend (Vercel)
+sbc-guard/        SBC-side collector + deterministic guard (Python, MQTT + ollama)
 docs/             vendor-index.toml + cheatsheets/*.toml (hardware KB)
 .github/workflows/  CI: Rust (fmt/clippy/test) + web-check + gui-check
 ```
 
-### 🧪 Development
+## 🧪 Development
 
 ```powershell
 cargo test               # unit + integration tests (4 crates)
@@ -283,25 +263,19 @@ cd web && npm ci && npx tsc --noEmit && npm run build
 cd gui && npm ci && npx tsc --noEmit && npm run build   # + npm run tauri build for installers
 ```
 
-### 🗺️ Roadmap
+## 🗺️ Roadmap
 
-- **Debugger depth**: variable & expression evaluation, SWO/trace streaming
-  into the agent loop (backtrace and SWO capture already ship in `debug`)
+- **Debugger depth**: variable & expression evaluation, SWO/trace streaming deeper into the agent loop
 - TUI command palette (fuzzy finder) and streaming-token animation
 - Tree-sitter structural edits and completions
 - Plugins / MCP on the unified tool registry
 - Web backend: containerized Rust agent behind the web frontend
+- Skills: installable tool packs (declarative external-command tools + schemas + prompts)
 
-### 🤝 Contributing
+## 🤝 Contributing
 
-Issues, PRs, and benchmark feedback are welcome. Please run the three quality
-gates and attach the relevant tests.
+Issues and PRs are welcome. Please run the three quality gates (`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`) and attach the relevant tests.
 
-### 📄 License
+## 📄 License
 
 [MIT](LICENSE) © 2026 MoRiv447
-
-### 🙏 Acknowledgments
-
-Architecture and UX are inspired by [opencode](https://github.com/anomalyco/opencode),
-[pi](https://github.com/earendil-works/pi), and [oh-my-pi](https://github.com/can1357/oh-my-pi).
