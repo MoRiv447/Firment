@@ -494,7 +494,8 @@ mod tests {
         // pipeline would otherwise rewrite every invalid byte as U+FFFD.
         let dir = tempdir().unwrap();
         let path = dir.path().join("gbk.txt");
-        let mut gbk = b"\xc4\xe3\xba\xc3\nworld\n".to_vec(); // "你好" in GBK
+        // "你好" in GBK
+        let gbk = b"\xc4\xe3\xba\xc3\nworld\n".to_vec();
         std::fs::write(&path, &gbk).unwrap();
         let err = EditFile
             .run(
@@ -509,7 +510,6 @@ mod tests {
             gbk,
             "file bytes must be untouched"
         );
-        let _ = gbk;
     }
 
     #[tokio::test]
