@@ -2,10 +2,10 @@
   "name": "firment",
   "version": "0.5.11",
   "private": true,
-  "description": "Firment monorepo — CLI core (Rust) + IDE (Tauri) + Web (Next.js)",
+  "description": "Firment monorepo — CLI core (Rust) + GUI client (Tauri) + Web (Next.js)",
   "scripts": {
-    "ide:dev": "cd ide && npm run tauri dev",
-    "ide:build": "cd ide && npm run tauri build",
+    "gui:dev": "cd gui && npm run tauri dev",
+    "gui:build": "cd gui && npm run tauri build",
     "web:dev": "cd web && npm run dev",
     "web:build": "cd web && npm run build",
     "web:deploy": "cd web && npx vercel deploy --prod --yes",
