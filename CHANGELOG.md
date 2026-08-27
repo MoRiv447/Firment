@@ -1,5 +1,72 @@
 # Changelog
 
+## Unreleased (2026-08-27) — six-surface bug audit hardening
+
+Follow-up audit (crates / TUI kernel, GUI client, web surface, sbc-guard)
+after the v0.6.0-rc cut. All HIGH and MEDIUM findings fixed; CI, 330 Rust
+tests and both frontend builds green.
+
+- **sbc-guard**: the classifier worker thread never started — `work_queue`
+  creation sat after an early `return` in `snapshot()`, so two-phase LLM
+  alerting degraded to raw-only AND fine-tuning pair collection
+  (`pairs/*.jsonl`) stayed empty forever while every escalation logged a
+  swallowed `AttributeError`. Fixed; unknown rule severities now rank as
+  most severe (a custom `critical` must escalate) with a startup warning.
+- **core/session**: `atomic_write`'s persist-retry loop was unbounded — an
+  external process holding the `.jsonl` handle (editor/AV/indexer) spun
+  every save forever on Windows, wedging the turn. Retries are now capped
+  (~3 s); saves stay best-effort so the next checkpoint retries.
+- **core/journal**: rollback's backup-cleanup loop ran after `drain(..)`
+  had emptied the vec — dead code that leaked every successful entry's
+  `.bak` into `<session>.undo/`. Now only failed restores retain backups.
+- **tools/edit_file**: editing a non-UTF-8 file (GBK/Latin-1) decoded it
+  lossily and rewrote EVERY invalid byte as U+FFFD — whole-file corruption,
+  not just the edited hunk. Such files are refused with `[Encoding]`;
+  regression test asserts original bytes survive untouched.
+- **tools/run**: `probe-rs run` lacked the siblings' `kill_on_drop` +
+  cancel-select discipline — Esc (or wave timeout) orphaned the child,
+  which kept holding the debug probe until its own timeout expired
+  (forever at `timeout_ms: 0`). Both branches now kill on cancellation.
+- **web**: three of six tools misread executor argument names against the
+  committed spec snapshot — `list_dir` wanted `depth` (spec: `recursive`),
+  `glob` wanted `path` (spec: `root`), `grep` wanted `file_pattern`
+  (spec: `glob`), so schema-conformant calls silently dropped their
+  filters/limits. All executors aligned with specs.json; `read_file`
+  matches its spec again (line-number prefixes, 1000-line cap, 1-based
+  header); leading `**/` matches root-level files like globset; hidden
+  paths are rejected by the sandbox (`.env.local` was readable in web
+  mode); context compaction extends its cut back to the parent assistant
+  (strict providers 400 on orphaned `tool` messages); `reasoning_effort`
+  clamps xhigh/max → high like the CLI; a disconnected client aborts the
+  LLM stream + tool loop via AbortSignal wiring instead of burning tokens
+  against a dead pipe; deleting a session mid-stream no longer resurrects
+  it when the stream completes.
+- **GUI**: workbench mainline self-heal / set-mainline did unguarded full
+  load-modify-save rewrites of transcript files — racing a running turn's
+  final save could permanently truncate it (knob commands already had the
+  guard; both workbench paths now share it). turn_end's transcript refresh
+  and send-failure rollback re-check the session id after their awaits, so
+  fast chat switching can no longer cross-contaminate messages.
+  `ask_user` requests are queued exactly like permission requests (two
+  concurrent questions used to wedge the first for 180 s). The backend
+  emits `permission-expired` / `ask-expired` when a dialog times out so
+  the stale dialog drops instead of later Allow clicks fake-approving
+  already-denied tools. SerialView/FlashView drop their event listeners
+  even when unmounted before `listen()` resolves (leak per tab switch).
+  The workbench session tree filters sessions with directory-boundary
+  matching (`thermo` no longer swallows `thermostat`), and the sidebar's
+  open-workbench button actually loads the clicked project via an event
+  bridge instead of relying on a mount-time localStorage read.
+- **repo hygiene**: root `ide:*` scripts removed (pointed at the deleted
+  `ide/` folder); renamed to `gui:*`; version badges and package metadata
+  unified at 0.6.0.
+
+Known issues left intentionally (LOW severity, next batch): serial reads
+decode per chunk (split multi-byte UTF-8 shows U+FFFD in CJK logs);
+cmd.exe quoting doubles `%`/`^` in build commands containing them;
+workbench KB editor saves still overwrite concurrent disk edits without
+an mtime check.
+
 ## v0.6.0-rc (2026-08-25) — workbench, parallel chats, SBC small-model data plane
 
 - **GUI project workbench** (W1+W2): project hub bound to
