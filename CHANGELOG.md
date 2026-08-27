@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (2026-08-27) — six-surface bug audit hardening
+## v0.6.0 (2026-08-27) — six-surface bug audit hardening
 
 Follow-up audit (crates / TUI kernel, GUI client, web surface, sbc-guard)
 after the v0.6.0-rc cut. All HIGH and MEDIUM findings fixed; CI, 330 Rust
