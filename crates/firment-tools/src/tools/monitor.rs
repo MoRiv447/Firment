@@ -2,14 +2,13 @@ use super::util::{resolve_within, truncate};
 use async_trait::async_trait;
 use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
+use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 pub struct Monitor;
 
-/// Blocking serial read loop: collect lines until the deadline, decoding hex
-/// code addresses against an ELF when provided. With `timestamp`, each line
-/// is prefixed with its arrival time `[SS.mmm]` relative to the read start.
+/// Open the port and hand the byte stream to [`read_serial_from`].
 fn read_serial(
     port: &str,
     baud: u32,
@@ -18,11 +17,33 @@ fn read_serial(
     timestamp: bool,
     cancel: Option<firment_core::Cancellable>,
 ) -> Result<String, String> {
-    use std::io::Read;
     let mut reader = serialport::new(port, baud)
         .timeout(Duration::from_millis(500))
         .open()
         .map_err(|e| format!("failed to open serial port {port}: {e}"))?;
+    let text = read_serial_from(&mut reader, timeout_ms, elf, timestamp, cancel)?;
+    // Only this wrapper knows the port name, so it owns the empty-case text.
+    if text.is_empty() {
+        Ok(format!("no data received on {port} within {timeout_ms} ms"))
+    } else {
+        Ok(text)
+    }
+}
+
+/// Blocking serial read loop: collect lines until the deadline, decoding hex
+/// code addresses against an ELF when provided. With `timestamp`, each line
+/// is prefixed with its arrival time `[SS.mmm]` relative to the read start.
+///
+/// Split out from [`read_serial`] so tests can drive it from a fake byte
+/// source — a real port cannot be opened in CI, and the chunking that
+/// breaks multi-byte characters only shows up on a live stream.
+fn read_serial_from(
+    reader: &mut impl Read,
+    timeout_ms: u64,
+    elf: Option<&Path>,
+    timestamp: bool,
+    cancel: Option<firment_core::Cancellable>,
+) -> Result<String, String> {
     let start = Instant::now();
     let deadline = start + Duration::from_millis(timeout_ms);
     let mut buf = [0u8; 4096];
@@ -79,7 +100,7 @@ fn read_serial(
     }
     let text = lines.join("\n");
     if text.is_empty() {
-        Ok(format!("no data received on {port} within {timeout_ms} ms"))
+        Ok(String::new())
     } else {
         Ok(truncate(&text, 32_000))
     }
@@ -410,5 +431,72 @@ mod tests {
             "got: {}",
             err.message
         );
+    }
+
+    /// Hands back one byte per `read()` and then behaves like an idle port.
+    /// One byte at a time is the worst case for multi-byte characters: every
+    /// CJK glyph arrives split three ways.
+    struct FakeReader {
+        data: Vec<u8>,
+        pos: usize,
+    }
+
+    impl Read for FakeReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            match self.data.get(self.pos) {
+                Some(&b) => {
+                    buf[0] = b;
+                    self.pos += 1;
+                    Ok(1)
+                }
+                None => {
+                    // Emulate the port timeout rather than spinning hot; the
+                    // loop re-checks its deadline and stops there.
+                    std::thread::sleep(Duration::from_millis(5));
+                    Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "no data"))
+                }
+            }
+        }
+    }
+
+    fn fake(data: &[u8]) -> FakeReader {
+        FakeReader {
+            data: data.to_vec(),
+            pos: 0,
+        }
+    }
+
+    #[test]
+    fn read_serial_from_reassembles_byte_at_a_time() {
+        let text = read_serial_from(&mut fake(b"hello\nworld\n"), 200, None, false, None).unwrap();
+        assert_eq!(text, "hello\nworld");
+    }
+
+    #[test]
+    fn read_serial_from_flushes_trailing_partial_line() {
+        let text = read_serial_from(&mut fake(b"a\nb\npartial"), 200, None, false, None).unwrap();
+        assert_eq!(text, "a\nb\npartial");
+    }
+
+    #[test]
+    fn read_serial_from_returns_empty_when_silent() {
+        let text = read_serial_from(&mut fake(b""), 60, None, false, None).unwrap();
+        assert!(text.is_empty(), "got: {text:?}");
+    }
+
+    #[test]
+    fn read_serial_from_prefixes_timestamps() {
+        let text = read_serial_from(&mut fake(b"hello\n"), 200, None, true, None).unwrap();
+        assert!(text.starts_with('['), "got: {text:?}");
+        assert!(text.contains("hello"), "got: {text:?}");
+    }
+
+    #[test]
+    fn read_serial_from_stops_on_cancel() {
+        let cancel = firment_core::Cancellable::new();
+        cancel.cancel();
+        let text =
+            read_serial_from(&mut fake(b"forever\n"), 5_000, None, false, Some(cancel)).unwrap();
+        assert!(text.contains("interrupted"), "got: {text:?}");
     }
 }
