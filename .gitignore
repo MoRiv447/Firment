@@ -11,6 +11,9 @@
 /.firment
 /auth.json
 
+# AI 助手本地会话与记忆数据（WorkBuddy，不纳入版本库）
+/.workbuddy
+
 # IDE / 编辑器
 /.idea
 /.vscode
