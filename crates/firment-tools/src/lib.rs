@@ -2,6 +2,7 @@ pub mod assembly;
 pub mod decode;
 pub mod hardware;
 pub mod tools;
+pub mod utf8;
 
 pub use tools::elf_analyze::analyze_elf_file;
 
