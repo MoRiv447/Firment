@@ -1284,7 +1284,10 @@ fn run_monitor(
         .map_err(|e| anyhow::anyhow!("failed to open serial port {port}: {e}"))?;
     let elf = elf.as_deref();
     let mut buf = [0u8; 4096];
-    let mut line_buf = String::new();
+    let mut splitter = firment_tools::utf8::LineSplitter::new(firment_tools::utf8::MAX_LINE_BYTES);
+    let mut print_line = |line: &str| {
+        println!("{}", firment_tools::decode::decode_line(line, elf));
+    };
     let deadline = if timeout_secs > 0 {
         Some(Instant::now() + Duration::from_secs(timeout_secs))
     } else {
@@ -1298,22 +1301,15 @@ fn run_monitor(
         }
         match reader.read(&mut buf) {
             Ok(0) => continue,
-            Ok(n) => {
-                for ch in String::from_utf8_lossy(&buf[..n]).chars() {
-                    if ch == '\n' {
-                        println!("{}", firment_tools::decode::decode_line(&line_buf, elf));
-                        line_buf.clear();
-                    } else {
-                        line_buf.push(ch);
-                    }
-                }
-            }
+            // Decode per line, not per read: a character split across two
+            // reads would otherwise print as U+FFFD.
+            Ok(n) => splitter.feed(&buf[..n], &mut print_line),
             Err(e) if e.kind() == std::io::ErrorKind::TimedOut => continue,
             Err(e) => return Err(anyhow::anyhow!("serial read failed: {e}")),
         }
     }
-    if !line_buf.is_empty() {
-        println!("{}", firment_tools::decode::decode_line(&line_buf, elf));
+    if let Some(tail) = splitter.take_tail() {
+        print_line(&tail);
     }
     Ok(())
 }
