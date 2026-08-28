@@ -47,24 +47,22 @@ fn read_serial_from(
     let start = Instant::now();
     let deadline = start + Duration::from_millis(timeout_ms);
     let mut buf = [0u8; 4096];
-    let mut line_buf = String::new();
+    let mut splitter = crate::utf8::LineSplitter::new(crate::utf8::MAX_LINE_BYTES);
     let mut lines: Vec<String> = Vec::new();
-    let push_line =
-        |line: &mut String, lines: &mut Vec<String>, start: Instant, timestamp: bool| {
-            let decoded = crate::decode::decode_line(line, elf);
-            let with_ts = if timestamp {
-                let elapsed = Instant::now() - start;
-                format!(
-                    "[{:02}.{:03}] {decoded}",
-                    elapsed.as_secs(),
-                    elapsed.subsec_millis()
-                )
-            } else {
-                decoded
-            };
-            lines.push(with_ts);
-            line.clear();
+    let push_line = |line: &str, lines: &mut Vec<String>, start: Instant, timestamp: bool| {
+        let decoded = crate::decode::decode_line(line, elf);
+        let with_ts = if timestamp {
+            let elapsed = Instant::now() - start;
+            format!(
+                "[{:02}.{:03}] {decoded}",
+                elapsed.as_secs(),
+                elapsed.subsec_millis()
+            )
+        } else {
+            decoded
         };
+        lines.push(with_ts);
+    };
     loop {
         // A cancelled turn must not keep holding the serial port until the
         // full timeout elapses.
@@ -77,15 +75,12 @@ fn read_serial_from(
         }
         match reader.read(&mut buf) {
             Ok(0) => continue,
-            Ok(n) => {
-                for ch in String::from_utf8_lossy(&buf[..n]).chars() {
-                    if ch == '\n' {
-                        push_line(&mut line_buf, &mut lines, start, timestamp);
-                    } else if ch != '\r' {
-                        line_buf.push(ch);
-                    }
-                }
-            }
+            // Decode each line only once its bytes are complete: decoding
+            // per read turns a character split across two reads into
+            // U+FFFD, which is the whole point of LineSplitter.
+            Ok(n) => splitter.feed(&buf[..n], &mut |line| {
+                push_line(line, &mut lines, start, timestamp)
+            }),
             Err(e)
                 if e.kind() == std::io::ErrorKind::TimedOut
                     || e.kind() == std::io::ErrorKind::WouldBlock =>
@@ -95,8 +90,8 @@ fn read_serial_from(
             Err(e) => return Err(format!("serial read failed: {e}")),
         }
     }
-    if !line_buf.is_empty() {
-        push_line(&mut line_buf, &mut lines, start, timestamp);
+    if let Some(tail) = splitter.take_tail() {
+        push_line(&tail, &mut lines, start, timestamp);
     }
     let text = lines.join("\n");
     if text.is_empty() {
@@ -498,5 +493,39 @@ mod tests {
         let text =
             read_serial_from(&mut fake(b"forever\n"), 5_000, None, false, Some(cancel)).unwrap();
         assert!(text.contains("interrupted"), "got: {text:?}");
+    }
+
+    // -- the regression these tests exist for ------------------------------
+
+    #[test]
+    fn read_serial_from_keeps_cjk_split_across_reads() {
+        // One byte per read(), so every 3-byte CJK glyph arrives split three
+        // ways — the exact shape that produced U+FFFD before.
+        let text = read_serial_from(
+            &mut fake("传感器就绪\n温度 25.6°C\n".as_bytes()),
+            200,
+            None,
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(text, "传感器就绪\n温度 25.6°C");
+        assert!(!text.contains('\u{FFFD}'), "got: {text:?}");
+    }
+
+    #[test]
+    fn read_serial_from_keeps_partial_cjk_tail() {
+        // No trailing newline: the final line is flushed by take_tail, and
+        // it has to survive the byte-at-a-time delivery intact too.
+        let text =
+            read_serial_from(&mut fake("启动中".as_bytes()), 200, None, false, None).unwrap();
+        assert_eq!(text, "启动中");
+        assert!(!text.contains('\u{FFFD}'), "got: {text:?}");
+    }
+
+    #[test]
+    fn read_serial_from_strips_one_trailing_cr() {
+        let text = read_serial_from(&mut fake(b"a\r\nb\r\n"), 200, None, false, None).unwrap();
+        assert_eq!(text, "a\nb");
     }
 }
