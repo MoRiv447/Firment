@@ -1194,7 +1194,7 @@ fn read_serial_with_expect(
     let start = Instant::now();
     let deadline = start + Duration::from_millis(timeout_ms);
     let mut buf = [0u8; 4096];
-    let mut line_buf = String::new();
+    let mut splitter = crate::utf8::LineSplitter::new(crate::utf8::MAX_LINE_BYTES);
     let mut lines: Vec<String> = Vec::new();
     let mut matched: usize = 0;
 
@@ -1206,6 +1206,25 @@ fn read_serial_with_expect(
         } else if expect_regex.is_some_and(|rx| rx.is_match(line)) {
             *matched += 1;
         }
+    };
+
+    // Decode one complete line, run the expect assertions against it and
+    // record it. Shared by the read loop and the trailing-partial-line
+    // flush, which used to carry a second copy of this body.
+    let handle_line = |line: &str, lines: &mut Vec<String>, matched: &mut usize| {
+        let decoded = crate::decode::decode_line(line, elf);
+        let with_ts = if timestamp {
+            let elapsed = Instant::now() - start;
+            format!(
+                "[{:02}.{:03}] {decoded}",
+                elapsed.as_secs(),
+                elapsed.subsec_millis()
+            )
+        } else {
+            decoded.clone()
+        };
+        check_line(&decoded, matched);
+        lines.push(with_ts);
     };
 
     loop {
@@ -1222,33 +1241,12 @@ fn read_serial_with_expect(
         }
         match reader.read(&mut buf) {
             Ok(0) => continue,
-            Ok(n) => {
-                for ch in String::from_utf8_lossy(&buf[..n]).chars() {
-                    if ch == '\n' {
-                        let decoded = crate::decode::decode_line(&line_buf, elf);
-                        let with_ts = if timestamp {
-                            let elapsed = Instant::now() - start;
-                            format!(
-                                "[{:02}.{:03}] {decoded}",
-                                elapsed.as_secs(),
-                                elapsed.subsec_millis()
-                            )
-                        } else {
-                            decoded.clone()
-                        };
-                        check_line(&decoded, &mut matched);
-                        lines.push(with_ts);
-                        line_buf.clear();
-                        if matched >= expect_count
-                            && (expect_contains.is_some() || expect_regex.is_some())
-                        {
-                            // we have enough, but finish this line batch
-                        }
-                    } else if ch != '\r' {
-                        line_buf.push(ch);
-                    }
-                }
-            }
+            // Decode per line, not per read: a character split across two
+            // reads would otherwise never match an expect assertion, since
+            // the U+FFFD it turns into is not the text the device sent.
+            Ok(n) => splitter.feed(&buf[..n], &mut |line| {
+                handle_line(line, &mut lines, &mut matched)
+            }),
             Err(e)
                 if e.kind() == std::io::ErrorKind::TimedOut
                     || e.kind() == std::io::ErrorKind::WouldBlock =>
@@ -1264,20 +1262,8 @@ fn read_serial_with_expect(
             break;
         }
     }
-    if !line_buf.is_empty() {
-        let decoded = crate::decode::decode_line(&line_buf, elf);
-        let with_ts = if timestamp {
-            let elapsed = Instant::now() - start;
-            format!(
-                "[{:02}.{:03}] {decoded}",
-                elapsed.as_secs(),
-                elapsed.subsec_millis()
-            )
-        } else {
-            decoded.clone()
-        };
-        check_line(&decoded, &mut matched);
-        lines.push(with_ts);
+    if let Some(tail) = splitter.take_tail() {
+        handle_line(&tail, &mut lines, &mut matched);
     }
     let text = lines.join("\n");
     if text.is_empty() {
