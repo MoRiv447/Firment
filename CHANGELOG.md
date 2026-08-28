@@ -27,6 +27,11 @@ the first of the three items on the v0.6.0 known-issues list.
   the `monitor` tool dropped every `\r` while `firm monitor` kept all of
   them, so progress-style output read `10%20%` in one and `10%\r20%` in
   the other.
+- **Behaviour change — trailing whitespace (GUI only).** The GUI monitor
+  used to `trim_end()` each line, which it needed in order to drop the
+  `\n` it deliberately kept; that also silently ate trailing spaces and
+  tabs. Lines now arrive with the newline already removed, so trailing
+  whitespace is preserved as the device sent it.
 - Lines are capped at 64 KiB, so a device streaming forever without a
   newline (mismatched baud rate) can no longer grow the buffer without
   bound. Genuinely invalid bytes are still replaced with U+FFFD rather
