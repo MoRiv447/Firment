@@ -79,7 +79,10 @@ impl PermissionChecker for GuiPermission {
                 self.shared.perm_waiters.lock().unwrap().remove(&id);
                 // Tell the frontend so it drops the stale dialog: a later
                 // Allow click must not pretend it approved anything.
-                let _ = self.shared.app.emit("permission-expired", json!({ "id": id }));
+                let _ = self
+                    .shared
+                    .app
+                    .emit("permission-expired", json!({ "id": id }));
                 Err(PermissionError::denied(format!(
                     "permission request for tool '{tool}' timed out after {}s",
                     PERMISSION_TIMEOUT.as_secs()

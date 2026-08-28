@@ -324,7 +324,11 @@ pub async fn set_default_chip(
     let chip = chip.trim().to_string();
     {
         let mut config = shared.config.lock().unwrap();
-        config.tools.default_chip = if chip.is_empty() { None } else { Some(chip.clone()) };
+        config.tools.default_chip = if chip.is_empty() {
+            None
+        } else {
+            Some(chip.clone())
+        };
         config
             .save(&shared.config_path)
             .map_err(|e| format!("save config: {e}"))?;

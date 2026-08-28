@@ -92,17 +92,14 @@ pub async fn workbench_state(
         let store = shared.store.lock().unwrap().clone();
         let mut needs_heal = false;
         if let Ok(summaries) = store.list() {
-            let target = summaries
-                .iter()
-                .find(|s| s.id == cfg.mainline_session);
+            let target = summaries.iter().find(|s| s.id == cfg.mainline_session);
             if let Some(target) = target {
                 let sibling_conflict = summaries.iter().any(|s| {
                     s.id != target.id
                         && s.kind == firment_core::SessionKind::Mainline
                         && s.cwd == target.cwd
                 });
-                needs_heal =
-                    sibling_conflict || target.kind != firment_core::SessionKind::Mainline;
+                needs_heal = sibling_conflict || target.kind != firment_core::SessionKind::Mainline;
             }
         }
         if needs_heal && !crate::commands::is_session_running(&shared, &cfg.mainline_session) {
