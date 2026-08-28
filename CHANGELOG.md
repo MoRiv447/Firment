@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.6.1 (2026-08-28) — serial reads decode at byte boundaries
+
+Chinese (and any other multi-byte) log output no longer degrades into
+U+FFFD when a `read()` splits a character across two chunks. This closes
+the first of the three items on the v0.6.0 known-issues list.
+
+- **All four serial readers** — `monitor`, `hil`, `firm monitor`, and the
+  GUI monitor — decoded every `read()` chunk on its own, so a 3-byte CJK
+  glyph arriving as `[E4] | [B8 AD]` rendered as two replacement
+  characters. They now accumulate raw bytes in a new `LineSplitter` and
+  decode a line only once its bytes are complete. UTF-8 is
+  self-synchronising, so `0x0A` can never occur inside a multi-byte
+  sequence and the byte-level scan for `\n` is exact.
+- **HIL assertions benefit most**: `expect_contains` / `expect_regex`
+  match against each line, so a Chinese line that decoded to U+FFFD could
+  never match no matter what the device actually sent.
+- **The GUI monitor keeps its eager flush.** It deliberately emits output
+  without waiting for a newline — devices printing AT responses, boot
+  progress or register dumps never send one — so it now flushes up to the
+  last *complete* character and holds a truncated tail back for the next
+  read. At most 3 bytes are held, adding half a character of latency
+  (~0.26 ms at 115200 baud).
+- **Behaviour change — carriage returns.** All four paths now agree: a
+  single trailing `\r` is stripped and interior `\r` is kept. Previously
+  the `monitor` tool dropped every `\r` while `firm monitor` kept all of
+  them, so progress-style output read `10%20%` in one and `10%\r20%` in
+  the other.
+- Lines are capped at 64 KiB, so a device streaming forever without a
+  newline (mismatched baud rate) can no longer grow the buffer without
+  bound. Genuinely invalid bytes are still replaced with U+FFFD rather
+  than dropped, keeping a corrupt stream visible.
+- **Testing**: `LineSplitter` has 18 unit tests, including one that feeds
+  the same CJK text split at *every* possible offset and one pinned to
+  the 4 KiB read-buffer boundary. `read_serial` also gained a
+  `read_serial_from` seam so a `FakeReader` delivering one byte per read
+  drives the loop end to end without hardware.
+
+Remaining known issues from v0.6.0 (LOW severity, next batch): cmd.exe
+quoting doubles `%`/`^` in build commands containing them; workbench KB
+editor saves still overwrite concurrent disk edits without an mtime check.
+
 ## v0.6.0 (2026-08-27) — six-surface bug audit hardening
 
 Follow-up audit (crates / TUI kernel, GUI client, web surface, sbc-guard)
