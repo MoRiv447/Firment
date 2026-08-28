@@ -36,7 +36,7 @@ the first of the three items on the v0.6.0 known-issues list.
   newline (mismatched baud rate) can no longer grow the buffer without
   bound. Genuinely invalid bytes are still replaced with U+FFFD rather
   than dropped, keeping a corrupt stream visible.
-- **Testing**: `LineSplitter` has 18 unit tests, including one that feeds
+- **Testing**: `LineSplitter` has 17 unit tests, including one that feeds
   the same CJK text split at *every* possible offset and one pinned to
   the 4 KiB read-buffer boundary. `read_serial` also gained a
   `read_serial_from` seam so a `FakeReader` delivering one byte per read
