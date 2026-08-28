@@ -65,7 +65,8 @@ pub async fn monitor_start(
     let monitor_ref = monitor.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut buf = [0u8; 4096];
-        let mut partial = String::new();
+        let mut splitter =
+            firment_tools::utf8::LineSplitter::new(firment_tools::utf8::MAX_LINE_BYTES);
         loop {
             if stop_r.load(Ordering::Relaxed) {
                 break;
@@ -73,37 +74,42 @@ pub async fn monitor_start(
             match handle.read(&mut buf) {
                 Ok(0) => continue,
                 Ok(n) => {
-                    let text = String::from_utf8_lossy(&buf[..n]).to_string();
-                    partial.push_str(&text);
-                    // Emit complete lines immediately, KEEPING the trailing
-                    // '\n'. The frontend uses the '\n' to detect line
-                    // boundaries (a newline-less chunk is glued onto the
-                    // current line), so stripping it here merges every line
-                    // into one.
-                    while let Some(pos) = partial.find('\n') {
-                        let line = partial[..=pos].trim_end().to_string();
+                    // Complete lines first, each still carrying the '\n'
+                    // the frontend uses to detect line boundaries (a
+                    // newline-less chunk is glued onto the current line).
+                    splitter.feed(&buf[..n], &mut |line| {
                         let decoded =
-                            firment_tools::decode::decode_line(&line, elf_path.as_deref());
+                            firment_tools::decode::decode_line(line, elf_path.as_deref());
                         let _ = app.emit(
                             "monitor-output",
                             json!({ "port": port_out, "kind": "stdout", "line": format!("{decoded}\n") }),
                         );
-                        partial.drain(..=pos);
-                    }
-                    // No newline in this chunk: still flush what we have so
-                    // progress-style output appears in real time instead of
-                    // being stuck until a '\n' finally arrives.
-                    if !partial.is_empty() {
-                        let chunk = std::mem::take(&mut partial);
+                    });
+                    // Then flush whatever is left, so progress-style output
+                    // (AT responses, boot progress, register dumps) still
+                    // appears in real time instead of waiting for a '\n'.
+                    // Only complete characters go out: an incomplete tail
+                    // stays buffered for the next read rather than being
+                    // frozen into a U+FFFD right now.
+                    let rest = splitter.take_flushable();
+                    if !rest.is_empty() {
                         let _ = app.emit(
                             "monitor-output",
-                            json!({ "port": port_out, "kind": "stdout", "line": chunk }),
+                            json!({ "port": port_out, "kind": "stdout", "line": rest }),
                         );
                     }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::TimedOut => continue,
                 Err(_) => break,
             }
+        }
+        // Flush a character the port closed in the middle of, instead of
+        // dropping it along with the buffer.
+        if let Some(tail) = splitter.take_tail() {
+            let _ = app.emit(
+                "monitor-output",
+                json!({ "port": port_out, "kind": "stdout", "line": tail }),
+            );
         }
         // Dead port (device unplugged, driver error): remove the map entry so
         // the port can be started again and active_monitors stays truthful.
