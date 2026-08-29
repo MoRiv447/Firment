@@ -147,12 +147,19 @@ pub(crate) fn token_arg(value: &str, what: &str) -> Result<String, String> {
     Ok(value.to_string())
 }
 
-/// Quote a value for safe interpolation into the platform shell used by
-/// `run_command` (cmd.exe on Windows, sh on Unix).
+/// Quote a value for interpolation into a shell command STRING that is only
+/// ever DISPLAYED (error text, previews, `run_command_line`). The actual
+/// probe-rs invocations use argv arrays and must never go through this.
+///
+/// cmd.exe caveat: the `%%`/`^^` doubling below is BATCH-FILE syntax. On a
+/// `cmd /C <string>` command line (what `run_command` does) the doubled
+/// characters survive verbatim, so this quoting CORRUPTS arguments that
+/// legitimately contain `%` or `^`. Values executed as data (paths, file
+/// names) are therefore passed out-of-band (cwd / argv), never through here.
 pub(crate) fn shell_quote(arg: &str) -> String {
     if cfg!(windows) {
-        // cmd.exe: double quotes are the quoting mechanism, but `%` expansion
-        // and `^` escaping still apply inside them, so neutralise both.
+        // cmd.exe: double quotes are the quoting mechanism; `%` expansion and
+        // `^` escaping still apply inside them (see caveat above).
         let escaped = arg.replace('%', "%%").replace('^', "^^");
         format!("\"{escaped}\"")
     } else {

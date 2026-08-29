@@ -705,10 +705,10 @@ async fn run_build_step(
     if dry_run {
         return Ok("[dry-run] build simulated (skipped)".to_string());
     }
-    let (command, note) = match ctx.build_command.clone() {
-        Some(cmd) => (cmd, String::new()),
-        None => match detect_build_command(&ctx.cwd) {
-            Some((cmd, note)) => (cmd, note),
+    let (command, work_dir, note) = match ctx.build_command.clone() {
+        Some(cmd) => (cmd, ctx.cwd.clone(), String::new()),
+        None => match crate::tools::build::detect_build_command(&ctx.cwd) {
+            Some(d) => (d.command, d.work_dir, d.note),
             None => {
                 return Err(
                     "[InvalidInput] build not configured and no build system auto-detected (looked for platformio.ini / Makefile / CMakeLists.txt / *.uvprojx)".to_string(),
@@ -725,7 +725,7 @@ async fn run_build_step(
     }
     let timeout = step.timeout_ms.unwrap_or(600_000).min(remaining.max(1000));
     let (text, code) =
-        crate::tools::util::run_command(&command, &ctx.cwd, timeout, None, Some(&ctx.cancel))
+        crate::tools::util::run_command(&command, &work_dir, timeout, None, Some(&ctx.cancel))
             .await
             .map_err(|e| format!("[Io] build spawn failed: {e}"))?;
     match code {
@@ -1375,110 +1375,9 @@ async fn run_elf_step(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Build detection (copied from build.rs, kept in sync)
-// ---------------------------------------------------------------------------
-
-const BUILD_MANIFESTS: &[(&str, &str)] = &[
-    ("platformio.ini", "pio run"),
-    ("Makefile", "make"),
-    ("makefile", "make"),
-    ("CMakeLists.txt", ""),
-];
-
-fn is_skipped_dir(name: &str) -> bool {
-    name.starts_with('.')
-        || matches!(
-            name,
-            "target" | "node_modules" | ".pio" | "build" | "obj" | "Debug" | "Release" | "dist"
-        )
-}
-
-fn cmd_in(dir: &Path, cwd: &Path, inner: &str) -> String {
-    if dir == cwd {
-        inner.to_string()
-    } else {
-        let rel = dir.strip_prefix(cwd).unwrap_or(dir);
-        format!(
-            "cd {} && {inner}",
-            crate::tools::util::shell_quote(&rel.to_string_lossy())
-        )
-    }
-}
-
-fn detect_build_command(cwd: &Path) -> Option<(String, String)> {
-    let mut candidates: Vec<(usize, PathBuf, String)> = Vec::new();
-    let mut stack: Vec<(PathBuf, usize)> = vec![(cwd.to_path_buf(), 0)];
-    let mut visited: Vec<PathBuf> = Vec::new();
-    while let Some((dir, depth)) = stack.pop() {
-        if depth > 2 || visited.contains(&dir) {
-            continue;
-        }
-        visited.push(dir.clone());
-        let mut found = false;
-        for (manifest, inner) in BUILD_MANIFESTS {
-            if dir.join(manifest).is_file() {
-                let command = if *manifest == "CMakeLists.txt" {
-                    if dir.join("build").is_dir() {
-                        "cmake --build build".to_string()
-                    } else {
-                        "cmake -B build && cmake --build build".to_string()
-                    }
-                } else {
-                    cmd_in(&dir, cwd, inner)
-                };
-                candidates.push((depth, dir.clone(), command));
-                found = true;
-                break;
-            }
-        }
-        if !found {
-            if let Ok(entries) = std::fs::read_dir(&dir) {
-                for entry in entries.flatten() {
-                    let name = entry.file_name().to_string_lossy().into_owned();
-                    if name.ends_with(".uvprojx") {
-                        let command = cmd_in(
-                            &dir,
-                            cwd,
-                            &format!("uv4 -j0 -b {}", crate::tools::util::shell_quote(&name)),
-                        );
-                        candidates.push((depth, dir.clone(), command));
-                        found = true;
-                        break;
-                    }
-                }
-            }
-        }
-        if found {
-            continue;
-        }
-        if depth < 2 {
-            if let Ok(entries) = std::fs::read_dir(&dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                            if !is_skipped_dir(name) {
-                                stack.push((path, depth + 1));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    candidates.sort_by_key(|(depth, _, _)| *depth);
-    candidates.first().map(|(_, dir, command)| {
-        (
-            command.clone(),
-            format!(
-                "[auto-detected] build system in {}: {}",
-                dir.display(),
-                command
-            ),
-        )
-    })
-}
+// Build detection lives in build.rs (`detect_build_command`) and is shared
+// here — the hil build step previously carried a verbatim copy, which is how
+// the `cd <dir> &&` cmd-quoting bug survived its fix in the build tool.
 
 #[cfg(test)]
 mod tests {

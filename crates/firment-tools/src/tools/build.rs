@@ -1,5 +1,4 @@
 use super::shell::dangerous_reason;
-use super::util::shell_quote;
 use async_trait::async_trait;
 use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
@@ -7,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 pub struct Build;
 
-/// Well-known build manifests checked in priority order. The inner command
-/// runs inside the manifest's directory (see `cmd_in`).
+/// Well-known build manifests checked in priority order. The detected command
+/// runs inside the manifest's directory (see `detect_build_command`).
 const BUILD_MANIFESTS: &[(&str, &str)] = &[
     ("platformio.ini", "pio run"),
     ("Makefile", "make"),
@@ -26,22 +25,21 @@ fn is_skipped_dir(name: &str) -> bool {
         )
 }
 
-/// Prefix an inner command with `cd <relative-dir> &&` when the build manifest
-/// lives in a subdirectory of the workspace; at the workspace root no cd is
-/// needed (the shell runner already uses the workspace as its cwd).
-fn cmd_in(dir: &Path, cwd: &Path, inner: &str) -> String {
-    if dir == cwd {
-        inner.to_string()
-    } else {
-        let rel = dir.strip_prefix(cwd).unwrap_or(dir);
-        format!("cd {} && {inner}", shell_quote(&rel.to_string_lossy()))
-    }
+/// A detected build system: the command string plus the directory it must run
+/// in. The command is executed via `run_command` (cmd /C on Windows) with
+/// `work_dir` as its working directory — the directory is deliberately NOT
+/// spliced into the command string, so workspace paths containing `%`, `^` or
+/// spaces survive cmd's quoting quirks untouched.
+pub(crate) struct DetectedBuild {
+    pub command: String,
+    pub work_dir: PathBuf,
+    pub note: String,
 }
 
 /// Auto-detect the project's build system by scanning the workspace and up to
-/// 2 levels of subdirectories. Returns `(command, note)` or `None` when no
-/// known build system is found. Shallowest match wins.
-fn detect_build_command(cwd: &Path) -> Option<(String, String)> {
+/// 2 levels of subdirectories. Shallowest match wins. Shared with the hil
+/// tool's build step.
+pub(crate) fn detect_build_command(cwd: &Path) -> Option<DetectedBuild> {
     let mut candidates: Vec<(usize, PathBuf, String)> = Vec::new();
     let mut stack: Vec<(PathBuf, usize)> = vec![(cwd.to_path_buf(), 0)];
     let mut visited: Vec<PathBuf> = Vec::new();
@@ -63,7 +61,7 @@ fn detect_build_command(cwd: &Path) -> Option<(String, String)> {
                         "cmake -B build && cmake --build build".to_string()
                     }
                 } else {
-                    cmd_in(&dir, cwd, inner)
+                    inner.to_string()
                 };
                 candidates.push((depth, dir.clone(), command));
                 found = true;
@@ -76,8 +74,11 @@ fn detect_build_command(cwd: &Path) -> Option<(String, String)> {
                 for entry in entries.flatten() {
                     let name = entry.file_name().to_string_lossy().into_owned();
                     if name.ends_with(".uvprojx") {
-                        let command =
-                            cmd_in(&dir, cwd, &format!("uv4 -j0 -b {}", shell_quote(&name)));
+                        // Plain interior quotes only: `"` cannot appear in a
+                        // Windows file name, and cmd /C keeps quoted names
+                        // intact — unlike `%%`/`^^` "doubling", which is
+                        // batch-file syntax and corrupts a /C command line.
+                        let command = format!("uv4 -j0 -b \"{name}\"");
                         candidates.push((depth, dir.clone(), command));
                         found = true;
                         break;
@@ -106,15 +107,14 @@ fn detect_build_command(cwd: &Path) -> Option<(String, String)> {
     }
 
     candidates.sort_by_key(|(depth, _, _)| *depth);
-    candidates.first().map(|(_, dir, command)| {
-        (
-            command.clone(),
-            format!(
-                "[auto-detected] build system in {}: {}",
-                dir.display(),
-                command
-            ),
-        )
+    candidates.first().map(|(_, dir, command)| DetectedBuild {
+        command: command.clone(),
+        work_dir: dir.clone(),
+        note: format!(
+            "[auto-detected] build system in {}: {}",
+            dir.display(),
+            command
+        ),
     })
 }
 
@@ -142,10 +142,13 @@ impl Tool for Build {
     }
 
     async fn run(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
-        let (command, note) = match ctx.build_command.clone() {
-            Some(cmd) => (cmd, String::new()),
+        let (command, work_dir, note) = match ctx.build_command.clone() {
+            // A configured build_command runs in the workspace root, exactly
+            // as it did before — only the auto-detected path gained a
+            // separate work_dir.
+            Some(cmd) => (cmd, ctx.cwd.clone(), String::new()),
             None => match detect_build_command(&ctx.cwd) {
-                Some((cmd, note)) => (cmd, note),
+                Some(d) => (d.command, d.work_dir, d.note),
                 None => {
                     return Err(ToolError::new(
                         "[InvalidInput] build tool is not configured and no build system was \
@@ -170,7 +173,7 @@ impl Tool for Build {
             .and_then(|t| t.as_u64())
             .unwrap_or(600_000);
         let (text, code) =
-            super::util::run_command(&command, &ctx.cwd, timeout_ms, None, Some(&ctx.cancel))
+            super::util::run_command(&command, &work_dir, timeout_ms, None, Some(&ctx.cancel))
                 .await
                 .map_err(ToolError::new)?;
         match code {
@@ -217,27 +220,47 @@ mod tests {
     fn detects_platformio_at_workspace_root() {
         let dir = tempdir().unwrap();
         std::fs::write(dir.path().join("platformio.ini"), "[env]\n").unwrap();
-        let (cmd, note) = detect_build_command(dir.path()).unwrap();
-        assert_eq!(cmd, "pio run");
-        assert!(note.contains("auto-detected"), "got: {note}");
+        let d = detect_build_command(dir.path()).unwrap();
+        assert_eq!(d.command, "pio run");
+        assert_eq!(d.work_dir, dir.path());
+        assert!(d.note.contains("auto-detected"), "got: {}", d.note);
     }
 
     #[test]
-    fn detects_platformio_in_subdirectory_with_cd() {
+    fn detects_platformio_in_subdirectory() {
         let dir = tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("cubemx")).unwrap();
         std::fs::write(dir.path().join("cubemx").join("platformio.ini"), "[env]\n").unwrap();
-        let (cmd, _) = detect_build_command(dir.path()).unwrap();
-        assert!(cmd.contains("cd") && cmd.contains("cubemx"), "got: {cmd}");
-        assert!(cmd.contains("pio run"), "got: {cmd}");
+        let d = detect_build_command(dir.path()).unwrap();
+        assert_eq!(d.command, "pio run", "no cd prefix: {:?}", d.command);
+        assert!(
+            d.work_dir.ends_with("cubemx"),
+            "command must run in the manifest dir: {:?}",
+            d.work_dir
+        );
+    }
+
+    #[test]
+    fn special_chars_in_subdir_stay_out_of_command() {
+        // Regression for the cmd.exe quoting bug: a directory named with
+        // cmd-hostile characters must not leak into the command string (the
+        // old `cd <dir> &&` prefix corrupted `%`/`^` via batch-style doubling).
+        let dir = tempdir().unwrap();
+        let weird = dir.path().join("rev^2_100%");
+        std::fs::create_dir_all(&weird).unwrap();
+        std::fs::write(weird.join("platformio.ini"), "[env]\n").unwrap();
+        let d = detect_build_command(dir.path()).unwrap();
+        assert_eq!(d.command, "pio run", "got: {:?}", d.command);
+        assert!(d.work_dir.ends_with("rev^2_100%"));
     }
 
     #[test]
     fn detects_makefile() {
         let dir = tempdir().unwrap();
         std::fs::write(dir.path().join("Makefile"), "all:\n").unwrap();
-        let (cmd, _) = detect_build_command(dir.path()).unwrap();
-        assert_eq!(cmd, "make");
+        let d = detect_build_command(dir.path()).unwrap();
+        assert_eq!(d.command, "make");
+        assert_eq!(d.work_dir, dir.path());
     }
 
     #[test]
@@ -249,8 +272,8 @@ mod tests {
         )
         .unwrap();
         std::fs::create_dir_all(dir.path().join("build")).unwrap();
-        let (cmd, _) = detect_build_command(dir.path()).unwrap();
-        assert_eq!(cmd, "cmake --build build");
+        let d = detect_build_command(dir.path()).unwrap();
+        assert_eq!(d.command, "cmake --build build");
     }
 
     #[test]
@@ -261,16 +284,17 @@ mod tests {
             "cmake_minimum_required(VERSION 3)\n",
         )
         .unwrap();
-        let (cmd, _) = detect_build_command(dir.path()).unwrap();
-        assert_eq!(cmd, "cmake -B build && cmake --build build");
+        let d = detect_build_command(dir.path()).unwrap();
+        assert_eq!(d.command, "cmake -B build && cmake --build build");
     }
 
     #[test]
     fn detects_keil_project() {
         let dir = tempdir().unwrap();
         std::fs::write(dir.path().join("fw.uvprojx"), "{}").unwrap();
-        let (cmd, _) = detect_build_command(dir.path()).unwrap();
-        assert!(cmd.contains("uv4 -j0 -b"), "got: {cmd}");
+        let d = detect_build_command(dir.path()).unwrap();
+        assert!(d.command.contains("uv4 -j0 -b"), "got: {}", d.command);
+        assert!(d.command.contains("\"fw.uvprojx\""), "got: {}", d.command);
     }
 
     #[test]
@@ -280,8 +304,9 @@ mod tests {
         let sub = dir.path().join("sub");
         std::fs::create_dir_all(&sub).unwrap();
         std::fs::write(sub.join("Makefile"), "all:\n").unwrap();
-        let (cmd, _) = detect_build_command(dir.path()).unwrap();
-        assert_eq!(cmd, "pio run", "workspace root must win over subdir");
+        let d = detect_build_command(dir.path()).unwrap();
+        assert_eq!(d.command, "pio run", "workspace root must win over subdir");
+        assert_eq!(d.work_dir, dir.path());
     }
 
     #[test]
