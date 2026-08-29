@@ -71,3 +71,30 @@ expect_count = 2
 
 # Inline steps (no .firment/hil.toml needed) — agent/CLI can do:
 # firm hil --steps '[{"kind":"build"},{"kind":"monitor","expect_contains":"ok","timeout_ms":3000}]' --dry-run
+
+# Physical observation (v0.7+): assert the LED is lit on a photo of the
+# board. The analysis is deterministic local CV — no vision model. Run a
+# first observe step WITHOUT expect_lit to get a `suggested roi`, then pin
+# it for repeat runs.
+[suite.observe-photo]
+chip = "stm32g431rb"
+
+[[suite.observe-photo.steps]]
+kind = "build"
+timeout_ms = 600000
+
+[[suite.observe-photo.steps]]
+kind = "flash"
+elf = "build/firmware.elf"
+timeout_ms = 180000
+
+[[suite.observe-photo.steps]]
+kind = "delay"
+duration_ms = 500
+
+[[suite.observe-photo.steps]]
+kind = "observe"
+file = "photos/led-on.jpg"     # inside the workspace
+roi = [120, 80, 40, 40]        # optional: point at the LED; omit to scan
+expect_lit = true              # fail the suite if the analysis says dark
+save = true                    # archive the frame under .firment/observe/

@@ -93,6 +93,7 @@ Firment separates responsibilities instead of treating the model as a shell scri
   - `break` / `step` / `continue` — set a breakpoint and report registers when it hits, single-step, resume
   - `backtrace` — halt and unwind the call stack against the firmware ELF (DWARF-based; the firmware must be built with `-g`)
   - `trace` — stream SWO/ITM trace packets (`probe-rs itm swo`); probe-rs configures CoreSight itself, the firmware just writes ITM ports
+  - `forensic` — one-command hard-fault post-mortem: halts the target, captures the exception frame + Cortex-M fault registers + a 64-word stack window, decodes the fault site and candidate call chain against the ELF, re-reads PC to detect a corrupted scene (watchdog reset race), correlates the capture against the session change ledger (7-day window, newest first), and snapshots the report under the session dir. Approval-exempt: the scene is ephemeral
 
 ### Verification & evidence
 
@@ -109,6 +110,8 @@ A successful compile or flash does **not** automatically prove the physical task
 - **`verify_command` gate**: a configured command (e.g. `cargo check`) runs before the agent may declare completion; if it fails, the agent must keep working
 - **ELF regression gate**: `elf_analyze` baselines are re-checked after every edited turn — flash/RAM growth or stack-depth growth above threshold blocks completion
 - **HIL end-to-end suites**: `hil` ties build → flash → monitored output (with `expect_contains`/`expect_regex` + `expect_count` assertions) → ELF analysis into one repeatable, replayable verification run, with `dry_run` for rehearsal
+- **`observe` gate (physical level, automated)**: a photo of the target + deterministic local CV answers "is the LED lit / where is the bright region" with a confidence rating — rung 5 verifiable by the agent itself. In HIL: an `observe` step asserts `expect_lit` and raises the suite's evidence level to `physical`
+- **Fault-signature markers**: captured serial/RTT output is scanned for fault signatures (panic, HardFault, BusFault, ...); on a hit the agent is pointed at `debug forensic` immediately — before a watchdog reset destroys the scene
 
 ### SBC edge data plane
 

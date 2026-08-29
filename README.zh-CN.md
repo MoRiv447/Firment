@@ -93,6 +93,7 @@ Firment 不把模型当 shell 脚本生成器，而是明确分工：
   - `break` / `step` / `continue` —— 设置断点并在命中时上报寄存器、单步、恢复运行
   - `backtrace` —— 暂停并对照固件 ELF 回溯调用栈（基于 DWARF；固件需以 `-g` 构建）
   - `trace` —— 流式采集 SWO/ITM 跟踪包（`probe-rs itm swo`）；probe-rs 自行配置 CoreSight，固件只需写 ITM 端口
+  - `forensic` —— 一条命令的 hard fault 验尸：暂停目标、抓取异常帧 + Cortex-M 故障寄存器 + 64 字栈窗，对照 ELF 解码故障点与候选调用链，复读 PC 检测现场是否被破坏（看门狗复位竞态），并将会话变更台账（7 天窗口、最新在前）关联进报告，快照存至会话目录。免审批：现场稍纵即逝
 
 ### 验证与证据
 
@@ -109,6 +110,8 @@ Firment 不把模型当 shell 脚本生成器，而是明确分工：
 - **`verify_command` 门禁**：配置的命令（如 `cargo check`）在 Agent 声明完成前必须运行；失败则 Agent 必须继续修改
 - **ELF 回归门禁**：每次编辑回合后自动复查 `elf_analyze` 基线——flash/RAM 增长或栈深增长超过阈值即拦截完成
 - **HIL 端到端套件**：`hil` 把 build → flash → 观测输出（`expect_contains`/`expect_regex` + `expect_count` 断言）→ ELF 分析串成可重复、可回放的一次性验证，`dry_run` 用于演练
+- **`observe` 门（物理层，自动化）**：一张目标板照片 + 确定性本地 CV 回答"LED 亮没亮 / 亮区在哪"，并给出置信度——第 5 层证据可由 agent 自行验证。HIL 中为 `observe` 步骤断言 `expect_lit`，将套件证据层级抬到 `physical`
+- **故障签名标记**：捕获的串口/RTT 输出会扫描故障签名（panic、HardFault、BusFault 等），命中即提示 agent 立刻执行 `debug forensic`——抢在看门狗复位毁掉现场之前
 
 ### SBC 端侧数据平面
 
