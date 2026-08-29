@@ -285,6 +285,34 @@ pub struct ProviderConfig {
     pub temperature: Option<f32>,
 }
 
+impl ProviderConfig {
+    /// Base URL with the per-type default applied and trailing slashes
+    /// trimmed — the single source both `list_models` and `firm doctor`
+    /// probe against.
+    pub fn effective_base(&self) -> String {
+        let base = self.base_url.clone().unwrap_or_else(|| {
+            if self.r#type == "anthropic" {
+                "https://api.anthropic.com".to_string()
+            } else {
+                "https://api.openai.com/v1".to_string()
+            }
+        });
+        base.trim_end_matches('/').to_string()
+    }
+
+    /// URL of the models endpoint. A base that already carries the
+    /// anthropic `/v1` prefix (e.g. `https://openrouter.ai/api/v1`) must
+    /// NOT get a second one — `/api/v1/v1/models` is a guaranteed 404.
+    pub fn models_url(&self) -> String {
+        let base = self.effective_base();
+        if self.r#type == "anthropic" && !base.ends_with("/v1") {
+            format!("{base}/v1/models")
+        } else {
+            format!("{base}/models")
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("io error: {0}")]
@@ -560,19 +588,7 @@ impl Config {
     pub async fn list_models(&self, name: &str) -> Result<Vec<String>, ConfigError> {
         let provider = self.provider(Some(name))?.clone();
         let key = self.api_key_for(&provider, name).unwrap_or_default();
-        let base = provider.base_url.clone().unwrap_or_else(|| {
-            if provider.r#type == "anthropic" {
-                "https://api.anthropic.com".to_string()
-            } else {
-                "https://api.openai.com/v1".to_string()
-            }
-        });
-        let base = base.trim_end_matches('/');
-        let url = if provider.r#type == "anthropic" {
-            format!("{base}/v1/models")
-        } else {
-            format!("{base}/models")
-        };
+        let url = provider.models_url();
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .build()?;
@@ -971,5 +987,58 @@ mod tests {
         assert_eq!(config.context_budget_chars, 256 * 1024);
         assert_eq!(config.max_output_tokens, None);
         assert_eq!(default_max_output_tokens(), 32 * 1024);
+    }
+}
+
+#[cfg(test)]
+mod models_url_tests {
+    use super::ProviderConfig;
+
+    fn provider(t: &str, base: Option<&str>) -> ProviderConfig {
+        ProviderConfig {
+            r#type: t.to_string(),
+            base_url: base.map(String::from),
+            api_key_env: None,
+            api_key: None,
+            model: "m".to_string(),
+            max_tokens: None,
+            temperature: None,
+        }
+    }
+
+    #[test]
+    fn anthropic_base_already_carrying_v1_is_not_doubled() {
+        let p = provider("anthropic", Some("https://openrouter.ai/api/v1"));
+        assert_eq!(p.models_url(), "https://openrouter.ai/api/v1/models");
+    }
+
+    #[test]
+    fn anthropic_base_without_v1_gets_the_prefix() {
+        let p = provider("anthropic", Some("https://api.deepseek.com"));
+        assert_eq!(p.models_url(), "https://api.deepseek.com/v1/models");
+    }
+
+    #[test]
+    fn openai_base_passes_through() {
+        let p = provider("openai", Some("https://api.openai.com/v1"));
+        assert_eq!(p.models_url(), "https://api.openai.com/v1/models");
+    }
+
+    #[test]
+    fn trailing_slash_is_trimmed_before_appending() {
+        let p = provider("openai", Some("http://localhost:11434/v1/"));
+        assert_eq!(p.models_url(), "http://localhost:11434/v1/models");
+    }
+
+    #[test]
+    fn defaults_apply_when_base_is_unset() {
+        assert_eq!(
+            provider("anthropic", None).models_url(),
+            "https://api.anthropic.com/v1/models"
+        );
+        assert_eq!(
+            provider("openai", None).models_url(),
+            "https://api.openai.com/v1/models"
+        );
     }
 }

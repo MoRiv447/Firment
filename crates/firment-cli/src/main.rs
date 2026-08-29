@@ -891,19 +891,7 @@ async fn doctor(config: &Config, path: &Path) -> anyhow::Result<()> {
         );
         println!("  api key: {key_status}");
 
-        let base = provider.base_url.clone().unwrap_or_else(|| {
-            if provider.r#type == "anthropic" {
-                "https://api.anthropic.com".to_string()
-            } else {
-                "https://api.openai.com/v1".to_string()
-            }
-        });
-        let base = base.trim_end_matches('/');
-        let probe_url = if provider.r#type == "anthropic" {
-            format!("{base}/v1/models")
-        } else {
-            format!("{base}/models")
-        };
+        let probe_url = provider.models_url();
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .build()?;
