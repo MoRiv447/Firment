@@ -860,7 +860,10 @@ impl App {
             }
         };
         if always {
-            self.always.lock().unwrap().insert(prompt.tool.clone());
+            self.always
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(prompt.tool.clone());
         }
         let _ = prompt.reply.send(allowed);
         if let Some(idx) = self

@@ -38,6 +38,10 @@ export function PermissionDialog({
     try {
       await api.respondPermission(req.id, allowed);
       onClose();
+    } catch (err) {
+      // Keep the dialog open and actionable: an IPC failure must not leave
+      // an unhandled rejection plus a wedged modal.
+      console.error('respond_permission failed:', err);
     } finally {
       setBusy(false);
     }
@@ -89,6 +93,8 @@ export function AskDialog({
       await api.respondAsk(req.id, answer);
       setCustom('');
       onClose();
+    } catch (err) {
+      console.error('respond_ask failed:', err);
     } finally {
       setBusy(false);
     }

@@ -56,7 +56,7 @@ impl PermissionChecker for GuiPermission {
         reason: &str,
     ) -> Result<(), PermissionError> {
         let always = {
-            let config = self.shared.config.lock().unwrap();
+            let config = self.shared.config.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             config.auto_approve.to_vec()
         };
         if always.iter().any(|t| t == tool) {
@@ -64,7 +64,7 @@ impl PermissionChecker for GuiPermission {
         }
         let id = next_seq();
         let (tx, rx) = oneshot::channel();
-        self.shared.perm_waiters.lock().unwrap().insert(id, tx);
+        self.shared.perm_waiters.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(id, tx);
         let _ = self.shared.app.emit(
             "permission-request",
             json!({ "id": id, "tool": tool, "args": args, "reason": reason, "session_id": self.session_id }),
@@ -76,7 +76,7 @@ impl PermissionChecker for GuiPermission {
             ))),
             Ok(Err(_)) => Err(PermissionError::denied("permission dialog closed")),
             Err(_) => {
-                self.shared.perm_waiters.lock().unwrap().remove(&id);
+                self.shared.perm_waiters.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&id);
                 // Tell the frontend so it drops the stale dialog: a later
                 // Allow click must not pretend it approved anything.
                 let _ = self
@@ -105,7 +105,7 @@ impl Asker for GuiAsker {
     async fn ask(&self, question: &str, options: &[String]) -> Result<String, String> {
         let id = next_seq();
         let (tx, rx) = oneshot::channel();
-        self.shared.ask_waiters.lock().unwrap().insert(id, tx);
+        self.shared.ask_waiters.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(id, tx);
         let _ = self.shared.app.emit(
             "ask-request",
             json!({ "id": id, "question": question, "options": options, "session_id": self.session_id }),
@@ -115,7 +115,7 @@ impl Asker for GuiAsker {
             Ok(Ok(None)) => Err("user dismissed the question".to_string()),
             Ok(Err(e)) => Err(e.to_string()),
             Err(_) => {
-                self.shared.ask_waiters.lock().unwrap().remove(&id);
+                self.shared.ask_waiters.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&id);
                 let _ = self.shared.app.emit("ask-expired", json!({ "id": id }));
                 Err(format!(
                     "question timed out after {}s",

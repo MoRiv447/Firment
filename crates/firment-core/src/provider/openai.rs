@@ -265,10 +265,33 @@ impl Provider for OpenAIProvider {
                         }
                         if let Some(calls) = delta.get("tool_calls").and_then(|c| c.as_array()) {
                             for tc in calls {
-                                let idx = tc
-                                    .get("index")
-                                    .and_then(|i| i.as_u64())
-                                    .unwrap_or(0) as usize;
+                                // Spec-conformant servers always send `index`.
+                                // Non-conformant ones omit it — a fresh `id`
+                                // or `name` then starts a NEW call instead of
+                                // merging everything into slot 0 (which used
+                                // to concatenate two calls' arguments into
+                                // one and overwrite id/name).
+                                let idx = match tc.get("index").and_then(|i| i.as_u64()) {
+                                    Some(i) => i as usize,
+                                    // No index: an id we have NOT seen starts
+                                    // a new call; anything else (argument
+                                    // fragments, repeated ids) continues the
+                                    // most recent one.
+                                    None => {
+                                        let new_id = tc
+                                            .get("id")
+                                            .and_then(|i| i.as_str())
+                                            .filter(|s| !s.is_empty())
+                                            .is_some_and(|id| {
+                                                !tool_acc.values().any(|e| e.id == *id)
+                                            });
+                                        if new_id {
+                                            tool_acc.len()
+                                        } else {
+                                            tool_acc.keys().copied().max().unwrap_or(0)
+                                        }
+                                    }
+                                };
                                 let entry = tool_acc.entry(idx).or_default();
                                 if let Some(id) = tc.get("id").and_then(|i| i.as_str())
                                     && !id.is_empty()

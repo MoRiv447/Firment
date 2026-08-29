@@ -63,7 +63,10 @@ impl PermissionChecker for TuiPermission {
 
 impl TuiPermission {
     fn already_approved(&self, tool: &str) -> bool {
-        self.always.lock().unwrap().contains(tool)
+        self.always
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains(tool)
     }
 }
 

@@ -64,7 +64,7 @@ function ToolCallBlock({ calls }: { calls: ToolCall[] }) {
   return (
     <Space direction="vertical" style={{ width: '100%' }} size={4}>
       {calls.map((c, i) => (
-        <CollapsedToolCard key={i} call={c} />
+        <CollapsedToolCard key={c.id || i} call={c} seq={i + 1} />
       ))}
     </Space>
   );
@@ -73,7 +73,7 @@ function ToolCallBlock({ calls }: { calls: ToolCall[] }) {
 /// Historical tool calls start collapsed (name + one-line arg preview);
 /// the header toggles open AND closed — expanding swaps in the full card
 /// below it. Live cards during streaming stay expanded.
-function CollapsedToolCard({ call }: { call: ToolCall }) {
+function CollapsedToolCard({ call, seq }: { call: ToolCall; seq: number }) {
   const [open, setOpen] = useState(false);
   let preview = '';
   try {
@@ -88,7 +88,7 @@ function CollapsedToolCard({ call }: { call: ToolCall }) {
     // tool-name tag.
     return (
       <ToolCard
-        tool={{ seq: 1, name: call.name, args: call.arguments, status: 'ok' }}
+        tool={{ seq, name: call.name, args: call.arguments, status: 'ok' }}
         standalone
         collapsible={{ open: true, onToggle: () => setOpen(false) }}
       />

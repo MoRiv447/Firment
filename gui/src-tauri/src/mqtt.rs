@@ -38,7 +38,7 @@ fn trace(shared: &Arc<Shared>, line: &str) {
 /// anything weird in the host async runtime.
 pub fn spawn_if_configured(shared: Arc<Shared>) {
     let broker = {
-        let cfg = shared.config.lock().unwrap();
+        let cfg = shared.config.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         cfg.mqtt.broker.trim().to_string()
     };
     trace(&shared, &format!("spawn: broker read as {broker:?}"));
@@ -137,29 +137,20 @@ async fn run(shared: Arc<Shared>, broker: String) {
                     // Online ONLY after the broker actually acknowledged the
                     // session — "subscribe queued" used to flip the card to
                     // green before the handshake, then errors flipped it
-                    // back: the flickering-status bug.
-                    set_status(
-                        &shared,
-                        format!("{{\"connected\":true,\"broker\":\"{broker}\"}}"),
-                    );
-                    emit(
-                        &shared,
-                        FrontendEvent::GuardStatus {
-                            frame: format!("{{\"connected\":true,\"broker\":\"{broker}\"}}"),
-                        },
-                    );
+                    // back: the flickering-status bug. Built with serde_json:
+                    // a broker URL containing `"` or `\` used to emit an
+                    // unparseable frame.
+                    let frame = status_json(true, Some(&broker), None, Some(frames));
+                    set_status(&shared, frame.clone());
+                    emit(&shared, FrontendEvent::GuardStatus { frame });
                 }
                 Ok(_) => {
                     if connacked && last_status.elapsed() >= Duration::from_secs(10) {
                         last_status = std::time::Instant::now();
                         trace(&shared, &format!("status heartbeat (frames={frames})"));
-                        set_status(
-                            &shared,
-                            format!("{{\"connected\":true,\"broker\":\"{broker}\",\"frames\":{frames}}}"),
-                        );
-                        emit(&shared, FrontendEvent::GuardStatus {
-                            frame: format!("{{\"connected\":true,\"broker\":\"{broker}\",\"frames\":{frames}}}"),
-                        });
+                        let frame = status_json(true, Some(&broker), None, Some(frames));
+                        set_status(&shared, frame.clone());
+                        emit(&shared, FrontendEvent::GuardStatus { frame });
                     }
                 }
                 Err(e) => {
@@ -167,16 +158,9 @@ async fn run(shared: Arc<Shared>, broker: String) {
                         &shared,
                         &format!("eventloop error (connacked={connacked}, frames={frames}): {e}"),
                     );
-                    set_status(
-                        &shared,
-                        format!("{{\"connected\":false,\"error\":\"{e}\"}}"),
-                    );
-                    emit(
-                        &shared,
-                        FrontendEvent::GuardStatus {
-                            frame: format!("{{\"connected\":false,\"error\":\"{e}\"}}"),
-                        },
-                    );
+                    let frame = status_json(false, None, Some(&e.to_string()), None);
+                    set_status(&shared, frame.clone());
+                    emit(&shared, FrontendEvent::GuardStatus { frame });
                     // The Info line fires ONCE per outage (edge-triggered):
                     // with the SBC off, the 3s retry loop would otherwise
                     // spam the chat with the same error every cycle.
@@ -272,7 +256,24 @@ fn emit(shared: &Arc<Shared>, ev: FrontendEvent) {
 /// remount) can pull the truth via the mqtt_status command instead of
 /// waiting for the next event.
 fn set_status(shared: &Arc<Shared>, frame: String) {
-    *shared.mqtt_status.lock().unwrap() = frame;
+    *shared.mqtt_status.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = frame;
+}
+
+/// Build the guard-status JSON the frontend card parses. serde_json (not
+/// string interpolation): broker URLs and error texts containing `"` or `\`
+/// used to produce malformed frames that the card rendered as `unknown`.
+fn status_json(connected: bool, broker: Option<&str>, error: Option<&str>, frames: Option<u64>) -> String {
+    let mut obj = serde_json::json!({ "connected": connected });
+    if let Some(b) = broker {
+        obj["broker"] = serde_json::json!(b);
+    }
+    if let Some(e) = error {
+        obj["error"] = serde_json::json!(e);
+    }
+    if let Some(f) = frames {
+        obj["frames"] = serde_json::json!(f);
+    }
+    obj.to_string()
 }
 
 #[cfg(test)]

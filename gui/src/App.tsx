@@ -666,10 +666,15 @@ export default function App() {
                         key={n.id}
                         onClick={() => {
                           if (n.sid) {
-                            void api.loadSession(n.sid).then((s) => {
-                              setSession(s);
-                              setView('chat');
-                            });
+                            // The notification may outlive its session
+                            // (deleted while the panel was open).
+                            void api
+                              .loadSession(n.sid)
+                              .then((s) => {
+                                setSession(s);
+                                setView('chat');
+                              })
+                              .catch(console.error);
                           }
                         }}
                         style={{

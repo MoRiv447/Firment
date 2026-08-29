@@ -89,7 +89,7 @@ pub async fn workbench_state(
     // commands guard the same hazard via ensure_not_running).
     let cfg = load_config(&root);
     if !cfg.mainline_session.is_empty() {
-        let store = shared.store.lock().unwrap().clone();
+        let store = shared.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
         let mut needs_heal = false;
         if let Ok(summaries) = store.list() {
             let target = summaries.iter().find(|s| s.id == cfg.mainline_session);
@@ -271,7 +271,7 @@ pub async fn workbench_hardware_list(
     };
 
     let default_chip = {
-        let config = shared.config.lock().unwrap();
+        let config = shared.config.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let merged = config.merged_for(&root);
         merged.tools.default_chip.clone().unwrap_or_default()
     };
@@ -666,7 +666,7 @@ pub async fn workbench_branch_create(
     parent_id: String,
     title: String,
 ) -> Result<String, String> {
-    let store = shared.store.lock().unwrap().clone();
+    let store = shared.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
     let branch = store
         .create_branch(&parent_id, &title)
         .map_err(|e| e.to_string())?;
@@ -737,7 +737,7 @@ pub async fn workbench_elf(
         }
         _ => {
             let glob = {
-                let config = shared.config.lock().unwrap();
+                let config = shared.config.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 config
                     .tools
                     .elf
@@ -760,7 +760,7 @@ pub async fn workbench_elf(
     // Gate thresholds for context (they are DELTA thresholds, shown as
     // reference next to the absolute numbers).
     let gate = {
-        let config = shared.config.lock().unwrap();
+        let config = shared.config.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         config.tools.elf.as_ref().map(|e| GateThresholdsDto {
             stack_threshold: e.stack_threshold,
             flash_threshold_kib: e.flash_threshold_kib,
@@ -798,7 +798,7 @@ pub async fn workbench_quality(
     shared: tauri::State<'_, Arc<Shared>>,
     session_id: String,
 ) -> Result<Vec<QualityItemDto>, String> {
-    let store = shared.store.lock().unwrap().clone();
+    let store = shared.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
     let session = store.load(&session_id).map_err(|e| e.to_string())?;
     const WATCHED: [&str; 5] = ["build", "verify", "hil", "flash", "run"];
     const FAIL_TAGS: [&str; 6] = [
@@ -849,7 +849,7 @@ pub async fn workbench_timeline(
     session_id: String,
     limit: Option<usize>,
 ) -> Result<Vec<TimelineEntryDto>, String> {
-    let store = shared.store.lock().unwrap().clone();
+    let store = shared.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
     let ledger = firment_core::journal::Ledger::new(store.ledger_path(&session_id));
     let entries = ledger.entries();
     let limit = limit.unwrap_or(12);

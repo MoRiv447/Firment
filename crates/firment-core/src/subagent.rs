@@ -140,13 +140,22 @@ impl SubagentFactory for SubagentRunner {
         nested.set_elf_config(self.config.tools.elf.clone());
         // Propagate the parent turn's cancellation into the nested agent so
         // interrupting the parent also stops the subagent (and the processes
-        // it spawned, via its own tool layer).
+        // it spawned, via its own tool layer). The handle is kept and aborted
+        // on drop: an uncancelled parent would otherwise leave the parked
+        // propagation task alive (one leaked tokio task per task-tool call).
         let propagate = cancel.clone();
         let nested_cancel = nested.cancel_signal();
-        tokio::spawn(async move {
+        let propagator = tokio::spawn(async move {
             propagate.cancelled().await;
             nested_cancel.cancel();
         });
+        struct AbortOnDrop(tokio::task::JoinHandle<()>);
+        impl Drop for AbortOnDrop {
+            fn drop(&mut self) {
+                self.0.abort();
+            }
+        }
+        let _propagator_guard = AbortOnDrop(propagator);
         let result = nested.run_turn(prompt).await;
         // The subagent session is transient bookkeeping: drop its whole
         // directory when done so long sessions do not accumulate temp junk.

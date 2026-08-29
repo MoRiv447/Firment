@@ -1138,7 +1138,10 @@ async fn run_trace_step(
             let expect_count = step
                 .expect_count
                 .or_else(|| step.expect.as_ref().and_then(|e| e.count))
-                .unwrap_or(1);
+                .unwrap_or(1)
+                // Same clamp as the monitor step: expect_count = 0 would pass
+                // vacuously before any byte arrives.
+                .max(1);
             if expect_contains.is_some() || expect_regex.is_some() {
                 let regex_obj = if let Some(rx) = &expect_regex {
                     Some(

@@ -796,7 +796,14 @@ impl PermissionChecker for CliPermission {
         _args: &serde_json::Value,
         reason: &str,
     ) -> Result<(), PermissionError> {
-        if self.yes || self.auto.contains(tool) || self.always.lock().unwrap().contains(tool) {
+        if self.yes
+            || self.auto.contains(tool)
+            || self
+                .always
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .contains(tool)
+        {
             return Ok(());
         }
         if !self.interactive {
@@ -812,7 +819,10 @@ impl PermissionChecker for CliPermission {
         match line.trim().to_lowercase().as_str() {
             "y" => Ok(()),
             "a" => {
-                self.always.lock().unwrap().insert(tool.to_string());
+                self.always
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .insert(tool.to_string());
                 Ok(())
             }
             _ => Err(PermissionError::denied("denied by user")),

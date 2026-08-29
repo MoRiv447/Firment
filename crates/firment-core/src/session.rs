@@ -235,11 +235,24 @@ impl SessionStore {
                 "meta" => {
                     if let Ok(m) = serde_json::from_value::<MetaLine>(value) {
                         meta = Some(m);
+                    } else {
+                        // Schema-drifted meta is as dangerous as a skipped
+                        // tool result: count it so dangling-tool-call repair
+                        // still runs below.
+                        corrupt_lines += 1;
                     }
                 }
                 "message" => {
                     if let Ok(m) = serde_json::from_value::<MessageLine>(value) {
                         messages.push(m.message);
+                    } else {
+                        // A valid-JSON line that fails MessageLine
+                        // deserialization (schema drift, hand-edited or
+                        // partially rewritten transcript) is exactly the
+                        // shape that strands an assistant tool_call without
+                        // its result and 400s the next provider request —
+                        // count it so the repair pass below triggers.
+                        corrupt_lines += 1;
                     }
                 }
                 _ => {}

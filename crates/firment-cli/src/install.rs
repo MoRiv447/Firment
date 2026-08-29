@@ -413,7 +413,11 @@ mod tests {
 
     impl PathEnv for MemoryPathEnv {
         fn read_user_path(&self) -> Result<String> {
-            Ok(self.value.lock().unwrap().clone())
+            Ok(self
+                .value
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone())
         }
 
         fn read_user_path_kind(&self) -> Result<Option<u32>> {
@@ -421,7 +425,10 @@ mod tests {
         }
 
         fn write_user_path_with_kind(&self, value: &str, _kind: Option<u32>) -> Result<()> {
-            *self.value.lock().unwrap() = value.to_string();
+            *self
+                .value
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = value.to_string();
             Ok(())
         }
     }
@@ -444,7 +451,12 @@ mod tests {
             value: Arc::new(Mutex::new(existing.clone())),
         };
         assert!(!add_user_path_impl(&env, &dir).unwrap());
-        assert_eq!(*env.value.lock().unwrap(), existing);
+        assert_eq!(
+            *env.value
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            existing
+        );
 
         let base = if cfg!(windows) {
             "C:\\Windows".to_string()
@@ -456,7 +468,9 @@ mod tests {
         };
         assert!(add_user_path_impl(&env, &dir).unwrap());
         assert_eq!(
-            *env.value.lock().unwrap(),
+            *env.value
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
             format!("{base};{}", dir.display())
         );
     }

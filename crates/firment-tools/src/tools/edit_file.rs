@@ -218,6 +218,15 @@ fn edit_by_hashline(
     }
     let full_hash = |line: &str| firment_core::hash::sha256_hex(line.as_bytes());
     let find = |anchor: &str| -> Result<usize, ToolError> {
+        // An empty (or all-whitespace) anchor would start_with-match every
+        // line and "uniquely" resolve in a single-line file — an edit with no
+        // anchor at all. The schema asks for the 8-hex hash; enforce it.
+        if anchor.len() < 8 || !anchor.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(ToolError::new(format!(
+                "[InvalidInput] hashline anchor {anchor:?} is not a non-empty 8-hex (or longer) \
+                 content hash; re-read with read_file hashlines=true and copy an anchor"
+            )));
+        }
         let anchor = anchor.to_lowercase();
         let matches: Vec<usize> = lines
             .iter()
@@ -443,6 +452,33 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.message.contains("not unique"), "got: {}", err.message);
+    }
+
+    #[tokio::test]
+    async fn hashline_empty_or_short_anchor_is_rejected() {
+        // An empty anchor startswith-matches EVERY line; in a single-line
+        // file it would "uniquely" resolve and edit with no anchor at all.
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "only line\n").unwrap();
+        for anchor in ["", "abc", "zzzzzzzz"] {
+            let err = EditFile
+                .run(
+                    json!({"path": "a.txt", "hashline": anchor, "new_text": "X"}),
+                    &ctx(dir.path()),
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                err.message.contains("[InvalidInput]"),
+                "anchor {anchor:?}: {}",
+                err.message
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "only line\n",
+            "file must be untouched"
+        );
     }
 
     #[tokio::test]

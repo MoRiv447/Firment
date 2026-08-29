@@ -60,3 +60,4 @@ Desktop.ini
 
 # 宣传文章（不纳入版本库）
 /articles
+.zcode/

@@ -699,10 +699,10 @@ export default function ChatPage() {
                       }
                       className="w-full px-3 py-2 bg-gray-800 border-[2px] border-black text-sm text-gray-200 focus:border-blue-500 outline-none"
                     >
+                      {/* Only the providers web.ts actually implements —
+                          tavily/brave exist in the CLI but throw here. */}
                       <option value="bing">Bing (no key, default — CN-reachable)</option>
                       <option value="duckduckgo">DuckDuckGo (no key)</option>
-                      <option value="tavily">Tavily (API key)</option>
-                      <option value="brave">Brave (API key)</option>
                     </select>
                     <p className="text-xs text-gray-500 mt-1">Default is Bing — works in mainland China without a key</p>
                   </div>

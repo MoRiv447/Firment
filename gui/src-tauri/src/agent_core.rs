@@ -20,7 +20,7 @@ pub fn build_agent(
     shared: &Arc<Shared>,
     session: Session,
 ) -> anyhow::Result<(Agent, CancelHandles)> {
-    let config = shared.config.lock().unwrap().clone();
+    let config = shared.config.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
     let merged = config.merged_for(&session.cwd);
 
     let sink: Arc<GuiSink> = Arc::new(GuiSink {
@@ -41,7 +41,7 @@ pub fn build_agent(
     let mut assembly = firment_tools::assembly::assemble_agent(
         &merged,
         session,
-        shared.store.lock().unwrap().clone(),
+        shared.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone(),
         sink,
         permission,
         Some(asker),

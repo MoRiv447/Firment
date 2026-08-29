@@ -198,7 +198,17 @@ impl AnthropicProvider {
                 ThinkingLevel::Max => 32768,
                 ThinkingLevel::Off => 1024,
             };
-            body["max_tokens"] = json!(self.max_tokens.max(budget + 2048));
+            // The API counts thinking tokens toward max_tokens, so the
+            // budget must fit underneath it. A per-request cap (e.g. the
+            // summarization limit) stays authoritative: shrink the budget to
+            // fit rather than silently raising the cap the caller set. With
+            // the session default, raise max_tokens to make room for the
+            // requested thinking level (previous behavior).
+            let budget = match request.max_tokens {
+                Some(_) => budget.min(max_tokens.saturating_sub(2048)),
+                None => budget,
+            };
+            body["max_tokens"] = json!(max_tokens.max(budget + 2048));
             // OpenRouter's compat endpoint (verified empirically against
             // stealth/ox-alpha): the anthropic-style thinking block
             // SUPPRESSES this model family's native reasoning, and sending

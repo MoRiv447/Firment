@@ -49,7 +49,7 @@ pub async fn monitor_start(
         stop: stop.clone(),
     });
     {
-        let mut map = shared.monitors.lock().unwrap();
+        let mut map = shared.monitors.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if map.contains_key(&port) {
             return Err(format!("a monitor is already running on {port}"));
         }
@@ -116,7 +116,7 @@ pub async fn monitor_start(
         // Compare by Arc pointer to only remove OUR entry (never a newer
         // monitor the user already restarted on the same port).
         {
-            let mut map = shared_for_reader.monitors.lock().unwrap();
+            let mut map = shared_for_reader.monitors.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             if map
                 .get(&port_out)
                 .is_some_and(|entry| Arc::ptr_eq(entry, &monitor_ref))
@@ -148,7 +148,7 @@ pub async fn monitor_send(shared: Arc<Shared>, port: &str, data: &str) -> Result
 }
 
 pub async fn monitor_stop(shared: Arc<Shared>, port: &str) {
-    let monitor = shared.monitors.lock().unwrap().remove(port);
+    let monitor = shared.monitors.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(port);
     if let Some(m) = monitor {
         // Setting the flag makes the reader loop exit; the read timeout
         // (100ms) bounds how long the blocked read can delay that.
@@ -159,7 +159,7 @@ pub async fn monitor_stop(shared: Arc<Shared>, port: &str) {
 }
 
 pub fn active_monitors(shared: &Arc<Shared>) -> Vec<String> {
-    shared.monitors.lock().unwrap().keys().cloned().collect()
+    shared.monitors.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).keys().cloned().collect()
 }
 
 /// Flash (`kind = "flash"`) or flash+run (`kind = "run"`) in-process via the

@@ -36,7 +36,7 @@ pub async fn start_turn(
     // reservation atomically; the agent is built after the reservation and
     // the slot released if the build fails.
     let slot = {
-        let mut map = shared.agents.lock().unwrap();
+        let mut map = shared.agents.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let slot = map.entry(session_id.clone()).or_insert_with(AgentSlot::new);
         if slot.running.swap(true, Ordering::SeqCst) {
             return Err("this session already has a turn running - cancel it first".to_string());
@@ -71,9 +71,9 @@ pub async fn start_turn(
     };
 
     {
-        let map = shared.agents.lock().unwrap();
+        let map = shared.agents.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(s) = map.get(&session_id) {
-            *s.cancel.lock().unwrap() = Some(handles);
+            *s.cancel.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(handles);
         }
     }
     tauri::async_runtime::spawn(async move {
@@ -108,9 +108,9 @@ pub async fn cancel_turn(
     // turn, so a cancel waiting on the lock would block until the turn
     // finishes and never take effect. Fire the pre-extracted handles instead.
     let handles = {
-        let map = shared.agents.lock().unwrap();
+        let map = shared.agents.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         map.get(&session_id)
-            .and_then(|slot| slot.cancel.lock().unwrap().clone())
+            .and_then(|slot| slot.cancel.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone())
     };
     if let Some((tx, signal)) = handles {
         let _ = tx.send(true);
@@ -123,7 +123,7 @@ pub async fn cancel_turn(
 pub async fn list_sessions(
     shared: tauri::State<'_, Arc<Shared>>,
 ) -> Result<Vec<crate::events::SessionSummaryDto>, String> {
-    let store = shared.store.lock().unwrap();
+    let store = shared.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let sessions = store.list().map_err(|e| e.to_string())?;
     Ok(sessions.iter().map(session_summary_dto).collect())
 }
@@ -136,7 +136,7 @@ pub async fn new_session(
 ) -> Result<crate::events::SessionDto, String> {
     let shared = shared.inner().clone();
     let (provider, model) = {
-        let config = shared.config.lock().unwrap().clone();
+        let config = shared.config.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
         default_provider_model(&config)
     };
     let session_mode = if mode.eq_ignore_ascii_case("plan") {
@@ -146,7 +146,7 @@ pub async fn new_session(
     };
     let mut session = Session::new(std::path::PathBuf::from(&cwd), provider, model.clone());
     session.mode = session_mode;
-    let store = shared.store.lock().unwrap().clone();
+    let store = shared.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
     store.save(&session).map_err(|e| e.to_string())?;
     // No global agent to swap anymore: each start_turn builds its own agent,
     // so creating a session never disturbs turns running in other chats.
@@ -168,7 +168,7 @@ pub async fn load_session(
     let shared = shared.inner().clone();
     // Switching chats never disturbs turns running elsewhere — parallel
     // sessions each own their agent, so there is nothing global to guard.
-    let store = shared.store.lock().unwrap().clone();
+    let store = shared.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
     let session = store.load(&id).map_err(|e| e.to_string())?;
     let dto = session_dto(&session);
     let _ = shared.app.emit(
@@ -188,7 +188,7 @@ pub async fn delete_session(
     // Deleting while a turn is running would let run_turn's final save
     // resurrect the session file — refuse until the turn ends or is cancelled.
     {
-        let map = shared.agents.lock().unwrap();
+        let map = shared.agents.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(slot) = map.get(&id) {
             if slot.running.load(Ordering::SeqCst) {
                 return Err(
@@ -198,7 +198,7 @@ pub async fn delete_session(
             }
         }
     }
-    let store = shared.store.lock().unwrap();
+    let store = shared.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     store.delete(&id).map_err(|e| e.to_string())
 }
 
@@ -207,7 +207,7 @@ pub async fn session_transcript(
     shared: tauri::State<'_, Arc<Shared>>,
     id: String,
 ) -> Result<crate::events::SessionDto, String> {
-    let store = shared.store.lock().unwrap().clone();
+    let store = shared.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
     let session = store.load(&id).map_err(|e| e.to_string())?;
     Ok(session_dto(&session))
 }
@@ -220,7 +220,7 @@ pub async fn session_transcript(
 /// Whether a turn is currently running in `session_id` (the agents map holds
 /// one slot per live agent).
 pub(crate) fn is_session_running(shared: &Shared, session_id: &str) -> bool {
-    let map = shared.agents.lock().unwrap();
+    let map = shared.agents.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     map.get(session_id)
         .map(|slot| slot.running.load(Ordering::SeqCst))
         .unwrap_or(false)
@@ -250,7 +250,7 @@ pub async fn set_session_thinking(
         .parse::<firment_core::ThinkingLevel>()
         .map_err(|e: std::io::Error| e.to_string())?;
     let shared = shared.inner().clone();
-    let store = shared.store.lock().unwrap().clone();
+    let store = shared.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
     let mut session = store.load(&session_id).map_err(|e| e.to_string())?;
     session.thinking = level;
     store.save(&session).map_err(|e| e.to_string())?;
@@ -270,7 +270,7 @@ pub async fn set_session_mode(
         other => return Err(format!("invalid mode '{other}' (expected agent|plan)")),
     };
     let shared = shared.inner().clone();
-    let store = shared.store.lock().unwrap().clone();
+    let store = shared.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
     let mut session = store.load(&session_id).map_err(|e| e.to_string())?;
     session.mode = mode;
     store.save(&session).map_err(|e| e.to_string())?;
@@ -288,7 +288,7 @@ pub async fn set_session_budget(
         return Err("budget must be 0 (default) or between 16384 and 4194304 chars".to_string());
     }
     let shared = shared.inner().clone();
-    let store = shared.store.lock().unwrap().clone();
+    let store = shared.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
     let mut session = store.load(&session_id).map_err(|e| e.to_string())?;
     session.context_budget_chars = chars;
     store.save(&session).map_err(|e| e.to_string())?;
@@ -310,7 +310,7 @@ pub struct ContextUsageDto {
 /// webview attached its listeners is recoverable here.
 #[tauri::command]
 pub async fn mqtt_status(shared: tauri::State<'_, Arc<Shared>>) -> Result<String, String> {
-    Ok(shared.mqtt_status.lock().unwrap().clone())
+    Ok(shared.mqtt_status.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone())
 }
 
 /// Set [tools] default_chip in the GLOBAL config: the flash tool falls back
@@ -323,7 +323,7 @@ pub async fn set_default_chip(
 ) -> Result<String, String> {
     let chip = chip.trim().to_string();
     {
-        let mut config = shared.config.lock().unwrap();
+        let mut config = shared.config.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         config.tools.default_chip = if chip.is_empty() {
             None
         } else {
@@ -346,7 +346,7 @@ pub async fn session_context_usage(
     session_id: String,
 ) -> Result<ContextUsageDto, String> {
     let shared = shared.inner().clone();
-    let store = shared.store.lock().unwrap().clone();
+    let store = shared.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
     let session = store.load(&session_id).map_err(|e| e.to_string())?;
     let system_chars = firment_core::context::system_prompt_for(&session.cwd, session.mode)
         .chars()
@@ -367,7 +367,7 @@ pub async fn session_context_usage(
         // No per-session override: the effective default is the MERGED
         // config budget (global [context_budget_chars] + project
         // .firment.toml overrides) — not a hardcoded constant.
-        let config = shared.config.lock().unwrap();
+        let config = shared.config.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         config.merged_for(&session.cwd).context_budget_chars as u64
     };
     let total_chars = system_chars + messages_chars;
@@ -388,7 +388,7 @@ pub async fn respond_permission(
     id: u64,
     allowed: bool,
 ) -> Result<(), String> {
-    if let Some(tx) = shared.perm_waiters.lock().unwrap().remove(&id) {
+    if let Some(tx) = shared.perm_waiters.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&id) {
         let _ = tx.send(allowed);
     }
     Ok(())
@@ -400,7 +400,7 @@ pub async fn respond_ask(
     id: u64,
     answer: Option<String>,
 ) -> Result<(), String> {
-    if let Some(tx) = shared.ask_waiters.lock().unwrap().remove(&id) {
+    if let Some(tx) = shared.ask_waiters.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&id) {
         let _ = tx.send(answer);
     }
     Ok(())
@@ -413,7 +413,7 @@ pub async fn fetch_models(
     shared: tauri::State<'_, Arc<Shared>>,
     provider: String,
 ) -> Result<Vec<String>, String> {
-    let config = shared.config.lock().unwrap().clone();
+    let config = shared.config.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
     config
         .list_models(&provider)
         .await
@@ -426,7 +426,7 @@ pub async fn set_api_key(
     provider: String,
     key: String,
 ) -> Result<(), String> {
-    let config = shared.config.lock().unwrap();
+    let config = shared.config.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     config
         .set_api_key(&provider, &key)
         .map_err(|e| e.to_string())
@@ -467,7 +467,7 @@ pub struct ProviderEntryDto {
 
 #[tauri::command]
 pub async fn get_settings(shared: tauri::State<'_, Arc<Shared>>) -> Result<SettingsDto, String> {
-    let config = shared.config.lock().unwrap().clone();
+    let config = shared.config.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
     let (_, model) = default_provider_model(&config);
     let mut providers: Vec<ProviderEntryDto> = config
         .providers
@@ -504,7 +504,7 @@ pub async fn save_settings(
     settings: SettingsDto,
 ) -> Result<(), String> {
     {
-        let mut config = shared.config.lock().unwrap();
+        let mut config = shared.config.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         config.default_provider = settings.default_provider.clone();
         if !settings.default_model.is_empty() {
             let provider_name = config.default_provider.clone();
@@ -543,7 +543,7 @@ pub async fn set_provider(
     base_url: Option<String>,
     model: String,
 ) -> Result<(), String> {
-    let mut config = shared.config.lock().unwrap();
+    let mut config = shared.config.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     config
         .set_provider(&name, &provider_type, base_url, &model)
         .map_err(|e| e.to_string())
@@ -555,7 +555,7 @@ pub async fn remove_provider(
     shared: tauri::State<'_, Arc<Shared>>,
     name: String,
 ) -> Result<(), String> {
-    let mut config = shared.config.lock().unwrap();
+    let mut config = shared.config.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     config.remove_provider(&name).map_err(|e| e.to_string())
 }
 
