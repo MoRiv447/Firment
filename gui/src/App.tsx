@@ -73,8 +73,16 @@ export default function App() {
   const { running, turn } = currentTurnState;
   const anyRunning = Object.values(turnsById).some((t) => t.running);
   // Info events (stall / tool-wave timeout / compaction notices) surfaced in
-  // the chat they belong to.
-  const [infos, setInfos] = useState<{ id: number; sid: string | null; text: string }[]>([]);
+  // the chat they belong to. Auto-expire after 15s (sweep below); ids come
+  // from a counter — Date.now() collided for same-millisecond entries.
+  const [infos, setInfos] = useState<
+    { id: number; sid: string | null; text: string; ts: number }[]
+  >([]);
+  const infoSeqRef = useRef(0);
+  const pushInfo = (sid: string | null, text: string) => {
+    const id = ++infoSeqRef.current;
+    setInfos((prev) => [...prev.slice(-8), { id, sid, text, ts: Date.now() }]);
+  };
   // Rough context usage for the OPEN session (header chip); refreshed when
   // the session changes and after every transcript refresh.
   const [usage, setUsage] = useState<ContextUsageDto | null>(null);
@@ -158,6 +166,23 @@ export default function App() {
         if (!sessionRef.current) setSession(s);
       })
       .catch(console.error);
+    // Reload mid-turn: the reducer starts empty, so a still-running turn
+    // would be invisible (no spinner, input re-enabled). Re-light the
+    // indicator for every session whose agent still has a live turn; the
+    // streamed text/tools return with the next event.
+    void api
+      .runningSessions()
+      .then((ids) => {
+        for (const id of ids) dispatchTurn({ type: 'turn_start', session_id: id });
+      })
+      .catch(console.error);
+    // Info banners self-expire: a stall warning that outlives its cause
+    // (cleared only on the next turn_start before) sat above the input for
+    // the rest of the session's life.
+    const sweep = setInterval(() => {
+      setInfos((prev) => prev.filter((i) => Date.now() - i.ts < 15_000));
+    }, 5_000);
+    return () => clearInterval(sweep);
   }, []);
 
   // Context usage follows the open session and its message count.
@@ -168,6 +193,18 @@ export default function App() {
       .then(setUsage)
       .catch(() => setUsage(null));
   }, [session?.id, session?.messages.length, session?.context_budget_chars]);
+
+  // A tool-heavy turn can double the context while the chip sits at its
+  // turn-start value; poll every 10s while anything is running.
+  useEffect(() => {
+    if (!anyRunning) return;
+    const refresh = setInterval(() => {
+      const id = sessionRef.current?.id;
+      if (!id) return;
+      void api.sessionContextUsage(id).then(setUsage).catch(() => {});
+    }, 10_000);
+    return () => clearInterval(refresh);
+  }, [anyRunning]);
 
   useEffect(() => {
     const unlisteners: Promise<() => void>[] = [];
@@ -227,9 +264,11 @@ export default function App() {
             // Error ends the turn WITHOUT a turn_end (start_turn emits only
             // Error on failure). Drop stale dialogs ONLY the ones belonging
             // to the finished chat — parallel sessions' pending dialogs must
-            // survive.
+            // survive. The turn's stale info banners (tool-wave timeout
+            // etc.) belong to the same dead turn — clear them too.
             flushDeltas();
             dispatchTurn(e);
+            setInfos((prev) => prev.filter((i) => i.sid !== sid));
             setPermQueue((q) => q.filter((r) => r.session_id !== sid));
             setAskQueue((q) => q.filter((r) => r.session_id !== sid));
             break;
@@ -308,7 +347,8 @@ export default function App() {
               if (last && last.text === e.message && last.sid === sid) {
                 return prev;
               }
-              return [...prev.slice(-8), { id: Date.now(), sid, text: e.message }];
+              const id = ++infoSeqRef.current;
+              return [...prev.slice(-8), { id, sid, text: e.message, ts: Date.now() }];
             });
             break;
           // device_frame / guard_status are consumed by the WorkbenchView's
@@ -383,14 +423,10 @@ export default function App() {
         prompt: string;
       };
       if (turnsRef.current[detail.sessionId]?.running) {
-        setInfos((prev) => [
-          ...prev.slice(-8),
-          {
-            id: Date.now(),
-            sid: detail.sessionId,
-            text: 'escalation skipped: mainline chat already has a turn running',
-          },
-        ]);
+        pushInfo(
+          detail.sessionId,
+          'escalation skipped: mainline chat already has a turn running',
+        );
         return;
       }
       void api
@@ -400,14 +436,7 @@ export default function App() {
           setView('chat');
           void api.startTurn(detail.sessionId, detail.prompt).catch((err) => {
             console.error(err);
-            setInfos((prev) => [
-              ...prev.slice(-8),
-              {
-                id: Date.now(),
-                sid: detail.sessionId,
-                text: `escalation turn failed: ${err}`,
-              },
-            ]);
+            pushInfo(detail.sessionId, `escalation turn failed: ${err}`);
           });
         })
         .catch(console.error);
@@ -472,10 +501,7 @@ export default function App() {
         .catch((err: unknown) => {
           console.error(err);
           if (attempts >= 5) {
-            setInfos((prev) => [
-              ...prev.slice(-8),
-              { id: Date.now(), sid: id, text: `delete failed after retries: ${err}` },
-            ]);
+            pushInfo(id, `delete failed after retries: ${err}`);
             return;
           }
           void api.cancelTurn(id).catch(console.error);
@@ -711,7 +737,7 @@ export default function App() {
                         }}
                         style={{
                           padding: '5px 6px',
-                          borderBottom: '1px solid #f0f0f0',
+                          borderBottom: '1px solid #2a2f3a',
                           cursor: n.sid ? 'pointer' : 'default',
                         }}
                       >
@@ -849,7 +875,15 @@ export default function App() {
                 >
                   <Tag
                     color={
-                      (usage?.pct ?? 0) > 90 ? 'red' : (usage?.pct ?? 0) > 70 ? 'orange' : 'green'
+                      // Unknown usage must read as unknown, not healthy:
+                      // green "ctx …" used to render while the fetch failed.
+                      usage === null
+                        ? 'default'
+                        : usage.pct > 90
+                          ? 'red'
+                          : usage.pct > 70
+                            ? 'orange'
+                            : 'green'
                     }
                     style={{
                       borderRadius: 0,

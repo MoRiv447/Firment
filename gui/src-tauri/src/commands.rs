@@ -740,3 +740,19 @@ pub async fn firm_run(
     )
     .await
 }
+
+/// Sessions whose agent currently has a live turn. The frontend calls this
+/// once on mount: after a window reload mid-turn the reducer is empty and
+/// the running turn would be invisible (no spinner, input re-enabled) until
+/// the next event.
+#[tauri::command]
+pub async fn running_sessions(
+    shared: tauri::State<'_, Arc<Shared>>,
+) -> Result<Vec<String>, String> {
+    let map = shared.agents.lock().unwrap_or_else(|p| p.into_inner());
+    Ok(map
+        .iter()
+        .filter(|(_, slot)| slot.running.load(Ordering::SeqCst))
+        .map(|(id, _)| id.clone())
+        .collect())
+}

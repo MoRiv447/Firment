@@ -92,6 +92,9 @@ export const api = {
   loadSession: (id: string) => invoke<SessionDto>('load_session', { id }),
   deleteSession: (id: string) => invoke('delete_session', { id }),
   sessionTranscript: (id: string) => invoke<SessionDto>('session_transcript', { id }),
+  // Session ids whose agent currently has a live turn (mount-time restore of
+  // running indicators after a reload).
+  runningSessions: () => invoke<string[]>('running_sessions'),
   respondPermission: (id: number, allowed: boolean) => invoke('respond_permission', { id, allowed }),
   respondAsk: (id: number, answer: string | null) => invoke('respond_ask', { id, answer }),
   fetchModels: (provider: string) => invoke<string[]>('fetch_models', { provider }),

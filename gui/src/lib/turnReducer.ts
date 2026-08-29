@@ -106,10 +106,24 @@ export function turnReducer(state: TurnState, e: FrontendEvent): TurnState {
     case 'error':
       // If the turn never started (e.g. no provider configured) `turn` is
       // null and the error must still surface instead of being dropped.
+      // Tools still marked running are resolved as failed — an interrupted
+      // wave never gets its tool_end, and blue "running" cards would
+      // otherwise hang under the transcript until the next turn.
       return {
         running: false,
         turn: state.turn
-          ? { ...state.turn, text: `${state.turn.text}\n⚠ ${e.message}` }
+          ? {
+              ...state.turn,
+              text: `${state.turn.text}\n⚠ ${e.message}`,
+              tools: Object.fromEntries(
+                Object.entries(state.turn.tools).map(([seq, t]) => [
+                  seq,
+                  t.status === 'running'
+                    ? { ...t, status: 'failed' as const, summary: 'interrupted by error' }
+                    : t,
+                ]),
+              ),
+            }
           : { text: `⚠ ${e.message}`, thinking: '', tools: {}, startedAt: Date.now() },
       };
 

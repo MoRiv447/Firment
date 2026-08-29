@@ -34,36 +34,32 @@ export function ChatView({
   // Seconds since the last visible event, ticking every second while running —
   // the user can watch this climb to tell a slow model from a wedged turn.
   const [idleSecs, setIdleSecs] = useState(0);
-  // How long the current tool has been running (or the turn if no tool yet).
-  const [runSecs, setRunSecs] = useState(0);
 
   // Detect a stuck agent: running is on but nothing has changed in the
-  // visible turn (text delta or new tool) for too long. Cheap proxy for
-  // "the provider stream is dead but Rust has not yet emitted TurnEnd" —
-  // shows a banner telling the user to hit Stop instead of waiting forever.
+  // visible turn (text delta, new tool, or a tool finishing) for too long.
+  // Cheap proxy for "the provider stream is dead but Rust has not yet
+  // emitted TurnEnd" — shows a banner telling the user to hit Stop instead
+  // of waiting forever. Tool STATUS transitions count as change: a 90s
+  // build is a running tool, not a wedged turn.
   const lastChangeRef = useRef<number>(Date.now());
   const [stuck, setStuck] = useState(false);
   const turnKey = `${turn?.text.length}:${
     turn?.thinking.length ?? 0
-  }:${turn?.tools ? Object.keys(turn.tools).length : 0}`;
+  }:${turn?.tools ? Object.values(turn.tools).map((t) => t.status).join('') : ''}`;
   useEffect(() => {
     lastChangeRef.current = Date.now();
     setStuck(false);
     setIdleSecs(0);
-    setRunSecs(0);
   }, [turnKey]);
   useEffect(() => {
     if (!running) {
       setStuck(false);
       setIdleSecs(0);
-      setRunSecs(0);
       return;
     }
-    const startedAt = turn?.startedAt ?? Date.now();
     const tick = setInterval(() => {
       const idle = Math.floor((Date.now() - lastChangeRef.current) / 1000);
       setIdleSecs(idle);
-      setRunSecs(Math.floor((Date.now() - startedAt) / 1000));
       if (idle > 60) setStuck(true);
     }, 1000);
     return () => clearInterval(tick);
@@ -109,6 +105,8 @@ export function ChatView({
   };
 
   const toolList = turn ? Object.values(turn.tools) : [];
+  const runningTools = toolList.filter((t) => t.status === 'running');
+  const lastRunning = runningTools[runningTools.length - 1];
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -130,15 +128,19 @@ export function ChatView({
               <div style={{ margin: '12px 0', display: 'flex', alignItems: 'center', gap: 10 }}>
                 <Spin size="small" />
                 <Text type="secondary" style={{ fontSize: 13 }}>
-                  {toolList.length > 0
-                    ? `running ${toolList[toolList.length - 1].name}…`
+                  {lastRunning
+                    ? `running ${lastRunning.name}…`
                     : turn && turn.text === ''
                       ? 'thinking…'
                       : 'generating…'}
                 </Text>
                 <Text type="secondary" style={{ fontSize: 12, fontFamily: 'Consolas, monospace' }}>
-                  {toolList.length > 0
-                    ? `tool ${fmtElapsed(runSecs * 1000)}`
+                  {lastRunning
+                    ? // The RUNNING TOOL's own elapsed, not time since the
+                      // last visible event (a chatty stream used to keep
+                      // resetting this to 0s and a finished wave kept it
+                      // climbing under the final text phase).
+                      `tool ${fmtElapsed(Date.now() - (lastRunning.startedAt ?? Date.now()))}`
                     : `idle ${fmtElapsed(idleSecs * 1000)}`}
                 </Text>
                 {idleSecs > 45 && (

@@ -58,6 +58,7 @@ pub fn run() {
             commands::load_session,
             commands::delete_session,
             commands::session_transcript,
+            commands::running_sessions,
             commands::set_session_thinking,
             commands::set_session_mode,
             commands::set_session_budget,
