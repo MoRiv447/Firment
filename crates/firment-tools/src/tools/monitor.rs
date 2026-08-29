@@ -193,6 +193,16 @@ pub fn enumerate_ports() -> String {
     }
 }
 
+/// Bare port names (`COM10`, `/dev/ttyUSB0`) for exact matching. The joined
+/// `enumerate_ports()` string must NOT be substring-matched: `"COM1"` is a
+/// substring of `"COM10 (...)"` and would report an attached port that
+/// isn't there.
+pub fn port_names() -> Vec<String> {
+    serialport::available_ports()
+        .map(|ports| ports.into_iter().map(|p| p.port_name).collect())
+        .unwrap_or_default()
+}
+
 #[async_trait]
 impl Tool for Monitor {
     fn name(&self) -> &'static str {

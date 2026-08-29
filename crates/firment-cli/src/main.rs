@@ -1086,7 +1086,12 @@ fn doctor_tools(cwd: &Path, tools: &firment_core::config::ToolsConfig) {
     }
     match &tools.monitor_port {
         Some(port) => {
-            let attached = ports.contains(port.as_str());
+            // Exact name match against bare port names: substring-matching
+            // the joined label string reported COM1 as "present" whenever
+            // COM10 existed.
+            let attached = firment_tools::tools::monitor::port_names()
+                .iter()
+                .any(|p| p == port);
             println!(
                 "  monitor_port : {port} — {}",
                 if attached {
