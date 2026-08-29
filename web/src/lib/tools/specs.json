@@ -43,13 +43,14 @@
     "input_schema": {
       "properties": {
         "action": {
-          "description": "What to do on the target",
+          "description": "What to do on the target. forensic: capture a hard-fault scene (exception frame + fault registers + stack scan + change-ledger correlation) into a structured report — the target must still be sitting in the fault",
           "enum": [
             "halt",
             "regs",
             "mem",
             "write",
             "analyze",
+            "forensic",
             "break",
             "step",
             "continue",
@@ -432,7 +433,7 @@
           "type": "string"
         },
         "steps": {
-          "description": "Inline steps [{kind, file, elf, chip, probe, port, baud, clk_hz, timeout_ms, expect_contains, expect_regex, expect_count, duration_ms}] — kinds: build/flash/run/monitor/trace/elf_analyze/delay; flash/run/elf auto-infer .pio/build/*/firmware.elf when elf omitted",
+          "description": "Inline steps [{kind, file, elf, chip, probe, port, baud, clk_hz, timeout_ms, expect_contains, expect_regex, expect_count, duration_ms}] — kinds: build/flash/run/monitor/trace/observe/elf_analyze/delay; flash/run/elf auto-infer .pio/build/*/firmware.elf when elf omitted",
           "type": "array"
         },
         "suite": {
@@ -519,6 +520,53 @@
           "type": "boolean"
         }
       },
+      "type": "object"
+    }
+  },
+  {
+    "name": "observe",
+    "description": "Analyze a photo of the target to verify PHYSICAL behavior (verification ladder rung 5): is the LED lit, how bright, where is the bright region. Deterministic local image analysis with a confidence rating — point the roi at the LED/indicator, not the whole board. Read-only.",
+    "input_schema": {
+      "properties": {
+        "mode": {
+          "description": "brightness: is the target lit, and how bright. blink/motion/diff arrive in a later release.",
+          "enum": [
+            "brightness",
+            "blink",
+            "motion",
+            "diff"
+          ],
+          "type": "string"
+        },
+        "path": {
+          "description": "Image path inside the workspace (PNG/JPEG). Required for mode=brightness.",
+          "type": "string"
+        },
+        "roi": {
+          "description": "[x, y, width, height] region to measure; omit to measure the whole frame. Point it at the LED/indicator, not the whole board — a small lit area is easily averaged away.",
+          "items": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "type": "array"
+        },
+        "save": {
+          "default": false,
+          "description": "Copy the measured image to .firment/observe/ for later review.",
+          "type": "boolean"
+        },
+        "threshold": {
+          "description": "Light/dark cutoff. Omit to derive it from the frame's own brightness range.",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "mode"
+      ],
       "type": "object"
     }
   },

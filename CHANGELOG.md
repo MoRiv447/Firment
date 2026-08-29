@@ -1,5 +1,65 @@
 # Changelog
 
+## v0.7.0 (2026-08-29) — fault forensics + physical observation
+
+Two features that push the agent toward "responsible for the result":
+it can now explain why firmware died, and it can SEE what the firmware
+does — verification-ladder rung 5 becomes machine-checkable.
+
+### Fault forensics
+
+- **`debug action=forensic`**: one command turns a sitting hard fault into
+  a structured post-mortem — exception frame (PC/LR/R0-R3/R12/xPSR decoded
+  against the ELF), Cortex-M fault registers with per-flag explanations,
+  a 64-word stack window scanned for code-pointer candidates (highest
+  covering symbol, Thumb bit stripped), the session change ledger
+  correlated (7-day window before the fault, newest first; entries
+  touching a file matching the faulting function are flagged), and a
+  report snapshot under `<session>/forensic/`. PC is re-read after the
+  capture: a drift warns that the scene may have been corrupted by a
+  watchdog reset race. Approval-exempt — the scene is ephemeral.
+- **Fault-signature markers**: the monitor tool, the hil run step and the
+  run tool scan captured output for fault signatures (sbc-guard's
+  panic/Guru-Meditation/assert-failed base extended with the Cortex-M
+  names HardFault/faultISR/BusFault/UsageFault — targets these crates
+  flash) and append a `[FAULT-DETECTED]` marker pointing at the capture.
+- Behavior notes: the target must still be sitting in the fault (a
+  watchdog reset destroys the scene); Cortex-M only — non-ARM targets get
+  a pointer to the console panic report.
+
+### Physical observation (observe tool, phase 1)
+
+- **New read-only `observe` tool**: deterministic local CV on a workspace
+  image answers "is the target lit, how bright, where is the bright
+  region" — no vision model (the provider message channel has no image
+  support; lit/not-lit needs no semantics anyway).
+- Verdicts use `lit_fraction` (a small LED must not be averaged away)
+  with a tiny-bright escape (any ≥200-luma pixel against a dim
+  background), auto thresholds keyed on the frame's own min/max split
+  with an absolute mid-scale fallback for uniform frames, and a
+  confidence rating with a reason on every verdict.
+- **Automatic ROI suggestion** via p99.5 luminance candidates (not the
+  max — a hot pixel must not pin a 1×1 box): the agent's first run
+  proposes the bright region, killing the coordinate-guessing cold
+  start. `save=true` archives the frame under `.firment/observe/`.
+- **HIL `observe` step** with `expect_lit` assertion — a suite can now
+  END at evidence level 5 (physical), e.g. build → flash → delay →
+  observe(expect_lit=true).
+- `blink` / `motion` / `diff` modes parse and return explicit
+  not-implemented errors (phase 2).
+
+### Evidence semantics + performance
+
+- **Evidence level names change**: SWO trace is RUNTIME observability,
+  not physical behavior — `trace` drops to level 4 (runtime) and the new
+  observe step claims level 5 (physical). HIL footers and any agent
+  narration quoting level names change accordingly.
+- **SymbolIndex**: serial log decoding used to re-read and re-parse the
+  whole firmware ELF for every hex token in every line; the monitor tool,
+  the hil monitor step and `firm monitor` now build the symbol table once
+  per capture. The plan-mode system prompt also lists `models` (it had
+  drifted from the actual plan registry).
+
 ## v0.6.3 (2026-08-29) — display overhaul: TUI smoothness + GUI streaming
 
 A display-layer batch driven by three rendering audits (TUI frame
