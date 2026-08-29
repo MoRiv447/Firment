@@ -96,6 +96,9 @@ pub(crate) struct App {
     /// from elapsed time (constant rotation speed) instead of the draw count
     /// (which strobed during token bursts and crawled in silence).
     pub(crate) started: Instant,
+    /// When the current reasoning phase began (drives the elapsed seconds
+    /// on the thinking row). `None` while text/tools stream.
+    pub(crate) thinking_since: Option<Instant>,
     /// Bumped on every transcript mutation; invalidates the wrapped-row
     /// cache in view.rs.
     pub(crate) row_version: u64,
@@ -165,6 +168,7 @@ impl App {
             cmd_tx,
             always,
             started: Instant::now(),
+            thinking_since: None,
             row_version: 0,
             row_cache: None,
         };
@@ -222,14 +226,17 @@ impl App {
             AgentEvent::TurnStart => {
                 self.busy = true;
                 self.ai_thinking = true;
+                self.thinking_since = Some(Instant::now());
             }
             AgentEvent::TextDelta(text) => match self.items.last_mut() {
                 Some(Item::Assistant(buffer)) => {
                     self.ai_thinking = false;
+                    self.thinking_since = None;
                     buffer.push_str(&text);
                 }
                 _ => {
                     self.ai_thinking = false;
+                    self.thinking_since = None;
                     self.items.push(Item::Assistant(text));
                 }
             },
@@ -239,17 +246,24 @@ impl App {
             // off while the model was actually reasoning).
             AgentEvent::Thinking(_) => {
                 self.ai_thinking = true;
+                if self.thinking_since.is_none() {
+                    self.thinking_since = Some(Instant::now());
+                }
             }
             AgentEvent::ToolStart { name, args, seq } => {
                 self.ai_thinking = false;
+                self.thinking_since = None;
                 self.active_tools
                     .push((name.clone(), tool_activity(&name, &args)));
+                // Friendly activity label ("building main.c…") instead of the
+                // raw JSON args blob on the card.
+                let summary = tool_activity(&name, &args);
                 self.items.push(Item::Tool {
                     name,
                     seq,
                     running: true,
                     ok: false,
-                    summary: args.to_string(),
+                    summary,
                 });
             }
             AgentEvent::ToolEnd {
@@ -282,6 +296,7 @@ impl App {
             AgentEvent::TurnEnd { .. } => {
                 self.busy = false;
                 self.ai_thinking = false;
+                self.thinking_since = None;
                 self.interrupting = false;
                 self.interrupt_armed_at = None;
             }
@@ -367,6 +382,7 @@ impl App {
                 self.items.push(Item::Error(message));
                 self.busy = false;
                 self.ai_thinking = false;
+                self.thinking_since = None;
                 self.interrupting = false;
                 self.interrupt_armed_at = None;
             }

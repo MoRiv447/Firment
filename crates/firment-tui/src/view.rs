@@ -214,6 +214,9 @@ impl App {
                 ok,
                 summary,
             } => {
+                // Finished cards dim into the background: the eye should go
+                // to what is RUNNING, not to a wall of bright history.
+                let dim = !running;
                 let (symbol, color) = if *running {
                     (SPINNER[self.spinner_frame()], Color::Yellow)
                 } else if *ok {
@@ -221,9 +224,14 @@ impl App {
                 } else {
                     ('✗', Color::Red)
                 };
+                let style = if dim {
+                    Style::default().fg(color).add_modifier(Modifier::DIM)
+                } else {
+                    Style::default().fg(color)
+                };
                 let line = format!("{symbol} {name}  {}", truncate_chars(summary, 140));
                 for seg in wrap_text(&line, width.saturating_sub(1)) {
-                    rows.push(Line::from(Span::styled(seg, Style::default().fg(color))));
+                    rows.push(Line::from(Span::styled(seg, style)));
                 }
             }
             Item::Permission { tool, reason } => {
@@ -293,10 +301,15 @@ impl App {
         self.content_width = content_width.max(1);
         let mut rows = self.render_rows(content_width.max(1));
         if self.ai_thinking {
-            const SPINNER: [char; 4] = ['◐', '◓', '◑', '◒'];
             let ch = SPINNER[self.spinner_frame()];
+            // Elapsed seconds make a long reasoning phase feel observed
+            // instead of hung (reasoning can legitimately run for minutes).
+            let secs = self
+                .thinking_since
+                .map(|t| t.elapsed().as_secs())
+                .unwrap_or(0);
             rows.push(Line::from(Span::styled(
-                format!(" {ch} thinking…"),
+                format!(" {ch} thinking… {secs}s"),
                 Style::default().fg(Color::Yellow),
             )));
         }
@@ -382,6 +395,7 @@ impl App {
             " input ".to_string()
         };
         let block = Block::bordered()
+            .border_type(ratatui::widgets::BorderType::Rounded)
             .title(Span::styled(title, Style::default().fg(Color::Cyan)))
             .border_style(Style::default().fg(Color::DarkGray));
         let content = if self.input.is_empty() {
@@ -473,6 +487,7 @@ impl App {
                 let area = centered_rect(60, 48, frame.area());
                 frame.render_widget(Clear, area);
                 let block = Block::bordered()
+                    .border_type(ratatui::widgets::BorderType::Rounded)
                     .title(Span::styled(
                         " Model picker ",
                         Style::default()
@@ -525,6 +540,7 @@ impl App {
                 let area = centered_rect(76, 52, frame.area());
                 frame.render_widget(Clear, area);
                 let block = Block::bordered()
+                    .border_type(ratatui::widgets::BorderType::Rounded)
                     .title(Span::styled(
                         " Session picker ",
                         Style::default()
@@ -597,6 +613,7 @@ impl App {
                 let area = centered_rect(68, 42, frame.area());
                 frame.render_widget(Clear, area);
                 let block = Block::bordered()
+                    .border_type(ratatui::widgets::BorderType::Rounded)
                     .title(Span::styled(
                         " Question ",
                         Style::default()
