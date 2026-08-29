@@ -1,5 +1,59 @@
 # Changelog
 
+## v0.6.2 (2026-08-29) — doctor, evidence levels, cmd-quoting fix
+
+Closes the remaining two v0.6.0 known issues and ships two features
+inspired by a review of garycli/garycli (an Apache-2.0 Python agent in
+the same niche): an environment self-check command and an explicit
+evidence-level framing for verification claims.
+
+- **`firm doctor` subcommand**: keeps the `--doctor` config/provider and
+  install checks, and adds toolchain detection (pio / cmake / make / uv4
+  via PATH lookup — never executed bare, `uv4` opens a GUI; probe-rs
+  probed with `--version`), serial port enumeration, and `[tools]`
+  semantics (default_chip set? configured monitor_port actually
+  attached? first token of build_command resolvable?). Failures surface
+  here with fix hints instead of mid-task.
+- **Evidence levels** (verification ladder): the system prompt defines
+  code → build → deploy → runtime → physical behavior, each level only
+  counting when actually observed, and requires completion reports to
+  state the highest level reached — build success never implies the
+  device behaves as asked. `build`/`verify` outputs carry
+  `[evidence: build]`; HIL suites append `evidence: reached level N (…)`
+  for the highest level attempted (dry-runs flagged explicitly). README
+  Security Model gains the matching bullet (en + zh).
+- **cmd.exe quoting fix (closes known issue #2)**: the auto-detected
+  build command no longer splices `cd <relative-dir> &&` into the
+  executed string, where cmd's batch-style `%`/`^` doubling corrupts
+  directory names containing those characters; the manifest directory is
+  passed to the runner's cwd instead, and the `uv4` project name is
+  quoted plainly. `hil` shared a verbatim copy of the build detection —
+  it now uses `build.rs`'s (which is how the bug survived there);
+  `shell_quote` is documented as display-only.
+- **KB editor concurrent-edit guard (closes known issue #3)**:
+  `workbench_kb_save` takes the mtime the editor loaded and fails with
+  `[ConcurrentChange]` when the file changed on disk in the meantime —
+  previously an agent-side or external edit between load and save was
+  silently reverted by a stale draft. Fresh cheatsheet creation passes a
+  `0` baseline (refuses if the file appeared); the frontend offers a
+  reload dialog on conflict.
+- **Hardening sweep** (all previously-audited LOW items): JSON-valid
+  session lines that fail deserialization now trigger dangling-tool-call
+  repair instead of being skipped silently; the subagent
+  cancel-propagation task no longer leaks per task call; hil trace steps
+  clamp `expect_count >= 1` like monitor steps; hashline anchors must be
+  real 8-hex hashes (an empty anchor matched every line); Anthropic
+  per-request `max_tokens` caps stay authoritative with thinking enabled;
+  OpenAI index-less tool-call deltas no longer merge everything into
+  slot 0; GUI MQTT status frames are built with serde_json (broker/error
+  strings containing quotes used to emit invalid JSON); permission/ask
+  dialogs stay actionable when their IPC fails; tool cards are keyed by
+  call id with real sequence numbers; the web tool-call accumulator
+  tolerates index-less deltas and fragmented names and logs
+  invalid-JSON arguments; the web search dropdown no longer offers
+  tavily/brave (CLI-only providers); 45 production lock sites tolerate
+  mutex poisoning.
+
 ## v0.6.1 (2026-08-28) — serial reads decode at byte boundaries
 
 Chinese (and any other multi-byte) log output no longer degrades into
