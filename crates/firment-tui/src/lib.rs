@@ -192,6 +192,9 @@ async fn run_loop(
 ) -> anyhow::Result<()> {
     // A 25ms tick lands paste-burst buffers on time without slowing animations.
     let mut ticker = tokio::time::interval(Duration::from_millis(25));
+    // After an event flood the default Burst behavior would fire the missed
+    // ticks back-to-back, making the spinner visibly jump. Skip instead.
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Refresh the git status bar every few seconds. The refresh runs on its
     // own task: `git status` can block for seconds on huge repos or network
     // drives, and awaiting it inline in this select would freeze key/event
@@ -230,6 +233,19 @@ async fn run_loop(
             event = event_rx.recv() => {
                 if let Some(event) = event {
                     app.on_agent(event);
+                    // Drain whatever is already queued before paying for a
+                    // redraw: a token burst used to trigger one FULL
+                    // transcript re-render per delta.
+                    let mut drained = 0usize;
+                    while drained < 32 {
+                        match event_rx.try_recv() {
+                            Ok(next) => {
+                                app.on_agent(next);
+                                drained += 1;
+                            }
+                            Err(_) => break,
+                        }
+                    }
                     dirty = true;
                 }
             }
@@ -271,10 +287,10 @@ async fn run_loop(
                 }
             }
         }
-        // No animation plays while waiting for approval; stop the 25ms
-        // redraws to avoid flicker.
-        let animate =
-            (app.busy || app.ai_thinking) && app.permission.is_none() && app.question.is_none();
+        // Spinners keep running behind a modal now that the backdrop is
+        // dimmed — freezing them read as "the app hung" during a long
+        // approval wait.
+        let animate = app.busy || app.ai_thinking;
         if dirty || (animate && spinner_tick) {
             terminal.draw(|frame| app.render(frame))?;
             dirty = false;

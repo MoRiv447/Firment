@@ -15,7 +15,18 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
+/// Spinner glyphs shared by the tool cards, the thinking row and the status
+/// bar. The phase comes from `App::spinner_frame` (wall clock, 120ms/step).
+const SPINNER: [char; 4] = ['◐', '◓', '◑', '◒'];
+
 impl App {
+    /// Constant-rate spinner phase, derived from wall clock: deriving it
+    /// from the draw count made the rotation strobe during token bursts
+    /// (one frame per delta) and crawl during silence.
+    pub(crate) fn spinner_frame(&self) -> usize {
+        (self.started.elapsed().as_millis() as usize / 120) % SPINNER.len()
+    }
+
     /// Rect of the currently open modal, if any. Single source for both the
     /// scrim (dim everything OUTSIDE this rect) and the dialog itself so the
     /// two can never drift apart. Keep the percentages here only.
@@ -107,109 +118,153 @@ impl App {
         }
     }
 
-    pub(crate) fn render_rows(&self, width: usize) -> Vec<Line<'static>> {
+    /// Whether this item's wrapped rows change on their own and must be
+    /// re-wrapped every frame (never cached).
+    fn is_row_dynamic(&self, idx: usize, item: &Item) -> bool {
+        match item {
+            // The running spinner glyph is baked into the wrapped line.
+            Item::Tool { running: true, .. } => true,
+            // The streaming assistant message grows on every batch.
+            Item::Assistant(_) => idx + 1 == self.items.len(),
+            _ => false,
+        }
+    }
+
+    pub(crate) fn render_rows(&mut self, width: usize) -> Vec<Line<'static>> {
+        // Wrap cache: keyed by (mutation version, width, item count). The
+        // old code re-wrapped the ENTIRE transcript character-by-character
+        // on every draw — including idle animation frames — so long
+        // sessions spent most of their frame budget in wrap_text.
+        let cache_hit = self
+            .row_cache
+            .as_ref()
+            .is_some_and(|(version, cached_width, rows)| {
+                *version == self.row_version
+                    && *cached_width == width
+                    && rows.len() == self.items.len()
+            });
+        if !cache_hit {
+            self.row_cache = Some((self.row_version, width, vec![None; self.items.len()]));
+        }
         let mut rows = Vec::new();
-        for item in &self.items {
-            match item {
-                Item::User(text) => {
-                    let wrapped = wrap_text(text, width.saturating_sub(2));
-                    for (idx, seg) in wrapped.iter().enumerate() {
-                        if idx == 0 {
-                            rows.push(Line::from(vec![
-                                Span::styled(
-                                    "❯ ",
-                                    Style::default()
-                                        .fg(Color::Cyan)
-                                        .add_modifier(Modifier::BOLD),
-                                ),
-                                Span::styled(
-                                    seg.clone(),
-                                    Style::default()
-                                        .fg(Color::Cyan)
-                                        .add_modifier(Modifier::BOLD),
-                                ),
-                            ]));
-                        } else {
-                            rows.push(Line::from(Span::styled(
+        for (idx, item) in self.items.iter().enumerate() {
+            let dynamic = self.is_row_dynamic(idx, item);
+            if !dynamic
+                && let Some(Some(cached)) = self.row_cache.as_ref().and_then(|c| c.2.get(idx))
+            {
+                rows.extend(cached.iter().cloned());
+                continue;
+            }
+            let wrapped = self.render_item(item, width);
+            if !dynamic
+                && let Some((version, cached_width, cache)) = self.row_cache.as_mut()
+                && *version == self.row_version
+                && *cached_width == width
+            {
+                cache[idx] = Some(wrapped.clone());
+            }
+            rows.extend(wrapped);
+        }
+        rows
+    }
+
+    fn render_item(&self, item: &Item, width: usize) -> Vec<Line<'static>> {
+        let mut rows = Vec::new();
+        match item {
+            Item::User(text) => {
+                let wrapped = wrap_text(text, width.saturating_sub(2));
+                for (idx, seg) in wrapped.iter().enumerate() {
+                    if idx == 0 {
+                        rows.push(Line::from(vec![
+                            Span::styled(
+                                "❯ ",
+                                Style::default()
+                                    .fg(Color::Cyan)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                            Span::styled(
                                 seg.clone(),
-                                Style::default().fg(Color::Cyan),
-                            )));
-                        }
-                    }
-                    rows.push(Line::from(""));
-                }
-                Item::Assistant(text) => {
-                    for seg in wrap_text(text, width.saturating_sub(1)) {
-                        rows.push(Line::from(Span::styled(
-                            seg,
-                            Style::default().fg(Color::LightGreen),
-                        )));
-                    }
-                    rows.push(Line::from(""));
-                }
-                Item::Tool {
-                    name,
-                    seq: _,
-                    running,
-                    ok,
-                    summary,
-                } => {
-                    let (symbol, color) = if *running {
-                        const SPINNER: [char; 4] = ['◐', '◓', '◑', '◒'];
-                        (
-                            SPINNER[(self.frame as usize) % SPINNER.len()],
-                            Color::Yellow,
-                        )
-                    } else if *ok {
-                        ('✓', Color::Green)
+                                Style::default()
+                                    .fg(Color::Cyan)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                        ]));
                     } else {
-                        ('✗', Color::Red)
-                    };
-                    let line = format!("{symbol} {name}  {}", truncate_chars(summary, 140));
-                    for seg in wrap_text(&line, width.saturating_sub(1)) {
-                        rows.push(Line::from(Span::styled(seg, Style::default().fg(color))));
+                        rows.push(Line::from(Span::styled(
+                            seg.clone(),
+                            Style::default().fg(Color::Cyan),
+                        )));
                     }
                 }
-                Item::Permission { tool, reason } => {
+                rows.push(Line::from(""));
+            }
+            Item::Assistant(text) => {
+                for seg in wrap_text(text, width.saturating_sub(1)) {
                     rows.push(Line::from(Span::styled(
-                        "⚠ Permission required",
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD),
+                        seg,
+                        Style::default().fg(Color::LightGreen),
                     )));
-                    for seg in wrap_text(&format!("Tool: {tool}"), width.saturating_sub(1)) {
-                        rows.push(Line::from(Span::styled(
-                            seg,
-                            Style::default().fg(Color::Yellow),
-                        )));
-                    }
-                    for seg in wrap_text(&format!("Reason: {reason}"), width.saturating_sub(1)) {
-                        rows.push(Line::from(Span::styled(
-                            seg,
-                            Style::default().fg(Color::White),
-                        )));
-                    }
+                }
+                rows.push(Line::from(""));
+            }
+            Item::Tool {
+                name,
+                seq: _,
+                running,
+                ok,
+                summary,
+            } => {
+                let (symbol, color) = if *running {
+                    (SPINNER[self.spinner_frame()], Color::Yellow)
+                } else if *ok {
+                    ('✓', Color::Green)
+                } else {
+                    ('✗', Color::Red)
+                };
+                let line = format!("{symbol} {name}  {}", truncate_chars(summary, 140));
+                for seg in wrap_text(&line, width.saturating_sub(1)) {
+                    rows.push(Line::from(Span::styled(seg, Style::default().fg(color))));
+                }
+            }
+            Item::Permission { tool, reason } => {
+                rows.push(Line::from(Span::styled(
+                    "⚠ Permission required",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                for seg in wrap_text(&format!("Tool: {tool}"), width.saturating_sub(1)) {
                     rows.push(Line::from(Span::styled(
-                        "[y] allow    [a] always allow for this session    [n] / Esc deny",
-                        Style::default().fg(Color::Green),
+                        seg,
+                        Style::default().fg(Color::Yellow),
                     )));
-                    rows.push(Line::from(""));
                 }
-                Item::System(text) => {
-                    for seg in wrap_text(text, width.saturating_sub(1)) {
-                        rows.push(Line::from(Span::styled(
-                            seg,
-                            Style::default().fg(Color::DarkGray),
-                        )));
-                    }
+                for seg in wrap_text(&format!("Reason: {reason}"), width.saturating_sub(1)) {
+                    rows.push(Line::from(Span::styled(
+                        seg,
+                        Style::default().fg(Color::White),
+                    )));
                 }
-                Item::Error(text) => {
-                    for seg in wrap_text(&format!("⚠ {text}"), width.saturating_sub(1)) {
-                        rows.push(Line::from(Span::styled(
-                            seg,
-                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                        )));
-                    }
+                rows.push(Line::from(Span::styled(
+                    "[y] allow    [a] always allow for this session    [n] / Esc deny",
+                    Style::default().fg(Color::Green),
+                )));
+                rows.push(Line::from(""));
+            }
+            Item::System(text) => {
+                for seg in wrap_text(text, width.saturating_sub(1)) {
+                    rows.push(Line::from(Span::styled(
+                        seg,
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+            }
+            Item::Error(text) => {
+                for seg in wrap_text(&format!("⚠ {text}"), width.saturating_sub(1)) {
+                    rows.push(Line::from(Span::styled(
+                        seg,
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    )));
                 }
             }
         }
@@ -217,7 +272,6 @@ impl App {
     }
 
     pub(crate) fn render(&mut self, frame: &mut Frame) {
-        self.frame = self.frame.wrapping_add(1);
         let frame_width = frame.area().width.saturating_sub(2) as usize;
         let (input_lines, line_starts, cursor_line, cursor_col) = if self.input.is_empty() {
             (Vec::<String>::new(), Vec::new(), 0, 0)
@@ -240,7 +294,7 @@ impl App {
         let mut rows = self.render_rows(content_width.max(1));
         if self.ai_thinking {
             const SPINNER: [char; 4] = ['◐', '◓', '◑', '◒'];
-            let ch = SPINNER[(self.frame as usize) % SPINNER.len()];
+            let ch = SPINNER[self.spinner_frame()];
             rows.push(Line::from(Span::styled(
                 format!(" {ch} thinking…"),
                 Style::default().fg(Color::Yellow),
@@ -273,7 +327,7 @@ impl App {
 
         let spinner = if self.busy {
             const SPINNER: [char; 4] = ['◐', '◓', '◑', '◒'];
-            SPINNER[(self.frame as usize) % SPINNER.len()].to_string()
+            SPINNER[self.spinner_frame()].to_string()
         } else {
             "•".to_string()
         };

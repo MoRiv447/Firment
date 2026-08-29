@@ -16,6 +16,7 @@ use crossterm::event::{
 };
 use firment_core::{AgentEvent, ChatMessage, QuestionRequest, SessionMode, ThinkingLevel};
 use ratatui::layout::Rect;
+use ratatui::text::Line;
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -91,7 +92,17 @@ pub(crate) struct App {
     pub(crate) config_path: PathBuf,
     pub(crate) cmd_tx: mpsc::Sender<AgentCmd>,
     pub(crate) always: Arc<Mutex<HashSet<String>>>,
-    pub(crate) frame: u64,
+    /// Wall-clock origin for the spinner animation: the frame index derives
+    /// from elapsed time (constant rotation speed) instead of the draw count
+    /// (which strobed during token bursts and crawled in silence).
+    pub(crate) started: Instant,
+    /// Bumped on every transcript mutation; invalidates the wrapped-row
+    /// cache in view.rs.
+    pub(crate) row_version: u64,
+    /// (row_version, width, per-item wrapped rows) — `None` entries are
+    /// dynamic rows (running tool spinners, the growing assistant tail) and
+    /// are re-wrapped every frame.
+    pub(crate) row_cache: Option<RowCache>,
 }
 
 impl App {
@@ -153,7 +164,9 @@ impl App {
             config_path,
             cmd_tx,
             always,
-            frame: 0,
+            started: Instant::now(),
+            row_version: 0,
+            row_cache: None,
         };
         if let Some(hint) = startup_hint {
             app.items.push(Item::System(hint));
@@ -188,6 +201,14 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Invalidate the wrapped-row cache. Every transcript mutation that
+    /// escapes `on_agent` (user answers, permission resolution, interrupt
+    /// notices, clipboard echoes) must call this or the view keeps showing
+    /// stale rows.
+    pub(crate) fn touch_rows(&mut self) {
+        self.row_version = self.row_version.wrapping_add(1);
     }
 
     pub(crate) fn on_agent(&mut self, event: AgentEvent) {
@@ -350,6 +371,9 @@ impl App {
                 self.interrupt_armed_at = None;
             }
         }
+        // One bump covers every transcript mutation inside the agent-event
+        // handler (the hot path — streaming mutations happen per batch).
+        self.touch_rows();
     }
 
     pub(crate) fn on_permission(&mut self, request: PermissionRequest) {
@@ -370,6 +394,7 @@ impl App {
             tool: request.tool.clone(),
             reason: request.reason.clone(),
         });
+        self.touch_rows();
         // The inline card must be visible; force the view back to the bottom.
         self.follow = true;
         self.scroll = 0;
@@ -467,6 +492,7 @@ impl App {
             None => "question dismissed".to_string(),
         };
         self.items.push(Item::System(echo));
+        self.touch_rows();
         let _ = question.reply.send(answer);
         false
     }
@@ -788,6 +814,7 @@ impl App {
             self.items.push(Item::Error(
                 "command channel is full; please retry".to_string(),
             ));
+            self.touch_rows();
         }
     }
 
@@ -808,6 +835,7 @@ impl App {
         }
         self.items
             .push(Item::System("⏹ Interrupt request sent…".to_string()));
+        self.touch_rows();
     }
 
     /// Soft-wrap the input to the display width; returns (lines, line start
@@ -887,6 +915,7 @@ impl App {
             prompt.tool
         )));
         self.pop_permission();
+        self.touch_rows();
         false
     }
 
@@ -1144,6 +1173,7 @@ impl App {
             ))),
             Err(e) => self.items.push(Item::System(format!("Copy failed: {e}"))),
         }
+        self.touch_rows();
     }
 
     /// Ctrl+C priority: input selection > transcript selection > last reply.
@@ -1160,6 +1190,7 @@ impl App {
                 ))),
                 Err(e) => self.items.push(Item::System(format!("Copy failed: {e}"))),
             }
+            self.touch_rows();
         }
     }
 
@@ -1239,6 +1270,7 @@ impl App {
                     self.model = model.clone();
                     self.items
                         .push(Item::System(format!("model -> {model} (switching…)")));
+                    self.touch_rows();
                     self.send_cmd(AgentCmd::SetModel(model));
                 }
                 self.model_picker = None;
@@ -1382,7 +1414,7 @@ impl App {
         }
     }
 
-    pub(crate) fn selection_text(&self, selection: Selection) -> String {
+    pub(crate) fn selection_text(&mut self, selection: Selection) -> String {
         let width = self.content_width.max(1);
         let rows = self.render_rows(width);
         let ((r0, c0), (r1, c1)) = selection.normalized();
@@ -1772,6 +1804,10 @@ impl App {
         }
     }
 }
+
+/// Wrapped-transcript cache payload: see `App::row_cache` and
+/// `view::render_rows`. (version, width, per-item rows).
+pub(crate) type RowCache = (u64, usize, Vec<Option<Vec<Line<'static>>>>);
 
 pub(crate) enum Item {
     User(String),
