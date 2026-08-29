@@ -170,6 +170,14 @@ enum Command {
         once: bool,
     },
     Tools,
+    /// Environment self-check: config + providers, install state, toolchain
+    /// on PATH, serial ports and [tools] semantics — so flash/build/monitor
+    /// fail at setup time with a fix hint, not mid-task.
+    Doctor {
+        /// Also run the SBC edge-model data-plane checks (MQTT, devices).
+        #[arg(long)]
+        sbc: bool,
+    },
     /// Hardware-in-the-loop suite: build → flash → monitor with expectations → elf_analyze, with replay.
     Hil {
         /// Suite name defined in .firment/hil.toml (omit to use inline steps via --steps JSON)
@@ -302,6 +310,20 @@ async fn main() -> anyhow::Result<()> {
             Command::Tools => {
                 let registry = firment_tools::default_registry();
                 println!("{}", serde_json::to_string_pretty(&registry.specs())?);
+            }
+            Command::Doctor { sbc } => {
+                let cwd = cli
+                    .cwd
+                    .clone()
+                    .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let config = load_config(&cli)?.merged_for(&cwd);
+                let path = cli.config.clone().unwrap_or_else(config_path);
+                doctor(&config, &path).await?;
+                doctor_install();
+                doctor_tools(&cwd, &config.tools);
+                if *sbc {
+                    doctor_sbc(&config).await;
+                }
             }
             Command::Hil {
                 suite,
@@ -944,6 +966,143 @@ fn doctor_install() {
             "not created yet"
         }
     );
+}
+
+/// Minimal PATH lookup without execution. Used for toolchain checks instead
+/// of running each tool with `--version`: some (Keil's uv4) have GUI side
+/// effects when invoked bare, and doctor must never open windows.
+fn which(name: &str) -> Option<PathBuf> {
+    let exts: Vec<String> = if cfg!(windows) {
+        env::var("PATHEXT")
+            .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
+            .split(';')
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect()
+    } else {
+        vec![String::new()]
+    };
+    let path_var = env::var_os("PATH")?;
+    for dir in env::split_paths(&path_var) {
+        for ext in &exts {
+            let candidate = dir.join(format!("{name}{ext}"));
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// Whether the first token of a user-configured build_command can resolve.
+/// cmd.exe shell builtins are accepted unconditionally (they never resolve
+/// via PATH but always work inside `cmd /C`).
+fn build_command_resolves(command: &str) -> bool {
+    const CMD_BUILTINS: &[&str] = &[
+        "cd", "echo", "dir", "del", "copy", "move", "md", "rd", "call", "set", "type", "exit",
+        "if", "for", "rem",
+    ];
+    let first = command
+        .split(|c: char| c.is_whitespace() || c == '&' || c == '|')
+        .map(str::trim)
+        .find(|s| !s.is_empty())
+        .unwrap_or("")
+        .trim_matches('"');
+    if first.is_empty() {
+        return false;
+    }
+    if first.contains('/') || first.contains('\\') {
+        Path::new(first).is_file()
+    } else if cfg!(windows) && CMD_BUILTINS.contains(&first.to_ascii_lowercase().as_str()) {
+        true
+    } else {
+        which(first).is_some()
+    }
+}
+
+/// Toolchain + serial + `[tools]` semantics checks. This never talks to
+/// hardware: it verifies what build/flash/monitor need so a missing piece
+/// fails HERE with a fix hint instead of mid-task with a confusing error.
+/// detect_build_command only looks for manifest FILES — doctor is the first
+/// place that checks whether the toolchain binaries themselves exist.
+fn doctor_tools(cwd: &Path, tools: &firment_core::config::ToolsConfig) {
+    println!("\ntoolchain (optional, only needed for matching project types):");
+    for (name, what) in [
+        ("pio", "PlatformIO CLI — platformio.ini projects"),
+        ("cmake", "CMake — CMakeLists.txt projects"),
+        ("make", "GNU make — Makefile projects"),
+        ("uv4", "Keil MDK uVision — *.uvprojx projects"),
+    ] {
+        println!(
+            "  {:<8}: {:<24} {}",
+            name,
+            if which(name).is_some() {
+                "found"
+            } else {
+                "not found"
+            },
+            what
+        );
+    }
+    match std::process::Command::new("probe-rs")
+        .arg("--version")
+        .output()
+    {
+        Ok(o) if o.status.success() => {
+            let version = String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            println!("  probe-rs : found {version} — required for flash/run");
+        }
+        _ => println!(
+            "  probe-rs : NOT FOUND — flash/run will fail; install via `cargo install \
+             probe-rs-tools` or the probe-rs GitHub releases"
+        ),
+    }
+
+    println!("\nserial ports:");
+    let ports = firment_tools::tools::monitor::enumerate_ports();
+    println!("  {ports}");
+
+    println!("\n[tools] config ({}):", cwd.display());
+    match &tools.default_chip {
+        Some(chip) => println!("  default_chip : {chip}"),
+        None => {
+            println!("  default_chip : not set — flash/run then require an explicit chip parameter")
+        }
+    }
+    match &tools.monitor_port {
+        Some(port) => {
+            let attached = ports.contains(port.as_str());
+            println!(
+                "  monitor_port : {port} — {}",
+                if attached {
+                    "present"
+                } else {
+                    "NOT attached right now (unplugged, or a stale config entry?)"
+                }
+            );
+        }
+        None => println!("  monitor_port : not set — monitor will ask to pick one"),
+    }
+    println!("  monitor_baud : {}", tools.monitor_baud);
+    match &tools.build_command {
+        Some(cmd) => println!(
+            "  build_command: {}",
+            if build_command_resolves(cmd) {
+                format!("\"{cmd}\" — resolves")
+            } else {
+                format!("\"{cmd}\" — first token NOT found on PATH (build would fail)")
+            }
+        ),
+        None => println!(
+            "  build_command: not set — build auto-detects platformio.ini / Makefile / \
+             CMakeLists.txt / *.uvprojx"
+        ),
+    }
 }
 
 /// `firm --doctor --sbc`: end-to-end check of the SBC edge-model data plane.
