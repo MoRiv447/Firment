@@ -21,7 +21,42 @@ const mdComponents: Components = {
   p: ({ children }) => <div style={{ margin: 0 }}>{children}</div>,
   ul: ({ children }) => <ul style={{ margin: 0, paddingLeft: 20 }}>{children}</ul>,
   ol: ({ children }) => <ol style={{ margin: 0, paddingLeft: 20 }}>{children}</ol>,
-  pre: ({ children }) => <pre style={{ margin: '6px 0 0' }}>{children}</pre>,
+  pre: ({ children }) => (
+    <pre
+      style={{
+        margin: '6px 0 0',
+        // Long code lines used to push a horizontal scrollbar onto the WHOLE
+        // chat scroll container — scroll inside the block instead.
+        overflowX: 'auto',
+        background: '#0a0c10',
+        border: '2px solid #000000',
+        padding: 8,
+      }}
+    >
+      {children}
+    </pre>
+  ),
+  code: ({ className, children, ...rest }) => {
+    // Fenced blocks render code inside pre>code: only INLINE code gets the
+    // pill background (the pre above already styles the block).
+    const inline = !String(className || '').includes('language-');
+    if (!inline) {
+      return (
+        <code className={className} {...rest}>
+          {children}
+        </code>
+      );
+    }
+    return (
+      <code
+        className={className}
+        {...rest}
+        style={{ background: '#1a1e26', padding: '1px 5px', border: '1px solid #000' }}
+      >
+        {children}
+      </code>
+    );
+  },
   table: ({ children }) => (
     <table
       style={{
@@ -197,9 +232,15 @@ export const MessageList = memo(function MessageList({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       {messages.map((m, i) => {
+        // Stable key: index keys made expansion state migrate to the wrong
+        // card whenever the optimistic-append → transcript-refresh cycle
+        // shifted rows (compaction / interrupted-note inserts shift too).
+        const key = `m${i}-${m.role}-${
+          m.tool_call_id || m.tool_calls?.[0]?.id || m.content.slice(0, 24)
+        }`;
         if (m.role === 'user') {
           return (
-            <div key={i} style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <div key={key} style={{ display: 'flex', justifyContent: 'flex-end' }}>
               <div
                 style={{
                   maxWidth: '80%',
@@ -211,16 +252,20 @@ export const MessageList = memo(function MessageList({
                   lineHeight: 1.65,
                   color: '#ffffff',
                   fontWeight: 500,
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
                 }}
               >
-                <Markdown>{m.content}</Markdown>
+                {/* Plain text: the user's pasted snake_case / #include lines
+                    are code, not prose to italicize. */}
+                {m.content}
               </div>
             </div>
           );
         }
         if (m.role === 'assistant') {
           return (
-            <div key={i} style={{ maxWidth: '88%', lineHeight: 1.7 }}>
+            <div key={key} style={{ maxWidth: '88%', lineHeight: 1.7 }}>
               {m.tool_calls && m.tool_calls.length > 0 && (
                 <ToolCallBlock calls={m.tool_calls} />
               )}
@@ -230,13 +275,13 @@ export const MessageList = memo(function MessageList({
         }
         if (m.role === 'tool') {
           return (
-            <div key={i} style={{ display: 'flex', justifyContent: 'flex-start', maxWidth: '92%' }}>
+            <div key={key} style={{ display: 'flex', justifyContent: 'flex-start', maxWidth: '92%' }}>
               <ToolResultCard name={m.name} content={m.content} />
             </div>
           );
         }
         return (
-          <div key={i}>
+          <div key={key}>
             <Tag
               color="#a855f7"
               style={{ borderRadius: 0, border: '2px solid #000', color: '#000', fontWeight: 700 }}

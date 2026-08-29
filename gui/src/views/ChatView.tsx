@@ -186,6 +186,24 @@ export function ChatView({
                 💭 {turn.thinking.slice(-400)}
               </div>
             )}
+            {turn && turn.thinking && turn.text && (
+              <details style={{ marginTop: 8, color: '#8b7bd8', fontSize: 12 }}>
+                <summary style={{ cursor: 'pointer', fontStyle: 'italic', userSelect: 'none' }}>
+                  💭 reasoning…
+                </summary>
+                <div
+                  style={{
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    fontStyle: 'italic',
+                    marginTop: 4,
+                    lineHeight: 1.6,
+                  }}
+                >
+                  {turn.thinking.slice(-1200)}
+                </div>
+              </details>
+            )}
             {turn && turn.text && (
               <div
                 style={{

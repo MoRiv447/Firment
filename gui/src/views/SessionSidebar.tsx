@@ -173,9 +173,12 @@ export function SessionSidebar({
                 fontWeight: s.id === currentId ? 700 : 500,
                 color: s.id === currentId ? '#fff' : '#e6e9ef',
               }}
-              ellipsis={{ tooltip: true }}
+              ellipsis={{ tooltip: s.preview }}
             >
-              {s.preview.length > 30 ? `${s.preview.slice(0, 30)}…` : s.preview}
+              {/* ellipsis carries the FULL preview in its tooltip — the old
+                  code truncated first, so the tooltip showed the same 30
+                  chars as the row. */}
+              {s.preview}
             </Text>
           </Space>
         }

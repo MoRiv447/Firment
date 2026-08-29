@@ -758,7 +758,7 @@ export default function App() {
                           </Tag>
                           <Text style={{ fontSize: 12, flex: 1, fontWeight: 600 }}>{n.title}</Text>
                           <Text type="secondary" style={{ fontSize: 10 }}>
-                            {new Date(n.ts).toLocaleTimeString()}
+                            {new Date(n.ts).toLocaleString()}
                           </Text>
                         </div>
                         {n.body && (

@@ -142,16 +142,17 @@ describe('turnsReducer (multi-session routing)', () => {
 });
 
 describe('turnReducer thinking phase', () => {
-  it('accumulates thinking then clears it when text starts', () => {
+  it('accumulates thinking and KEEPS it once text starts (collapsed preview)', () => {
     let s = turnReducer(initialTurnState(), { type: 'turn_start' });
     s = turnReducer(s, { type: 'thinking', text: 'pondering…', session_id: 'x' });
     expect(s.turn?.thinking).toBe('pondering…');
     s = turnReducer(s, { type: 'thinking', text: ' more', session_id: 'x' });
     expect(s.turn?.thinking).toBe('pondering… more');
     s = turnReducer(s, { type: 'text_delta', text: 'answer', session_id: 'x' });
-    // Reasoning done: the snippet must not linger under the reply.
     expect(s.turn?.text).toBe('answer');
-    expect(s.turn?.thinking).toBe('');
+    // Reasoning is retained for the collapsible preview — interleaved
+    // reasoning between tool waves used to vanish with the rest.
+    expect(s.turn?.thinking).toBe('pondering… more');
   });
 
   it('ignores thinking deltas when no turn is running', () => {

@@ -44,8 +44,10 @@ export function turnReducer(state: TurnState, e: FrontendEvent): TurnState {
         ...state,
         turn: {
           ...state.turn,
-          // First real text ends the visible reasoning phase.
-          thinking: '',
+          // Reasoning is KEPT (rendered as a collapsed "reasoning" block
+          // next to the reply) — wiping it on first text hid the
+          // interleaved reasoning that arrives between tool waves for the
+          // rest of the turn.
           text: state.turn.text + e.text,
         },
       };
