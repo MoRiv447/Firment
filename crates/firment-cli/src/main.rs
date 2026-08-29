@@ -1445,10 +1445,15 @@ fn run_monitor(
         .open()
         .map_err(|e| anyhow::anyhow!("failed to open serial port {port}: {e}"))?;
     let elf = elf.as_deref();
+    let symbol_index = elf.and_then(firment_tools::decode::SymbolIndex::from_path);
     let mut buf = [0u8; 4096];
     let mut splitter = firment_tools::utf8::LineSplitter::new(firment_tools::utf8::MAX_LINE_BYTES);
     let mut print_line = |line: &str| {
-        println!("{}", firment_tools::decode::decode_line(line, elf));
+        let decoded = match &symbol_index {
+            Some(index) => index.decode_line(line),
+            None => line.to_string(),
+        };
+        println!("{decoded}");
     };
     let deadline = if timeout_secs > 0 {
         Some(Instant::now() + Duration::from_secs(timeout_secs))

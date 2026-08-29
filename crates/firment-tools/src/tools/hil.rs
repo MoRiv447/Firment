@@ -1238,8 +1238,14 @@ fn read_serial_with_expect(
     // Decode one complete line, run the expect assertions against it and
     // record it. Shared by the read loop and the trailing-partial-line
     // flush, which used to carry a second copy of this body.
+    // Symbol index built once: per-line per-token ELF re-reads are the
+    // dominant cost on address-heavy log streams.
+    let symbol_index = elf.and_then(crate::decode::SymbolIndex::from_path);
     let handle_line = |line: &str, lines: &mut Vec<String>, matched: &mut usize| {
-        let decoded = crate::decode::decode_line(line, elf);
+        let decoded = match &symbol_index {
+            Some(index) => index.decode_line(line),
+            None => line.to_string(),
+        };
         let with_ts = if timestamp {
             let elapsed = Instant::now() - start;
             format!(

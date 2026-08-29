@@ -105,11 +105,74 @@ pub fn decode_address(elf: &Path, address: u64) -> Option<String> {
     Some(format!("{name}+0x{:x}", address - base))
 }
 
-/// Decode hex code addresses in one log line when an ELF is provided.
-pub fn decode_line(line: &str, elf: Option<&Path>) -> String {
-    let Some(elf) = elf else {
-        return line.to_string();
-    };
+/// Cached function-symbol table for repeated address lookups. `decode_address`
+/// re-reads and re-parses the whole ELF for EVERY address — fine for a
+/// one-off PC/LR attribution, but a monitor log line can carry several hex
+/// tokens and a capture can carry thousands of lines. Build once, query many.
+///
+/// Coverage semantics match `decode_address` exactly (including size-0
+/// symbols covering unboundedly upward). Unlike the elf_analyze stats table,
+/// `$`-prefixed mapping symbols are KEPT so index output is byte-identical
+/// to the legacy path.
+pub struct SymbolIndex {
+    /// (address, size, name), sorted ascending by address.
+    symbols: Vec<(u64, u64, String)>,
+    min_addr: u64,
+}
+
+impl SymbolIndex {
+    /// Build the index from an ELF file. Returns None when the file is
+    /// missing/unparseable.
+    pub fn from_path(elf: &Path) -> Option<Self> {
+        let data = std::fs::read(elf).ok()?;
+        Self::from_data(&data)
+    }
+
+    pub fn from_data(data: &[u8]) -> Option<Self> {
+        let file = object::File::parse(data).ok()?;
+        let mut symbols: Vec<(u64, u64, String)> = file
+            .symbols()
+            .filter(|sym| sym.kind() == object::SymbolKind::Text)
+            .filter_map(|sym| {
+                let name = sym.name().ok()?;
+                if name.is_empty() {
+                    return None;
+                }
+                Some((sym.address(), sym.size(), name.to_string()))
+            })
+            .collect();
+        symbols.sort_unstable_by_key(|(addr, _, _)| *addr);
+        let min_addr = symbols.first().map(|(a, _, _)| *a)?;
+        Some(Self { symbols, min_addr })
+    }
+
+    /// Resolve a code address to `function+0xOFFSET` (highest covering base,
+    /// gap addresses return None — same rules as `decode_address`).
+    pub fn lookup(&self, address: u64) -> Option<String> {
+        if address < self.min_addr {
+            return None;
+        }
+        // First symbol with base > address; the candidate is the one before
+        // it. If that candidate doesn't cover (its size ends before the
+        // address — a gap), walk back to lower bases, mirroring
+        // decode_address's highest-covering-base rule.
+        let pos = self
+            .symbols
+            .partition_point(|(addr, _, _)| *addr <= address);
+        for (addr, size, name) in self.symbols[..pos].iter().rev() {
+            if *size > 0 && address >= addr.saturating_add(*size) {
+                continue;
+            }
+            return Some(format!("{name}+0x{:x}", address - addr));
+        }
+        None
+    }
+}
+
+/// Shared token-scan body for `decode_line` and `SymbolIndex::decode_line`:
+/// split the line on non-hex boundaries, resolve `0x`-prefixed tokens (>= 8
+/// hex digits), and annotate them in place.
+fn decode_line_with(line: &str, mut lookup: impl FnMut(u64) -> Option<String>) -> String {
     let mut out = line.to_string();
     let tokens: Vec<String> = out
         .split(|c: char| !c.is_ascii_hexdigit() && c != 'x' && c != 'X')
@@ -123,11 +186,27 @@ pub fn decode_line(line: &str, elf: Option<&Path>) -> String {
         let Ok(addr) = u64::from_str_radix(&lower[2..], 16) else {
             continue;
         };
-        if let Some(decoded) = decode_address(elf, addr) {
+        if let Some(decoded) = lookup(addr) {
             out = out.replace(&token, &format!("{token} ({decoded})"));
         }
     }
     out
+}
+
+/// Decode hex code addresses in one log line when an ELF is provided.
+pub fn decode_line(line: &str, elf: Option<&Path>) -> String {
+    let Some(elf) = elf else {
+        return line.to_string();
+    };
+    decode_line_with(line, |addr| decode_address(elf, addr))
+}
+
+impl SymbolIndex {
+    /// `decode_line` against the cached index — same output, no per-token
+    /// ELF re-read.
+    pub fn decode_line(&self, line: &str) -> String {
+        decode_line_with(line, |addr| self.lookup(addr))
+    }
 }
 
 #[cfg(test)]
@@ -155,6 +234,76 @@ mod tests {
         use object::{BinaryFormat, Endianness};
         let obj = Object::new(BinaryFormat::Elf, arch, Endianness::Little);
         std::fs::write(path, obj.write().unwrap()).unwrap();
+    }
+
+    /// ELF with real text symbols: handler@0x1000 (size 0x100), main@0x2000
+    /// (size 0x40), gap after main, tail@0x9000 (size 0 — covers upward).
+    fn write_elf_with_symbols(path: &Path) {
+        use object::write::{Object, Symbol, SymbolSection};
+        use object::{BinaryFormat, Endianness, SectionKind, SymbolKind, SymbolScope};
+        let mut obj = Object::new(
+            BinaryFormat::Elf,
+            object::Architecture::Arm,
+            Endianness::Little,
+        );
+        let text = obj.add_section(Vec::new(), b".text".to_vec(), SectionKind::Text);
+        for (name, value, size) in [
+            ("handler", 0x1000u64, 0x100u64),
+            ("main", 0x2000, 0x40),
+            ("tail", 0x9000, 0),
+        ] {
+            obj.add_symbol(Symbol {
+                name: name.as_bytes().to_vec(),
+                value,
+                size,
+                kind: SymbolKind::Text,
+                scope: SymbolScope::Compilation,
+                section: SymbolSection::Section(text),
+                weak: false,
+                flags: object::SymbolFlags::None,
+            });
+        }
+        std::fs::write(path, obj.write().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn symbol_index_matches_decode_address() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("fw.elf");
+        write_elf_with_symbols(&p);
+        let index = SymbolIndex::from_path(&p).unwrap();
+        for addr in [0x1000u64, 0x10ff, 0x2000, 0x203f, 0x9abc, 0xdeadbeef] {
+            assert_eq!(
+                index.lookup(addr).as_deref(),
+                decode_address(&p, addr).as_deref(),
+                "index/legacy mismatch at {addr:#x}"
+            );
+        }
+        // Gap between main's end and tail: must not be misattributed.
+        assert_eq!(index.lookup(0x5000), None);
+        assert_eq!(decode_address(&p, 0x5000), None);
+        // Below the lowest symbol.
+        assert_eq!(index.lookup(0x10), None);
+    }
+
+    #[test]
+    fn indexed_decode_line_matches_legacy() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("fw.elf");
+        write_elf_with_symbols(&p);
+        let index = SymbolIndex::from_path(&p).unwrap();
+        let line = "fault at pc=0x00002010 lr=0x00001004 sp=0x2000fffc";
+        assert_eq!(index.decode_line(line), decode_line(line, Some(&p)));
+        assert!(
+            index.decode_line(line).contains("main+0x10"),
+            "got: {}",
+            index.decode_line(line)
+        );
+    }
+
+    #[test]
+    fn symbol_index_missing_elf_returns_none() {
+        assert!(SymbolIndex::from_path(Path::new("C:/definitely/missing.elf")).is_none());
     }
 
     #[test]

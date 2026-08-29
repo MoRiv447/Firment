@@ -49,8 +49,14 @@ fn read_serial_from(
     let mut buf = [0u8; 4096];
     let mut splitter = crate::utf8::LineSplitter::new(crate::utf8::MAX_LINE_BYTES);
     let mut lines: Vec<String> = Vec::new();
+    // Build the symbol index ONCE: decoding used to re-read and re-parse the
+    // whole ELF for every hex token in every line.
+    let index = elf.and_then(crate::decode::SymbolIndex::from_path);
     let push_line = |line: &str, lines: &mut Vec<String>, start: Instant, timestamp: bool| {
-        let decoded = crate::decode::decode_line(line, elf);
+        let decoded = match &index {
+            Some(index) => index.decode_line(line),
+            None => line.to_string(),
+        };
         let with_ts = if timestamp {
             let elapsed = Instant::now() - start;
             format!(
