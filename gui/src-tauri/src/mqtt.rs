@@ -38,7 +38,10 @@ fn trace(shared: &Arc<Shared>, line: &str) {
 /// anything weird in the host async runtime.
 pub fn spawn_if_configured(shared: Arc<Shared>) {
     let broker = {
-        let cfg = shared.config.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let cfg = shared
+            .config
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         cfg.mqtt.broker.trim().to_string()
     };
     trace(&shared, &format!("spawn: broker read as {broker:?}"));
@@ -256,13 +259,21 @@ fn emit(shared: &Arc<Shared>, ev: FrontendEvent) {
 /// remount) can pull the truth via the mqtt_status command instead of
 /// waiting for the next event.
 fn set_status(shared: &Arc<Shared>, frame: String) {
-    *shared.mqtt_status.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = frame;
+    *shared
+        .mqtt_status
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = frame;
 }
 
 /// Build the guard-status JSON the frontend card parses. serde_json (not
 /// string interpolation): broker URLs and error texts containing `"` or `\`
 /// used to produce malformed frames that the card rendered as `unknown`.
-fn status_json(connected: bool, broker: Option<&str>, error: Option<&str>, frames: Option<u64>) -> String {
+fn status_json(
+    connected: bool,
+    broker: Option<&str>,
+    error: Option<&str>,
+    frames: Option<u64>,
+) -> String {
     let mut obj = serde_json::json!({ "connected": connected });
     if let Some(b) = broker {
         obj["broker"] = serde_json::json!(b);
