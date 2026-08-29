@@ -12,8 +12,10 @@ evidence-level framing for verification claims.
   via PATH lookup — never executed bare, `uv4` opens a GUI; probe-rs
   probed with `--version`), serial port enumeration, and `[tools]`
   semantics (default_chip set? configured monitor_port actually
-  attached? first token of build_command resolvable?). Failures surface
-  here with fix hints instead of mid-task.
+  attached? first token of build_command resolvable?). The port check
+  matches bare port names exactly — substring-matching the joined label
+  string reported `COM1` as attached whenever `COM10` existed. Failures
+  surface here with fix hints instead of mid-task.
 - **Evidence levels** (verification ladder): the system prompt defines
   code → build → deploy → runtime → physical behavior, each level only
   counting when actually observed, and requires completion reports to
@@ -29,7 +31,9 @@ evidence-level framing for verification claims.
   passed to the runner's cwd instead, and the `uv4` project name is
   quoted plainly. `hil` shared a verbatim copy of the build detection —
   it now uses `build.rs`'s (which is how the bug survived there);
-  `shell_quote` is documented as display-only.
+  `shell_quote` is display-only and no longer doubles `%`/`^`, so flash
+  errors show paths like `rev^2_100%` verbatim instead of
+  `rev^^2_100%%`.
 - **KB editor concurrent-edit guard (closes known issue #3)**:
   `workbench_kb_save` takes the mtime the editor loaded and fails with
   `[ConcurrentChange]` when the file changed on disk in the meantime —
