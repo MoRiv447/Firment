@@ -43,6 +43,7 @@ pub fn plan_registry() -> Arc<ToolRegistry> {
                 | "elf_analyze"
                 | "periph_init"
                 | "device_log"
+                | "observe"
         ) {
             registry.register(tool);
         }

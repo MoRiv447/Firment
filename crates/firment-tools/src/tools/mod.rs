@@ -14,6 +14,7 @@ mod html;
 mod list_dir;
 pub mod models;
 pub mod monitor;
+mod observe;
 mod periph_init;
 mod pinmap;
 mod read_file;
@@ -38,6 +39,7 @@ pub fn all() -> Vec<Arc<dyn Tool>> {
         Arc::new(read_file::ReadFile),
         Arc::new(run::Run),
         Arc::new(monitor::Monitor),
+        Arc::new(observe::Observe),
         Arc::new(hil::Hil),
         Arc::new(periph_init::PeriphInit),
         Arc::new(pinmap::Pinmap),
