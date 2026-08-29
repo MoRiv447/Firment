@@ -9,13 +9,49 @@ use crate::util::{
     truncate_tail, wrap_text,
 };
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Margin};
+use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
 impl App {
+    /// Rect of the currently open modal, if any. Single source for both the
+    /// scrim (dim everything OUTSIDE this rect) and the dialog itself so the
+    /// two can never drift apart. Keep the percentages here only.
+    fn modal_area(&self, frame: Rect) -> Option<Rect> {
+        if self.question.is_some() {
+            Some(centered_rect(68, 42, frame))
+        } else if self.model_picker.is_some() {
+            Some(centered_rect(60, 48, frame))
+        } else if self.session_picker.is_some() {
+            Some(centered_rect(76, 52, frame))
+        } else {
+            None
+        }
+    }
+
+    /// Dim every cell outside `keep`: the transcript kept rendering at full
+    /// brightness around a modal (concurrent tool waves guarantee events
+    /// arrive behind an open ask_user), which read as corrupted output.
+    fn apply_scrim(&self, frame: &mut Frame, keep: Rect) {
+        let area = frame.area();
+        for y in 0..area.height {
+            for x in 0..area.width {
+                let inside = x >= keep.x
+                    && x < keep.x.saturating_add(keep.width)
+                    && y >= keep.y
+                    && y < keep.y.saturating_add(keep.height);
+                if inside {
+                    continue;
+                }
+                if let Some(cell) = frame.buffer_mut().cell_mut(Position { x, y }) {
+                    cell.set_style(cell.style().add_modifier(Modifier::DIM));
+                }
+            }
+        }
+    }
+
     pub(crate) fn highlight_selection(&self, rows: &mut Vec<Line<'static>>) {
         let Some(selection) = self.selection else {
             return;
@@ -366,7 +402,19 @@ impl App {
             frame.set_cursor_position((cursor_x, cursor_y));
         }
 
-        if self.permission.is_none() {
+        // Modal scrim (see modal_area/apply_scrim): dim the live transcript
+        // around the dialog BEFORE drawing it — the dialog's Clear only
+        // covers its own rect, and the transcript otherwise kept rendering
+        // at full brightness on both sides.
+        if let Some(keep) = self.modal_area(frame.area()) {
+            self.apply_scrim(frame, keep);
+        }
+
+        // Modals render regardless of the (inline, non-modal) permission
+        // card: the old `permission.is_none()` gate made the question dialog
+        // VANISH whenever an approval was pending while its keys still
+        // routed there — an invisible dialog swallowing keypresses.
+        {
             if let Some(picker) = &self.model_picker {
                 let area = centered_rect(60, 48, frame.area());
                 frame.render_widget(Clear, area);

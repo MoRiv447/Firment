@@ -620,15 +620,25 @@ mod tests {
             options: vec!["stm32f407".to_string(), "stm32g0".to_string()],
             reply: tx,
         });
-        assert!(matches!(
-            app.items.last(),
-            Some(Item::System(text)) if text.contains("which chip?")
-        ));
+        // The modal IS the display: no transcript duplicate while the
+        // question is open.
         assert!(app.question.is_some());
+        assert!(
+            app.items.is_empty()
+                || !matches!(
+                    app.items.last(),
+                    Some(Item::System(text)) if text.contains("which chip?")
+                )
+        );
 
         app.on_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
         assert_eq!(rx.try_recv(), Ok(Some("stm32g0".to_string())));
         assert!(app.question.is_none());
+        // The ANSWER is echoed into the transcript instead.
+        assert!(matches!(
+            app.items.last(),
+            Some(Item::System(text)) if text.contains("question answered: stm32g0")
+        ));
     }
 
     #[test]

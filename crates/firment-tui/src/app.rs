@@ -402,8 +402,9 @@ impl App {
             let _ = previous.reply.send(None);
         }
         self.question_input.clear();
-        self.items
-            .push(Item::System(format!("❓ {}", request.question)));
+        // The modal IS the question display — no transcript duplicate. (The
+        // old `Item::System("❓ …")` row landed mid-tool-list and, never
+        // removed after answering, stayed in the transcript forever.)
         // The question modal must be visible; force the view back to the bottom.
         self.follow = true;
         self.scroll = 0;
@@ -459,6 +460,13 @@ impl App {
             }
         };
         self.question_input.clear();
+        // Transcript echo of what was answered — the question itself only
+        // ever lived in the modal.
+        let echo = match &answer {
+            Some(a) => format!("question answered: {a}"),
+            None => "question dismissed".to_string(),
+        };
+        self.items.push(Item::System(echo));
         let _ = question.reply.send(answer);
         false
     }
