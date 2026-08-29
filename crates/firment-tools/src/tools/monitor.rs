@@ -103,6 +103,9 @@ fn read_serial_from(
     if text.is_empty() {
         Ok(String::new())
     } else {
+        // Fault signature → point the agent at the forensic capture BEFORE
+        // the scene is lost (the target may reset any moment).
+        let text = crate::forensic::append_fault_marker(text);
         Ok(truncate(&text, 32_000))
     }
 }

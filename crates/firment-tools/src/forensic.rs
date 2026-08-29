@@ -325,3 +325,80 @@ mod tests {
         assert!(report.contains("snapshot: snap/forensic.txt"));
     }
 }
+
+/// Scan captured device output for fault signatures and return the marker
+/// line the agent should see. Signature base is sbc-guard's rules.toml
+/// (`panic|Guru Meditation|assert failed` — a Linux SBC has no Cortex-M
+/// faults), EXTENDED with the Cortex-M fault names this crate's targets hit:
+/// HardFault/faultISR/BusFault/UsageFault. Case-insensitive; a marker is a
+/// hint to run `debug action=forensic`, not a verdict.
+pub(crate) fn fault_detected_marker(text: &str) -> Option<&'static str> {
+    const NEEDLES: [&str; 8] = [
+        "hardfault",
+        "hard fault",
+        "panic",
+        "guru meditation",
+        "assert failed",
+        "faultisr",
+        "busfault",
+        "usagefault",
+    ];
+    let lower = text.to_ascii_lowercase();
+    NEEDLES
+        .iter()
+        .find(|n| lower.contains(*n))
+        .map(|_| "[FAULT-DETECTED] — capture the scene now: debug action=forensic")
+}
+
+/// Append the fault marker when the captured output contains a fault
+/// signature. Shared by the monitor tool, the hil run step and the run tool.
+pub(crate) fn append_fault_marker(text: String) -> String {
+    match fault_detected_marker(&text) {
+        Some(marker) => format!("{text}\n{marker}"),
+        None => text,
+    }
+}
+
+#[cfg(test)]
+mod marker_tests {
+    use super::*;
+
+    #[test]
+    fn marker_hits_fault_signatures() {
+        for line in [
+            "HardFault_Handler entered",
+            "running hard fault recovery",
+            "panicked at src/main.rs:10",
+            "Guru Meditation Error: Core 0",
+            "assert failed: x > 0",
+            "faultISR: bad thing",
+            "BusFault at 0xdead",
+            "UsageFault: unaligned",
+        ] {
+            assert!(fault_detected_marker(line).is_some(), "must detect: {line}");
+        }
+    }
+
+    #[test]
+    fn marker_ignores_clean_output() {
+        for line in [
+            "LED blinking at 1 Hz",
+            "sensor value 42",
+            "build finished (exit 0)",
+            "usage: firm hil --suite blink",
+        ] {
+            assert!(
+                fault_detected_marker(line).is_none(),
+                "false positive on: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn append_fault_marker_appends_once() {
+        let out = append_fault_marker("HardFault\n".to_string());
+        assert!(out.contains("[FAULT-DETECTED]"));
+        assert_eq!(out.matches("[FAULT-DETECTED]").count(), 1);
+        assert_eq!(append_fault_marker("all good\n".to_string()), "all good\n");
+    }
+}

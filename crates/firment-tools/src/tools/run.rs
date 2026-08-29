@@ -209,7 +209,10 @@ impl Tool for Run {
         .await
         {
             Ok((text, Some(0), _)) => Ok(ToolOutput {
-                text: format!("run finished (exit 0)\n{text}"),
+                text: format!(
+                    "run finished (exit 0)\n{}",
+                    crate::forensic::append_fault_marker(text)
+                ),
             }),
             Ok((text, Some(code), _)) => Err(ToolError::new(format!(
                 "[Io] run failed (exit {code})\ncommand: {command}\n{text}"
@@ -219,7 +222,10 @@ impl Tool for Run {
                  not hold the debug probe); captured output:\n{text}"
             ))),
             Ok((text, None, false)) => Ok(ToolOutput {
-                text: format!("run timed out after {timeout_ms} ms; captured output:\n{text}"),
+                text: format!(
+                    "run timed out after {timeout_ms} ms; captured output:\n{}",
+                    crate::forensic::append_fault_marker(text)
+                ),
             }),
             Err(e) => Err(probe_rs_err(e)),
         }

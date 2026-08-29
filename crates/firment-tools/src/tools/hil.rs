@@ -917,7 +917,10 @@ async fn run_run_step(
     match crate::tools::util::run_probe_rs(args, &ctx.cwd, timeout, Some(ctx.cancel.clone()), &[])
         .await
     {
-        Ok((text, Some(0))) => Ok(format!("run finished (exit 0)\n{text}")),
+        Ok((text, Some(0))) => Ok(format!(
+            "run finished (exit 0)\n{}",
+            crate::forensic::append_fault_marker(text)
+        )),
         Ok((text, Some(c))) => Err(format!("[Io] run failed (exit {c})\n{text}")),
         Ok((text, None)) => Ok(format!(
             "run timed out after {timeout} ms; captured:\n{text}"
