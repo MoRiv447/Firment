@@ -421,7 +421,7 @@ impl Tool for Debug {
         json!({
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["halt", "regs", "mem", "write", "analyze", "break", "step", "continue", "backtrace", "trace"], "description": "What to do on the target"},
+                "action": {"type": "string", "enum": ["halt", "regs", "mem", "write", "analyze", "forensic", "break", "step", "continue", "backtrace", "trace"], "description": "What to do on the target. forensic: capture a hard-fault scene (exception frame + fault registers + stack scan + change-ledger correlation) into a structured report — the target must still be sitting in the fault"},
                 "chip": {"type": "string", "description": "probe-rs chip id, e.g. stm32g431rb (defaults to [tools] default_chip)"},
                 "probe": {"type": "string", "description": "Optional probe serial/id when multiple probes are attached"},
                 "elf": {"type": "string", "description": "Path to the firmware ELF (inside the workspace); REQUIRED for backtrace (needs DWARF debug info) and needed for symbol:name addresses / analyze PC decoding"},
@@ -440,6 +440,13 @@ impl Tool for Debug {
 
     fn approval(&self, args: &Value) -> Option<String> {
         let action = args.get("action").and_then(|a| a.as_str()).unwrap_or("?");
+        if action == "forensic" {
+            // Read-only capture of an EPHEMERAL scene: halting and reading
+            // costs nothing, and a confirmation prompt can cost the whole
+            // scene (the watchdog may reset the target while the user
+            // reaches for the keyboard). Never gate it.
+            return None;
+        }
         if action == "write" {
             let addr = args.get("address").and_then(|a| a.as_str()).unwrap_or("?");
             let value = args
@@ -558,6 +565,12 @@ impl Tool for Debug {
             return Err(ToolError::new(
                 "[InvalidInput] backtrace needs an elf parameter (the firmware ELF with DWARF \
                  debug info, i.e. built with -g)",
+            ));
+        }
+        if action == "forensic" && elf.is_none() {
+            return Err(ToolError::new(
+                "[InvalidInput] action=forensic needs 'elf' (stack unwinding and the change \
+                 correlation run against the firmware symbol table)",
             ));
         }
         let trace_duration = args
@@ -734,6 +747,157 @@ impl Tool for Debug {
                     stack_addr,
                     elf.as_deref(),
                 );
+                Ok(ToolOutput {
+                    text: truncate(&report, 32_000),
+                })
+            }
+            "forensic" => {
+                // Same Cortex-M gate as analyze: fault registers are
+                // CoreSight-only.
+                if let Some(reason) = crate::decode::non_arm_reason(&chip, elf.as_deref()) {
+                    return Err(ToolError::new(format!(
+                        "[InvalidInput] debug forensic decodes Cortex-M fault registers, but                          {reason} — read the target's own panic report over the console                          instead (e.g. ESP-IDF panic backtrace via monitor)."
+                    )));
+                }
+                let elf_path = elf.as_deref().ok_or_else(|| {
+                    ToolError::new("[InvalidInput] action=forensic requires 'elf'")
+                })?;
+                let index = crate::decode::SymbolIndex::from_path(elf_path).ok_or_else(|| {
+                    ToolError::new(format!(
+                        "[NotFound] cannot read the symbol table from {}",
+                        elf_path.display()
+                    ))
+                })?;
+
+                // 1. Halt + register read.
+                let (regs_text, regs_code) = run_probe_rs_retry(
+                    debug_args(&chip, probe.as_deref(), &["break", "info reg"]),
+                    &cwd,
+                    timeout_ms,
+                    cancel.clone(),
+                    &[],
+                )
+                .await
+                .map_err(probe_err)?;
+                if regs_code != Some(0) {
+                    return Err(ToolError::new(format!(
+                        "[Io] debug attach/halt/regs failed (exit {regs_code:?})
+{regs_text}
+                         hint: the target must still be sitting in the fault — a watchdog                          reset or a reflash destroys the scene"
+                    )));
+                }
+                let regs = parse_regs(&regs_text);
+                let Some(pc) = regs.get("pc").copied() else {
+                    return Err(ToolError::new("[Io] no pc in the probe-rs register table"));
+                };
+                let lr = regs.get("lr").copied().unwrap_or(0);
+                let Some(sp) = regs.get("sp").copied().or_else(|| regs.get("r13").copied()) else {
+                    return Err(ToolError::new("[Io] no sp in the probe-rs register table"));
+                };
+
+                // 2. Fault registers.
+                let (fault_text, fault_code) = run_probe_rs_retry(
+                    read_args(&chip, probe.as_deref(), "b32", 0xE000_ED28, 5),
+                    &cwd,
+                    timeout_ms,
+                    cancel.clone(),
+                    &[],
+                )
+                .await
+                .map_err(probe_err)?;
+                let fault_words = if fault_code == Some(0) {
+                    parse_hex_words(&fault_text)
+                } else {
+                    Vec::new()
+                };
+                let mut fault_regs = [0u64; 5];
+                for (i, w) in fault_words.iter().take(5).enumerate() {
+                    fault_regs[i] = *w;
+                }
+                let cfsr_lines =
+                    cfsr_analysis(fault_regs[0], fault_regs[1], fault_regs[2], fault_regs[3]);
+
+                // 3. Stack window: exception frame + call-chain candidates.
+                let (stack_words, stack_addr) = match run_probe_rs_retry(
+                    read_args(&chip, probe.as_deref(), "b32", sp, 64),
+                    &cwd,
+                    timeout_ms,
+                    cancel.clone(),
+                    &[],
+                )
+                .await
+                {
+                    Ok((t, Some(0))) => (parse_hex_words(&t), sp),
+                    _ => (Vec::new(), sp),
+                };
+
+                // 4. Scene-stability check: re-read PC. A watchdog reset
+                // between captures moves the core; the report must say so
+                // instead of presenting a mixed scene as coherent.
+                let (regs2_text, _c2) = run_probe_rs_retry(
+                    debug_args(&chip, probe.as_deref(), &["break", "info reg"]),
+                    &cwd,
+                    timeout_ms,
+                    cancel.clone(),
+                    &[],
+                )
+                .await
+                .map_err(probe_err)?;
+                let pc_drifted = parse_regs(&regs2_text)
+                    .get("pc")
+                    .is_some_and(|pc2| *pc2 != pc);
+
+                // Change-ledger correlation (7-day window, newest first).
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let faulting_fn = index
+                    .lookup(pc & !1)
+                    .as_deref()
+                    .map(|d| d.split('+').next().unwrap_or(d).to_string());
+                let ledger_lines = match ctx.ledger_path.as_deref() {
+                    Some(path) => crate::forensic::correlate_changes(
+                        &firment_core::Ledger::new(path.to_path_buf()).entries(),
+                        now,
+                        faulting_fn.as_deref(),
+                    ),
+                    None => vec![
+                        "  (no session ledger — run inside a session for change correlation)"
+                            .to_string(),
+                    ],
+                };
+
+                // Snapshot destination (written after assembly).
+                let snapshot = ctx.session_dir.as_ref().map(|dir| {
+                    let d = dir.join("forensic");
+                    std::fs::create_dir_all(&d).ok();
+                    d.join(format!(
+                        "{}-{chip}.txt",
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|t| t.as_secs())
+                            .unwrap_or(0)
+                    ))
+                });
+                let scene = crate::forensic::Scene {
+                    chip: &chip,
+                    pc,
+                    lr,
+                    sp,
+                    fault_regs,
+                    cfsr_lines,
+                    stack_words: &stack_words,
+                    stack_addr,
+                    index: &index,
+                    ledger_lines,
+                    pc_drifted,
+                    snapshot_path: snapshot.as_ref().map(|p| p.to_string_lossy().into_owned()),
+                };
+                let report = crate::forensic::forensic_report(&scene);
+                if let Some(path) = &snapshot {
+                    let _ = std::fs::write(path, &report);
+                }
                 Ok(ToolOutput {
                     text: truncate(&report, 32_000),
                 })

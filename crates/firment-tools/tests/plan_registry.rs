@@ -18,6 +18,7 @@ fn plan_registry_exposes_only_read_only_tools() {
     assert!(names.contains(&"elf_analyze"));
     assert!(names.contains(&"periph_init"));
     assert!(names.contains(&"device_log"));
+    assert!(names.contains(&"observe"));
     assert!(!names.contains(&"write_file"));
     assert!(!names.contains(&"edit_file"));
     assert!(!names.contains(&"shell"));
@@ -26,5 +27,5 @@ fn plan_registry_exposes_only_read_only_tools() {
     assert!(!names.contains(&"pinmap"));
     assert!(!names.contains(&"device_cmd"));
     assert!(!names.contains(&"decision"));
-    assert_eq!(names.len(), 14);
+    assert_eq!(names.len(), 15);
 }
