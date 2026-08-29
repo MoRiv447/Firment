@@ -44,10 +44,16 @@ machine — read the "why" so you don't re-create the problem.
   security software intercepting file operations, NOT the code and NOT a
   cargo bug:
   - WorkBuddy's sandbox (`modify_backup` rule) intercepts every
-    create/modify/delete; its `rm -f` shim also silently no-ops there
-    (stderr goes to /dev/null), so "rm the lock and retry" cannot work
-    in-sandbox. The fix lives in WorkBuddy settings (`sandbox`
-    extra-allow-write for `target/**`), not in more retries.
+    create/modify/delete and breaks cargo's lock-file open; its `rm -f`
+    shim also silently no-ops there (stderr goes to /dev/null), so "rm
+    the lock and retry" cannot work in-sandbox. VERIFIED FIX: run the
+    session in **bypass-permissions mode** (the sandbox follows the
+    session's `permissionMode`; bypass logs show `passthrough=true` and
+    355 tests passed with zero lock errors, while `default`/
+    `acceptEdits` sandbox commands and the lock error recurs). The
+    `sandbox.extraAllowWrite` list in `~/.workbuddy/settings.json` does
+    NOT reach the shell sandbox — never `extend_rules` appear in the
+    sandbox logs — so editing it does not help.
   - Huorong (火绒) real-time shield also holds handles on freshly written
     files. `D:\OldStudy66\Firment` (at least `target/` dirs and `.git/`)
     belongs in its trust zone.
