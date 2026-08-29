@@ -1,5 +1,71 @@
 # Changelog
 
+## v0.6.3 (2026-08-29) — display overhaul: TUI smoothness + GUI streaming
+
+A display-layer batch driven by three rendering audits (TUI frame
+composition, TUI animation pipeline, GUI streaming pipeline). 21 concrete
+issues fixed across both surfaces.
+
+### GUI
+
+- **Turn-end blank flash**: the whole reply (text + tool cards) vanished
+  for an IPC round-trip at turn end, and was lost entirely if the
+  transcript fetch failed. The finished turn now stays rendered until the
+  refreshed transcript commits (same React batch — never shown twice),
+  and a fast send racing the fetch no longer rolls the optimistic user
+  bubble back.
+- **Streaming cost**: text/thinking deltas coalesce into 50ms batched
+  dispatches; `MessageList` is memoized (a delta used to re-parse the
+  ENTIRE transcript through react-markdown); streaming scroll is
+  stick-to-bottom with rAF coalescing and a jump-to-bottom pill when the
+  user scrolls up; the live reply renders through the same Markdown
+  pipeline as the committed transcript (no raw-markdown → formatted snap).
+- **Live-state correctness**: the status row keys off tools still RUNNING
+  (it used to say "running grep… / tool 42s" under the final text phase
+  and reset the timer to 0s on every delta); the stuck-detector counts
+  tool completions as activity (a 90s build no longer trips the 60s
+  no-events banner); an `error` resolves still-running tools as failed
+  instead of hanging blue cards forever; reloading the app mid-turn
+  restores the running indicator (new `running_sessions` command) instead
+  of the whole turn being invisible; info banners self-expire after 15s
+  with collision-free keys and clear on error; the context chip renders
+  gray when usage is unknown and polls every 10s during turns.
+- **Visual**: fenced code blocks get a bordered dark block with in-block
+  horizontal scrolling (long lines used to scroll the whole chat);
+  inline code gets a pill background; message keys derive from content
+  ids (expansion state no longer migrates between cards when rows
+  shift); reasoning is retained through the turn and renders as a
+  collapsed "💭 reasoning…" block next to the reply; user messages render
+  as plain pre-wrap text; the sidebar tooltip shows the full preview;
+  notification timestamps include the date; the near-white notification
+  divider is dark.
+
+### TUI
+
+- **Modal layering**: the ask_user dialog no longer pushes a duplicate
+  question row into the transcript (it landed mid-tool-list and stayed
+  forever); the ANSWER is echoed instead. Modals get a scrim — everything
+  outside the dialog is dimmed, so the live transcript no longer renders
+  at full brightness on both sides of the box. The `permission.is_none()`
+  render gate is gone (an approval pending made the question dialog
+  VANISH while its keys still routed there).
+- **Animation smoothness**: the spinner phase derives from wall clock
+  (120ms/step) — it previously strobed during token bursts (one frame per
+  delta) and crawled in silence; the 25ms ticker skips missed ticks
+  instead of bursting after event floods; the event loop drains up to 32
+  queued events per redraw; wrapped rows are cached per item (invalidated
+  on transcript mutations/width changes), so idle animation frames no
+  longer re-wrap the entire history; spinners keep running behind a
+  dimmed modal instead of freezing.
+- **Reasoning visibility**: DeepSeek `reasoning_content` and OpenRouter
+  `reasoning` deltas are no longer dropped by the openai stream parser —
+  the thinking indicator now actually shows during reasoning on those
+  providers (and the GUI's thinking preview fills in); the TUI thinking
+  row shows elapsed seconds.
+- **Visual polish**: running tool cards show the human activity label
+  ("building main.c…") instead of the raw JSON args blob; dialogs and
+  the input box use rounded borders; finished tool cards render dimmed.
+
 ## v0.6.2 (2026-08-29) — doctor, evidence levels, cmd-quoting fix
 
 Closes the remaining two v0.6.0 known issues and ships two features
