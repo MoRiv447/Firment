@@ -101,6 +101,12 @@ export interface KbEntryDto {
   key: string;
   exists: boolean;
   content: string;
+  /**
+   * Save baseline (disk mtime in ms): null when the file does not exist yet.
+   * Pass it back to workbenchKbSave so an externally modified file is not
+   * silently overwritten.
+   */
+  mtimeMs: number | null;
 }
 
 /** Aggregated per-node view of SBC device traffic (GUI-side rolling). */

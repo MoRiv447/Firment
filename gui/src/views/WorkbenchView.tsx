@@ -214,6 +214,11 @@ export function WorkbenchView() {
   const [kbDraft, setKbDraft] = useState('');
   const [kbDirty, setKbDirty] = useState(false);
   const [newCheatName, setNewCheatName] = useState('');
+  // Save baselines (disk mtime per key, captured when the draft was loaded):
+  // passed back to workbench_kb_save so an external edit (agent, other
+  // editor) is refused instead of silently overwritten. undefined = the file
+  // was never opened in the editor.
+  const kbBaselineRef = useRef<Record<string, number | null>>({});
 
   const rememberProject = (dir: string) => {
     localStorage.setItem('workbench-last-cwd', dir);
@@ -355,6 +360,14 @@ export function WorkbenchView() {
     try {
       const files = await api.workbenchKbList(target);
       setKbFiles(files);
+      // Seed baselines only for keys never opened in the editor: an existing
+      // baseline belongs to the loaded DRAFT and must keep exposing disk
+      // changes made after it was loaded.
+      for (const f of files) {
+        if (kbBaselineRef.current[f.key] === undefined) {
+          kbBaselineRef.current[f.key] = f.mtimeMs;
+        }
+      }
       // Keep the current selection if it still exists; else default to
       // AGENTS.md so the editor is never stuck on a deleted file.
       setKbKey((prev) => {
@@ -509,6 +522,9 @@ export function WorkbenchView() {
     const f = kbFiles.find((x) => x.key === key);
     setKbKey(key);
     setKbDraft(f?.content ?? '');
+    // Loading the draft freezes the baseline: any disk change from this
+    // moment on is a conflict the save must surface.
+    kbBaselineRef.current[key] = f?.mtimeMs ?? null;
     setKbDirty(false);
   };
 
@@ -516,13 +532,34 @@ export function WorkbenchView() {
     if (!cwd.trim() || !kbKey || !kbDirty) return;
     setBusy(true);
     try {
-      await api.workbenchKbSave(cwd.trim(), kbKey, kbDraft);
-      setKbFiles((prev) =>
-        prev.map((f) => (f.key === kbKey ? { ...f, content: kbDraft, exists: true } : f)),
+      await api.workbenchKbSave(
+        cwd.trim(),
+        kbKey,
+        kbDraft,
+        kbBaselineRef.current[kbKey] ?? null,
       );
+      const files = await api.workbenchKbList(cwd.trim());
+      setKbFiles(files);
+      kbBaselineRef.current[kbKey] =
+        files.find((f) => f.key === kbKey)?.mtimeMs ?? null;
       setKbDirty(false);
     } catch (err) {
-      setError(String(err));
+      const msg = String(err);
+      if (msg.includes('[ConcurrentChange]')) {
+        // The file changed on disk while the draft was open. Offer a reload
+        // instead of letting the user fight a silent last-writer-wins.
+        Modal.confirm({
+          title: '文件已被外部修改',
+          content: '知识文件在编辑期间被 agent 或其他程序改动。放弃当前草稿并重新加载磁盘内容？',
+          okText: '重新加载',
+          cancelText: '保留草稿',
+          onOk: () => {
+            if (kbKey) selectKbFile(kbKey);
+          },
+        });
+      } else {
+        setError(msg);
+      }
     } finally {
       setBusy(false);
     }
@@ -553,8 +590,9 @@ export function WorkbenchView() {
     const key = `cheatsheet:${name}`;
     setBusy(true);
     try {
-      // Create empty, reload list, and jump straight into editing it.
-      await api.workbenchKbSave(cwd.trim(), key, '# project cheatsheet\n');
+      // Create empty, reload list, and jump straight into editing it. The
+      // fresh-create baseline (0) refuses when the file appeared meanwhile.
+      await api.workbenchKbSave(cwd.trim(), key, '# project cheatsheet\n', 0);
       const files = await api.workbenchKbList(cwd.trim());
       setKbFiles(files);
       setKbKey(key);

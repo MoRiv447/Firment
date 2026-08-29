@@ -73,8 +73,10 @@ export const api = {
   workbenchDecisionRemove: (cwd: string, index: number) =>
     invoke<DecisionEntryDto[]>('workbench_decision_remove', { cwd, index }),
   workbenchKbList: (cwd: string) => invoke<KbEntryDto[]>('workbench_kb_list', { cwd }),
-  workbenchKbSave: (cwd: string, key: string, content: string) =>
-    invoke<void>('workbench_kb_save', { cwd, key, content }),
+  // expectedMtimeMs = the loaded file's mtime baseline (null: skip the guard;
+  // 0: fresh-create — refuse when the file already exists on disk).
+  workbenchKbSave: (cwd: string, key: string, content: string, expectedMtimeMs?: number | null) =>
+    invoke<void>('workbench_kb_save', { cwd, key, content, expectedMtimeMs: expectedMtimeMs ?? null }),
   workbenchKbDelete: (cwd: string, key: string) => invoke<void>('workbench_kb_delete', { cwd, key }),
   workbenchSetMainline: (cwd: string, sessionId: string) =>
     invoke('workbench_set_mainline', { cwd, sessionId }),

@@ -538,12 +538,28 @@ fn read_or_empty(p: &Path) -> String {
     std::fs::read_to_string(p).unwrap_or_default()
 }
 
+/// Last-modified time in milliseconds since the epoch, `None` when the file
+/// does not exist. The KB editor carries this as a save baseline so a stale
+/// editor cannot silently overwrite changes made on disk in the meantime
+/// (by the agent or any other editor).
+fn mtime_ms(p: &Path) -> Option<u64> {
+    let meta = std::fs::metadata(p).ok()?;
+    meta.modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_millis() as u64)
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct KbEntryDto {
     /// Whitelist key ("AGENTS.md", "vendor-index.toml", "cheatsheet:x.toml").
     pub key: String,
     pub exists: bool,
     pub content: String,
+    /// Save baseline: `None` when the file does not exist yet, `Some(0)` is
+    /// used by creators to require that the file is still absent.
+    pub mtime_ms: Option<u64>,
 }
 
 #[tauri::command]
@@ -557,11 +573,13 @@ pub async fn workbench_kb_list(cwd: String) -> Result<Vec<KbEntryDto>, String> {
             key: KB_AGENTS.into(),
             exists: root.join(KB_AGENTS).is_file(),
             content: read_or_empty(&root.join(KB_AGENTS)),
+            mtime_ms: mtime_ms(&root.join(KB_AGENTS)),
         },
         KbEntryDto {
             key: format!("docs/{KB_VENDOR}"),
             exists: root.join("docs").join(KB_VENDOR).is_file(),
             content: read_or_empty(&root.join("docs").join(KB_VENDOR)),
+            mtime_ms: mtime_ms(&root.join("docs").join(KB_VENDOR)),
         },
     ];
     let cheat_dir = root.join(".firment").join("cheatsheets");
@@ -574,10 +592,12 @@ pub async fn workbench_kb_list(cwd: String) -> Result<Vec<KbEntryDto>, String> {
         names.sort();
         for name in names {
             let p = cheat_dir.join(&name);
+            let mtime = mtime_ms(&p);
             entries.push(KbEntryDto {
                 key: format!("cheatsheet:{name}"),
                 exists: true,
                 content: read_or_empty(&p),
+                mtime_ms: mtime,
             });
         }
     }
@@ -585,10 +605,35 @@ pub async fn workbench_kb_list(cwd: String) -> Result<Vec<KbEntryDto>, String> {
 }
 
 #[tauri::command]
-pub async fn workbench_kb_save(cwd: String, key: String, content: String) -> Result<(), String> {
+pub async fn workbench_kb_save(
+    cwd: String,
+    key: String,
+    content: String,
+    expected_mtime_ms: Option<u64>,
+) -> Result<(), String> {
     let root = PathBuf::from(&cwd);
     let path = kb_path(&root, &key)
         .ok_or_else(|| format!("unknown or disallowed knowledge file '{key}'"))?;
+    // Concurrent-edit guard: the frontend passes the mtime it loaded. `Some(0)`
+    // means "I expect this file NOT to exist" (fresh cheatsheet creation);
+    // `None` skips the guard (legacy callers).
+    if let Some(expected) = expected_mtime_ms {
+        let disk = mtime_ms(&path);
+        let matches = match (expected, disk) {
+            (0, None) => true,             // fresh create, still absent
+            (0, Some(_)) => false,         // created in the meantime
+            (_, Some(d)) => expected == d, // both exist: mtime must match
+            (_, None) => false,            // expected existing content, file deleted
+        };
+        if !matches {
+            return Err(format!(
+                "[ConcurrentChange] {key} changed on disk since it was loaded — reload the \
+                 knowledge file and re-apply your edit (disk mtime {:?}, expected {expected})",
+                disk.map(|d| d.to_string())
+                    .unwrap_or_else(|| "<deleted>".into()),
+            ));
+        }
+    }
     // The vendor-index key always writes under docs/ (the location the
     // auto-detector checks first).
     if let Some(parent) = path.parent() {
@@ -825,4 +870,131 @@ pub async fn workbench_timeline(
                 .collect(),
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_project(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("firment-kb-test-{}-{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".firment").join("cheatsheets")).unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn save_with_stale_mtime_is_refused() {
+        let root = temp_project("stale");
+        let key = "cheatsheet:guard.toml";
+        workbench_kb_save(
+            root.to_string_lossy().into(),
+            key.into(),
+            "v1\n".into(),
+            None,
+        )
+        .await
+        .unwrap();
+        let baseline = mtime_ms(&kb_path(&root, key).unwrap()).unwrap();
+        // External writer lands new content after the editor loaded v1.
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        std::fs::write(kb_path(&root, key).unwrap(), "external edit\n").unwrap();
+        let err = workbench_kb_save(
+            root.to_string_lossy().into(),
+            key.into(),
+            "stale draft\n".into(),
+            Some(baseline),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("[ConcurrentChange]"), "got: {err}");
+        assert_eq!(
+            std::fs::read_to_string(kb_path(&root, key).unwrap()).unwrap(),
+            "external edit\n",
+            "the external edit must survive"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn save_with_matching_mtime_succeeds() {
+        let root = temp_project("match");
+        let key = "cheatsheet:guard2.toml";
+        workbench_kb_save(
+            root.to_string_lossy().into(),
+            key.into(),
+            "v1\n".into(),
+            None,
+        )
+        .await
+        .unwrap();
+        let baseline = mtime_ms(&kb_path(&root, key).unwrap()).unwrap();
+        workbench_kb_save(
+            root.to_string_lossy().into(),
+            key.into(),
+            "v2\n".into(),
+            Some(baseline),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(kb_path(&root, key).unwrap()).unwrap(),
+            "v2\n"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn fresh_create_guard_rejects_existing_file() {
+        let root = temp_project("fresh");
+        let key = "cheatsheet:new.toml";
+        // expected 0 = "still absent": passes when nothing is there...
+        workbench_kb_save(
+            root.to_string_lossy().into(),
+            key.into(),
+            "# project cheatsheet\n".into(),
+            Some(0),
+        )
+        .await
+        .unwrap();
+        // ...and refuses a second creation over an existing file.
+        let err = workbench_kb_save(
+            root.to_string_lossy().into(),
+            key.into(),
+            "# project cheatsheet\n".into(),
+            Some(0),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("[ConcurrentChange]"), "got: {err}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn save_without_baseline_keeps_legacy_behavior() {
+        let root = temp_project("legacy");
+        let key = "cheatsheet:legacy.toml";
+        workbench_kb_save(
+            root.to_string_lossy().into(),
+            key.into(),
+            "a\n".into(),
+            None,
+        )
+        .await
+        .unwrap();
+        workbench_kb_save(
+            root.to_string_lossy().into(),
+            key.into(),
+            "b\n".into(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(kb_path(&root, key).unwrap()).unwrap(),
+            "b\n"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
