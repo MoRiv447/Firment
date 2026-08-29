@@ -258,6 +258,26 @@ impl Provider for OpenAIProvider {
                     };
 
                     if let Some(delta) = payload.pointer("/choices/0/delta") {
+                        // Reasoning deltas (never persisted into the
+                        // transcript — they only drive the "model is
+                        // reasoning" indicator): DeepSeek/OpenAI-style
+                        // `reasoning_content`, OpenRouter's `reasoning`
+                        // (string, or an object carrying `text`).
+                        for key in ["reasoning_content", "reasoning"] {
+                            let snippet = match delta.get(key) {
+                                Some(s) if s.is_string() => s.as_str().map(String::from),
+                                Some(o) if o.is_object() => o
+                                    .get("text")
+                                    .and_then(|t| t.as_str())
+                                    .map(String::from),
+                                _ => None,
+                            };
+                            if let Some(text) = snippet
+                                && !text.is_empty()
+                            {
+                                yield Ok(ProviderEvent::Thinking(text));
+                            }
+                        }
                         if let Some(text) = delta.get("content").and_then(|c| c.as_str())
                             && !text.is_empty()
                         {
