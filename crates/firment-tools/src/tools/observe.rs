@@ -93,21 +93,38 @@ fn suggest_roi(frame: &RgbaImage, luma_at: impl Fn(u32, u32) -> u8) -> Option<Re
     if w == 0 || h == 0 {
         return None;
     }
-    let mut lumas: Vec<u8> = Vec::with_capacity((w * h) as usize);
+    // A 256-bucket histogram answers every percentile in O(n): cloning and
+    // sorting all of a 1080p frame to read two values is wasted work when
+    // luma has only 256 possible values.
+    let mut hist = [0u64; 256];
     for y in 0..h {
         for x in 0..w {
-            lumas.push(luma_at(x, y));
+            hist[luma_at(x, y) as usize] += 1;
         }
     }
-    let mut sorted = lumas.clone();
-    sorted.sort_unstable();
-    // p99.5, not the max: a single hot pixel or a compression artifact must
-    // not define the suggested region.
-    let p995 = sorted[((sorted.len() as u64 - 1) * 995 / 1000) as usize];
-    // A "bright source" candidate must be genuinely bright: on a bright
-    // ambient background p99.5 equals the background itself and the
-    // suggestion would cover the whole frame.
-    let cutoff = p995.max(200);
+    let total = (w as u64) * (h as u64);
+    let percentile = |permille: u64| -> u8 {
+        let target = (total - 1) * permille / 1000;
+        let mut acc = 0u64;
+        for (v, count) in hist.iter().enumerate() {
+            acc += *count;
+            if acc > target {
+                return v as u8;
+            }
+        }
+        255
+    };
+    // Background = the median. p99.5 alone misses a board LED entirely: at
+    // 0.005% of the frame it never reaches the 99.5th percentile, which
+    // still lands on the background — the suggestion would then be driven by
+    // ambient light that no one asked about.
+    let median = percentile(500);
+    let p995 = percentile(995);
+    // Relative margin above that background, never an absolute floor: a
+    // dim-but-clear LED must be found just as well as a blazing one, while a
+    // uniformly bright frame yields no suggestion at all (nothing stands
+    // out, so there is no region worth proposing).
+    let cutoff = median.saturating_add(60).max(p995);
     let (mut min_x, mut min_y, mut max_x, mut max_y) = (u32::MAX, u32::MAX, 0u32, 0u32);
     let mut count = 0u64;
     let mut best = (0u32, 0u32, 0u8);
@@ -208,7 +225,12 @@ pub(crate) fn analyze_brightness(frame: &RgbaImage, spec: &Spec) -> (Brightness,
     // Lit verdict: >= 2% of the ROI above the cutoff, OR any genuinely
     // bright pixel against a dim background (a board LED is a few pixels —
     // 4px on 320x240 is 0.005%, far below any sane fraction floor).
-    let tiny_bright = separated && max >= 200;
+    //
+    // The margin is RELATIVE to the threshold, not an absolute floor: a LED
+    // behind a diffuser, shot off-angle or under-exposed can sit well below
+    // 200 while being far brighter than its surroundings. An absolute cutoff
+    // silently reported those as unlit.
+    let tiny_bright = separated && max.saturating_sub(threshold) >= 40;
     let lit = lit_fraction >= 0.02 || tiny_bright;
     let (confidence, note) = if bimodal && (0.02..0.5).contains(&lit_fraction) {
         (
@@ -579,6 +601,36 @@ mod tests {
         // The auto-ROI suggestion points at the dot and is small.
         let r = suggested.expect("lit frame suggests an roi");
         assert!(r.w * r.h >= 1 && r.x <= 101 && r.y <= 101);
+    }
+
+    #[test]
+    fn dim_led_still_registers_as_lit() {
+        // Regression: the verdict used to demand an absolute luma >= 200, so
+        // an LED behind a diffuser, shot off-angle or under-exposed read as
+        // UNLIT even at ~19x the background. Brightness is relative — what
+        // matters is the margin over the surroundings.
+        let mut frame = solid(320, 240, 8);
+        for (x, y) in [(100, 100), (101, 100), (100, 101), (101, 101)] {
+            frame.put_pixel(x, y, image::Rgba([150, 150, 150, 255]));
+        }
+        let (b, suggested) = analyze_brightness(
+            &frame,
+            &Spec {
+                roi: None,
+                threshold: None,
+            },
+        );
+        assert!(
+            b.lit,
+            "a dim-but-clear LED must register: frac={}",
+            b.lit_fraction
+        );
+        // It must also still be locatable, not swallowed by the background.
+        let r = suggested.expect("lit frame suggests an roi");
+        assert!(
+            r.x <= 101 && r.y <= 101 && r.x + r.w >= 101 && r.y + r.h >= 101,
+            "suggestion must cover the LED: {r:?}"
+        );
     }
 
     #[test]
