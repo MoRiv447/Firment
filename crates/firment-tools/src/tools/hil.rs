@@ -57,6 +57,18 @@ struct HilStep {
     autodetect: Option<bool>,
     #[serde(default)]
     clk_hz: Option<u64>,
+    // observe step: what to measure on the frame, where, and the verdict
+    // to assert. See tools/observe.rs for the analysis.
+    #[serde(default)]
+    mode: Option<String>,
+    #[serde(default)]
+    roi: Option<[u32; 4]>,
+    #[serde(default)]
+    threshold: Option<u8>,
+    #[serde(default)]
+    expect_lit: Option<bool>,
+    #[serde(default)]
+    save: Option<bool>,
     // allow `expect` object form: { contains, regex, count }
     #[serde(default)]
     expect: Option<HilExpect>,
@@ -98,7 +110,7 @@ impl Tool for Hil {
             "type": "object",
             "properties": {
                 "suite": {"type": "string", "description": "Suite name defined in .firment/hil.toml"},
-                "steps": {"type": "array", "description": "Inline steps [{kind, file, elf, chip, probe, port, baud, clk_hz, timeout_ms, expect_contains, expect_regex, expect_count, duration_ms}] — kinds: build/flash/run/monitor/trace/elf_analyze/delay; flash/run/elf auto-infer .pio/build/*/firmware.elf when elf omitted"},
+                "steps": {"type": "array", "description": "Inline steps [{kind, file, elf, chip, probe, port, baud, clk_hz, timeout_ms, expect_contains, expect_regex, expect_count, duration_ms}] — kinds: build/flash/run/monitor/trace/observe/elf_analyze/delay; flash/run/elf auto-infer .pio/build/*/firmware.elf when elf omitted"},
                 "chip": {"type": "string", "description": "Override chip for flash/run/trace steps"},
                 "port": {"type": "string", "description": "Override serial port for monitor steps; 'auto' picks first detected port"},
                 "probe": {"type": "string", "description": "Override probe id"},
@@ -298,6 +310,7 @@ impl Tool for Hil {
                 "run" => run_run_step(&step.inner, ctx, dry_run, remaining).await,
                 "monitor" => run_monitor_step(&step.inner, ctx, dry_run, remaining).await,
                 "trace" => run_trace_step(&step.inner, ctx, dry_run, remaining).await,
+                "observe" => run_observe_step(&step.inner, ctx, dry_run).await,
                 "elf_analyze" | "elf" => run_elf_step(&step.inner, ctx, remaining).await,
                 "delay" | "sleep" => {
                     let ms = step
@@ -324,7 +337,7 @@ impl Tool for Hil {
                     Ok(format!("delay {ms} ms"))
                 }
                 _ => Err(format!(
-                    "[InvalidInput] unknown hil step kind: {kind} (expected build/flash/run/monitor/trace/elf_analyze/delay)"
+                    "[InvalidInput] unknown hil step kind: {kind} (expected build/flash/run/monitor/trace/observe/elf_analyze/delay)"
                 )),
             };
 
@@ -380,7 +393,10 @@ impl Tool for Hil {
                     "build" => (2, "build"),
                     "flash" => (3, "deploy"),
                     "run" | "monitor" => (4, "runtime"),
-                    "trace" => (5, "hardware"),
+                    // SWO/ITM is RUNTIME observability, not physical
+                    // behavior — level 5 belongs to the observe step.
+                    "trace" => (4, "runtime"),
+                    "observe" => (5, "physical"),
                     _ => continue, // elf_analyze / delay do not advance the ladder
                 };
                 if l > level {
@@ -1168,6 +1184,101 @@ async fn run_trace_step(
     }
 }
 
+/// Observe step: run the deterministic CV analysis (tools/observe.rs) on a
+/// frame and assert the physical verdict. Follows the monitor convention —
+/// expectation failures return Ok with an embedded [HIL_EXPECT:FAIL] marker
+/// so the suite still records the capture; only infra errors are Err.
+async fn run_observe_step(
+    step: &HilStep,
+    ctx: &ToolContext,
+    dry_run: bool,
+) -> Result<String, String> {
+    let mode = step.mode.as_deref().unwrap_or("brightness");
+    if mode != "brightness" {
+        return Err(format!(
+            "[InvalidInput] observe mode={mode} is not implemented yet (phase 1: brightness)"
+        ));
+    }
+    let Some(path) = step.file.as_deref() else {
+        return Err("[InvalidInput] observe step requires file (the frame to analyze)".to_string());
+    };
+    if dry_run {
+        return Ok(format!("[dry-run] observe simulated: {path} mode={mode}"));
+    }
+    let resolved = crate::tools::util::resolve_within(&ctx.cwd, path, &ctx.allowed_roots)
+        .map_err(|e| format!("[Permission] {e}"))?;
+    let frame = image::open(&resolved)
+        .map_err(|e| format!("[Io] cannot decode {}: {e}", resolved.display()))?
+        .to_rgba8();
+    let roi = step.roi.map(|r| crate::tools::observe::Rect {
+        x: r[0],
+        y: r[1],
+        w: r[2],
+        h: r[3],
+    });
+    let (b, suggested) = crate::tools::observe::analyze_brightness(
+        &frame,
+        &crate::tools::observe::Spec {
+            roi,
+            threshold: step.threshold,
+        },
+    );
+    let mut out = format!(
+        "observe {path} ({}x{})
+  luma: min={} max={} mean={}
+  lit: {} ({:.0}% of ROI above threshold {})
+  confidence: {} — {}",
+        frame.width(),
+        frame.height(),
+        b.min,
+        b.max,
+        b.mean,
+        if b.lit { "yes" } else { "no" },
+        b.lit_fraction * 100.0,
+        b.threshold_used,
+        b.confidence.name(),
+        b.note,
+    );
+    if let Some(r) = suggested {
+        out.push_str(&format!(
+            "
+  suggested roi: [{}, {}, {}, {}]",
+            r.x, r.y, r.w, r.h
+        ));
+    }
+    if step.save == Some(true) {
+        let dir = ctx.cwd.join(".firment").join("observe");
+        std::fs::create_dir_all(&dir).map_err(|e| format!("[Io] create {}: {e}", dir.display()))?;
+        let dest = dir.join(format!(
+            "{}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            resolved
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default()
+        ));
+        std::fs::copy(&resolved, &dest)
+            .map_err(|e| format!("[Io] save {}: {e}", dest.display()))?;
+        out.push_str(&format!(
+            "
+  saved: {}",
+            dest.display()
+        ));
+    }
+    if let Some(want) = step.expect_lit {
+        let marker = if b.lit == want { "PASS" } else { "FAIL" };
+        out.push_str(&format!(
+            "
+[HIL_EXPECT:{marker}] observe lit={} — wanted lit={want}",
+            b.lit
+        ));
+    }
+    Ok(out)
+}
+
 fn evaluate_expect(
     text: &str,
     contains: Option<&str>,
@@ -1542,5 +1653,58 @@ elf = "build/fw.elf"
         let tool = Hil;
         let err = tool.run(json!({"suite": "blink"}), &c).await.unwrap_err();
         assert!(err.message.contains("hil"), "got: {}", err.message);
+    }
+
+    #[tokio::test]
+    async fn observe_step_dry_run_reports_simulated() {
+        let dir = tempdir().unwrap();
+        let step = HilStep {
+            kind: "observe".to_string(),
+            file: Some("led.png".to_string()),
+            ..Default::default()
+        };
+        let out = run_observe_step(&step, &ctx(dir.path()), true)
+            .await
+            .unwrap();
+        assert!(out.contains("[dry-run] observe simulated"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn observe_step_requires_file() {
+        let dir = tempdir().unwrap();
+        let step = HilStep {
+            kind: "observe".to_string(),
+            ..Default::default()
+        };
+        let err = run_observe_step(&step, &ctx(dir.path()), false)
+            .await
+            .unwrap_err();
+        assert!(err.contains("requires file"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn observe_step_asserts_lit_verdict() {
+        let dir = tempdir().unwrap();
+        let frame = image::RgbaImage::from_pixel(64, 64, image::Rgba([250, 250, 250, 255]));
+        frame.save(dir.path().join("led.png")).unwrap();
+        let pass = HilStep {
+            kind: "observe".to_string(),
+            file: Some("led.png".to_string()),
+            expect_lit: Some(true),
+            ..Default::default()
+        };
+        let out = run_observe_step(&pass, &ctx(dir.path()), false)
+            .await
+            .unwrap();
+        assert!(out.contains("[HIL_EXPECT:PASS]"), "got: {out}");
+
+        let fail = HilStep {
+            expect_lit: Some(false),
+            ..pass
+        };
+        let out = run_observe_step(&fail, &ctx(dir.path()), false)
+            .await
+            .unwrap();
+        assert!(out.contains("[HIL_EXPECT:FAIL]"), "got: {out}");
     }
 }

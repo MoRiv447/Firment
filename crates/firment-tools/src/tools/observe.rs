@@ -60,7 +60,7 @@ pub enum Confidence {
 }
 
 impl Confidence {
-    fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Confidence::High => "HIGH",
             Confidence::Medium => "MEDIUM",
@@ -156,7 +156,7 @@ fn luma(px: &image::Rgba<u8>) -> u8 {
 
 /// Brightness analysis over the frame (or the Spec's ROI). Returns the
 /// measurement plus a suggested ROI for repeat runs (lit frames only).
-fn analyze_brightness(frame: &RgbaImage, spec: &Spec) -> (Brightness, Option<Rect>) {
+pub(crate) fn analyze_brightness(frame: &RgbaImage, spec: &Spec) -> (Brightness, Option<Rect>) {
     let (rx, ry, rw, rh) =
         spec.roi
             .map(|r| (r.x, r.y, r.w, r.h))
@@ -269,7 +269,7 @@ fn analyze_brightness(frame: &RgbaImage, spec: &Spec) -> (Brightness, Option<Rec
     )
 }
 
-fn parse_roi(args: &Value, frame: &RgbaImage) -> Result<Option<Rect>, ToolError> {
+pub(crate) fn parse_roi(args: &Value, frame: &RgbaImage) -> Result<Option<Rect>, ToolError> {
     let Some(roi) = args.get("roi") else {
         return Ok(None);
     };

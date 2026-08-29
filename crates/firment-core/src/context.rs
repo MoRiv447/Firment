@@ -206,6 +206,7 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          - Evidence levels: verification forms a ladder — (1) code exists, (2) it compiles / \
          builds, (3) it is deployed to the device, (4) it runs without crashing, (5) the device \
          physically behaves as asked (LED blinks, motor spins, sensor reports plausible values). \
+         Rung 5 is machine-checkable: the observe tool measures a photo of the target. \
          A higher level NEVER implies the ones above it succeeded for the user's actual goal: \
          build success does not prove the hardware works. When reporting completion, state the \
          highest evidence level you actually reached and what remains unverified — prefer \
