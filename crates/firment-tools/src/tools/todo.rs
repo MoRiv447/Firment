@@ -181,6 +181,7 @@ mod tests {
             permission: Arc::new(AutoApprove::everything()),
             allow_dangerous: false,
             journal: Arc::new(Mutex::new(EditJournal::new(dir.join("undo")))),
+            ledger_path: None,
             verify_command: None,
             symbols_backend: None,
             build_command: None,

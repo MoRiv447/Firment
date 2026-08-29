@@ -49,6 +49,10 @@ pub struct ToolContext {
     pub web_search_api_key: Option<String>,
     /// Per-session directory for tool bookkeeping (e.g. the todo list).
     pub session_dir: Option<PathBuf>,
+    /// This session's change ledger, when the embedder runs the tool inside
+    /// a session. Fault forensics correlates the captured scene against
+    /// recent changes through it; None for session-less direct invocations.
+    pub ledger_path: Option<PathBuf>,
     /// Turn-level cooperative cancellation signal. Long-running tools poll
     /// `cancelled()` and terminate child processes when it fires.
     pub cancel: Cancellable,
@@ -97,6 +101,7 @@ impl ToolContext {
             web_search_provider: None,
             web_search_api_key: None,
             session_dir: None,
+            ledger_path: None,
             cancel: Cancellable::new(),
             device_log_dir: None,
             providers: Vec::new(),

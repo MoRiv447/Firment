@@ -870,6 +870,7 @@ impl Agent {
             web_search_provider: self.web_search_provider.clone(),
             web_search_api_key: self.web_search_api_key.clone(),
             session_dir: self.session_dir.clone(),
+            ledger_path: Some(self.store.ledger_path(&self.session.id)),
             cancel: self.cancel.clone(),
             device_log_dir: self.device_log_dir.clone(),
             providers: self.provider_endpoints.clone(),

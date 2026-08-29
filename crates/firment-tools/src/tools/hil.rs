@@ -1509,6 +1509,7 @@ async fn run_elf_step(
         web_search_provider: None,
         web_search_api_key: None,
         session_dir: ctx.session_dir.clone(),
+        ledger_path: ctx.ledger_path.clone(),
         device_log_dir: ctx.device_log_dir.clone(),
         providers: Vec::new(),
         cancel: ctx.cancel.clone(),

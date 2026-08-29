@@ -88,6 +88,7 @@ mod tests {
             web_search_provider: None,
             web_search_api_key: None,
             session_dir: None,
+            ledger_path: None,
             providers: Vec::new(),
             cancel: firment_core::Cancellable::new(),
             allowed_roots: Vec::new(),
