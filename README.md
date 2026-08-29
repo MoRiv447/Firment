@@ -266,12 +266,15 @@ cd gui && npm ci && npx tsc --noEmit && npm run build   # + npm run tauri build 
 
 ## 🗺️ Roadmap
 
-- **Debugger depth**: variable & expression evaluation, SWO/trace streaming deeper into the agent loop
-- TUI command palette (fuzzy finder) and streaming-token animation
+- **Fault forensics** (next): a hard fault becomes a one-command report — capture the scene, unwind the stack, attribute the likely change. Debugger depth (variable & expression evaluation at a halted site) is part of this release's scope
+- TUI command palette (fuzzy finder)
+- SWO/trace streaming deeper into the agent loop
 - Tree-sitter structural edits and completions
 - Plugins / MCP on the unified tool registry
 - Web backend: containerized Rust agent behind the web frontend
 - Skills: installable tool packs (declarative external-command tools + schemas + prompts)
+
+*(Streaming-token animation shipped in v0.6.3 — time-driven spinners, batched deltas, cached wrapping.)*
 
 ## 🤝 Contributing
 

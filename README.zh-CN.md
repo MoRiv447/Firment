@@ -264,12 +264,15 @@ cd gui && npm ci && npx tsc --noEmit && npm run build   # + npm run tauri build 
 
 ## 🗺️ 路线图
 
-- **调试器纵深**：变量与表达式求值、SWO/trace 更深地接入 Agent 循环
-- TUI 命令面板（模糊查找）与流式 token 动画
+- **故障法证**（下一个版本）：一次 hard fault 变成一份一键报告——抓现场、回溯栈、定位可疑变更。调试器纵深（断点处的变量与表达式求值）也纳入该版本范围
+- TUI 命令面板（模糊查找）
+- SWO/trace 更深地接入 Agent 循环
 - tree-sitter 结构化编辑与补全
 - 基于统一工具注册表的插件 / MCP
 - Web 后端：容器化 Rust Agent 支撑 Web 前端
 - 技能包：可安装的工具包（声明式外部命令工具 + schema + 提示词）
+
+*（流式 token 动画已在 v0.6.3 落地——时间驱动 spinner、增量合批、换行缓存。）*
 
 ## 🤝 贡献
 
