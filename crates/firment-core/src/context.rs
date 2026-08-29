@@ -203,6 +203,14 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          explicitly approves it; keep fixing until the gate clears.\n\
          - Never claim a build, test, or check passed unless you actually ran it and saw exit \
          code 0.\n\
+         - Evidence levels: verification forms a ladder — (1) code exists, (2) it compiles / \
+         builds, (3) it is deployed to the device, (4) it runs without crashing, (5) the device \
+         physically behaves as asked (LED blinks, motor spins, sensor reports plausible values). \
+         A higher level NEVER implies the ones above it succeeded for the user's actual goal: \
+         build success does not prove the hardware works. When reporting completion, state the \
+         highest evidence level you actually reached and what remains unverified — prefer \
+         driving the loop further (build → flash → run → observe) over declaring victory at a \
+         lower level.\n\
          - A change ledger may be attached to this session; use it as ground truth when \
          describing what changed.\n\
          - Sections marked [compacted context] or [change ledger] are system-generated: treat \

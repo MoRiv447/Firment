@@ -367,12 +367,36 @@ impl Tool for Hil {
 
         let total_elapsed = overall_start.elapsed().as_millis() as u64;
         let status = if overall_ok { "PASS" } else { "FAIL" };
+        // Evidence tag (verification ladder in the system prompt): the
+        // highest level this suite ATTEMPTED, so a build-only suite is not
+        // mistaken for hardware validation.
+        let evidence = if dry_run {
+            "dry-run — nothing was executed".to_string()
+        } else {
+            let mut level = 1u8;
+            let mut name = "code";
+            for s in &resolved_steps {
+                let (l, n) = match s.inner.kind.as_str() {
+                    "build" => (2, "build"),
+                    "flash" => (3, "deploy"),
+                    "run" | "monitor" => (4, "runtime"),
+                    "trace" => (5, "hardware"),
+                    _ => continue, // elf_analyze / delay do not advance the ladder
+                };
+                if l > level {
+                    level = l;
+                    name = n;
+                }
+            }
+            format!("reached level {level} ({name})")
+        };
         let mut footer = format!(
             "\nhil: {status} suite={suite_label} in {total_elapsed} ms — replay: {replay_id}"
         );
         if failed_expect {
             footer.push_str(" (expectations not met)");
         }
+        footer.push_str(&format!("\nevidence: {evidence}"));
         footer.push_str(&format!("\nreplay file: {}", replay_path.display()));
         footer.push_str("\nreplay: hil replay <id>  |  list: hil replay list");
         output_sections.push(footer);

@@ -178,7 +178,7 @@ impl Tool for Build {
                 .map_err(ToolError::new)?;
         match code {
             Some(0) => Ok(ToolOutput {
-                text: format!("{note}build passed (exit 0)\n{text}"),
+                text: format!("{note}build passed (exit 0)\n{text}\n[evidence: build]"),
             }),
             Some(code) => Err(ToolError::new(format!(
                 "[CompileError] build failed (exit {code})\n{note}{text}"
