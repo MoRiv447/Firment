@@ -14,7 +14,7 @@
 
 **Firment is an AI engineering agent for firmware and embedded development.** Named after *firmament* — the sky above every embedded engineer — with the second **a** dropped to fuse *firmware + agent*. It takes a natural-language requirement and drives the whole loop from the same conversation: write code, build with the real toolchain, flash over the debug probe, monitor serial output, analyze the ELF, and debug the target on-chip when it misbehaves.
 
-The kernel is a Rust coding agent with an embedded-first toolchain. It is not a code generator that stops at "here is a plausible `main.c`" — it completes *verifiable engineering tasks*: a firmware change is only done when it builds, flashes, runs, and the observable output matches the expectation.
+The kernel is a Rust coding agent with an embedded-first toolchain. A firmware change is not "done" when the model prints code — it is done when it compiles, lands on the target, runs, and the observed output matches what was asked for.
 
 **One repo, three surfaces (monorepo):**
 
@@ -61,7 +61,7 @@ Firment separates responsibilities instead of treating the model as a shell scri
 - **Tools execute deterministic engineering operations**: compilation, flashing, serial monitoring, register access, ELF analysis, on-target debugging.
 - **Evidence drives the next step** whenever the connected environment can provide it.
 
-> **Move from "AI wrote some embedded code" toward "AI completed a verifiable engineering task."**
+> **"The model wrote firmware" is not the finish line — "the firmware was verified on real hardware" is.**
 
 ---
 
@@ -230,7 +230,7 @@ firm --doctor --sbc
 
 ## 🔒 Security Model
 
-- **Hardware disclaimer**: Firment can execute real commands against connected hardware. Treat generated code and automated actions as engineering output that still requires review — on power electronics, motors, heaters, batteries or valuable prototypes, set conservative current/voltage/speed limits, keep a safe recovery/flashing path, and never equate "build succeeded" or "flash succeeded" with physical correctness.
+- **Hardware disclaimer**: Firment executes real commands against connected hardware, and its output is engineering work that still needs a human in the loop. Before anything touches power electronics, motors, heaters, batteries or a one-of-a-kind prototype: decide your own current/voltage/speed bounds, keep an independent way to recover and re-flash, and treat a green build or a finished flash as exactly that — neither of them tells you how the device actually behaves.
 - **Evidence levels**: verification is a ladder — (1) code, (2) build, (3) deploy, (4) runtime, (5) physical behavior. Each level only counts when actually observed; passing one never implies the ones above. `build`/`verify` outputs carry an `[evidence: build]` tag and HIL suites report the highest level they attempted (`evidence: reached level N (…)`), so completion reports state what was proven, not assumed. On power electronics, motors, heaters or batteries, physical behavior must additionally be bounded by YOUR independent limits — the agent has no sense of current, torque or heat.
 - **Disclaimer**: the dangerous command guard is a best-effort heuristic, not an OS sandbox. File tools are confined by the path sandbox; `shell` remains permission-gated. For strong isolation, run Firment inside a container/VM.
 - Write/edit/shell require permission confirmation by default (TUI popup, `y`/`n`/`a`); `-y` still respects the dangerous command guard (`rm/rmdir/del/erase/Remove-Item/mv/ren/git clean/git reset --hard`, force push, `format`, `taskkill`, scripting deletion APIs, cmd-style `%VAR%` indirection — blocked unless `--allow-dangerous`)

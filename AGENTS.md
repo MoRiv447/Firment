@@ -79,3 +79,9 @@ machine — read the "why" so you don't re-create the problem.
   headings in the exact `## vX.Y.Z (date) — title` format.
 - Counts and numbers quoted in changelogs/commit messages must be
   verified (a past entry said "18 unit tests" when there were 17).
+- When borrowing IDEAS from other projects (features, doc structures,
+  prompt concepts), implement and word them independently — never
+  transplant prose or code from sources with attribution requirements
+  (Apache-2.0, GPL, ...) without a license check. A README rewrite once
+  lifted sentences from a peer project nearly verbatim; such passages
+  must be reworded, not patched with attribution.

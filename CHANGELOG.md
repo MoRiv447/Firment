@@ -3,9 +3,13 @@
 ## v0.6.2 (2026-08-29) — doctor, evidence levels, cmd-quoting fix
 
 Closes the remaining two v0.6.0 known issues and ships two features
-inspired by a review of garycli/garycli (an Apache-2.0 Python agent in
-the same niche): an environment self-check command and an explicit
-evidence-level framing for verification claims.
+inspired by a review of a peer project in the same niche: an
+environment self-check command and an explicit evidence-level framing
+for verification claims. The inspiration is concept-level only —
+everything here is implemented and worded independently, no external
+source code or text is included (three README sentences that a
+previous docs rewrite had adapted too closely were rewritten in this
+pass).
 
 - **`firm doctor` subcommand**: keeps the `--doctor` config/provider and
   install checks, and adds toolchain detection (pio / cmake / make / uv4
