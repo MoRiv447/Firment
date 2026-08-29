@@ -59,6 +59,14 @@ does — verification-ladder rung 5 becomes machine-checkable.
   the hil monitor step and `firm monitor` now build the symbol table once
   per capture. The plan-mode system prompt also lists `models` (it had
   drifted from the actual plan registry).
+- **Post-release fix (v0.7.0 re-tagged)**: the lit verdict and the ROI
+  suggestion both demanded an absolute luma of 200, so an LED behind a
+  diffuser, shot off-angle or under-exposed — still ~19x its own
+  background — was reported as unlit. Both now work off the margin over
+  the frame's own background instead of an absolute floor. (`p99.5` alone
+  never saw a board LED at all: at 0.005% of the frame it still lands on
+  the background.) The ROI percentile also comes from a 256-bucket
+  histogram now rather than sorting every pixel.
 
 ## v0.6.3 (2026-08-29) — display overhaul: TUI smoothness + GUI streaming
 
