@@ -17,7 +17,26 @@ describe('turnReducer (IDE event->UI contract)', () => {
       { type: 'turn_end', text: 'Hello' },
     ]);
     expect(state.running).toBe(false);
+    // The finished turn is RETAINED (anti blank-flash) until turn_synced.
+    expect(state.turn?.finished).toBe(true);
+    expect(state.turn?.text).toBe('Hello');
+    const synced = turnReducer(state, { type: 'turn_synced' });
+    expect(synced.turn).toBeNull();
+  });
+
+  it('turn_end without a prior turn stays null', () => {
+    const state = feed([{ type: 'turn_end', text: '' }]);
+    expect(state.running).toBe(false);
     expect(state.turn).toBeNull();
+  });
+
+  it('tool_start records a startedAt timestamp', () => {
+    const before = Date.now();
+    const state = feed([
+      { type: 'turn_start' },
+      { type: 'tool_start', name: 'build', args: {}, seq: 0 },
+    ]);
+    expect(state.turn?.tools[0].startedAt).toBeGreaterThanOrEqual(before);
   });
 
   it('accumulates text deltas and marks tools running/ok', () => {
@@ -99,13 +118,21 @@ describe('turnsReducer (multi-session routing)', () => {
     expect(state.b.turn?.text).toBe('');
   });
 
-  it('ends only the session that emitted turn_end', () => {
+  it('ends only the session that emitted turn_end (retained until synced)', () => {
     let state = turnsReducer({}, start);
     state = turnsReducer(state, startB);
     state = turnsReducer(state, endA);
-    // Finished-clean slots are PRUNED (no information retained).
-    expect(state.a).toBeUndefined();
+    // The finished turn is RETAINED (anti blank-flash) — the slot stays
+    // with running=false until turn_synced lands.
+    expect(state.a?.running).toBe(false);
+    expect(state.a?.turn?.finished).toBe(true);
     expect(state.b.running).toBe(true);
+    const synced = turnsReducer(state, {
+      type: 'turn_synced',
+      session_id: 'a',
+    });
+    expect(synced.a).toBeUndefined();
+    expect(synced.b.running).toBe(true);
   });
 
   it('ignores events without a session id (legacy/global)', () => {

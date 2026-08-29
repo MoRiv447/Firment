@@ -58,7 +58,13 @@ export function turnReducer(state: TurnState, e: FrontendEvent): TurnState {
           ...state.turn,
           tools: {
             ...state.turn.tools,
-            [e.seq]: { seq: e.seq, name: e.name, args: e.args, status: 'running' },
+            [e.seq]: {
+              seq: e.seq,
+              name: e.name,
+              args: e.args,
+              status: 'running',
+              startedAt: Date.now(),
+            },
           },
         },
       };
@@ -81,8 +87,20 @@ export function turnReducer(state: TurnState, e: FrontendEvent): TurnState {
       };
 
     case 'turn_end':
-      // Turn text is cleared so the transcript (refreshed by App.tsx) is
-      // the single source of truth — the same reply must not show twice.
+      // KEEP the finished turn rendered: clearing it here blanks the reply
+      // until the post-turn transcript fetch lands (a visible blink, or a
+      // lost reply when that fetch fails). App dispatches `turn_synced`
+      // once the fresh transcript is committed, and THIS is where the turn
+      // is finally dropped — the running flag flips now so the input
+      // re-enables and the spinner row disappears.
+      return {
+        running: false,
+        turn: state.turn ? { ...state.turn, finished: true } : null,
+      };
+
+    case 'turn_synced':
+      // The refreshed transcript now contains the reply; drop the retained
+      // live copy (same React batch as setSession, so no double render).
       return { running: false, turn: null };
 
     case 'error':

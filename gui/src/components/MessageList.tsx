@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Alert, Space, Tag, Typography } from 'antd';
 import { DownOutlined, RightOutlined } from '@ant-design/icons';
@@ -186,7 +186,14 @@ function ToolResultCard({ name, content }: { name?: string; content: string }) {
   );
 }
 
-export function MessageList({ messages }: { messages: ChatMessage[] }): ReactNode {
+// Memoized: `messages` is referentially stable while a turn streams (only
+// the live-turn state changes), so without this every text delta re-parsed
+// the WHOLE transcript through react-markdown.
+export const MessageList = memo(function MessageList({
+  messages,
+}: {
+  messages: ChatMessage[];
+}): ReactNode {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       {messages.map((m, i) => {
@@ -244,4 +251,4 @@ export function MessageList({ messages }: { messages: ChatMessage[] }): ReactNod
       })}
     </div>
   );
-}
+});

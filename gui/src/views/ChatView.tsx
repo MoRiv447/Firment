@@ -1,7 +1,7 @@
 import { Alert, Button, Input, Space, Spin, Tag, Typography } from 'antd';
-import { SendOutlined, StopOutlined } from '@ant-design/icons';
+import { ArrowDownOutlined, SendOutlined, StopOutlined } from '@ant-design/icons';
 import { useEffect, useRef, useState } from 'react';
-import { MessageList } from '../components/MessageList';
+import { MessageList, Markdown } from '../components/MessageList';
 import { ToolCard } from '../components/ToolCard';
 import type { RunningTurn, SessionDto } from '../types';
 
@@ -70,10 +70,35 @@ export function ChatView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running]);
 
+  // Stick-to-bottom scrolling: follow the stream only while the user is at
+  // the bottom; scrolling up detaches (a jump pill appears) until they
+  // re-engage. The scroll itself is coalesced into one rAF per change so a
+  // delta burst costs one layout read+write, not one per event.
+  const stickRef = useRef(true);
+  const rafRef = useRef<number | null>(null);
+  const [detached, setDetached] = useState(false);
+  const followIfStuck = () => {
+    if (!stickRef.current) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+      rafRef.current = null;
+    });
+  };
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const stuck = el.scrollTop + el.clientHeight >= el.scrollHeight - 80;
+    stickRef.current = stuck;
+    setDetached(!stuck);
+  };
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
+    followIfStuck();
+    return () => {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    };
   }, [session?.messages.length, turn?.text, turn?.tools]);
 
   const send = () => {
@@ -89,11 +114,13 @@ export function ChatView({
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div
         ref={scrollRef}
+        onScroll={onScroll}
         style={{
           flex: 1,
           overflow: 'auto',
           padding: '24px 28px',
           background: '#0a0c10',
+          position: 'relative',
         }}
       >
         {session && (
@@ -167,10 +194,37 @@ export function ChatView({
                   lineHeight: 1.7,
                 }}
               >
-                {turn.text}
+                {/* Same renderer as the committed transcript: the reply no
+                    longer snaps from raw markdown to formatted at turn end. */}
+                <Markdown>{turn.text}</Markdown>
               </div>
             )}
           </>
+        )}
+        {detached && (
+          <Button
+            size="small"
+            icon={<ArrowDownOutlined />}
+            onClick={() => {
+              stickRef.current = true;
+              const el = scrollRef.current;
+              if (el) el.scrollTop = el.scrollHeight;
+              setDetached(false);
+            }}
+            style={{
+              position: 'absolute',
+              bottom: 16,
+              left: '50%',
+              transform: 'translateX(-50%)',
+              borderRadius: 0,
+              border: '2px solid #000',
+              boxShadow: '2px 2px 0 #000',
+              fontWeight: 700,
+              zIndex: 5,
+            }}
+          >
+            跳到底部
+          </Button>
         )}
         {!session && (
           <div

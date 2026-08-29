@@ -39,6 +39,7 @@ import {
 import type {
   AskRequest,
   ContextUsageDto,
+  FrontendEvent,
   MonitorLine,
   NotificationEntry,
   PermissionRequest,
@@ -171,6 +172,21 @@ export default function App() {
   useEffect(() => {
     const unlisteners: Promise<() => void>[] = [];
 
+    // Token-burst coalescing: text/thinking deltas accumulate for ~50ms and
+    // flush as one batched dispatch, so a fast stream costs ~20 renders/s
+    // instead of one full re-render per delta. Non-text events flush the
+    // buffer first to preserve ordering.
+    const deltaBuffer: FrontendEvent[] = [];
+    let deltaTimer: number | null = null;
+    const flushDeltas = () => {
+      if (deltaTimer !== null) {
+        window.clearTimeout(deltaTimer);
+        deltaTimer = null;
+      }
+      const buffered = deltaBuffer.splice(0);
+      for (const ev of buffered) dispatchTurn(ev);
+    };
+
     unlisteners.push(
       onAgentEvent((e) => {
         // Route to the session that owns the event; fall back to the
@@ -186,10 +202,14 @@ export default function App() {
             break;
           case 'text_delta':
           case 'thinking':
+            deltaBuffer.push(e);
+            if (deltaTimer === null) {
+              deltaTimer = window.setTimeout(flushDeltas, 50);
+            }
+            break;
           case 'tool_start':
           case 'tool_end':
-            // Pure state transitions live in turnReducer (unit-tested);
-            // dispatch keeps App.tsx free of the accumulation logic.
+            flushDeltas();
             dispatchTurn(e);
             // Notification center: build/verify/flash failures are
             // project-level events worth surfacing even in another chat.
@@ -208,31 +228,40 @@ export default function App() {
             // Error on failure). Drop stale dialogs ONLY the ones belonging
             // to the finished chat — parallel sessions' pending dialogs must
             // survive.
+            flushDeltas();
             dispatchTurn(e);
             setPermQueue((q) => q.filter((r) => r.session_id !== sid));
             setAskQueue((q) => q.filter((r) => r.session_id !== sid));
             break;
           case 'turn_end':
+            flushDeltas();
             dispatchTurn(e);
             setPermQueue((q) => q.filter((r) => r.session_id !== sid));
             setAskQueue((q) => q.filter((r) => r.session_id !== sid));
             if (sid && sid === sessionRef.current?.id) {
-              // Clear the streaming turn so the transcript (refreshed below)
-              // is the single source of truth — otherwise the same reply
-              // shows twice (once in turn.text, once in session.messages).
+              // The finished turn stays rendered until the refreshed
+              // transcript lands (no blank flash); THIS dispatch drops it in
+              // the same React batch as setSession, so the reply is never
+              // shown twice.
               void api
                 .sessionTranscript(sid)
                 .then((s) => {
                   // Re-check AFTER the await: switching chats while this
                   // fetch was in flight must not clobber the newly opened
                   // session (the send box then follows sessionRef.current).
-                  if (sessionRef.current?.id === s.id) {
-                    setSession(s);
-                    // Message count changed → refresh the header usage chip.
-                    void api.sessionContextUsage(s.id).then(setUsage).catch(() => {});
-                  }
+                  if (sessionRef.current?.id !== s.id) return;
+                  // A send racing this fetch leaves local state with MORE
+                  // messages (optimistic user bubble) than the snapshot —
+                  // never roll the visible session back to an older one.
+                  const current = sessionRef.current;
+                  if (current && current.id === s.id && s.messages.length < current.messages.length)
+                    return;
+                  setSession(s);
+                  // Message count changed → refresh the header usage chip.
+                  void api.sessionContextUsage(s.id).then(setUsage).catch(() => {});
+                  dispatchTurn({ type: 'turn_synced', session_id: sid });
                 })
-                .catch(console.error);
+                .catch(console.error); // fetch failed → keep the live reply
             }
             // The finished session's sidebar row (preview / updated_at)
             // changed on disk either way.
@@ -422,8 +451,11 @@ export default function App() {
         .deleteSession(id)
         .then(async () => {
           // Drop the dead session's turn slot (it would otherwise keep its
-          // error text/tools alive in memory forever).
+          // error text/tools alive in memory forever). turn_end now RETAINS
+          // the finished turn (anti blank-flash), so follow with turn_synced
+          // to actually null + prune the slot.
           dispatchTurn({ type: 'turn_end', session_id: id, text: '' });
+          dispatchTurn({ type: 'turn_synced', session_id: id });
           const list = await api.listSessions();
           setSessions(list);
           // If the current session was deleted, switch to the newest remaining

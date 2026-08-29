@@ -193,6 +193,9 @@ export type FrontendEvent =
   | { type: 'tool_start'; session_id?: string | null; name: string; args: unknown; seq: number }
   | { type: 'tool_end'; session_id?: string | null; name: string; ok: boolean; summary: string; seq: number }
   | { type: 'turn_end'; session_id?: string | null; text: string }
+  // UI-internal: App dispatches this after the post-turn transcript fetch
+  // lands, clearing the retained finished turn (anti blank-flash).
+  | { type: 'turn_synced'; session_id?: string | null }
   | { type: 'info'; session_id?: string | null; message: string }
   | { type: 'device_frame'; node: string; kind: string; frame: string }
   | { type: 'guard_status'; frame: string }
@@ -249,6 +252,8 @@ export interface ToolCardState {
   args: unknown;
   status: 'running' | 'ok' | 'failed';
   summary?: string;
+  /** Wall-clock start for the per-tool elapsed label. */
+  startedAt?: number;
 }
 
 export interface RunningTurn {
@@ -257,6 +262,11 @@ export interface RunningTurn {
   thinking: string;
   tools: Record<number, ToolCardState>;
   startedAt: number;
+  /**
+   * The turn ended but the refreshed transcript has not landed yet: the
+   * finished reply stays rendered (no blank flash) until `turn_synced`.
+   */
+  finished?: boolean;
 }
 
 export interface MonitorLine {
