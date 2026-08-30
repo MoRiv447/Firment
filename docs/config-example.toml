@@ -1,0 +1,135 @@
+# Firment — provider configuration examples
+#
+#   `firm config` writes these for you: it lists the same presets the
+#   binary ships with, you pick a number, optionally paste a key, done.
+#   This file exists for when you would rather write it by hand —
+#   copy a block into your config and fill in the key.
+#
+#   Config location:
+#     Windows  %APPDATA%\firment\config.toml
+#     other    ~/.config/firment/config.toml
+#
+#   Entries are alphabetical and carry no ranking: Firment does not
+#   endorse or recommend any of them. Pick by your own network, budget
+#   and privacy requirements.
+#
+#   Three ways to supply a key:
+#     1. api_key_env = "..."   environment variable (recommended —
+#                              nothing plaintext on disk)
+#     2. `firm` TUI: run /apikey sk-xxx  (persists to auth.json)
+#     3. api_key = "sk-..."    inline (plaintext in this file)
+#
+#   Switch between providers with `firm --provider <name>`, or
+#   `/provider <name>` inside the TUI. `default_provider` decides the
+#   one used when you pass neither.
+
+default_provider = "deepseek"
+
+# ---------------------------------------------------------------------------
+# Direct from mainland China (no proxy needed)
+# ---------------------------------------------------------------------------
+
+[providers.deepseek]
+type = "openai"
+base_url = "https://api.deepseek.com/v1"
+api_key_env = "DEEPSEEK_API_KEY"
+model = "deepseek-v4-flash"
+
+[providers.qwen]
+type = "openai"
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+api_key_env = "DASHSCOPE_API_KEY"
+model = "qwen-max"
+
+[providers.glm]
+type = "openai"
+base_url = "https://open.bigmodel.cn/api/paas/v4"
+api_key_env = "ZHIPUAI_API_KEY"
+model = "glm-4-plus"
+
+[providers.moonshot]
+type = "openai"
+base_url = "https://api.moonshot.cn/v1"
+api_key_env = "MOONSHOT_API_KEY"
+model = "moonshot-v1-32k"
+
+# ---------------------------------------------------------------------------
+# International (mainland China usually needs a proxy — see the note at
+# the bottom)
+# ---------------------------------------------------------------------------
+
+[providers.openai]
+type = "openai"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+model = "gpt-5"
+
+[providers.anthropic]
+type = "anthropic"
+base_url = "https://api.anthropic.com"
+api_key_env = "ANTHROPIC_API_KEY"
+model = "claude-sonnet-4-5"
+
+[providers.gemini]
+type = "openai"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+api_key_env = "GEMINI_API_KEY"
+model = "gemini-2.5-pro"
+
+# ---------------------------------------------------------------------------
+# Aggregators — one key, many models
+# ---------------------------------------------------------------------------
+
+[providers.openrouter]
+type = "openai"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+model = "deepseek/deepseek-v4-pro"
+
+# Note: OrcaRouter's `orcarouter/auto` picks a model per request. That is
+# fine for chat, but a coding agent's output should be reproducible —
+# prefer a fixed model when you care why the agent wrote what it wrote.
+[providers.orcarouter]
+type = "openai"
+base_url = "https://api.orcarouter.ai/v1"
+api_key_env = "ORCA_KEY"
+model = "orcarouter/auto"
+
+# ---------------------------------------------------------------------------
+# Local / LAN — no key, nothing leaves the machine
+# ---------------------------------------------------------------------------
+
+[providers.ollama]
+type = "openai"
+base_url = "http://localhost:11434/v1"
+model = "llama3.2"
+# A server on another machine works the same way — and Firment bypasses
+# the proxy for private ranges, so 192.168.x.x keeps working even when a
+# proxy is configured for everything else.
+
+[providers.lmstudio]
+type = "openai"
+base_url = "http://localhost:1234/v1"
+model = "local-model"
+
+# ---------------------------------------------------------------------------
+# Notes
+# ---------------------------------------------------------------------------
+#
+# type:
+#   "openai"     -> the endpoint speaks /chat/completions (most hosts)
+#   "anthropic"  -> the endpoint speaks /v1/messages
+#
+# Optional per-provider fields:
+#   max_tokens = 8192
+#   temperature = 0.2
+#
+# Behind a proxy:
+#   Firment reads HTTP_PROXY / HTTPS_PROXY / ALL_PROXY as usual, and
+#   always bypasses the proxy for localhost, .local and the private
+#   ranges 10/8, 172.16/12 and 192.168/16 — so LAN model servers stay
+#   reachable. If you need something else excluded, add it to NO_PROXY.
+#
+# Verify with:   firm doctor
+# It checks provider connectivity, the toolchain on PATH, serial ports
+# and the [tools] semantics in one pass.
