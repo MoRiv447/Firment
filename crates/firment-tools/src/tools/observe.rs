@@ -1,8 +1,8 @@
 //! `observe` — read-only computer-vision analysis of frames (photos of the
 //! target), giving the agent evidence at rung 5 of the verification ladder:
-//! "the device physically behaves as asked". Brightness analysis of a still
-//! image, plus motion and blink analysis of a frame sequence (a burst of
-//! shots in capture order); diff arrives in a later release.
+//! "the device physically behaves as asked". Brightness of a still image,
+//! motion and blink of a frame sequence (a burst of shots in capture order),
+//! and diff between a before/after pair.
 //!
 //! Deterministic local CV via the `image` crate — no vision model, no
 //! provider changes, results are reproducible and unit-testable.
@@ -633,6 +633,129 @@ pub(crate) fn analyze_blink(samples: &[Sample]) -> Blink {
     }
 }
 
+/// Diff verdict between a "before" and an "after" frame.
+#[derive(Debug)]
+pub struct Diff {
+    pub changed: bool,
+    pub changed_fraction: f32,
+    pub mean_abs_diff: f32,
+    /// Signed mean luma delta — positive means the frame got BRIGHTER after.
+    pub mean_delta: f32,
+    pub bbox: Option<Rect>,
+    /// Which quadrant of the ROI holds the most change ("top-left", ...).
+    pub dominant_quadrant: Option<&'static str>,
+    /// The dominant quadrant's share of the total change (0..1).
+    pub quadrant_share: Option<f32>,
+    pub confidence: Confidence,
+    pub note: String,
+}
+
+/// Which quadrant of the ROI holds the largest share of the change. A single
+/// moving block already answers with its bbox; this is for the case where the
+/// change is spread out and "where" still matters.
+fn dominant_quadrant(
+    before: &RgbaImage,
+    after: &RgbaImage,
+    roi: Option<Rect>,
+    pixel_threshold: u8,
+) -> (Option<&'static str>, Option<f32>) {
+    let (rx, ry, rw, rh) =
+        roi.map(|r| (r.x, r.y, r.w, r.h))
+            .unwrap_or((0, 0, before.width(), before.height()));
+    let (mx, my) = (rx + rw / 2, ry + rh / 2);
+    let mut changed: [f32; 4] = [0.0; 4]; // tl, tr, bl, br
+    let mut total = 0.0;
+    for y in ry..(ry + rh).min(before.height()) {
+        for x in rx..(rx + rw).min(before.width()) {
+            let d = luma(before.get_pixel(x, y)).abs_diff(luma(after.get_pixel(x, y)));
+            if d >= pixel_threshold {
+                let q = (if y < my { 0 } else { 2 }) + (if x < mx { 0 } else { 1 });
+                changed[q] += 1.0;
+                total += 1.0;
+            }
+        }
+    }
+    if total == 0.0 {
+        return (None, None);
+    }
+    let (idx, &share) = changed
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.total_cmp(b.1))
+        .unwrap();
+    let name = match idx {
+        0 => "top-left",
+        1 => "top-right",
+        2 => "bottom-left",
+        _ => "bottom-right",
+    };
+    (Some(name), Some(share / total))
+}
+
+pub(crate) fn analyze_diff(
+    before: &RgbaImage,
+    after: &RgbaImage,
+    roi: Option<Rect>,
+    pixel_threshold: u8,
+) -> Result<Diff, String> {
+    let (changed_fraction, mean_abs_diff, bbox) =
+        frame_diff_map(before, after, roi, pixel_threshold)?;
+    let mean_delta = mean_luma(after, roi) - mean_luma(before, roi);
+    // Looser mean gate than motion's: a diff compares the SAME scene before
+    // and after, so a small changed region is diluted by the unchanged
+    // majority — an 8x8 LED block on 640x480 is a real change that a 2.0
+    // average would wash out.
+    let changed = changed_fraction >= 0.01 && mean_abs_diff >= 1.0;
+    let (dominant_quadrant, quadrant_share) =
+        dominant_quadrant(before, after, roi, pixel_threshold);
+    // A frame that changed almost everywhere is not a flash-diff, it is a
+    // moved/reframed camera — the measurement is then meaningless.
+    let reframed = changed_fraction > 0.6;
+    let confidence = if !changed {
+        Confidence::High
+    } else if reframed {
+        Confidence::Low
+    } else if changed_fraction >= 0.02 {
+        Confidence::High
+    } else {
+        Confidence::Medium
+    };
+    let direction = if mean_delta.abs() < 1.0 {
+        "no net brightness change".to_string()
+    } else if mean_delta > 0.0 {
+        format!("brighter after (+{mean_delta:.1} luma)")
+    } else {
+        format!("darker after ({mean_delta:.1} luma)")
+    };
+    let note = match (changed, reframed) {
+        (false, _) => format!(
+            "{:.2}% of pixels changed by {pixel_threshold}+ luma (mean diff \
+             {mean_abs_diff:.1}) — nothing measurable moved",
+            changed_fraction * 100.0
+        ),
+        (true, true) => format!(
+            "{:.0}% of the frame changed — the camera was likely moved or reframed, \
+             so this diff is not about the board",
+            changed_fraction * 100.0
+        ),
+        (true, false) => format!(
+            "{:.1}% of pixels changed (mean diff {mean_abs_diff:.1}), {direction}",
+            changed_fraction * 100.0
+        ),
+    };
+    Ok(Diff {
+        changed,
+        changed_fraction,
+        mean_abs_diff,
+        mean_delta,
+        bbox,
+        dominant_quadrant,
+        quadrant_share,
+        confidence,
+        note,
+    })
+}
+
 pub(crate) fn parse_roi(args: &Value, frame: &RgbaImage) -> Result<Option<Rect>, ToolError> {
     let Some(roi) = args.get("roi") else {
         return Ok(None);
@@ -674,7 +797,7 @@ pub(crate) fn parse_roi(args: &Value, frame: &RgbaImage) -> Result<Option<Rect>,
 }
 
 const NOT_IMPLEMENTED: &str =
-    "brightness, motion and blink are in — diff arrives in a later release";
+    "brightness, motion, blink and diff are the four modes — this one is a typo";
 
 #[async_trait]
 impl Tool for Observe {
@@ -693,11 +816,15 @@ impl Tool for Observe {
                 "mode": {
                     "type": "string",
                     "enum": ["brightness", "blink", "motion", "diff"],
-                    "description": "brightness: is the target lit, and how bright. motion: did anything move across a frame sequence. blink: does it alternate, and at what frequency. diff arrives in a later release."
+                    "description": "brightness: is the target lit, and how bright. motion: did anything move across a frame sequence. blink: does it alternate, and at what frequency. diff: what changed between a before and an after frame."
                 },
                 "path": {
                     "type": "string",
-                    "description": "Image path inside the workspace (PNG/JPEG). Required for mode=brightness."
+                    "description": "Image path inside the workspace (PNG/JPEG). Required for mode=brightness (and mode=diff as the 'before' frame)."
+                },
+                "after": {
+                    "type": "string",
+                    "description": "mode=diff only: the 'after' frame to compare against 'path'. Same scene, same size — proving a change really moved pixels."
                 },
                 "paths": {
                     "type": "array",
@@ -748,7 +875,7 @@ impl Tool for Observe {
             .get("mode")
             .and_then(|m| m.as_str())
             .ok_or_else(|| ToolError::new("[InvalidInput] missing 'mode'"))?;
-        if !matches!(mode, "brightness" | "motion" | "blink") {
+        if !matches!(mode, "brightness" | "motion" | "blink" | "diff") {
             return Err(ToolError::new(format!(
                 "[InvalidInput] mode={mode} is not implemented yet — {NOT_IMPLEMENTED}"
             )));
@@ -756,6 +883,7 @@ impl Tool for Observe {
         match mode {
             "motion" => return run_motion(&args, ctx),
             "blink" => return run_blink(&args, ctx),
+            "diff" => return run_diff(&args, ctx),
             _ => {}
         }
         let path = args
@@ -1002,6 +1130,68 @@ fn run_blink(args: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
     })
 }
 
+/// mode=diff: compare a "before" and an "after" frame — the flash-diff
+/// scenario, proving an agent's change really moved pixels on the board.
+fn run_diff(args: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+    let before = args
+        .get("path")
+        .and_then(|p| p.as_str())
+        .ok_or_else(|| ToolError::new("[InvalidInput] mode=diff requires 'path' (before frame)"))?;
+    let after = args
+        .get("after")
+        .and_then(|p| p.as_str())
+        .ok_or_else(|| ToolError::new("[InvalidInput] mode=diff requires 'after' (after frame)"))?;
+    let load = |p: &str| -> Result<RgbaImage, ToolError> {
+        let resolved = resolve_within(&ctx.cwd, p, &ctx.allowed_roots)
+            .map_err(|e| ToolError::new(format!("[Permission] {p}: {e}")))?;
+        Ok(image::open(&resolved)
+            .map_err(|e| ToolError::new(format!("[Io] cannot decode {p}: {e}")))?
+            .to_rgba8())
+    };
+    let before_frame = load(before)?;
+    let after_frame = load(after)?;
+    let roi = parse_roi(args, &before_frame)?;
+    let d = analyze_diff(&before_frame, &after_frame, roi, MOTION_PIXEL_THRESHOLD)
+        .map_err(ToolError::new)?;
+
+    let mut text = format!(
+        "[observe] mode=diff roi=[{},{}]\n  changed: {}\n  changed fraction: {:.1}% (pixel \
+         threshold {})\n  mean abs diff: {:.1}\n  mean delta: {:+.1} luma (net brightness \
+         shift)\n  confidence: {} — {}\n",
+        roi.map(|r| r.x.to_string()).unwrap_or_else(|| "-".into()),
+        roi.map(|r| r.y.to_string()).unwrap_or_else(|| "-".into()),
+        if d.changed { "yes" } else { "no" },
+        d.changed_fraction * 100.0,
+        MOTION_PIXEL_THRESHOLD,
+        d.mean_abs_diff,
+        d.mean_delta,
+        d.confidence.name(),
+        d.note,
+    );
+    if let Some(b) = d.bbox {
+        text.push_str(&format!(
+            "  bbox: [{}, {}, {}, {}] — where the change is\n",
+            b.x, b.y, b.w, b.h
+        ));
+    }
+    if let (Some(q), Some(share)) = (d.dominant_quadrant, d.quadrant_share) {
+        text.push_str(&format!(
+            "  change concentrates in: {q} ({:.0}% of it)\n",
+            share * 100.0
+        ));
+    }
+    text.push_str(&format!(
+        "  frame: {}x{}, before={before} after={after}\n",
+        before_frame.width(),
+        before_frame.height()
+    ));
+    text.push_str(CAMERA_CAVEAT);
+
+    Ok(ToolOutput {
+        text: truncate(&text, 32_000),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1239,6 +1429,71 @@ mod tests {
     }
 
     #[test]
+    fn diff_reports_bbox_and_signed_delta() {
+        // The same block gets brighter: the diff must report where (bbox)
+        // and which way (positive delta = brighter after).
+        let before = frame_with_block(10, 10, 8, 150);
+        let after = frame_with_block(10, 10, 8, 240);
+        let d = analyze_diff(&before, &after, None, MOTION_PIXEL_THRESHOLD).unwrap();
+        assert!(d.changed, "{}", d.note);
+        assert!(d.mean_delta > 0.0, "brighter after: {}", d.mean_delta);
+        let bbox = d.bbox.expect("diff reports where");
+        assert!(bbox.x <= 10 && bbox.y <= 10, "{bbox:?}");
+        assert!(
+            bbox.x + bbox.w >= 18 && bbox.y + bbox.h >= 18,
+            "covers the block: {bbox:?}"
+        );
+    }
+
+    #[test]
+    fn diff_identical_frames_unchanged() {
+        let f = frame_with_block(10, 10, 8, 240);
+        let d = analyze_diff(&f, &f, None, MOTION_PIXEL_THRESHOLD).unwrap();
+        assert!(!d.changed, "{}", d.note);
+        assert_eq!(
+            d.confidence.name(),
+            "HIGH",
+            "nothing moved is a safe finding"
+        );
+    }
+
+    #[test]
+    fn diff_flags_reframed_camera() {
+        // Nearly everything changed: that is a moved camera, not a flash diff.
+        let before = solid(64, 64, 8);
+        let after = solid(64, 64, 200);
+        let d = analyze_diff(&before, &after, None, MOTION_PIXEL_THRESHOLD).unwrap();
+        assert!(d.changed);
+        assert_eq!(d.confidence.name(), "LOW", "{}", d.note);
+        assert!(d.note.contains("moved"), "{}", d.note);
+    }
+
+    #[test]
+    fn diff_dominant_quadrant_locates_the_change() {
+        // A bright block only in the bottom-right quadrant.
+        let before = solid(64, 64, 8);
+        let mut after = solid(64, 64, 8);
+        for y in 40..56 {
+            for x in 40..56 {
+                after.put_pixel(x, y, image::Rgba([240, 240, 240, 255]));
+            }
+        }
+        let d = analyze_diff(&before, &after, None, MOTION_PIXEL_THRESHOLD).unwrap();
+        assert_eq!(d.dominant_quadrant, Some("bottom-right"), "{}", d.note);
+        assert!(
+            d.quadrant_share.unwrap() > 0.9,
+            "change concentrated: {:?}",
+            d.quadrant_share
+        );
+    }
+
+    #[test]
+    fn diff_rejects_mismatched_sizes() {
+        let err = analyze_diff(&solid(16, 16, 8), &solid(32, 32, 8), None, 16).unwrap_err();
+        assert!(err.contains("differ in size"), "got: {err}");
+    }
+
+    #[test]
     fn brightness_detects_lit_region() {
         // Black frame with a white 40x40 block at (120, 80) of 320x240.
         let mut frame = solid(320, 240, 10);
@@ -1440,7 +1695,7 @@ mod tests {
     async fn unsupported_mode_states_not_implemented() {
         let dir = tempdir().unwrap();
         let err = Observe
-            .run(json!({"mode": "diff"}), &ctx(dir.path()))
+            .run(json!({"mode": "spectrogram"}), &ctx(dir.path()))
             .await
             .unwrap_err();
         assert!(

@@ -528,13 +528,17 @@
     "description": "Analyze a photo of the target to verify PHYSICAL behavior (verification ladder rung 5): is the LED lit, how bright, where is the bright region. Deterministic local image analysis with a confidence rating — point the roi at the LED/indicator, not the whole board. Read-only.",
     "input_schema": {
       "properties": {
+        "after": {
+          "description": "mode=diff only: the 'after' frame to compare against 'path'. Same scene, same size — proving a change really moved pixels.",
+          "type": "string"
+        },
         "interval_ms": {
           "description": "mode=blink: the gap between shots, in ms — only you know your burst rate, and a frequency cannot be derived from an undated burst. The estimate is only as good as this value.",
           "minimum": 1,
           "type": "integer"
         },
         "mode": {
-          "description": "brightness: is the target lit, and how bright. motion: did anything move across a frame sequence. blink: does it alternate, and at what frequency. diff arrives in a later release.",
+          "description": "brightness: is the target lit, and how bright. motion: did anything move across a frame sequence. blink: does it alternate, and at what frequency. diff: what changed between a before and an after frame.",
           "enum": [
             "brightness",
             "blink",
@@ -544,7 +548,7 @@
           "type": "string"
         },
         "path": {
-          "description": "Image path inside the workspace (PNG/JPEG). Required for mode=brightness.",
+          "description": "Image path inside the workspace (PNG/JPEG). Required for mode=brightness (and mode=diff as the 'before' frame).",
           "type": "string"
         },
         "paths": {
