@@ -895,9 +895,15 @@ fn run_config(config_path: &Path) -> anyhow::Result<()> {
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;
     let pick: usize = match line.trim().parse() {
-        Ok(0) => return Ok(()),
+        Ok(0) => {
+            println!("nothing changed.");
+            return Ok(());
+        }
         Ok(n) if (1..=CATALOG.len()).contains(&n) => n - 1,
-        _ => return Ok(()),
+        _ => {
+            println!("invalid choice — nothing changed.");
+            return Ok(());
+        }
     };
     let preset = &CATALOG[pick];
 
@@ -910,6 +916,7 @@ fn run_config(config_path: &Path) -> anyhow::Result<()> {
         let mut ok = String::new();
         std::io::stdin().read_line(&mut ok)?;
         if !ok.trim().eq_ignore_ascii_case("y") {
+            println!("nothing changed.");
             return Ok(());
         }
     }
@@ -946,21 +953,28 @@ fn run_config(config_path: &Path) -> anyhow::Result<()> {
         },
     );
     config.save(config_path)?;
+    // Announce the add BEFORE asking about the default — otherwise a "N"
+    // answer reads like it undid the add that follows in the output.
+    println!(
+        "added [providers.{}] model {} (edit the model in config.toml if the vendor \
+         renamed it).",
+        preset.name, preset.models[0]
+    );
 
-    print!("set as the default provider? [y/N] ");
+    print!("set it as the default provider? [y/N] ");
     std::io::stdout().flush()?;
     let mut def = String::new();
     std::io::stdin().read_line(&mut def)?;
     if def.trim().eq_ignore_ascii_case("y") {
         config.default_provider = preset.name.to_string();
         config.save(config_path)?;
+        println!(
+            "default provider set to {} — run `firm doctor` to verify connectivity.",
+            preset.name
+        );
+    } else {
+        println!("Run `firm doctor` to verify connectivity.");
     }
-
-    println!(
-        "added [providers.{}] model {} (edit the model in config.toml if the vendor \
-         renamed it). Run `firm doctor` to verify connectivity.",
-        preset.name, preset.models[0]
-    );
     Ok(())
 }
 
