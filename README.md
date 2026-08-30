@@ -210,7 +210,7 @@ firm --plan     read-only plan mode
 firm /sessions  interactive session picker
 firm install    add to PATH + completions
 firm update     self-update
-firm config     open the configuration file
+firm config     interactively pick a provider from the neutral catalog (endpoints + key, writes config.toml)
 firm build      run the configured build command
 firm flash      flash a firmware ELF via probe-rs
 firm run        flash and run the target, streaming RTT logs

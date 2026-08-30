@@ -8,6 +8,7 @@ pub mod journal;
 pub mod kb;
 pub mod permission;
 pub mod provider;
+pub mod providers;
 pub mod schema;
 pub mod session;
 pub mod subagent;
@@ -29,6 +30,7 @@ pub use provider::{
     AnthropicProvider, ChatRequest, OpenAIProvider, Provider, ProviderError, ProviderEvent,
     ProviderStream, StopReason,
 };
+pub use providers::{CATALOG, ProviderPreset};
 pub use session::{Session, SessionError, SessionKind, SessionStore, SessionSummary};
 pub use subagent::{NullSink, SubagentFactory, SubagentRunner};
 pub use tool::{Tool, ToolContext, ToolError, ToolOutput, ToolRegistry};

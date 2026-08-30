@@ -163,7 +163,7 @@ curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | 
 
 ## ⚙️ 配置
 
-`firm config` 打开配置文件（首次运行自动生成；Windows 在 `%APPDATA%\firment\config.toml`，其他系统在 `~/.config/firment/config.toml`）：
+配置文件（首次运行自动生成；Windows 在 `%APPDATA%\firment\config.toml`，其他系统在 `~/.config/firment/config.toml`；`firm config` 可从内置中立供应商目录交互式添加 provider）：
 
 ```toml
 [provider.default]
@@ -208,7 +208,7 @@ firm --plan    只读计划模式
 firm /sessions 交互式会话选择器
 firm install   加入 PATH + 补全
 firm update    自更新
-firm config    打开配置文件
+firm config    从内置中立目录交互式选择 provider（端点 + key，写入 config.toml）
 firm build     运行配置的构建命令
 firm flash     通过 probe-rs 烧录固件 ELF
 firm run       烧录并运行目标，流式输出 RTT 日志

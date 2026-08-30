@@ -24,6 +24,14 @@
 - **doctor diagnostics**: probe failures now walk the reqwest error source
   chain and print a hint for the proxy/TLS-middlebox case and the LAN
   `NO_PROXY` case, instead of a bare `unreachable`.
+- **`firm config` — one-key provider setup**. Lists a NEUTRAL catalog of
+  common endpoints (Anthropic, DeepSeek, Gemini, GLM, LM Studio, Moonshot,
+  Ollama, OpenAI, OpenRouter, OrcaRouter, Qwen — alphabetical, no rank, no
+  endorsement), lets you pick one, optionally enter the key, and writes the
+  provider into config.toml. You decide whether it becomes the default.
+  Model names are the vendors' common ones at build time and are editable
+  in config.toml. (`firm config` previously had no implementation — the
+  README description was rewritten to match.)
 
 ## v0.7.0 (2026-08-29) — fault forensics + physical observation
 

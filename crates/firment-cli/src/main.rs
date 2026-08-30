@@ -170,6 +170,9 @@ enum Command {
         once: bool,
     },
     Tools,
+    /// Interactively add a provider from the built-in neutral catalog
+    /// (`firm config` → pick a preset → key → done).
+    Config,
     /// Environment self-check: config + providers, install state, toolchain
     /// on PATH, serial ports and [tools] semantics — so flash/build/monitor
     /// fail at setup time with a fix hint, not mid-task.
@@ -310,6 +313,10 @@ async fn main() -> anyhow::Result<()> {
             Command::Tools => {
                 let registry = firment_tools::default_registry();
                 println!("{}", serde_json::to_string_pretty(&registry.specs())?);
+            }
+            Command::Config => {
+                let path = cli.config.clone().unwrap_or_else(config_path);
+                run_config(&path)?;
             }
             Command::Doctor { sbc } => {
                 let cwd = cli
@@ -862,6 +869,98 @@ fn list_sessions() -> anyhow::Result<()> {
             preview
         );
     }
+    Ok(())
+}
+
+/// `firm config`: pick a preset from the neutral catalog, optionally supply a
+/// key, and write the provider into config.toml. Nothing becomes the default
+/// unless the user asks, and the catalog itself endorses no vendor.
+fn run_config(config_path: &Path) -> anyhow::Result<()> {
+    use firment_core::{CATALOG, ProviderConfig};
+
+    let mut config = Config::load_or_create(config_path)?;
+    println!("provider presets (neutral catalog — no endorsement, nothing becomes default):\n");
+    for (i, p) in CATALOG.iter().enumerate() {
+        let key = p
+            .api_key_env
+            .map(|e| format!(" key=${e}"))
+            .unwrap_or_default();
+        println!("  {:>2}. {:<18} {}{}", i + 1, p.display, p.note, key);
+        println!("       url    : {}", p.base_url);
+        println!("       models : {}", p.models.join(", "));
+    }
+    println!("\n  0. cancel");
+    print!("\nchoose a provider [0-{}]: ", CATALOG.len());
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    let pick: usize = match line.trim().parse() {
+        Ok(0) => return Ok(()),
+        Ok(n) if (1..=CATALOG.len()).contains(&n) => n - 1,
+        _ => return Ok(()),
+    };
+    let preset = &CATALOG[pick];
+
+    if config.providers.contains_key(preset.name) {
+        print!(
+            "[providers.{}] already exists — overwrite it? [y/N] ",
+            preset.name
+        );
+        std::io::stdout().flush()?;
+        let mut ok = String::new();
+        std::io::stdin().read_line(&mut ok)?;
+        if !ok.trim().eq_ignore_ascii_case("y") {
+            return Ok(());
+        }
+    }
+
+    let api_key_env = preset.api_key_env.map(|e| e.to_string());
+    let api_key = if let Some(env_name) = preset.api_key_env {
+        print!(
+            "API key for {} (enter to skip and rely on ${env_name}): ",
+            preset.display
+        );
+        std::io::stdout().flush()?;
+        let mut key = String::new();
+        std::io::stdin().read_line(&mut key)?;
+        let k = key.trim();
+        if k.is_empty() {
+            None
+        } else {
+            Some(k.to_string())
+        }
+    } else {
+        None
+    };
+
+    config.providers.insert(
+        preset.name.to_string(),
+        ProviderConfig {
+            r#type: preset.r#type.to_string(),
+            base_url: Some(preset.base_url.to_string()),
+            api_key_env,
+            api_key,
+            model: preset.models[0].to_string(),
+            max_tokens: None,
+            temperature: None,
+        },
+    );
+    config.save(config_path)?;
+
+    print!("set as the default provider? [y/N] ");
+    std::io::stdout().flush()?;
+    let mut def = String::new();
+    std::io::stdin().read_line(&mut def)?;
+    if def.trim().eq_ignore_ascii_case("y") {
+        config.default_provider = preset.name.to_string();
+        config.save(config_path)?;
+    }
+
+    println!(
+        "added [providers.{}] model {} (edit the model in config.toml if the vendor \
+         renamed it). Run `firm doctor` to verify connectivity.",
+        preset.name, preset.models[0]
+    );
     Ok(())
 }
 
