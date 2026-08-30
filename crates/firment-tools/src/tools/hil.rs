@@ -310,7 +310,7 @@ impl Tool for Hil {
                 "run" => run_run_step(&step.inner, ctx, dry_run, remaining).await,
                 "monitor" => run_monitor_step(&step.inner, ctx, dry_run, remaining).await,
                 "trace" => run_trace_step(&step.inner, ctx, dry_run, remaining).await,
-                "observe" => run_observe_step(&step.inner, ctx, dry_run).await,
+                "observe" => run_observe_step(&step.inner, ctx, dry_run, remaining).await,
                 "elf_analyze" | "elf" => run_elf_step(&step.inner, ctx, remaining).await,
                 "delay" | "sleep" => {
                     let ms = step
@@ -1195,6 +1195,7 @@ async fn run_observe_step(
     step: &HilStep,
     ctx: &ToolContext,
     dry_run: bool,
+    remaining: u64,
 ) -> Result<String, String> {
     let mode = step.mode.as_deref().unwrap_or("brightness");
     if mode != "brightness" {
@@ -1206,7 +1207,20 @@ async fn run_observe_step(
         return Err("[InvalidInput] observe step requires file (the frame to analyze)".to_string());
     };
     if dry_run {
-        return Ok(format!("[dry-run] observe simulated: {path} mode={mode}"));
+        // Mirror run_monitor_step: a dry run has no frame to look at, so an
+        // expectation must FAIL instead of silently passing.
+        return Ok(match step.expect_lit {
+            Some(want) => format!(
+                "[dry-run] observe {path} simulated (mode={mode}) — would check expect_lit={want}\n\
+                 [HIL_EXPECT:FAIL] dry-run cannot verify hardware output (no frame)"
+            ),
+            None => format!("[dry-run] observe {path} simulated (mode={mode})"),
+        });
+    }
+    // Decoding and measuring a frame is not free; if the suite budget is
+    // already gone, say so rather than burning it.
+    if remaining == 0 {
+        return Err("[Timeout] hil suite budget exhausted before the observe step".to_string());
     }
     let resolved = crate::tools::util::resolve_within(&ctx.cwd, path, &ctx.allowed_roots)
         .map_err(|e| format!("[Permission] {e}"))?;
@@ -1667,10 +1681,33 @@ elf = "build/fw.elf"
             file: Some("led.png".to_string()),
             ..Default::default()
         };
-        let out = run_observe_step(&step, &ctx(dir.path()), true)
+        let out = run_observe_step(&step, &ctx(dir.path()), true, 60_000)
             .await
             .unwrap();
-        assert!(out.contains("[dry-run] observe simulated"), "got: {out}");
+        assert!(out.contains("[dry-run] observe"), "got: {out}");
+        // No expectation was set, so there must be no verdict at all —
+        // asserted on meaning rather than on the exact wording.
+        assert!(!out.contains("[HIL_EXPECT"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn observe_step_dry_run_fails_when_expecting_lit() {
+        let dir = tempdir().unwrap();
+        let step = HilStep {
+            kind: "observe".to_string(),
+            file: Some("led.png".to_string()),
+            expect_lit: Some(true),
+            ..Default::default()
+        };
+        let out = run_observe_step(&step, &ctx(dir.path()), true, 60_000)
+            .await
+            .unwrap();
+        // A dry run has no frame to measure: reporting Ok here would let the
+        // expectation pass silently (the bug this test pins).
+        assert!(
+            out.contains("[HIL_EXPECT:FAIL]") && out.contains("cannot verify hardware"),
+            "dry-run with an expectation must not pass: {out}"
+        );
     }
 
     #[tokio::test]
@@ -1680,7 +1717,7 @@ elf = "build/fw.elf"
             kind: "observe".to_string(),
             ..Default::default()
         };
-        let err = run_observe_step(&step, &ctx(dir.path()), false)
+        let err = run_observe_step(&step, &ctx(dir.path()), false, 60_000)
             .await
             .unwrap_err();
         assert!(err.contains("requires file"), "got: {err}");
@@ -1697,7 +1734,7 @@ elf = "build/fw.elf"
             expect_lit: Some(true),
             ..Default::default()
         };
-        let out = run_observe_step(&pass, &ctx(dir.path()), false)
+        let out = run_observe_step(&pass, &ctx(dir.path()), false, 60_000)
             .await
             .unwrap();
         assert!(out.contains("[HIL_EXPECT:PASS]"), "got: {out}");
@@ -1706,7 +1743,7 @@ elf = "build/fw.elf"
             expect_lit: Some(false),
             ..pass
         };
-        let out = run_observe_step(&fail, &ctx(dir.path()), false)
+        let out = run_observe_step(&fail, &ctx(dir.path()), false, 60_000)
             .await
             .unwrap();
         assert!(out.contains("[HIL_EXPECT:FAIL]"), "got: {out}");
