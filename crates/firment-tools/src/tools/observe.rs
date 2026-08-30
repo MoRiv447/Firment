@@ -295,7 +295,7 @@ pub(crate) fn analyze_brightness(frame: &RgbaImage, spec: &Spec) -> (Brightness,
 /// Mean luma over the frame (or the ROI) as a float. Used to spot a
 /// whole-frame brightness shift, which usually means the camera changed
 /// exposure rather than anything moving.
-fn mean_luma(frame: &RgbaImage, roi: Option<Rect>) -> f32 {
+pub(crate) fn mean_luma(frame: &RgbaImage, roi: Option<Rect>) -> f32 {
     let (rx, ry, rw, rh) =
         roi.map(|r| (r.x, r.y, r.w, r.h))
             .unwrap_or((0, 0, frame.width(), frame.height()));

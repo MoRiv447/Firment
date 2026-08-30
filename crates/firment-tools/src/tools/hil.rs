@@ -69,6 +69,24 @@ struct HilStep {
     expect_lit: Option<bool>,
     #[serde(default)]
     save: Option<bool>,
+    // observe sequence modes (motion / blink): frames in capture order.
+    #[serde(default)]
+    paths: Option<Vec<String>>,
+    // observe diff: the frame taken after the change.
+    #[serde(default)]
+    after: Option<String>,
+    // observe blink: assumed gap between burst shots — the user knows their
+    // burst rate, we do not. Required before any frequency can be claimed.
+    #[serde(default)]
+    interval_ms: Option<u64>,
+    #[serde(default)]
+    expect_blinking: Option<bool>,
+    #[serde(default)]
+    expect_blink_hz: Option<f64>,
+    #[serde(default)]
+    expect_motion: Option<bool>,
+    #[serde(default)]
+    expect_diff: Option<bool>,
     // allow `expect` object form: { contains, regex, count }
     #[serde(default)]
     expect: Option<HilExpect>,
@@ -1198,30 +1216,67 @@ async fn run_observe_step(
     remaining: u64,
 ) -> Result<String, String> {
     let mode = step.mode.as_deref().unwrap_or("brightness");
-    if mode != "brightness" {
-        return Err(format!(
-            "[InvalidInput] observe mode={mode} is not implemented yet (phase 1: brightness)"
-        ));
-    }
-    let Some(path) = step.file.as_deref() else {
-        return Err("[InvalidInput] observe step requires file (the frame to analyze)".to_string());
-    };
     if dry_run {
-        // Mirror run_monitor_step: a dry run has no frame to look at, so an
+        // Mirror run_monitor_step: a dry run has no frame to look at, so any
         // expectation must FAIL instead of silently passing.
-        return Ok(match step.expect_lit {
-            Some(want) => format!(
-                "[dry-run] observe {path} simulated (mode={mode}) — would check expect_lit={want}\n\
+        let has_expect = step.expect_lit.is_some()
+            || step.expect_blinking.is_some()
+            || step.expect_blink_hz.is_some()
+            || step.expect_motion.is_some()
+            || step.expect_diff.is_some();
+        return Ok(if has_expect {
+            format!(
+                "[dry-run] observe simulated (mode={mode}) — would check expectations\n\
                  [HIL_EXPECT:FAIL] dry-run cannot verify hardware output (no frame)"
-            ),
-            None => format!("[dry-run] observe {path} simulated (mode={mode})"),
+            )
+        } else {
+            format!("[dry-run] observe simulated (mode={mode})")
         });
     }
-    // Decoding and measuring a frame is not free; if the suite budget is
+    // Decoding and measuring frames is not free; if the suite budget is
     // already gone, say so rather than burning it.
     if remaining == 0 {
         return Err("[Timeout] hil suite budget exhausted before the observe step".to_string());
     }
+    match mode {
+        "brightness" => run_observe_brightness(step, ctx).await,
+        "motion" => run_observe_motion(step, ctx),
+        "blink" => run_observe_blink(step, ctx),
+        "diff" => run_observe_diff(step, ctx),
+        other => Err(format!(
+            "[InvalidInput] observe mode={other} is not valid (brightness | motion | blink | diff)"
+        )),
+    }
+}
+
+/// Load a burst of frames from workspace paths, in capture order.
+fn load_observe_frames(
+    ctx: &ToolContext,
+    paths: &[String],
+) -> Result<Vec<image::RgbaImage>, String> {
+    let mut frames = Vec::with_capacity(paths.len());
+    for (i, p) in paths.iter().enumerate() {
+        let resolved = crate::tools::util::resolve_within(&ctx.cwd, p, &ctx.allowed_roots)
+            .map_err(|e| format!("[Permission] frames[{i}] ({p}): {e}"))?;
+        let img = image::open(&resolved)
+            .map_err(|e| {
+                format!(
+                    "[Io] cannot decode frames[{i}] ({}): {e}",
+                    resolved.display()
+                )
+            })?
+            .to_rgba8();
+        frames.push(img);
+    }
+    Ok(frames)
+}
+
+/// brightness: is the target lit, and how bright. The only still-frame mode;
+/// the verdict is asserted via expect_lit.
+async fn run_observe_brightness(step: &HilStep, ctx: &ToolContext) -> Result<String, String> {
+    let Some(path) = step.file.as_deref() else {
+        return Err("[InvalidInput] observe step requires file (the frame to analyze)".to_string());
+    };
     let resolved = crate::tools::util::resolve_within(&ctx.cwd, path, &ctx.allowed_roots)
         .map_err(|e| format!("[Permission] {e}"))?;
     let frame = image::open(&resolved)
@@ -1291,6 +1346,234 @@ async fn run_observe_step(
             "
 [HIL_EXPECT:{marker}] observe lit={} — wanted lit={want}",
             b.lit
+        ));
+    }
+    Ok(out)
+}
+
+/// motion: did anything move across a burst of frames. Verdict via
+/// expect_motion; a "yes" on LOW confidence is not evidence and cannot pass.
+fn run_observe_motion(step: &HilStep, ctx: &ToolContext) -> Result<String, String> {
+    let Some(paths) = step.paths.as_deref() else {
+        return Err(
+            "[InvalidInput] observe mode=motion requires paths (2+ frames, in capture order)"
+                .to_string(),
+        );
+    };
+    if paths.len() < 2 {
+        return Err(
+            "[InvalidInput] observe mode=motion requires at least 2 frames in paths".to_string(),
+        );
+    }
+    let frames = load_observe_frames(ctx, paths)?;
+    let roi = step.roi.map(|r| crate::tools::observe::Rect {
+        x: r[0],
+        y: r[1],
+        w: r[2],
+        h: r[3],
+    });
+    let m = crate::tools::observe::analyze_motion(
+        &frames,
+        roi,
+        crate::tools::observe::MOTION_PIXEL_THRESHOLD,
+    )
+    .map_err(|e| format!("[InvalidInput] {e}"))?;
+    let mut out = format!(
+        "observe mode=motion ({} frames, {}x{})
+  moving: {} (changed {:.1}% of ROI, mean abs diff {:.1})
+  confidence: {} — {}",
+        m.frames,
+        frames[0].width(),
+        frames[0].height(),
+        if m.moving { "yes" } else { "no" },
+        m.changed_fraction * 100.0,
+        m.mean_abs_diff,
+        m.confidence.name(),
+        m.note,
+    );
+    if let Some(want) = step.expect_motion {
+        // A "yes" verdict on LOW confidence (e.g. exposure drift) is not
+        // evidence — the analysis itself said it cannot tell motion from the
+        // camera auto-exposing.
+        let ok = if want {
+            m.moving && !matches!(m.confidence, crate::tools::observe::Confidence::Low)
+        } else {
+            !m.moving
+        };
+        let marker = if ok { "PASS" } else { "FAIL" };
+        out.push_str(&format!(
+            "
+[HIL_EXPECT:{marker}] observe motion={} — wanted motion={want}{}",
+            m.moving,
+            if want && m.moving && !ok {
+                " (low confidence)"
+            } else {
+                ""
+            },
+        ));
+    }
+    Ok(out)
+}
+
+/// blink: does a burst alternate, and at what frequency. expect_blinking is a
+/// plain boolean match; expect_blink_hz additionally requires a time base, a
+/// non-LOW confidence and the wanted value inside the measured range.
+fn run_observe_blink(step: &HilStep, ctx: &ToolContext) -> Result<String, String> {
+    let Some(paths) = step.paths.as_deref() else {
+        return Err(
+            "[InvalidInput] observe mode=blink requires paths (3+ frames, in capture order)"
+                .to_string(),
+        );
+    };
+    if paths.len() < 3 {
+        return Err(
+            "[InvalidInput] observe mode=blink requires at least 3 frames in paths".to_string(),
+        );
+    }
+    let frames = load_observe_frames(ctx, paths)?;
+    let roi = step.roi.map(|r| crate::tools::observe::Rect {
+        x: r[0],
+        y: r[1],
+        w: r[2],
+        h: r[3],
+    });
+    let interval_ms = step.interval_ms.unwrap_or(0);
+    let samples: Vec<crate::tools::observe::Sample> = frames
+        .iter()
+        .enumerate()
+        .map(|(i, f)| crate::tools::observe::Sample {
+            t_ms: i as u64 * interval_ms,
+            luma: crate::tools::observe::mean_luma(f, roi),
+        })
+        .collect();
+    let b = crate::tools::observe::analyze_blink(&samples);
+    let mut out = format!(
+        "observe mode=blink ({} frames, interval_ms={})
+  blinking: {}
+  edges: {}
+  confidence: {} — {}",
+        b.samples,
+        if interval_ms > 0 {
+            interval_ms.to_string()
+        } else {
+            "not given".to_string()
+        },
+        if b.blinking { "yes" } else { "no" },
+        b.edges,
+        b.confidence.name(),
+        b.note,
+    );
+    if let (Some(low), Some(high)) = (b.hz_low, b.hz_high) {
+        out.push_str(&format!("\n  frequency: {low:.2} .. {high:.2} Hz"));
+    }
+    if let Some(want) = step.expect_blinking {
+        let marker = if b.blinking == want { "PASS" } else { "FAIL" };
+        out.push_str(&format!(
+            "
+[HIL_EXPECT:{marker}] observe blinking={} — wanted blinking={want}",
+            b.blinking
+        ));
+    }
+    if let Some(want) = step.expect_blink_hz {
+        // Only a real measurement can answer this. A missing time base, LOW
+        // confidence or an aliased capture are all "cannot confirm" — and a
+        // LOW-confidence number must never pass an assertion.
+        let (marker, reason) = if step.interval_ms.is_none() {
+            (
+                "FAIL",
+                "interval_ms not given — cannot turn edges into a frequency",
+            )
+        } else if matches!(b.confidence, crate::tools::observe::Confidence::Low) {
+            ("FAIL", "low confidence — not asserting a frequency on it")
+        } else if let (Some(low), Some(high)) = (b.hz_low, b.hz_high) {
+            if (low as f64) <= want && want <= (high as f64) {
+                ("PASS", "inside the measured range")
+            } else {
+                ("FAIL", "outside the measured range")
+            }
+        } else {
+            ("FAIL", "no frequency estimated (see note)")
+        };
+        out.push_str(&format!(
+            "
+[HIL_EXPECT:{marker}] observe blink_hz={want} — {reason}"
+        ));
+    }
+    Ok(out)
+}
+
+/// diff: before/after comparison — did an agent's change actually move
+/// pixels? Verdict via expect_diff; a "yes" on LOW confidence (reframed
+/// camera) cannot pass.
+fn run_observe_diff(step: &HilStep, ctx: &ToolContext) -> Result<String, String> {
+    let Some(path) = step.file.as_deref() else {
+        return Err(
+            "[InvalidInput] observe mode=diff requires file (the before frame)".to_string(),
+        );
+    };
+    let Some(after) = step.after.as_deref() else {
+        return Err(
+            "[InvalidInput] observe mode=diff requires after (the frame taken after the change)"
+                .to_string(),
+        );
+    };
+    let load = |p: &str| -> Result<image::RgbaImage, String> {
+        let resolved = crate::tools::util::resolve_within(&ctx.cwd, p, &ctx.allowed_roots)
+            .map_err(|e| format!("[Permission] {p}: {e}"))?;
+        Ok(image::open(&resolved)
+            .map_err(|e| format!("[Io] cannot decode {p}: {e}"))?
+            .to_rgba8())
+    };
+    let before = load(path)?;
+    let after_frame = load(after)?;
+    let roi = step.roi.map(|r| crate::tools::observe::Rect {
+        x: r[0],
+        y: r[1],
+        w: r[2],
+        h: r[3],
+    });
+    let d = crate::tools::observe::analyze_diff(
+        &before,
+        &after_frame,
+        roi,
+        crate::tools::observe::MOTION_PIXEL_THRESHOLD,
+    )
+    .map_err(|e| format!("[InvalidInput] {e}"))?;
+    let mut out = format!(
+        "observe mode=diff ({}x{})
+  changed: {} (mean delta {}{:.1}, {:.1}% of ROI)
+  confidence: {} — {}",
+        before.width(),
+        before.height(),
+        if d.changed { "yes" } else { "no" },
+        if d.mean_delta >= 0.0 { "+" } else { "" },
+        d.mean_delta,
+        d.changed_fraction * 100.0,
+        d.confidence.name(),
+        d.note,
+    );
+    if let (Some(q), Some(share)) = (d.dominant_quadrant, d.quadrant_share) {
+        out.push_str(&format!(
+            "\n  change concentrates in: {q} ({:.0}% of it)",
+            share * 100.0
+        ));
+    }
+    if let Some(want) = step.expect_diff {
+        let ok = if want {
+            d.changed && !matches!(d.confidence, crate::tools::observe::Confidence::Low)
+        } else {
+            !d.changed
+        };
+        let marker = if ok { "PASS" } else { "FAIL" };
+        out.push_str(&format!(
+            "
+[HIL_EXPECT:{marker}] observe diff={} — wanted diff={want}{}",
+            d.changed,
+            if want && d.changed && !ok {
+                " (low confidence)"
+            } else {
+                ""
+            },
         ));
     }
     Ok(out)
@@ -1744,6 +2027,177 @@ elf = "build/fw.elf"
             ..pass
         };
         let out = run_observe_step(&fail, &ctx(dir.path()), false, 60_000)
+            .await
+            .unwrap();
+        assert!(out.contains("[HIL_EXPECT:FAIL]"), "got: {out}");
+    }
+
+    fn solid(luma: u8) -> image::RgbaImage {
+        image::RgbaImage::from_pixel(64, 64, image::Rgba([luma, luma, luma, 255]))
+    }
+
+    fn frame_with_block(x: u32, y: u32, size: u32, luma: u8) -> image::RgbaImage {
+        let mut f = solid(8);
+        for py in y..y + size {
+            for px in x..x + size {
+                f.put_pixel(px, py, image::Rgba([luma, luma, luma, 255]));
+            }
+        }
+        f
+    }
+
+    #[tokio::test]
+    async fn observe_step_motion_verdict() {
+        let dir = tempdir().unwrap();
+        // The block MOVES between shots but total brightness stays the same,
+        // so the pair is clean motion (HIGH), not exposure drift.
+        frame_with_block(10, 10, 8, 240)
+            .save(dir.path().join("m1.png"))
+            .unwrap();
+        frame_with_block(30, 30, 8, 240)
+            .save(dir.path().join("m2.png"))
+            .unwrap();
+        let step = HilStep {
+            kind: "observe".to_string(),
+            mode: Some("motion".to_string()),
+            paths: Some(vec!["m1.png".to_string(), "m2.png".to_string()]),
+            expect_motion: Some(true),
+            ..Default::default()
+        };
+        let out = run_observe_step(&step, &ctx(dir.path()), false, 60_000)
+            .await
+            .unwrap();
+        assert!(out.contains("[HIL_EXPECT:PASS]"), "got: {out}");
+
+        // Identical frames: no motion, the assertion must fail.
+        let same = HilStep {
+            paths: Some(vec!["m1.png".to_string(), "m1.png".to_string()]),
+            ..step
+        };
+        let out = run_observe_step(&same, &ctx(dir.path()), false, 60_000)
+            .await
+            .unwrap();
+        assert!(out.contains("[HIL_EXPECT:FAIL]"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn observe_step_motion_low_confidence_fails() {
+        let dir = tempdir().unwrap();
+        // Block moves AND the whole frame brightens: the analysis says "yes
+        // but LOW" — a LOW-confidence yes is not evidence and must not pass.
+        let a = frame_with_block(10, 10, 8, 240);
+        let mut b = frame_with_block(30, 30, 8, 240);
+        for px in b.pixels_mut() {
+            px[0] = px[0].saturating_add(60);
+            px[1] = px[1].saturating_add(60);
+            px[2] = px[2].saturating_add(60);
+        }
+        a.save(dir.path().join("m1.png")).unwrap();
+        b.save(dir.path().join("m2.png")).unwrap();
+        let step = HilStep {
+            kind: "observe".to_string(),
+            mode: Some("motion".to_string()),
+            paths: Some(vec!["m1.png".to_string(), "m2.png".to_string()]),
+            expect_motion: Some(true),
+            ..Default::default()
+        };
+        let out = run_observe_step(&step, &ctx(dir.path()), false, 60_000)
+            .await
+            .unwrap();
+        assert!(
+            out.contains("[HIL_EXPECT:FAIL]") && out.contains("low confidence"),
+            "a LOW-confidence 'yes' must not pass: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn observe_step_blink_hz_verdict() {
+        let dir = tempdir().unwrap();
+        // Square wave, 2 samples per half-cycle at 100 ms => 400 ms period,
+        // i.e. 2.5 Hz. Ten frames is enough for a non-LOW estimate.
+        for i in 0..10usize {
+            let luma = if i % 4 < 2 { 240u8 } else { 10u8 };
+            solid(luma)
+                .save(dir.path().join(format!("b{i}.png")))
+                .unwrap();
+        }
+        let paths: Vec<String> = (0..10).map(|i| format!("b{i}.png")).collect();
+        let pass = HilStep {
+            kind: "observe".to_string(),
+            mode: Some("blink".to_string()),
+            paths: Some(paths.clone()),
+            interval_ms: Some(100),
+            expect_blink_hz: Some(2.5),
+            ..Default::default()
+        };
+        let out = run_observe_step(&pass, &ctx(dir.path()), false, 60_000)
+            .await
+            .unwrap();
+        assert!(out.contains("[HIL_EXPECT:PASS]"), "got: {out}");
+
+        // 5 Hz is outside the measured ~2.0–3.3 Hz range.
+        let out_of_range = HilStep {
+            expect_blink_hz: Some(5.0),
+            ..pass
+        };
+        let out = run_observe_step(&out_of_range, &ctx(dir.path()), false, 60_000)
+            .await
+            .unwrap();
+        assert!(out.contains("[HIL_EXPECT:FAIL]"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn observe_step_blink_hz_needs_interval_ms() {
+        let dir = tempdir().unwrap();
+        for i in 0..4usize {
+            let luma = if i % 2 == 0 { 240 } else { 10 };
+            solid(luma)
+                .save(dir.path().join(format!("b{i}.png")))
+                .unwrap();
+        }
+        let paths: Vec<String> = (0..4).map(|i| format!("b{i}.png")).collect();
+        let step = HilStep {
+            kind: "observe".to_string(),
+            mode: Some("blink".to_string()),
+            paths: Some(paths),
+            expect_blink_hz: Some(2.5),
+            ..Default::default()
+        };
+        let out = run_observe_step(&step, &ctx(dir.path()), false, 60_000)
+            .await
+            .unwrap();
+        assert!(
+            out.contains("[HIL_EXPECT:FAIL]") && out.contains("interval_ms"),
+            "a missing time base must fail loudly: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn observe_step_diff_verdict() {
+        let dir = tempdir().unwrap();
+        solid(8).save(dir.path().join("before.png")).unwrap();
+        frame_with_block(10, 10, 8, 240)
+            .save(dir.path().join("after.png"))
+            .unwrap();
+        let pass = HilStep {
+            kind: "observe".to_string(),
+            mode: Some("diff".to_string()),
+            file: Some("before.png".to_string()),
+            after: Some("after.png".to_string()),
+            expect_diff: Some(true),
+            ..Default::default()
+        };
+        let out = run_observe_step(&pass, &ctx(dir.path()), false, 60_000)
+            .await
+            .unwrap();
+        assert!(out.contains("[HIL_EXPECT:PASS]"), "got: {out}");
+
+        // Same frame on both sides: nothing changed.
+        let no_change = HilStep {
+            after: Some("before.png".to_string()),
+            ..pass
+        };
+        let out = run_observe_step(&no_change, &ctx(dir.path()), false, 60_000)
             .await
             .unwrap();
         assert!(out.contains("[HIL_EXPECT:FAIL]"), "got: {out}");
