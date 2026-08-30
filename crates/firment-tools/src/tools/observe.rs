@@ -291,6 +291,173 @@ pub(crate) fn analyze_brightness(frame: &RgbaImage, spec: &Spec) -> (Brightness,
     )
 }
 
+/// Mean luma over the frame (or the ROI) as a float. Used to spot a
+/// whole-frame brightness shift, which usually means the camera changed
+/// exposure rather than anything moving.
+fn mean_luma(frame: &RgbaImage, roi: Option<Rect>) -> f32 {
+    let (rx, ry, rw, rh) =
+        roi.map(|r| (r.x, r.y, r.w, r.h))
+            .unwrap_or((0, 0, frame.width(), frame.height()));
+    let mut sum = 0u64;
+    let mut n = 0u64;
+    for y in ry..(ry + rh).min(frame.height()) {
+        for x in rx..(rx + rw).min(frame.width()) {
+            sum += luma(frame.get_pixel(x, y)) as u64;
+            n += 1;
+        }
+    }
+    if n == 0 { 0.0 } else { sum as f32 / n as f32 }
+}
+
+/// Per-pixel comparison of two frames, restricted to `roi`.
+///
+/// Returns (fraction of pixels whose luma moved by at least
+/// `pixel_threshold`, mean absolute luma difference, bounding box of the
+/// pixels that moved). Shared by motion and diff.
+pub(crate) fn frame_diff_map(
+    a: &RgbaImage,
+    b: &RgbaImage,
+    roi: Option<Rect>,
+    pixel_threshold: u8,
+) -> Result<(f32, f32, Option<Rect>), String> {
+    if a.dimensions() != b.dimensions() {
+        return Err(format!(
+            "frames differ in size: {}x{} vs {}x{}",
+            a.width(),
+            a.height(),
+            b.width(),
+            b.height()
+        ));
+    }
+    let (rx, ry, rw, rh) =
+        roi.map(|r| (r.x, r.y, r.w, r.h))
+            .unwrap_or((0, 0, a.width(), a.height()));
+    let mut changed = 0u64;
+    let mut total = 0u64;
+    let mut sum = 0u64;
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (u32::MAX, u32::MAX, 0u32, 0u32);
+    for y in ry..(ry + rh).min(a.height()) {
+        for x in rx..(rx + rw).min(a.width()) {
+            let d = luma(a.get_pixel(x, y)).abs_diff(luma(b.get_pixel(x, y)));
+            total += 1;
+            sum += d as u64;
+            if d >= pixel_threshold {
+                changed += 1;
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+            }
+        }
+    }
+    if total == 0 {
+        return Ok((0.0, 0.0, None));
+    }
+    // `then`, not `then_some`: the latter evaluates its argument eagerly, so
+    // an unchanged pair (min_x still u32::MAX) would underflow in the
+    // subtraction before the closure ever got a say.
+    let bbox = (changed > 0).then(|| Rect {
+        x: min_x,
+        y: min_y,
+        w: max_x - min_x + 1,
+        h: max_y - min_y + 1,
+    });
+    Ok((
+        changed as f32 / total as f32,
+        sum as f32 / total as f32,
+        bbox,
+    ))
+}
+
+/// Per-pixel luma change that counts as "this pixel moved".
+pub(crate) const MOTION_PIXEL_THRESHOLD: u8 = 16;
+
+/// Motion verdict over a frame sequence.
+#[derive(Debug)]
+pub struct Motion {
+    pub frames: usize,
+    pub moving: bool,
+    /// Strongest neighbouring-pair change, as a fraction of ROI pixels.
+    pub changed_fraction: f32,
+    pub mean_abs_diff: f32,
+    /// Where the change happened (strongest pair).
+    pub bbox: Option<Rect>,
+    /// Whole-frame luma drift across the strongest pair. A large value means
+    /// the camera changed exposure — not that something moved.
+    pub global_shift: f32,
+    pub confidence: Confidence,
+    pub note: String,
+}
+
+pub(crate) fn analyze_motion(
+    frames: &[RgbaImage],
+    roi: Option<Rect>,
+    pixel_threshold: u8,
+) -> Result<Motion, String> {
+    if frames.len() < 2 {
+        return Err("motion needs at least 2 frames".to_string());
+    }
+    let mut changed_fraction = 0f32;
+    let mut mean_abs_diff = 0f32;
+    let mut bbox = None;
+    let mut global_shift = 0f32;
+    for pair in frames.windows(2) {
+        let (frac, mean, box_here) = frame_diff_map(&pair[0], &pair[1], roi, pixel_threshold)?;
+        let shift = (mean_luma(&pair[0], roi) - mean_luma(&pair[1], roi)).abs();
+        if frac > changed_fraction {
+            changed_fraction = frac;
+            bbox = box_here;
+        }
+        mean_abs_diff = mean_abs_diff.max(mean);
+        global_shift = global_shift.max(shift);
+    }
+    // Two gates, not one: the fraction alone is fooled by a single hot
+    // pixel, and the mean alone is fooled by a uniform brightness drift.
+    let moving = changed_fraction >= 0.01 && mean_abs_diff >= 2.0;
+    // Did the whole frame get brighter or darker? Then it is exposure or
+    // ambient light, and the motion verdict cannot be trusted.
+    let exposure_suspect = mean_abs_diff > 0.0 && global_shift >= 0.5 * mean_abs_diff;
+    let note = if !moving {
+        format!(
+            "nothing moved: {:.2}% of pixels changed by {pixel_threshold}+ luma \
+             (mean diff {mean_abs_diff:.1})",
+            changed_fraction * 100.0
+        )
+    } else if exposure_suspect {
+        format!(
+            "{:.1}% changed, but whole-frame luma also drifted {global_shift:.1} — likely \
+             exposure or ambient light rather than motion",
+            changed_fraction * 100.0
+        )
+    } else {
+        format!(
+            "{:.1}% of pixels changed (mean diff {mean_abs_diff:.1}) across {} frames",
+            changed_fraction * 100.0,
+            frames.len()
+        )
+    };
+    let confidence = if !moving {
+        // "Nothing moved" is a positive, safe finding.
+        Confidence::High
+    } else if exposure_suspect {
+        Confidence::Low
+    } else if changed_fraction >= 0.02 {
+        Confidence::High
+    } else {
+        Confidence::Medium
+    };
+    Ok(Motion {
+        frames: frames.len(),
+        moving,
+        changed_fraction,
+        mean_abs_diff,
+        bbox,
+        global_shift,
+        confidence,
+        note,
+    })
+}
+
 pub(crate) fn parse_roi(args: &Value, frame: &RgbaImage) -> Result<Option<Rect>, ToolError> {
     let Some(roi) = args.get("roi") else {
         return Ok(None);
@@ -350,11 +517,22 @@ impl Tool for Observe {
                 "mode": {
                     "type": "string",
                     "enum": ["brightness", "blink", "motion", "diff"],
-                    "description": "brightness: is the target lit, and how bright. blink/motion/diff arrive in a later release."
+                    "description": "brightness: is the target lit, and how bright. motion: did anything move across a frame sequence. blink/diff arrive in a later release."
                 },
                 "path": {
                     "type": "string",
                     "description": "Image path inside the workspace (PNG/JPEG). Required for mode=brightness."
+                },
+                "paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Frame sequence inside the workspace, in capture order — for mode=motion. A phone's burst mode works: copy the shots in order. Needs at least 2 frames, all the same size."
+                },
+                "pixel_threshold": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 255,
+                    "description": "motion: per-pixel luma change that counts as 'this pixel moved' (default 16). Raise it on grainy shots."
                 },
                 "roi": {
                     "type": "array",
@@ -389,10 +567,13 @@ impl Tool for Observe {
             .get("mode")
             .and_then(|m| m.as_str())
             .ok_or_else(|| ToolError::new("[InvalidInput] missing 'mode'"))?;
-        if mode != "brightness" {
+        if !matches!(mode, "brightness" | "motion") {
             return Err(ToolError::new(format!(
                 "[InvalidInput] mode={mode} is not implemented yet — {NOT_IMPLEMENTED}"
             )));
+        }
+        if mode == "motion" {
+            return run_motion(&args, ctx);
         }
         let path = args
             .get("path")
@@ -469,6 +650,98 @@ impl Tool for Observe {
     }
 }
 
+/// Appended to every sequence-mode verdict: these measurements compare
+/// pixels, so they cannot tell a light turning on from the camera
+/// changing its mind about exposure.
+const CAMERA_CAVEAT: &str = "  note: pixel comparison cannot tell a light switching on from exposure or \
+     ambient change — fix the camera settings (or set roi) before trusting a \
+     marginal verdict.";
+
+/// mode=motion: read a frame sequence in capture order and report whether
+/// anything moved.
+fn run_motion(args: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+    let paths = args
+        .get("paths")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| {
+            ToolError::new(
+                "[InvalidInput] mode=motion requires 'paths' (2+ frames, in capture order)",
+            )
+        })?;
+    if paths.len() < 2 {
+        return Err(ToolError::new(
+            "[InvalidInput] mode=motion requires at least 2 frames in 'paths'",
+        ));
+    }
+    let pixel_threshold = match args.get("pixel_threshold").and_then(|v| v.as_u64()) {
+        Some(t) if t > 255 => {
+            return Err(ToolError::new(
+                "[InvalidInput] pixel_threshold must be 0..=255",
+            ));
+        }
+        Some(t) => t as u8,
+        None => MOTION_PIXEL_THRESHOLD,
+    };
+
+    let mut frames = Vec::with_capacity(paths.len());
+    for (i, entry) in paths.iter().enumerate() {
+        let Some(p) = entry.as_str() else {
+            return Err(ToolError::new(format!(
+                "[InvalidInput] paths[{i}] must be a string"
+            )));
+        };
+        let resolved = resolve_within(&ctx.cwd, p, &ctx.allowed_roots)
+            .map_err(|e| ToolError::new(format!("[Permission] frames[{i}] ({p}): {e}")))?;
+        let img = image::open(&resolved)
+            .map_err(|e| {
+                ToolError::new(format!(
+                    "[Io] cannot decode frames[{i}] ({}): {e}",
+                    resolved.display()
+                ))
+            })?
+            .to_rgba8();
+        frames.push(img);
+    }
+
+    // ROI bounds are validated against the first frame; equal sizes across
+    // the whole sequence are checked inside the analysis.
+    let roi = parse_roi(args, &frames[0])?;
+    let m = analyze_motion(&frames, roi, pixel_threshold).map_err(ToolError::new)?;
+
+    let mut text = format!(
+        "[observe] mode=motion frames={} roi=[{},{}]\n  moving: {}\n  changed: {:.1}% of ROI \
+         (pixel threshold {})\n  mean abs diff: {:.1}\n  exposure drift: {:.1}\n  \
+         confidence: {} — {}\n",
+        m.frames,
+        roi.map(|r| r.x.to_string()).unwrap_or_else(|| "-".into()),
+        roi.map(|r| r.y.to_string()).unwrap_or_else(|| "-".into()),
+        if m.moving { "yes" } else { "no" },
+        m.changed_fraction * 100.0,
+        pixel_threshold,
+        m.mean_abs_diff,
+        m.global_shift,
+        m.confidence.name(),
+        m.note,
+    );
+    if let Some(b) = m.bbox {
+        text.push_str(&format!(
+            "  bbox: [{}, {}, {}, {}] — where the change is\n",
+            b.x, b.y, b.w, b.h
+        ));
+    }
+    text.push_str(&format!(
+        "  frame: {}x{}, source=paths ({} files)\n",
+        frames[0].width(),
+        frames[0].height(),
+        paths.len()
+    ));
+    text.push_str(CAMERA_CAVEAT);
+
+    Ok(ToolOutput {
+        text: truncate(&text, 32_000),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -491,6 +764,100 @@ mod tests {
 
     fn solid(w: u32, h: u32, l: u8) -> RgbaImage {
         RgbaImage::from_pixel(w, h, image::Rgba([l, l, l, 255]))
+    }
+
+    /// Black frame with a bright square at (x, y).
+    fn frame_with_block(x: u32, y: u32, size: u32, l: u8) -> RgbaImage {
+        let mut f = solid(64, 64, 8);
+        for dy in 0..size {
+            for dx in 0..size {
+                f.put_pixel(x + dx, y + dy, image::Rgba([l, l, l, 255]));
+            }
+        }
+        f
+    }
+
+    #[test]
+    fn motion_detects_moving_block() {
+        // The block moves from (10,10) to (30,30): both the old and the new
+        // position should be inside the reported bounding box.
+        let frames = vec![
+            frame_with_block(10, 10, 8, 240),
+            frame_with_block(30, 30, 8, 240),
+        ];
+        let m = analyze_motion(&frames, None, MOTION_PIXEL_THRESHOLD).unwrap();
+        assert!(m.moving, "a moving block is motion: {}", m.note);
+        let bbox = m.bbox.expect("motion reports where it happened");
+        assert!(
+            bbox.x <= 10 && bbox.y <= 10,
+            "covers the old spot: {bbox:?}"
+        );
+        assert!(
+            bbox.x + bbox.w >= 38 && bbox.y + bbox.h >= 38,
+            "covers the new spot: {bbox:?}"
+        );
+    }
+
+    #[test]
+    fn motion_static_frames_report_no_motion() {
+        let frames = vec![
+            frame_with_block(10, 10, 8, 240),
+            frame_with_block(10, 10, 8, 240),
+        ];
+        let m = analyze_motion(&frames, None, MOTION_PIXEL_THRESHOLD).unwrap();
+        assert!(!m.moving, "identical frames are not motion: {}", m.note);
+        assert_eq!(m.confidence.name(), "HIGH");
+    }
+
+    #[test]
+    fn motion_ignores_a_single_hot_pixel() {
+        // One flickering pixel is sensor noise, not a motor turning: the
+        // fraction gate must reject it even though the delta is large.
+        let mut a = solid(64, 64, 8);
+        let mut b = a.clone();
+        a.put_pixel(5, 5, image::Rgba([255, 255, 255, 255]));
+        b.put_pixel(5, 5, image::Rgba([0, 0, 0, 255]));
+        let m = analyze_motion(&[a, b], None, MOTION_PIXEL_THRESHOLD).unwrap();
+        assert!(
+            !m.moving,
+            "a single pixel is noise, not motion: frac={}",
+            m.changed_fraction
+        );
+    }
+
+    #[test]
+    fn motion_flags_exposure_shift_as_low_confidence() {
+        // A block moves AND the whole frame brightens: the verdict may be
+        // right, but the evidence is contaminated, so it must say so.
+        let mut frames = vec![
+            frame_with_block(10, 10, 8, 240),
+            frame_with_block(30, 30, 8, 240),
+        ];
+        for px in frames[1].pixels_mut() {
+            px[0] = px[0].saturating_add(60);
+            px[1] = px[1].saturating_add(60);
+            px[2] = px[2].saturating_add(60);
+        }
+        let m = analyze_motion(&frames, None, MOTION_PIXEL_THRESHOLD).unwrap();
+        assert!(m.moving, "a block did move: {}", m.note);
+        assert_eq!(
+            m.confidence.name(),
+            "LOW",
+            "whole-frame drift must downgrade the verdict: {}",
+            m.note
+        );
+    }
+
+    #[test]
+    fn motion_needs_two_frames() {
+        let err = analyze_motion(&[solid(16, 16, 8)], None, MOTION_PIXEL_THRESHOLD).unwrap_err();
+        assert!(err.contains("at least 2 frames"), "got: {err}");
+    }
+
+    #[test]
+    fn frame_diff_map_rejects_mismatched_sizes() {
+        let err = frame_diff_map(&solid(16, 16, 8), &solid(32, 32, 8), None, 16).unwrap_err();
+        assert!(err.contains("differ in size"), "got: {err}");
     }
 
     #[test]

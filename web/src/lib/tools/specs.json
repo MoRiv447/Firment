@@ -529,7 +529,7 @@
     "input_schema": {
       "properties": {
         "mode": {
-          "description": "brightness: is the target lit, and how bright. blink/motion/diff arrive in a later release.",
+          "description": "brightness: is the target lit, and how bright. motion: did anything move across a frame sequence. blink/diff arrive in a later release.",
           "enum": [
             "brightness",
             "blink",
@@ -541,6 +541,19 @@
         "path": {
           "description": "Image path inside the workspace (PNG/JPEG). Required for mode=brightness.",
           "type": "string"
+        },
+        "paths": {
+          "description": "Frame sequence inside the workspace, in capture order — for mode=motion. A phone's burst mode works: copy the shots in order. Needs at least 2 frames, all the same size.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pixel_threshold": {
+          "description": "motion: per-pixel luma change that counts as 'this pixel moved' (default 16). Raise it on grainy shots.",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
         },
         "roi": {
           "description": "[x, y, width, height] region to measure; omit to measure the whole frame. Point it at the LED/indicator, not the whole board — a small lit area is easily averaged away.",
