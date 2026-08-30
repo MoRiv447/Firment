@@ -1,7 +1,7 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.7.1-blue)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.7.2-blue)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![CI](https://img.shields.io/badge/CI-Rust%20%2B%20Web%20%2B%20GUI-green)](.github/workflows/ci.yml)
@@ -110,7 +110,7 @@ A successful compile or flash does **not** automatically prove the physical task
 - **`verify_command` gate**: a configured command (e.g. `cargo check`) runs before the agent may declare completion; if it fails, the agent must keep working
 - **ELF regression gate**: `elf_analyze` baselines are re-checked after every edited turn — flash/RAM growth or stack-depth growth above threshold blocks completion
 - **HIL end-to-end suites**: `hil` ties build → flash → monitored output (with `expect_contains`/`expect_regex` + `expect_count` assertions) → ELF analysis into one repeatable, replayable verification run, with `dry_run` for rehearsal
-- **`observe` gate (physical level, automated)**: a photo of the target + deterministic local CV answers "is the LED lit / where is the bright region" with a confidence rating — rung 5 verifiable by the agent itself. In HIL: an `observe` step asserts `expect_lit` and raises the suite's evidence level to `physical`
+- **`observe` gate (physical level, automated)**: deterministic local CV on photos of the target answers "is the LED lit / where is the bright region" (`mode=brightness`, with an automatic ROI suggestion), "did anything move across a burst of shots" (`mode=motion`), "does it blink and how fast" (`mode=blink` — frequency as a range, not a false-precise number) and "did the change actually move pixels" (`mode=diff`, before/after). Every verdict carries a confidence rating, and HIL steps assert these verdicts (`expect_lit` / `expect_motion` / `expect_blink_hz` / ...) — a low-confidence answer can never pass an assertion — so rung 5 is verifiable by the agent itself without a vision model
 - **Fault-signature markers**: captured serial/RTT output is scanned for fault signatures (panic, HardFault, BusFault, ...); on a hit the agent is pointed at `debug forensic` immediately — before a watchdog reset destroys the scene
 
 ### SBC edge data plane

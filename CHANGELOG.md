@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.7.2 (2026-08-30) — physical observation, phase 2 + LAN proxy fix
+
+- **observe phase 2: three sequence analysers**. The v0.7.0 tool only
+  judged a single photo. It now also reads a *burst* of frames in capture
+  order (`paths`) — a phone's burst mode is enough, no camera SDK, no
+  command execution, the tool stays read-only:
+  - `mode=motion`: did anything move across the burst? Two gates
+    (changed-pixel fraction AND mean abs diff) so neither a single hot
+    pixel nor uniform drift alone can flip the verdict; a whole-frame
+    luma shift downgrades to LOW confidence with the reason stated,
+    because a motor turning and a camera auto-exposing look identical in
+    pixels.
+  - `mode=blink`: brightness sequence → Schmitt-trigger edges (midpoint
+    ±10% hysteresis) → period from first-to-last rising edge over the
+    gaps → frequency as a RANGE, never a bare number (`0.95 .. 1.05 Hz`).
+    `interval_ms` is required — only the user knows their burst rate.
+    Fewer than two samples per period = aliased: refuse to state a
+    frequency. One transition is "power-on or mode switch", not a period.
+  - `mode=diff`: before/after comparison (`path` + `after`) with a signed
+    mean delta (brighter after = `+X`), a dominant-quadrant hint, and a
+    reframed-camera guard (>60% of the frame changing → LOW).
+- **HIL observe step covers all four modes** (was brightness-only, other
+  modes errored "not implemented"). New step expectations: `expect_motion`,
+  `expect_diff`, `expect_blinking`, `expect_blink_hz`. Low-confidence
+  verdicts can never pass an assertion: a "yes" on LOW confidence fails,
+  and `expect_blink_hz` additionally requires `interval_ms` and the wanted
+  value inside the measured range. dry-run now fails *any* expectation
+  (it previously only handled `expect_lit`).
+- **HIL fixes**: the observe step no longer fake-passes on dry-run when it
+  carries an expectation, and it now honors the suite's time budget
+  (`remaining`) like every other step.
+- **LAN endpoints are never proxied** (`firment-core/src/http.rs`):
+  behind a proxy, reaching a local model server (Ollama on 192.168.x.x,
+  LM Studio, a LAN SBC) used to fail with a bare connection error —
+  reqwest reads `NO_PROXY` but that variable almost never lists the
+  private ranges. Every client (8 call sites + both providers) now
+  attaches the private-range exclusion list; no proxy configured ⇒
+  behavior unchanged.
+- **docs**: `docs/config-example.toml` — a hand-editable provider
+  reference (alphabetical, grouped by reachability, no ranking, no
+  referral links); `docs/hil-example.toml` gains a blink-suite example.
+
 ## v0.7.1 (2026-08-30) — proxy compatibility + forensic stack-scan reliability
 
 - **TLS backend: rustls → native-tls (behavior change)**. rustls refuses TLS

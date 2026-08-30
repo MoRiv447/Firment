@@ -1,7 +1,7 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.7.1-blue)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.7.2-blue)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![CI](https://img.shields.io/badge/CI-Rust%20%2B%20Web%20%2B%20GUI-green)](.github/workflows/ci.yml)
@@ -110,7 +110,7 @@ Firment 不把模型当 shell 脚本生成器，而是明确分工：
 - **`verify_command` 门禁**：配置的命令（如 `cargo check`）在 Agent 声明完成前必须运行；失败则 Agent 必须继续修改
 - **ELF 回归门禁**：每次编辑回合后自动复查 `elf_analyze` 基线——flash/RAM 增长或栈深增长超过阈值即拦截完成
 - **HIL 端到端套件**：`hil` 把 build → flash → 观测输出（`expect_contains`/`expect_regex` + `expect_count` 断言）→ ELF 分析串成可重复、可回放的一次性验证，`dry_run` 用于演练
-- **`observe` 门（物理层，自动化）**：一张目标板照片 + 确定性本地 CV 回答"LED 亮没亮 / 亮区在哪"，并给出置信度——第 5 层证据可由 agent 自行验证。HIL 中为 `observe` 步骤断言 `expect_lit`，将套件证据层级抬到 `physical`
+- **`observe` 门（物理层，自动化）**：对目标板的照片做确定性本地 CV——`mode=brightness` 回答"LED 亮没亮 / 亮区在哪"（带自动 ROI 建议）、`mode=motion` 回答"连拍序列里有没有东西动了"、`mode=blink` 回答"闪不闪、多快"（频率只给区间，不给伪精确值）、`mode=diff` 回答"改动前后像素真的变了吗"（before/after 对比）。每个结论都带置信度，HIL 步骤可断言这些结论（`expect_lit`/`expect_motion`/`expect_blink_hz` 等）——**低置信度的答案永远无法通过断言**——第 5 层证据可由 agent 自行验证，且不依赖视觉模型
 - **故障签名标记**：捕获的串口/RTT 输出会扫描故障签名（panic、HardFault、BusFault 等），命中即提示 agent 立刻执行 `debug forensic`——抢在看门狗复位毁掉现场之前
 
 ### SBC 端侧数据平面

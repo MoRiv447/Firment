@@ -525,7 +525,7 @@
   },
   {
     "name": "observe",
-    "description": "Analyze a photo of the target to verify PHYSICAL behavior (verification ladder rung 5): is the LED lit, how bright, where is the bright region. Deterministic local image analysis with a confidence rating — point the roi at the LED/indicator, not the whole board. Read-only.",
+    "description": "Analyze photos of the target to verify PHYSICAL behavior (verification ladder rung 5). Four modes: mode=brightness (still image: is the LED lit, how bright, where — with an automatic ROI suggestion), mode=motion (a burst of shots in capture order via paths: did anything move), mode=blink (same burst + interval_ms: does it alternate and at what frequency — reported as a range, never a false-precise number), mode=diff (path + after: what changed between a before/after pair, with a signed brightness delta). Deterministic local image analysis, every verdict carries a confidence rating. Point the roi at the LED/indicator, not the whole board. Read-only.",
     "input_schema": {
       "properties": {
         "after": {

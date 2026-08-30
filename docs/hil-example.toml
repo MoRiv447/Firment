@@ -98,3 +98,44 @@ file = "photos/led-on.jpg"     # inside the workspace
 roi = [120, 80, 40, 40]        # optional: point at the LED; omit to scan
 expect_lit = true              # fail the suite if the analysis says dark
 save = true                    # archive the frame under .firment/observe/
+
+# Fourth suite: blink measurement (v0.7.2+). Phone burst mode works — copy
+# the shots into the workspace IN CAPTURE ORDER, then give interval_ms (the
+# gap between shots, which only you know). The analysis never guesses a
+# time base, so expect_blink_hz REQUIRES interval_ms.
+[suite.blink-observe]
+chip = "stm32g431rb"
+
+[[suite.blink-observe.steps]]
+kind = "build"
+timeout_ms = 600000
+
+[[suite.blink-observe.steps]]
+kind = "flash"
+elf = "build/firmware.elf"
+timeout_ms = 180000
+
+[[suite.blink-observe.steps]]
+kind = "delay"
+duration_ms = 500
+
+[[suite.blink-observe.steps]]
+kind = "observe"
+mode = "blink"
+paths = [
+  "photos/blink-0.jpg",
+  "photos/blink-1.jpg",
+  "photos/blink-2.jpg",
+  "photos/blink-3.jpg",
+  "photos/blink-4.jpg",
+  "photos/blink-5.jpg",
+  "photos/blink-6.jpg",
+  "photos/blink-7.jpg",
+  "photos/blink-8.jpg",
+  "photos/blink-9.jpg",
+]
+interval_ms = 100              # your burst rate — REQUIRED for expect_blink_hz
+# roi = [120, 80, 40, 40]      # optional, point at the LED
+expect_blinking = true         # plain boolean: does it alternate at all
+expect_blink_hz = 2.5          # strict: must be inside the measured range,
+                               # non-LOW confidence, interval_ms present
