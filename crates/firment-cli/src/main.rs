@@ -1005,7 +1005,7 @@ async fn doctor(config: &Config, path: &Path) -> anyhow::Result<()> {
         println!("  api key: {key_status}");
 
         let probe_url = provider.models_url();
-        let client = reqwest::Client::builder()
+        let client = firment_core::http_builder()
             .timeout(Duration::from_secs(10))
             .build()?;
         let mut request = client.get(&probe_url);
@@ -1389,7 +1389,7 @@ async fn doctor_sbc(config: &Config) {
         println!("    hint: add a provider whose base_url is http://{host}:<ollama-port>/v1,");
         println!("          e.g. [providers.sbc-ollama] with type=\"openai\"");
     } else {
-        let http = reqwest::Client::builder()
+        let http = firment_core::http_builder()
             .timeout(Duration::from_secs(8))
             .build()
             .ok();

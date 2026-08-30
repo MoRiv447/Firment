@@ -122,7 +122,7 @@ impl Tool for WebFetch {
             .ok_or_else(|| ToolError::new("[InvalidInput] missing url"))?;
         Self::validate_url(url)?;
 
-        let client = reqwest::Client::builder()
+        let client = firment_core::http_builder()
             .timeout(Duration::from_secs(20))
             .user_agent("Firment/0.4 (firmware coding agent)")
             .redirect(reqwest::redirect::Policy::custom(|attempt| {

@@ -55,7 +55,7 @@ static DDG_THROTTLE: StdMutex<Option<Instant>> = StdMutex::new(None);
 
 fn http_client() -> &'static reqwest::Client {
     CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
+        firment_core::http_builder()
             .timeout(Duration::from_secs(20))
             .user_agent(BROWSER_UA)
             .cookie_store(true)
@@ -467,7 +467,7 @@ async fn tavily(
              TAVILY_API_KEY) or web_search_api_key in config.toml",
         ));
     }
-    let client = reqwest::Client::builder()
+    let client = firment_core::http_builder()
         .timeout(Duration::from_secs(20))
         .build()
         .map_err(|e| ToolError::new(format!("[Io] http client init failed: {e}")))?;
@@ -530,7 +530,7 @@ async fn brave(
              BRAVE_API_KEY) or web_search_api_key in config.toml",
         ));
     }
-    let client = reqwest::Client::builder()
+    let client = firment_core::http_builder()
         .timeout(Duration::from_secs(20))
         .build()
         .map_err(|e| ToolError::new(format!("[Io] http client init failed: {e}")))?;

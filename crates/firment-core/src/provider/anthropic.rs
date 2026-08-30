@@ -24,7 +24,7 @@ impl AnthropicProvider {
         temperature: Option<f32>,
     ) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: crate::http_client(),
             base_url: base_url.into().trim_end_matches('/').to_string(),
             api_key: api_key.into(),
             model: model.into(),

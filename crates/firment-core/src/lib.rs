@@ -4,6 +4,7 @@ pub mod cancel;
 pub mod config;
 pub mod context;
 pub mod hash;
+pub mod http;
 pub mod journal;
 pub mod kb;
 pub mod permission;
@@ -24,6 +25,7 @@ pub use config::{
     config_dir, config_path, load_auth, save_auth,
 };
 pub use context::{default_system_prompt, delegation_section, system_prompt_for};
+pub use http::{http_builder, http_client};
 pub use journal::{EditJournal, Ledger, LedgerChange, UndoSummary};
 pub use permission::{AutoApprove, PermissionChecker, PermissionError, PlanModePermission};
 pub use provider::{

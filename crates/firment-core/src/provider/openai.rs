@@ -52,7 +52,7 @@ impl OpenAIProvider {
         let model = model.into();
         let vendor = Vendor::detect(&base_url, &model);
         Self {
-            client: reqwest::Client::new(),
+            client: crate::http_client(),
             base_url,
             api_key: api_key.into(),
             model,

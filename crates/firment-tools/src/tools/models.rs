@@ -61,7 +61,7 @@ impl Tool for Models {
             None => ctx.providers.clone(),
         };
 
-        let client = reqwest::Client::builder()
+        let client = firment_core::http_builder()
             .timeout(Duration::from_secs(8))
             .build()
             .map_err(|e| ToolError::new(format!("[Http] client: {e}")))?;

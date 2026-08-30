@@ -589,7 +589,7 @@ impl Config {
         let provider = self.provider(Some(name))?.clone();
         let key = self.api_key_for(&provider, name).unwrap_or_default();
         let url = provider.models_url();
-        let client = reqwest::Client::builder()
+        let client = crate::http_builder()
             .timeout(Duration::from_secs(10))
             .build()?;
         let mut request = client.get(&url);
