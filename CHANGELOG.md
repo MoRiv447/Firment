@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.7.1 (2026-08-30) — proxy compatibility + forensic stack-scan reliability
+
+- **TLS backend: rustls → native-tls (behavior change)**. rustls refuses TLS
+  renegotiation, and proxy/SSL-interception middleboxes (Clash, corporate
+  inspection) trigger exactly that — reqwest then reports a bare
+  `unreachable (error sending request)` with no way in. native-tls uses the
+  OS stack (Schannel / Security.framework / OpenSSL), which handles
+  renegotiation and trusts the CA certs a user installed for their proxy.
+- **reqwest feature completion** (default-features=false had silently
+  dropped these): `charset` — `web_search` no longer mangles GBK-encoded
+  Chinese pages; `http2`; `macos-system-configuration` — the GUI launched
+  from Finder now sees the system proxy; `socks` — `ALL_PROXY=socks5://`
+  is no longer silently ignored. Linux release/CI builds now install
+  libssl-dev explicitly.
+- **Forensic stack scan reliability**. The scan now suppresses unreliable
+  candidates instead of reporting them as a call chain: ARM mapping symbols
+  (`$a/$d/$t` — never call sites), and size-0 symbols addressed far beyond
+  their base (a size-0 symbol covers unboundedly upward, so random stack
+  words resolved to it by construction). The report distinguishes "no code
+  pointers resolved" from "N candidate(s) suppressed as unreliable" — the
+  single old message was misleading once filtering existed.
+- **doctor diagnostics**: probe failures now walk the reqwest error source
+  chain and print a hint for the proxy/TLS-middlebox case and the LAN
+  `NO_PROXY` case, instead of a bare `unreachable`.
+
 ## v0.7.0 (2026-08-29) — fault forensics + physical observation
 
 Two features that push the agent toward "responsible for the result":

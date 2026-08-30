@@ -43,22 +43,57 @@ pub fn exception_frame(words: &[u64]) -> Option<ExceptionFrame> {
 /// to a known function. The Cortex-M Thumb bit (LSB) is stripped before
 /// lookup; consecutive duplicates collapse. Order is stack order — on a
 /// fault frame that is most-recent-first.
-pub fn code_pointer_scan(words: &[u64], index: &SymbolIndex) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
+/// Stack-scan verdict: the surviving candidates plus how many were rejected
+/// as unreliable. The count matters — an empty candidate list backed by a
+/// pile of suppressed words reads very differently from "nothing on the
+/// stack looked like code at all".
+pub struct ScanResult {
+    pub candidates: Vec<String>,
+    pub suppressed: usize,
+}
+
+/// A size-0 symbol covers every address above it (see `SymbolIndex::lookup`),
+/// so a stack word landing on one is only plausibly a return address if it
+/// sits close behind the symbol's base. Beyond this, treat it as noise.
+const MAX_UNSIZED_OFFSET: u64 = 0x1000;
+
+pub fn code_pointer_scan(words: &[u64], index: &SymbolIndex) -> ScanResult {
+    let mut candidates: Vec<String> = Vec::new();
+    let mut suppressed = 0usize;
     for &w in words {
         if w < 2 {
             continue;
         }
         let addr = w & !1;
-        let Some(decoded) = index.lookup(addr) else {
+        let Some((name, offset, size)) = index.lookup_detail(addr) else {
             continue;
         };
-        if out.last().is_some_and(|last: &String| last == &decoded) {
+        // ARM mapping symbols ($a/$d/$t) mark instruction/data switches; they
+        // are never call sites.
+        if name.starts_with('$') {
+            suppressed += 1;
             continue;
         }
-        out.push(decoded);
+        // Size-0 symbols cover unboundedly upward, so a random stack word far
+        // above the base resolves to them by construction. A return address
+        // never sits base + megabytes away.
+        if size == 0 && offset > MAX_UNSIZED_OFFSET {
+            suppressed += 1;
+            continue;
+        }
+        let decoded = format!("{name}+0x{offset:x}");
+        if candidates
+            .last()
+            .is_some_and(|last: &String| last == &decoded)
+        {
+            continue;
+        }
+        candidates.push(decoded);
     }
-    out
+    ScanResult {
+        candidates,
+        suppressed,
+    }
 }
 
 fn age_str(now: u64, created: u64) -> String {
@@ -180,14 +215,24 @@ pub fn forensic_report(scene: &Scene) -> String {
         out.push_str(&format!("  {line}\n"));
     }
 
-    let candidates = code_pointer_scan(scene.stack_words, scene.index);
+    let scan = code_pointer_scan(scene.stack_words, scene.index);
     out.push_str("candidate call chain (stack scan, most recent first):\n");
-    if candidates.is_empty() {
-        out.push_str(
-            "  (no code pointers resolved — rebuild with debug symbols or widen the capture)\n",
-        );
+    if scan.candidates.is_empty() {
+        if scan.suppressed > 0 {
+            // Field-access captures don't work across a line-continuation
+            // backslash, so bind the count to a plain identifier first.
+            let n = scan.suppressed;
+            out.push_str(&format!(
+                "  ({n} candidate(s) suppressed as unreliable — mapping symbols \
+                 or unbounded offsets; rebuild with debug symbols for a real chain)\n"
+            ));
+        } else {
+            out.push_str(
+                "  (no code pointers resolved — rebuild with debug symbols or widen the capture)\n",
+            );
+        }
     } else {
-        for (i, c) in candidates.iter().enumerate() {
+        for (i, c) in scan.candidates.iter().enumerate() {
             out.push_str(&format!("  {}. {c}\n", i + 1));
         }
     }
@@ -235,6 +280,39 @@ mod tests {
         std::fs::write(path, obj.write().unwrap()).unwrap();
     }
 
+    /// Adds the two symbol shapes the stack scan must defend against: an ARM
+    /// mapping symbol ($a — never a call site) and a size-0 linker-style
+    /// symbol (covers unboundedly upward, so far-above stack words resolve to
+    /// it by construction).
+    fn write_elf_with_edge_symbols(path: &Path) {
+        use object::write::{Object, Symbol, SymbolSection};
+        use object::{BinaryFormat, Endianness, SectionKind, SymbolKind, SymbolScope};
+        let mut obj = Object::new(
+            BinaryFormat::Elf,
+            object::Architecture::Arm,
+            Endianness::Little,
+        );
+        let text = obj.add_section(Vec::new(), b".text".to_vec(), SectionKind::Text);
+        let symbols: [(&str, u64, u64); 3] = [
+            ("handler", 0x1000, 0x100),
+            ("$a", 0x2000, 0),
+            ("bare", 0x3000, 0),
+        ];
+        for (name, value, size) in symbols {
+            obj.add_symbol(Symbol {
+                name: name.as_bytes().to_vec(),
+                value,
+                size,
+                kind: SymbolKind::Text,
+                scope: SymbolScope::Compilation,
+                section: SymbolSection::Section(text),
+                weak: false,
+                flags: object::SymbolFlags::None,
+            });
+        }
+        std::fs::write(path, obj.write().unwrap()).unwrap();
+    }
+
     #[test]
     fn exception_frame_interprets_stack_order() {
         let words = [1u64, 2, 3, 4, 5, 0x2011, 0x1005, 0x0100_0000];
@@ -254,10 +332,31 @@ mod tests {
         let index = SymbolIndex::from_path(&p).unwrap();
         // Thumb bits set, one duplicate, one non-pointer.
         let words = [0x1005, 0x1005, 0x1011, 0x50];
+        let scan = code_pointer_scan(&words, &index);
         assert_eq!(
-            code_pointer_scan(&words, &index),
-            vec!["handler+0x4".to_string(), "handler+0x10".to_string(),]
+            scan.candidates,
+            vec!["handler+0x4".to_string(), "handler+0x10".to_string()]
         );
+        assert_eq!(scan.suppressed, 0);
+    }
+
+    #[test]
+    fn code_pointer_scan_suppresses_unreliable_symbols() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("fw.elf");
+        write_elf_with_edge_symbols(&p);
+        let index = SymbolIndex::from_path(&p).unwrap();
+        // $a mapping symbol (never a call site); size-0 symbol at a close
+        // offset (plausible); the SAME size-0 symbol far above its base (a
+        // random word that only resolves because the symbol covers
+        // unboundedly); a real function.
+        let words = [0x2001, 0x3005, 0x5001, 0x1005];
+        let scan = code_pointer_scan(&words, &index);
+        assert_eq!(
+            scan.candidates,
+            vec!["bare+0x4".to_string(), "handler+0x4".to_string()]
+        );
+        assert_eq!(scan.suppressed, 2);
     }
 
     #[test]

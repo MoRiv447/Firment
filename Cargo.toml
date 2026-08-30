@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
@@ -32,7 +32,15 @@ ratatui = "0.29"
 serialport = "4"
 sha2 = "0.10"
 regex = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+# native-tls over rustls: rustls refuses TLS renegotiation, and
+# proxy/SSL-interception middleboxes (Clash, corporate inspection) trigger
+# exactly that — reqwest then reports a bare "error sending request" with no
+# way in. native-tls uses the OS stack (Schannel/Security.framework/OpenSSL),
+# which handles renegotiation AND trusts CA certs the user installed for
+# their proxy. The extra features restore what default-features=false drops:
+# charset (.text() decoding — GBK pages), http2, macOS system-proxy detection
+# (GUI launched from Finder has no shell env), and socks proxies.
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "native-tls", "charset", "http2", "macos-system-configuration", "socks"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"

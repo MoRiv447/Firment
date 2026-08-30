@@ -910,7 +910,23 @@ async fn doctor(config: &Config, path: &Path) -> anyhow::Result<()> {
         }
         match request.send().await {
             Ok(response) => println!("  probe {probe_url}: HTTP {}", response.status()),
-            Err(e) => println!("  probe {probe_url}: unreachable ({e})"),
+            Err(e) => {
+                println!("  probe {probe_url}: unreachable ({e})");
+                // reqwest's top-level Display hides the real cause; walk the
+                // source chain so the user sees WHAT failed, not just that
+                // something did.
+                let mut src = std::error::Error::source(&e);
+                while let Some(cause) = src {
+                    println!("    cause: {cause}");
+                    src = cause.source();
+                }
+                println!(
+                    "    hint: if you are behind a proxy, this is more likely a TLS \
+                     middlebox (renegotiation / MITM certificate) than a bad URL or \
+                     key — retry with HTTPS_PROXY='' to confirm. LAN endpoints need \
+                     NO_PROXY."
+                );
+            }
         }
     }
     Ok(())

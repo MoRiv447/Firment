@@ -114,6 +114,13 @@ pub fn decode_address(elf: &Path, address: u64) -> Option<String> {
 /// symbols covering unboundedly upward). Unlike the elf_analyze stats table,
 /// `$`-prefixed mapping symbols are KEPT so index output is byte-identical
 /// to the legacy path.
+///
+/// The lenient covering rule is deliberate for LOG decoding: attributing an
+/// address to the nearest known symbol is more useful than printing nothing.
+/// The stack scan, however, must treat those candidates skeptically — a
+/// size-0 symbol absorbing megabytes of address space turns random stack
+/// words into fake return addresses. Use `lookup_detail` there and judge by
+/// offset (see `code_pointer_scan`).
 pub struct SymbolIndex {
     /// (address, size, name), sorted ascending by address.
     symbols: Vec<(u64, u64, String)>,
@@ -147,7 +154,9 @@ impl SymbolIndex {
     }
 
     /// Resolve a code address to `function+0xOFFSET` (highest covering base,
-    /// gap addresses return None — same rules as `decode_address`).
+    /// same rules as `decode_address`). A gap resolves to None — UNLESS a
+    /// size-0 symbol below it covers unboundedly upward, in which case the
+    /// gap is attributed to that symbol; `decode_address` behaves the same.
     pub fn lookup(&self, address: u64) -> Option<String> {
         if address < self.min_addr {
             return None;
@@ -164,6 +173,28 @@ impl SymbolIndex {
                 continue;
             }
             return Some(format!("{name}+0x{:x}", address - addr));
+        }
+        None
+    }
+
+    /// Detail view of `lookup` for the stack scan: returns the symbol name,
+    /// its offset into the symbol, and the symbol's reported size, so the
+    /// caller can judge whether a candidate is reliable at all (see
+    /// `code_pointer_scan` for the reliability rules). Covering semantics
+    /// are identical to `lookup` — including size-0 symbols covering
+    /// unboundedly upward, which is exactly what the caller must filter on.
+    pub(crate) fn lookup_detail(&self, address: u64) -> Option<(&str, u64, u64)> {
+        if address < self.min_addr {
+            return None;
+        }
+        let pos = self
+            .symbols
+            .partition_point(|(addr, _, _)| *addr <= address);
+        for (addr, size, name) in self.symbols[..pos].iter().rev() {
+            if *size > 0 && address >= addr.saturating_add(*size) {
+                continue;
+            }
+            return Some((name.as_str(), address - addr, *size));
         }
         None
     }
