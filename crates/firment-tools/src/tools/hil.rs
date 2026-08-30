@@ -1437,7 +1437,20 @@ fn run_observe_blink(step: &HilStep, ctx: &ToolContext) -> Result<String, String
         w: r[2],
         h: r[3],
     });
-    let interval_ms = step.interval_ms.unwrap_or(0);
+    // A frequency needs a time base; a burst of photos carries none unless
+    // the user states the gap. Without it the sample series is t_ms = 0
+    // everywhere, which turns period into 0 and the range into `inf .. 1000
+    // Hz` — refuse instead (same rule as the tool itself).
+    let Some(interval_ms) = step.interval_ms else {
+        return Err(
+            "[InvalidInput] observe mode=blink requires interval_ms — the gap between shots, \
+             which only you know. Without a time base a frequency is invented."
+                .to_string(),
+        );
+    };
+    if interval_ms == 0 {
+        return Err("[InvalidInput] interval_ms must be > 0".to_string());
+    }
     let samples: Vec<crate::tools::observe::Sample> = frames
         .iter()
         .enumerate()
@@ -1448,16 +1461,11 @@ fn run_observe_blink(step: &HilStep, ctx: &ToolContext) -> Result<String, String
         .collect();
     let b = crate::tools::observe::analyze_blink(&samples);
     let mut out = format!(
-        "observe mode=blink ({} frames, interval_ms={})
+        "observe mode=blink ({} frames, interval_ms={interval_ms})
   blinking: {}
   edges: {}
   confidence: {} — {}",
         b.samples,
-        if interval_ms > 0 {
-            interval_ms.to_string()
-        } else {
-            "not given".to_string()
-        },
         if b.blinking { "yes" } else { "no" },
         b.edges,
         b.confidence.name(),
@@ -1475,15 +1483,9 @@ fn run_observe_blink(step: &HilStep, ctx: &ToolContext) -> Result<String, String
         ));
     }
     if let Some(want) = step.expect_blink_hz {
-        // Only a real measurement can answer this. A missing time base, LOW
-        // confidence or an aliased capture are all "cannot confirm" — and a
-        // LOW-confidence number must never pass an assertion.
-        let (marker, reason) = if step.interval_ms.is_none() {
-            (
-                "FAIL",
-                "interval_ms not given — cannot turn edges into a frequency",
-            )
-        } else if matches!(b.confidence, crate::tools::observe::Confidence::Low) {
+        // Only a real measurement can answer this. A LOW-confidence number
+        // must never pass an assertion.
+        let (marker, reason) = if matches!(b.confidence, crate::tools::observe::Confidence::Low) {
             ("FAIL", "low confidence — not asserting a frequency on it")
         } else if let (Some(low), Some(high)) = (b.hz_low, b.hz_high) {
             if (low as f64) <= want && want <= (high as f64) {
@@ -2163,12 +2165,12 @@ elf = "build/fw.elf"
             expect_blink_hz: Some(2.5),
             ..Default::default()
         };
-        let out = run_observe_step(&step, &ctx(dir.path()), false, 60_000)
+        let err = run_observe_step(&step, &ctx(dir.path()), false, 60_000)
             .await
-            .unwrap();
+            .unwrap_err();
         assert!(
-            out.contains("[HIL_EXPECT:FAIL]") && out.contains("interval_ms"),
-            "a missing time base must fail loudly: {out}"
+            err.contains("interval_ms"),
+            "a missing time base must fail loudly: {err}"
         );
     }
 

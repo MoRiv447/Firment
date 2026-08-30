@@ -99,7 +99,7 @@ roi = [120, 80, 40, 40]        # optional: point at the LED; omit to scan
 expect_lit = true              # fail the suite if the analysis says dark
 save = true                    # archive the frame under .firment/observe/
 
-# Fourth suite: blink measurement (v0.7.2+). Phone burst mode works — copy
+# Fifth suite: blink measurement (v0.7.2+). Phone burst mode works — copy
 # the shots into the workspace IN CAPTURE ORDER, then give interval_ms (the
 # gap between shots, which only you know). The analysis never guesses a
 # time base, so expect_blink_hz REQUIRES interval_ms.
