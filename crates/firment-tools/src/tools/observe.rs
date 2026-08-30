@@ -1,7 +1,8 @@
 //! `observe` — read-only computer-vision analysis of frames (photos of the
 //! target), giving the agent evidence at rung 5 of the verification ladder:
-//! "the device physically behaves as asked". Phase 1 is brightness/lit
-//! analysis of a still image; blink/motion/diff arrive in a later release.
+//! "the device physically behaves as asked". Brightness analysis of a still
+//! image, plus motion and blink analysis of a frame sequence (a burst of
+//! shots in capture order); diff arrives in a later release.
 //!
 //! Deterministic local CV via the `image` crate — no vision model, no
 //! provider changes, results are reproducible and unit-testable.
@@ -458,6 +459,180 @@ pub(crate) fn analyze_motion(
     })
 }
 
+/// One brightness reading at a point in time.
+///
+/// The analyser takes these rather than frames so it stays pure: no IO, no
+/// clock, fully deterministic tests. The time axis is whatever the caller
+/// says it is — for a burst of photos that is `index * interval_ms`, which is
+/// an assumption, and the output says so.
+#[derive(Debug, Clone, Copy)]
+pub struct Sample {
+    pub t_ms: u64,
+    pub luma: f32,
+}
+
+/// Luma range below which there is no blink to speak of: sensor noise and
+/// compression artefacts stay under this, a real on/off LED sits far above it.
+const BLINK_MIN_SPAN: f32 = 24.0;
+
+/// Blink verdict over a brightness time series.
+#[derive(Debug)]
+pub struct Blink {
+    pub samples: usize,
+    pub blinking: bool,
+    /// Rising edges seen — a period needs at least two of them.
+    pub edges: usize,
+    /// Centre estimate, only when the sampling rate can actually support one.
+    pub hz: Option<f32>,
+    /// The honest answer is a RANGE: edges are only located to within one
+    /// sample interval, so a bare "1.33 Hz" would be false precision.
+    pub hz_low: Option<f32>,
+    pub hz_high: Option<f32>,
+    /// Fraction of samples spent in the lit state.
+    pub duty: Option<f32>,
+    pub span: f32,
+    pub confidence: Confidence,
+    pub note: String,
+}
+
+/// Median gap between samples. Edges are located to within one interval, so
+/// that gap is the error bar on everything derived from them.
+fn median_interval_ms(samples: &[Sample]) -> f32 {
+    if samples.len() < 2 {
+        return 0.0;
+    }
+    let mut gaps: Vec<u64> = samples
+        .windows(2)
+        .map(|w| w[1].t_ms.saturating_sub(w[0].t_ms))
+        .collect();
+    gaps.sort_unstable();
+    gaps[gaps.len() / 2] as f32
+}
+
+pub(crate) fn analyze_blink(samples: &[Sample]) -> Blink {
+    let n = samples.len();
+    let no_period = |edges: usize, span: f32, note: String| Blink {
+        samples: n,
+        blinking: false,
+        edges,
+        hz: None,
+        hz_low: None,
+        hz_high: None,
+        duty: None,
+        span,
+        confidence: Confidence::Low,
+        note,
+    };
+    if n < 3 {
+        return no_period(
+            0,
+            0.0,
+            "needs at least 3 samples to say anything about a period".to_string(),
+        );
+    }
+    let lumas: Vec<f32> = samples.iter().map(|s| s.luma).collect();
+    let min = lumas.iter().cloned().fold(f32::INFINITY, f32::min);
+    let max = lumas.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let span = max - min;
+    if span < BLINK_MIN_SPAN {
+        return no_period(
+            0,
+            span,
+            format!("brightness barely moves (span {span:.1} luma) — nothing to call a blink"),
+        );
+    }
+
+    // Schmitt trigger: midpoint plus a hysteresis band, so noise riding the
+    // threshold cannot manufacture edges.
+    let mid = min + span / 2.0;
+    let band = span * 0.10;
+    let (hi, lo) = (mid + band, mid - band);
+
+    let mut lit = lumas[0] > mid;
+    let mut edges: Vec<usize> = Vec::new();
+    let mut lit_count = 0usize;
+    for (i, &l) in lumas.iter().enumerate() {
+        if !lit && l > hi {
+            lit = true;
+            edges.push(i);
+        } else if lit && l < lo {
+            lit = false;
+        }
+        if lit {
+            lit_count += 1;
+        }
+    }
+    let duty = lit_count as f32 / n as f32;
+    let dt = median_interval_ms(samples);
+
+    if edges.len() < 2 {
+        return no_period(
+            edges.len(),
+            span,
+            format!(
+                "only {} rising edge(s) in {n} samples — that can be power-on or a mode \
+                 switch, not a period",
+                edges.len()
+            ),
+        );
+    }
+
+    // First-to-last edge divided by the intervals between them: holds up
+    // better than "total time / edge count" when the duty slowly drifts.
+    let first_t = samples[edges[0]].t_ms;
+    let last_t = samples[edges[edges.len() - 1]].t_ms;
+    let period = last_t.saturating_sub(first_t) as f32 / (edges.len() - 1) as f32;
+
+    // Nyquist: under two samples per period the estimate is aliased nonsense.
+    // Refuse rather than invent a number.
+    if dt > 0.0 && period < 2.0 * dt {
+        return Blink {
+            samples: n,
+            blinking: true,
+            edges: edges.len(),
+            hz: None,
+            hz_low: None,
+            hz_high: None,
+            duty: Some(duty),
+            span,
+            confidence: Confidence::Low,
+            note: format!(
+                "≈{period:.0} ms period but only one sample every {dt:.0} ms — sampling rate \
+                 too low (aliasing likely), refusing to give a frequency"
+            ),
+        };
+    }
+
+    // Report the range, not a point: each edge is ±dt uncertain.
+    let hz_high = 1000.0 / (period - dt).max(1.0);
+    let hz_low = 1000.0 / (period + dt);
+    let per_period = if dt > 0.0 { period / dt } else { f32::INFINITY };
+    let confidence = if per_period < 4.0 {
+        Confidence::Low
+    } else if per_period >= 8.0 && edges.len() >= 4 && (0.1..=0.9).contains(&duty) {
+        Confidence::High
+    } else {
+        Confidence::Medium
+    };
+    Blink {
+        samples: n,
+        blinking: true,
+        edges: edges.len(),
+        hz: Some(1000.0 / period),
+        hz_low: Some(hz_low),
+        hz_high: Some(hz_high),
+        duty: Some(duty),
+        span,
+        confidence,
+        note: format!(
+            "{} rising edges over {n} samples, period ≈ {period:.0} ms ({per_period:.1} \
+             samples/period, duty {:.0}%)",
+            edges.len(),
+            duty * 100.0
+        ),
+    }
+}
+
 pub(crate) fn parse_roi(args: &Value, frame: &RgbaImage) -> Result<Option<Rect>, ToolError> {
     let Some(roi) = args.get("roi") else {
         return Ok(None);
@@ -498,7 +673,8 @@ pub(crate) fn parse_roi(args: &Value, frame: &RgbaImage) -> Result<Option<Rect>,
     Ok(Some(Rect { x, y, w, h }))
 }
 
-const NOT_IMPLEMENTED: &str = "arrives in v0.7.x — phase 1 supports mode=brightness only";
+const NOT_IMPLEMENTED: &str =
+    "brightness, motion and blink are in — diff arrives in a later release";
 
 #[async_trait]
 impl Tool for Observe {
@@ -517,7 +693,7 @@ impl Tool for Observe {
                 "mode": {
                     "type": "string",
                     "enum": ["brightness", "blink", "motion", "diff"],
-                    "description": "brightness: is the target lit, and how bright. motion: did anything move across a frame sequence. blink/diff arrive in a later release."
+                    "description": "brightness: is the target lit, and how bright. motion: did anything move across a frame sequence. blink: does it alternate, and at what frequency. diff arrives in a later release."
                 },
                 "path": {
                     "type": "string",
@@ -526,7 +702,12 @@ impl Tool for Observe {
                 "paths": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Frame sequence inside the workspace, in capture order — for mode=motion. A phone's burst mode works: copy the shots in order. Needs at least 2 frames, all the same size."
+                    "description": "Frame sequence inside the workspace, in capture order — for mode=motion / mode=blink. A phone's burst mode works: copy the shots in order. Needs at least 2 frames, all the same size."
+                },
+                "interval_ms": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "mode=blink: the gap between shots, in ms — only you know your burst rate, and a frequency cannot be derived from an undated burst. The estimate is only as good as this value."
                 },
                 "pixel_threshold": {
                     "type": "integer",
@@ -567,13 +748,15 @@ impl Tool for Observe {
             .get("mode")
             .and_then(|m| m.as_str())
             .ok_or_else(|| ToolError::new("[InvalidInput] missing 'mode'"))?;
-        if !matches!(mode, "brightness" | "motion") {
+        if !matches!(mode, "brightness" | "motion" | "blink") {
             return Err(ToolError::new(format!(
                 "[InvalidInput] mode={mode} is not implemented yet — {NOT_IMPLEMENTED}"
             )));
         }
-        if mode == "motion" {
-            return run_motion(&args, ctx);
+        match mode {
+            "motion" => return run_motion(&args, ctx),
+            "blink" => return run_blink(&args, ctx),
+            _ => {}
         }
         let path = args
             .get("path")
@@ -659,30 +842,23 @@ const CAMERA_CAVEAT: &str = "  note: pixel comparison cannot tell a light switch
 
 /// mode=motion: read a frame sequence in capture order and report whether
 /// anything moved.
-fn run_motion(args: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+/// Load the `paths` sequence, in order, into frames. Shared by every
+/// sequence mode.
+fn load_frames(args: &Value, ctx: &ToolContext) -> Result<Vec<RgbaImage>, ToolError> {
     let paths = args
         .get("paths")
         .and_then(|v| v.as_array())
         .ok_or_else(|| {
             ToolError::new(
-                "[InvalidInput] mode=motion requires 'paths' (2+ frames, in capture order)",
+                "[InvalidInput] this mode requires 'paths' — a frame sequence in capture order \
+             (a phone's burst mode works: copy the shots in order)",
             )
         })?;
     if paths.len() < 2 {
         return Err(ToolError::new(
-            "[InvalidInput] mode=motion requires at least 2 frames in 'paths'",
+            "[InvalidInput] 'paths' needs at least 2 frames",
         ));
     }
-    let pixel_threshold = match args.get("pixel_threshold").and_then(|v| v.as_u64()) {
-        Some(t) if t > 255 => {
-            return Err(ToolError::new(
-                "[InvalidInput] pixel_threshold must be 0..=255",
-            ));
-        }
-        Some(t) => t as u8,
-        None => MOTION_PIXEL_THRESHOLD,
-    };
-
     let mut frames = Vec::with_capacity(paths.len());
     for (i, entry) in paths.iter().enumerate() {
         let Some(p) = entry.as_str() else {
@@ -702,6 +878,21 @@ fn run_motion(args: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> 
             .to_rgba8();
         frames.push(img);
     }
+    Ok(frames)
+}
+
+fn run_motion(args: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+    let frames = load_frames(args, ctx)?;
+    let paths_len = frames.len();
+    let pixel_threshold = match args.get("pixel_threshold").and_then(|v| v.as_u64()) {
+        Some(t) if t > 255 => {
+            return Err(ToolError::new(
+                "[InvalidInput] pixel_threshold must be 0..=255",
+            ));
+        }
+        Some(t) => t as u8,
+        None => MOTION_PIXEL_THRESHOLD,
+    };
 
     // ROI bounds are validated against the first frame; equal sizes across
     // the whole sequence are checked inside the analysis.
@@ -733,7 +924,76 @@ fn run_motion(args: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> 
         "  frame: {}x{}, source=paths ({} files)\n",
         frames[0].width(),
         frames[0].height(),
-        paths.len()
+        paths_len
+    ));
+    text.push_str(CAMERA_CAVEAT);
+
+    Ok(ToolOutput {
+        text: truncate(&text, 32_000),
+    })
+}
+
+/// mode=blink: read a brightness sequence and report whether (and how fast)
+/// it alternates.
+fn run_blink(args: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+    let frames = load_frames(args, ctx)?;
+    // A frequency needs a time base; a burst of photos carries none unless
+    // the user says what the gap was. Refuse rather than invent one.
+    let Some(interval_ms) = args.get("interval_ms").and_then(|v| v.as_u64()) else {
+        return Err(ToolError::new(
+            "[InvalidInput] mode=blink requires 'interval_ms' — the gap between shots, which \
+             only you know. Without a time base a frequency is invented; use mode=motion if \
+             you only need to know whether it changed.",
+        ));
+    };
+    if interval_ms == 0 {
+        return Err(ToolError::new("[InvalidInput] interval_ms must be > 0"));
+    }
+    let roi = parse_roi(args, &frames[0])?;
+    // t_ms = index * interval_ms is an ASSUMPTION, not a measurement: a phone
+    // burst is never perfectly even. The output says so.
+    let samples: Vec<Sample> = frames
+        .iter()
+        .enumerate()
+        .map(|(i, f)| Sample {
+            t_ms: i as u64 * interval_ms,
+            luma: mean_luma(f, roi),
+        })
+        .collect();
+    let b = analyze_blink(&samples);
+
+    let duty_txt = b
+        .duty
+        .map(|d| format!("{:.0}%", d * 100.0))
+        .unwrap_or_else(|| "n/a".to_string());
+    let mut text = format!(
+        "[observe] mode=blink frames={} roi=[{},{}] interval_ms={interval_ms}\n  blinking: {}\n  \
+         edges: {}\n  duty: {duty_txt}\n  luma span: {:.1}\n  confidence: {} — {}\n",
+        b.samples,
+        roi.map(|r| r.x.to_string()).unwrap_or_else(|| "-".into()),
+        roi.map(|r| r.y.to_string()).unwrap_or_else(|| "-".into()),
+        if b.blinking { "yes" } else { "no" },
+        b.edges,
+        b.span,
+        b.confidence.name(),
+        b.note,
+    );
+    if b.blinking {
+        match (b.hz_low, b.hz_high) {
+            (Some(low), Some(high)) => {
+                text.push_str(&format!(
+                    "  frequency: {low:.2} .. {high:.2} Hz{}\n",
+                    b.hz.map(|h| format!(" (~{h:.2})")).unwrap_or_default()
+                ));
+            }
+            _ => text.push_str("  frequency: not estimated (see note)\n"),
+        }
+    }
+    text.push_str(&format!(
+        "  frame: {}x{}, source=paths ({} files)\n",
+        frames[0].width(),
+        frames[0].height(),
+        frames.len()
     ));
     text.push_str(CAMERA_CAVEAT);
 
@@ -858,6 +1118,124 @@ mod tests {
     fn frame_diff_map_rejects_mismatched_sizes() {
         let err = frame_diff_map(&solid(16, 16, 8), &solid(32, 32, 8), None, 16).unwrap_err();
         assert!(err.contains("differ in size"), "got: {err}");
+    }
+
+    /// Square-wave brightness series: `periods` full cycles of `per` samples
+    /// dark then `per` lit, `dt_ms` apart, starting dark.
+    fn square_series(periods: usize, per: usize, dt_ms: u64, lo: f32, hi: f32) -> Vec<Sample> {
+        let mut out = Vec::new();
+        for _ in 0..periods {
+            for _ in 0..per {
+                let t = out.len() as u64 * dt_ms;
+                out.push(Sample { t_ms: t, luma: lo });
+            }
+            for _ in 0..per {
+                let t = out.len() as u64 * dt_ms;
+                out.push(Sample { t_ms: t, luma: hi });
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn blink_detects_1hz_from_samples() {
+        // 4 cycles, 10 samples per half-cycle, 50 ms apart => 500 ms on,
+        // 500 ms off => 1 Hz with 20 samples per period.
+        let s = square_series(4, 10, 50, 8.0, 240.0);
+        let b = analyze_blink(&s);
+        assert!(b.blinking, "{}", b.note);
+        assert_eq!(b.edges, 4, "{}", b.note);
+        let hz = b.hz.expect("a resolvable period yields a frequency");
+        assert!((hz - 1.0).abs() < 0.05, "expected ~1 Hz, got {hz}");
+        // The point of phase 2: report a RANGE, never a bare figure.
+        let (low, high) = (b.hz_low.unwrap(), b.hz_high.unwrap());
+        assert!(
+            low < hz && hz < high,
+            "range must bracket it: {low}..{high}"
+        );
+        assert_eq!(b.confidence.name(), "HIGH", "{}", b.note);
+        assert!(
+            (b.duty.unwrap() - 0.5).abs() < 0.05,
+            "50% duty: {:?}",
+            b.duty
+        );
+    }
+
+    #[test]
+    fn blink_steady_series_has_no_frequency() {
+        let s: Vec<Sample> = (0..20)
+            .map(|i| Sample {
+                t_ms: i * 100,
+                luma: 128.0,
+            })
+            .collect();
+        let b = analyze_blink(&s);
+        assert!(!b.blinking, "{}", b.note);
+        assert!(b.hz.is_none(), "a flat line has no frequency");
+    }
+
+    #[test]
+    fn blink_single_edge_reports_no_period() {
+        // Dark then bright once: that is power-on or a mode switch, and
+        // claiming a period from it would be invention.
+        let s: Vec<Sample> = (0..20)
+            .map(|i| Sample {
+                t_ms: i * 100,
+                luma: if i < 10 { 8.0 } else { 240.0 },
+            })
+            .collect();
+        let b = analyze_blink(&s);
+        assert!(!b.blinking, "{}", b.note);
+        assert!(b.hz.is_none(), "one edge is not a period");
+        assert!(b.note.contains("power-on"), "{}", b.note);
+    }
+
+    #[test]
+    fn blink_at_the_sampling_limit_is_low_confidence() {
+        // One sample per half-cycle: the period is exactly two sample
+        // intervals — the theoretical best a uniform burst can resolve.
+        let s = square_series(4, 1, 100, 8.0, 240.0);
+        let b = analyze_blink(&s);
+        assert!(b.blinking, "it does alternate: {}", b.note);
+        assert_eq!(
+            b.confidence.name(),
+            "LOW",
+            "2 samples/period deserves no confidence: {}",
+            b.note
+        );
+    }
+
+    #[test]
+    fn blink_hysteresis_ignores_values_on_the_threshold() {
+        // Big overall swing, but half the samples sit exactly on the
+        // midpoint — without hysteresis each one would read as an edge.
+        let s: Vec<Sample> = (0..12)
+            .map(|i| Sample {
+                t_ms: i * 100,
+                luma: match i {
+                    0..=2 => 240.0,
+                    6..=8 => 8.0,
+                    _ => 124.0, // the midpoint
+                },
+            })
+            .collect();
+        let b = analyze_blink(&s);
+        assert_eq!(b.edges, 0, "midpoint samples are not edges: {}", b.note);
+        assert!(!b.blinking, "{}", b.note);
+    }
+
+    #[test]
+    fn blink_needs_three_samples() {
+        let s = vec![
+            Sample { t_ms: 0, luma: 8.0 },
+            Sample {
+                t_ms: 100,
+                luma: 240.0,
+            },
+        ];
+        let b = analyze_blink(&s);
+        assert!(!b.blinking);
+        assert!(b.note.contains("at least 3"), "{}", b.note);
     }
 
     #[test]
@@ -1062,7 +1440,7 @@ mod tests {
     async fn unsupported_mode_states_not_implemented() {
         let dir = tempdir().unwrap();
         let err = Observe
-            .run(json!({"mode": "blink"}), &ctx(dir.path()))
+            .run(json!({"mode": "diff"}), &ctx(dir.path()))
             .await
             .unwrap_err();
         assert!(

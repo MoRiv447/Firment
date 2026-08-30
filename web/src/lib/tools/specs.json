@@ -528,8 +528,13 @@
     "description": "Analyze a photo of the target to verify PHYSICAL behavior (verification ladder rung 5): is the LED lit, how bright, where is the bright region. Deterministic local image analysis with a confidence rating — point the roi at the LED/indicator, not the whole board. Read-only.",
     "input_schema": {
       "properties": {
+        "interval_ms": {
+          "description": "mode=blink: the gap between shots, in ms — only you know your burst rate, and a frequency cannot be derived from an undated burst. The estimate is only as good as this value.",
+          "minimum": 1,
+          "type": "integer"
+        },
         "mode": {
-          "description": "brightness: is the target lit, and how bright. motion: did anything move across a frame sequence. blink/diff arrive in a later release.",
+          "description": "brightness: is the target lit, and how bright. motion: did anything move across a frame sequence. blink: does it alternate, and at what frequency. diff arrives in a later release.",
           "enum": [
             "brightness",
             "blink",
@@ -543,7 +548,7 @@
           "type": "string"
         },
         "paths": {
-          "description": "Frame sequence inside the workspace, in capture order — for mode=motion. A phone's burst mode works: copy the shots in order. Needs at least 2 frames, all the same size.",
+          "description": "Frame sequence inside the workspace, in capture order — for mode=motion / mode=blink. A phone's burst mode works: copy the shots in order. Needs at least 2 frames, all the same size.",
           "items": {
             "type": "string"
           },
