@@ -23,20 +23,17 @@ const NO_PROXY_RANGES: &str =
 /// — only the env-var form does.
 pub fn http_builder() -> reqwest::ClientBuilder {
     let mut builder = reqwest::Client::builder();
-    if let Some(url) = env_proxy("HTTP_PROXY") {
-        if let Ok(proxy) = reqwest::Proxy::http(&url) {
-            builder = builder.proxy(proxy.no_proxy(lan_no_proxy()));
-        }
+    // Written as one `if let` per proxy: nested if-lets trip
+    // clippy::collapsible_if, and let-chains would raise the MSRV past the
+    // 1.85 this crate declares.
+    if let Some(Ok(proxy)) = env_proxy("HTTP_PROXY").map(|u| reqwest::Proxy::http(&u)) {
+        builder = builder.proxy(proxy.no_proxy(lan_no_proxy()));
     }
-    if let Some(url) = env_proxy("HTTPS_PROXY") {
-        if let Ok(proxy) = reqwest::Proxy::https(&url) {
-            builder = builder.proxy(proxy.no_proxy(lan_no_proxy()));
-        }
+    if let Some(Ok(proxy)) = env_proxy("HTTPS_PROXY").map(|u| reqwest::Proxy::https(&u)) {
+        builder = builder.proxy(proxy.no_proxy(lan_no_proxy()));
     }
-    if let Some(url) = env_proxy("ALL_PROXY") {
-        if let Ok(proxy) = reqwest::Proxy::all(&url) {
-            builder = builder.proxy(proxy.no_proxy(lan_no_proxy()));
-        }
+    if let Some(Ok(proxy)) = env_proxy("ALL_PROXY").map(|u| reqwest::Proxy::all(&u)) {
+        builder = builder.proxy(proxy.no_proxy(lan_no_proxy()));
     }
     builder
 }
