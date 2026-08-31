@@ -1700,15 +1700,18 @@ async fn run_la_step_with(
         wants.push(format!("expect_decoded='{s}'"));
     }
     if dry_run {
-        let checked = if wants.is_empty() {
-            "nothing (no expectations)".to_string()
+        // Mirror run_observe_step: with no expectation there is nothing to
+        // fake, so the suite stays green. Any expectation must FAIL — a dry
+        // run captured no samples, and "would have checked" is not evidence.
+        return Ok(if wants.is_empty() {
+            "[dry-run] la simulated — would capture, nothing to assert".to_string()
         } else {
-            wants.join(", ")
-        };
-        return Ok(format!(
-            "[dry-run] la simulated — would capture and check {checked}\n\
-             [HIL_EXPECT:FAIL] dry-run cannot verify hardware output (no samples)"
-        ));
+            format!(
+                "[dry-run] la simulated — would capture and check {}\n\
+                 [HIL_EXPECT:FAIL] dry-run cannot verify hardware output (no samples)",
+                wants.join(", ")
+            )
+        });
     }
     // The suite-level approval already covered hardware steps: auto-approve
     // the child context (same mechanism as the elf step).
@@ -2677,6 +2680,27 @@ expect_decoded = "0x55"
         assert!(
             out.contains("[HIL_EXPECT:FAIL]") && out.contains("no samples"),
             "dry-run must not fake hardware evidence: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn la_step_dry_run_without_expectations_does_not_fail_the_suite() {
+        let dir = tempdir().unwrap();
+        // A dry run with nothing to assert is not a failed expectation — it
+        // is a rehearsal. Only an expectation must fail (no samples to
+        // measure), which is what the neighbouring test pins.
+        let step = HilStep {
+            kind: "la".to_string(),
+            capture: Some("whatever".to_string()),
+            ..Default::default()
+        };
+        let out = run_la_step(&step, &ctx(dir.path()), true, 60_000)
+            .await
+            .unwrap();
+        assert!(out.contains("[dry-run]"), "got: {out}");
+        assert!(
+            !out.contains("[HIL_EXPECT"),
+            "a rehearsal with no expectation must not fail the suite: {out}"
         );
     }
 

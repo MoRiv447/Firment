@@ -61,6 +61,12 @@ pub fn classify(
         return Ok(Verdict::Crash(format!("fault signature: {marker}")));
     }
     for sig in &cfg.extra_fault_signatures {
+        // Defense in depth: an empty signature matches every window, so
+        // redteam's validate_suite rejects it up front. Skip it here too —
+        // a verdict must never hinge on a vacuously true match.
+        if sig.is_empty() {
+            continue;
+        }
         if text.contains(sig.as_str()) {
             return Ok(Verdict::Crash(format!("extra signature: {sig}")));
         }
@@ -151,6 +157,23 @@ mod tests {
             v,
             Verdict::Alive,
             "cannot claim an absence never established as a presence"
+        );
+    }
+
+    #[test]
+    fn empty_signature_never_matches() {
+        // `"".contains` is vacuously true — skipping it is the last line of
+        // defence behind redteam's validate_suite, which refuses such config.
+        let cfg = OracleCfg {
+            heartbeat_regex: Some(r"tick=\d+".to_string()),
+            boot_banner: None,
+            extra_fault_signatures: vec!["".to_string()],
+        };
+        let v = classify("tick=1\n", true, false, &cfg).unwrap();
+        assert_eq!(
+            v,
+            Verdict::Alive,
+            "an empty signature must not turn every window into a crash"
         );
     }
 

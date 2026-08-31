@@ -210,6 +210,22 @@ fn validate_suite(suite: &RedteamSuite) -> Result<(), String> {
             ));
         }
     }
+    // An empty fault signature matches EVERY window (`"".contains` is a
+    // subset of every string), which would turn the whole campaign into
+    // "everything crashed" — the loudest possible false-positive generator,
+    // and one a stray `signatures = [""]` in the TOML produces by accident.
+    if let Some(empty) = suite
+        .oracle
+        .extra_fault_signatures
+        .iter()
+        .find(|s| s.trim().is_empty())
+    {
+        return Err(format!(
+            "[InvalidInput] oracle.extra_fault_signatures contains an empty signature \
+             ({empty:?}) — an empty string matches every window and would mark every case \
+             as a crash"
+        ));
+    }
     Ok(())
 }
 
@@ -1148,6 +1164,25 @@ mod tests {
             },
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn empty_fault_signature_is_rejected() {
+        // `"".contains` is true for every window: leaving an empty entry in
+        // extra_fault_signatures would mark every single case as a crash.
+        let mut s = suite();
+        s.oracle.extra_fault_signatures = vec!["".to_string()];
+        let err = validate_suite(&s).unwrap_err();
+        assert!(
+            err.contains("empty signature"),
+            "an empty signature must be refused: {err}"
+        );
+        // Whitespace-only is the same vacuous match.
+        s.oracle.extra_fault_signatures = vec!["stack underflow".to_string(), "   ".to_string()];
+        assert!(validate_suite(&s).is_err());
+        // A real signature list passes.
+        s.oracle.extra_fault_signatures = vec!["stack underflow".to_string()];
+        assert!(validate_suite(&s).is_ok());
     }
 
     /// Scripted link: crashes on the Nth send, alive otherwise.
