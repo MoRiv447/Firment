@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.7.3 (2026-08-31) — observation correctness pass
+
 - **HIL observe steps now validate `roi` the way the observe tool does**
   (w/h >= 1, inside the frame) instead of building the Rect unchecked and
   letting the analysers clamp silently — a typo'd roi on a brightness
