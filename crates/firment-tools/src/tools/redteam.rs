@@ -1227,9 +1227,12 @@ impl Tool for Redteam {
                 match run_campaign(label, &suite, ctx, &note, outcome.findings.len() + 1).await {
                     Ok(mut extra) => {
                         let dir = outcome.dir.clone();
+                        // Campaign evidence is model-authored: the strict
+                        // gate (payload required, references must exist and
+                        // contain the quoted line, no self-references) is
+                        // what keeps a hallucination out of the report.
                         for f in extra.iter_mut() {
-                            let d = dir.clone();
-                            f.finalize(|e| d.join(e).is_file());
+                            f.finalize_strict(&dir);
                         }
                         campaign_note =
                             format!("campaign added {} candidate finding(s)", extra.len());

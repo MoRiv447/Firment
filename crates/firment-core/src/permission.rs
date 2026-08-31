@@ -116,13 +116,25 @@ impl TargetLockPermission {
 #[async_trait]
 impl PermissionChecker for TargetLockPermission {
     async fn confirm(&self, tool: &str, args: &Value, reason: &str) -> Result<(), PermissionError> {
+        // The attacker must not freeze the target on a breakpoint and then
+        // "discover" a hang it manufactured: memory writes are off the
+        // table, observation is not.
+        if tool == "debug" && args.get("action").and_then(|v| v.as_str()) == Some("write") {
+            return Err(PermissionError::denied(
+                "red team target lock: debug action=write is not allowed for the campaign — \
+                 the attacker observes the firmware's behaviour, it does not poke the target \
+                 into a fake hang",
+            ));
+        }
         let (key, what) = match tool {
             "monitor" => ("port", "serial port"),
             "device_cmd" => ("node", "device node"),
             _ => return self.inner.confirm(tool, args, reason).await,
         };
         match args.get(key).and_then(|v| v.as_str()) {
-            Some(value) if self.ports.iter().any(|p| p == value) => {}
+            // Case-insensitive: Windows COM names are ("COM3" == "com3"),
+            // and a needless exact-match denial just burns a campaign turn.
+            Some(value) if self.ports.iter().any(|p| p.eq_ignore_ascii_case(value)) => {}
             Some(value) => {
                 return Err(PermissionError::denied(format!(
                     "red team target lock: {what} '{value}' is not one of the suite's declared \
@@ -134,7 +146,8 @@ impl PermissionChecker for TargetLockPermission {
             None => {
                 return Err(PermissionError::denied(format!(
                     "red team target lock: {tool} without an explicit {key} (e.g. auto-detect) \
-                     could reach an unapproved target"
+                     could reach an unapproved target — pass {key} explicitly, one of {:?}",
+                    self.ports
                 )));
             }
         }
@@ -235,5 +248,36 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(rec.seen.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn port_match_is_case_insensitive() {
+        // Windows COM names are case-insensitive; exact-match denial would
+        // just waste campaign turns.
+        let (p, _) = lock(&["COM3"]);
+        p.confirm("monitor", &json!({"port": "com3"}), "r")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn debug_memory_write_is_denied_to_the_attacker() {
+        // The attacker observes; it must not poke the target into a hang it
+        // then "discovers".
+        let (p, rec) = lock(&["COM3"]);
+        let err = p
+            .confirm(
+                "debug",
+                &json!({"action": "write", "addr": "0x20000000"}),
+                "r",
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("target lock"), "got {err}");
+        assert!(rec.seen.lock().unwrap().is_empty());
+        // Observation actions still pass.
+        p.confirm("debug", &json!({"action": "analyze"}), "r")
+            .await
+            .unwrap();
     }
 }

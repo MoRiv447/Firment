@@ -8,6 +8,7 @@
 //! re-runnable without an LLM in the loop.
 
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -64,9 +65,57 @@ impl Finding {
     /// reference and answers whether the file actually exists (the runner
     /// passes a real fs check; tests pass a closure).
     pub fn finalize(&mut self, evidence_exists: impl Fn(&str) -> bool) {
-        let verified =
-            !self.evidence.is_empty() && self.evidence.iter().all(|e| evidence_exists(e));
+        let verified = !self.evidence.is_empty()
+            && self
+                .evidence
+                .iter()
+                .all(|e| is_safe_relative_path(e) && evidence_exists(e));
         if verified {
+            self.confidence = "HIGH".to_string();
+        } else {
+            self.confidence = "UNVERIFIED".to_string();
+            if self.severity > Severity::Low {
+                self.severity = Severity::Low;
+            }
+        }
+    }
+
+    /// The strict gate for LLM-campaign findings, where the evidence list
+    /// is MODEL-authored and therefore untrusted. A hallucinated finding
+    /// must not ride in on "report.md exists": every evidence reference
+    /// has to be a relative path inside the run dir, not the run's own
+    /// report files, actually present, AND actually containing the quoted
+    /// `observed` line. No payload_hex means no reproducer means UNVERIFIED
+    /// — the prompt promised this; here it is enforced.
+    pub fn finalize_strict(&mut self, dir: &Path) {
+        // The modulo form is on purpose: `is_multiple_of` stabilised in
+        // 1.87, past this workspace's declared MSRV 1.85.
+        #[allow(clippy::manual_is_multiple_of)]
+        let payload_ok = !self.payload_hex.is_empty()
+            && self.payload_hex.len() % 2 == 0
+            && self.payload_hex.bytes().all(|b| b.is_ascii_hexdigit());
+        let observed = self.observed.clone();
+        let evidence_ok = !self.evidence.is_empty()
+            && self.evidence.iter().all(|e| {
+                if !is_safe_relative_path(e) {
+                    return false;
+                }
+                let name = Path::new(e)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                if name == "report.md" || name == "findings.jsonl" {
+                    return false; // the run's own outputs are not evidence
+                }
+                let path = dir.join(e);
+                // join of a relative path cannot escape, but double-check.
+                path.is_file()
+                    && path.starts_with(dir)
+                    && std::fs::read_to_string(&path)
+                        .map(|t| !observed.is_empty() && t.contains(observed.as_str()))
+                        .unwrap_or(false)
+            });
+        if payload_ok && evidence_ok {
             self.confidence = "HIGH".to_string();
         } else {
             self.confidence = "UNVERIFIED".to_string();
@@ -86,6 +135,23 @@ impl Finding {
         serde_json::from_str(line.trim_end_matches('\n'))
             .map_err(|e| format!("[Io] corrupt finding line: {e}"))
     }
+}
+
+/// An evidence reference must be a plain relative path: no absolute paths
+/// (`Path::join` with an absolute path REPLACES the base — an escape hatch),
+/// no parent-dir traversal. Checks components, not `is_absolute`: on
+/// Windows "/etc/hosts" is NOT absolute (no drive prefix) but still has a
+/// RootDir component that `join` would honour.
+fn is_safe_relative_path(e: &str) -> bool {
+    use std::path::Component;
+    let p = Path::new(e);
+    !e.is_empty()
+        && !p.components().any(|c| {
+            matches!(
+                c,
+                Component::Prefix(_) | Component::RootDir | Component::ParentDir
+            )
+        })
 }
 
 /// Lowercase hex of a payload, for the report and the reproducer.
@@ -235,5 +301,72 @@ mod tests {
         assert!(Severity::High < Severity::Critical);
         assert_eq!(default_severity("crash"), Severity::High);
         assert_eq!(default_severity("mystery"), Severity::Low);
+    }
+
+    #[test]
+    fn finalize_rejects_absolute_and_traversing_evidence() {
+        // Path::join with an absolute path REPLACES the base — an evidence
+        // entry like "/etc/hosts" must never count as verification.
+        let mut f = finding();
+        f.evidence = vec!["/etc/hosts".to_string()];
+        f.finalize(|_| true);
+        assert_eq!(f.confidence, "UNVERIFIED");
+        assert_eq!(f.severity, Severity::Low);
+
+        let mut f = finding();
+        f.evidence = vec!["../outside.log".to_string()];
+        f.finalize(|_| true);
+        assert_eq!(f.confidence, "UNVERIFIED");
+    }
+
+    #[test]
+    fn finalize_strict_demands_payload_and_real_quoted_evidence() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("capture-F-002.log"),
+            "tick=9\nHardFault_Handler\n",
+        )
+        .unwrap();
+
+        // A well-formed campaign finding: payload + evidence containing the
+        // quoted line → HIGH.
+        let mut good = finding();
+        good.strategy = "campaign".to_string();
+        good.observed = "HardFault_Handler".to_string();
+        good.evidence = vec!["capture-F-002.log".to_string()];
+        good.finalize_strict(dir.path());
+        assert_eq!(good.confidence, "HIGH", "got: {good:?}");
+
+        // Missing payload_hex → no reproducer → UNVERIFIED + low.
+        let mut no_payload = good.clone();
+        no_payload.payload_hex = String::new();
+        no_payload.finalize_strict(dir.path());
+        assert_eq!(no_payload.confidence, "UNVERIFIED");
+        assert_eq!(no_payload.severity, Severity::Low);
+
+        // Evidence that exists but does NOT contain the quoted line (the
+        // hallucination ride-in) → UNVERIFIED.
+        let mut unrelated = good.clone();
+        unrelated.observed = "everything is on fire".to_string();
+        unrelated.finalize_strict(dir.path());
+        assert_eq!(unrelated.confidence, "UNVERIFIED", "got: {unrelated:?}");
+
+        // The run's own report files are not evidence.
+        std::fs::write(dir.path().join("report.md"), "HardFault_Handler").unwrap();
+        let mut self_ref = good.clone();
+        self_ref.evidence = vec!["report.md".to_string()];
+        self_ref.finalize_strict(dir.path());
+        assert_eq!(self_ref.confidence, "UNVERIFIED");
+
+        // Absolute-path evidence → UNVERIFIED.
+        let mut abs = good.clone();
+        abs.evidence = vec![
+            dir.path()
+                .join("capture-F-002.log")
+                .to_string_lossy()
+                .into_owned(),
+        ];
+        abs.finalize_strict(dir.path());
+        assert_eq!(abs.confidence, "UNVERIFIED");
     }
 }

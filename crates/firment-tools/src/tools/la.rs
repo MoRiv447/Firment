@@ -118,6 +118,20 @@ fn resolve_capture(ctx: &ToolContext, arg: &str) -> Result<(PathBuf, CaptureMeta
     let dir = la_dir(&ctx.cwd);
     let looks_like_id = !arg.contains('/') && !arg.contains('\\') && !arg.contains(".sr");
     let stem = if looks_like_id {
+        // Same charset rule as hil replay ids: `dir.join(arg)` with ".." or
+        // a dot-name would walk out of .firment/la/ (join replaces on
+        // absolute paths, and ".." resolves upward).
+        if arg.is_empty()
+            || !arg
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+            || arg.starts_with('.')
+        {
+            return Err(ToolError::new(format!(
+                "[InvalidInput] capture id '{arg}' is not a plain name (letters, digits, - _ . \
+                 ; no leading dot)"
+            )));
+        }
         dir.join(arg)
     } else {
         let resolved = resolve_within(&ctx.cwd, arg, &ctx.allowed_roots).map_err(ToolError::new)?;
@@ -1017,6 +1031,31 @@ mod tests {
             .unwrap()
             .text;
         assert!(out.contains("fx2lafw"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn capture_id_traversal_is_refused() {
+        // ".." has no separator and no ".sr" — without the charset rule it
+        // would join out of .firment/la/ and read a meta file elsewhere.
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".firment")).unwrap();
+        std::fs::write(
+            dir.path().join(".firment").join("meta.json"),
+            r#"{"id":"x","driver":"d","channels":"0","channel_count":1,"has_binary":true}"#,
+        )
+        .unwrap();
+        let err = La::default()
+            .run(
+                json!({"action": "measure", "capture": ".."}),
+                &ctx_with(dir.path(), Some(cfg())),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.message.contains("[InvalidInput]"),
+            "got: {}",
+            err.message
+        );
     }
 
     #[test]
