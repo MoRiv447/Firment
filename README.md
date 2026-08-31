@@ -269,7 +269,9 @@ cd gui && npm ci && npx tsc --noEmit && npm run build   # + npm run tauri build 
 
 ## 🗺️ Roadmap
 
-- **Fault forensics** (next): a hard fault becomes a one-command report — capture the scene, unwind the stack, attribute the likely change. Debugger depth (variable & expression evaluation at a halted site) is part of this release's scope
+- Logic analyzer integration: capture, measure and decode real waveforms as physical evidence (rung 5)
+- Red team: an adversarial agent attacks the firmware it wrote — malformed input, crash oracles, evidence-backed findings
+- Debugger depth: variable & expression evaluation at a halted site (fault forensics shipped in v0.7.0)
 - TUI command palette (fuzzy finder)
 - SWO/trace streaming deeper into the agent loop
 - Tree-sitter structural edits and completions

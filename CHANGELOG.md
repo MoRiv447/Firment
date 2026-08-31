@@ -9,6 +9,31 @@
   `expect_lit = false` on a measurement of nothing. `mode=blink`
   additionally rejects a burst whose frames do not share one size
   (motion/diff already errored on a size mismatch; blink now does too).
+- **observe's motion verdict now comes from one frame pair**. The
+  per-statistic maxes used to mix pairs: a quiet pair's sub-threshold
+  exposure drift could inflate `mean_abs_diff` and `global_shift` while
+  `changed_fraction` came from the moving pair, so the exposure gate
+  compared a drift the motion pair never had and demoted a clean HIGH to
+  LOW. Every reported number — and the exposure check — now uses the
+  strongest pair, as the struct's own docs always promised.
+- **observe `mode=diff` honours `pixel_threshold`**. The argument was
+  parsed but `run_diff` hardcoded the default (16), so raising it on
+  grainy shots silently did nothing; the reported threshold now matches
+  what was measured.
+- **observe `save` works for all four modes**. It used to copy only the
+  brightness frame; motion/blink now copy every frame of the measured
+  sequence (index-tagged) and diff copies both frames (`-before` /
+  `-after` tagged), all under `.firment/observe/`. HIL observe steps
+  gained the same coverage.
+- **HIL `steps` schema description lists the observe fields**. The
+  inline-steps description omitted `mode`, `roi`, `threshold`,
+  `expect_lit`, `save`, `paths`, `after`, `interval_ms`,
+  `expect_blinking`, `expect_blink_hz`, `expect_motion` and
+  `expect_diff`, so the model could not see how to assert a physical
+  check without reading the docs.
+- **Roadmap corrected**: fault forensics shipped in v0.7.0; the debugger
+  depth item (variable & expression evaluation at a halted site) stays.
+  Logic analyzer integration and red team join the roadmap.
 
 ## v0.7.2 (2026-08-30) — physical observation, phase 2 + LAN proxy fix
 
