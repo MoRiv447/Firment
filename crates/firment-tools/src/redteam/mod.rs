@@ -4,4 +4,6 @@
 //! unit-testable without hardware — the same split that made `observe` and
 //! `forensic` trustworthy.
 
+pub mod findings;
 pub mod mutate;
+pub mod oracle;
