@@ -139,3 +139,40 @@ interval_ms = 100              # your burst rate — REQUIRED for expect_blink_h
 expect_blinking = true         # plain boolean: does it alternate at all
 expect_blink_hz = 2.5          # strict: must be inside the measured range,
                                # non-LOW confidence, interval_ms present
+
+# ---------------------------------------------------------------------------
+# la: logic-analyzer waveform assertions (v0.8.0) — rung 5, measured not
+# asserted. Requires sigrok-cli installed and [tools.la] driver configured
+# (or driver= on the step). A LOW-confidence measurement can never pass.
+# ---------------------------------------------------------------------------
+[suite.uart-clock]
+chip = "stm32g431rb"
+
+[[suite.uart-clock.steps]]
+kind = "build"
+
+[[suite.uart-clock.steps]]
+kind = "flash"
+elf = "build/firmware.elf"
+timeout_ms = 180000
+
+[[suite.uart-clock.steps]]
+# Capture 400k samples of channel 0 at 8 MHz and assert the PWM on it.
+kind = "la"
+channels = "0,1"
+samplerate = "8m"
+samples = 400000
+channel = 0
+expect_frequency_hz = 1000000.0   # must sit inside the measured range
+expect_duty = 0.5                 # ±10 percentage points
+
+[[suite.uart-clock.steps]]
+# Decode the UART line from a stored capture (or capture again): the text
+# sigrok's decoder puts on the wire must contain the expected payload.
+kind = "la"
+channels = "0,1"
+samplerate = "8m"
+samples = 800000
+decoder = "uart"
+decoder_opts = { rx = "1", baudrate = "115200" }
+expect_decoded = "BOOT-OK"

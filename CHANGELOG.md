@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- **`la` — logic analyzer integration**. Capture, measurement and protocol
+  decode over sigrok-cli as an EXTERNAL binary (argv array, no shell, never
+  a linked library — the GPL stays on the other side of the process
+  boundary, the same pattern as probe-rs):
+  - `action=detect/info` probe the install and the device; `action=capture`
+    acquires a bounded window into `.firment/la/` (the `.sr` session is
+    archived for PulseView, a raw-bit sidecar feeds the measurements);
+    `action=measure` computes frequency (as a range, never a false-precise
+    point value), duty, edge counts, pulse widths and a bitrate heuristic
+    from the raw bits — deterministic, unit-tested, every verdict carries a
+    confidence; `action=decode` delegates protocol semantics (uart / spi /
+    i2c / 1-wire / CAN …) to sigrok's own decoders.
+  - `[tools.la]` config in short (`la = "fx2lafw"`) and table form; a
+    project `.firment.toml` may override driver/samplerate/channels but its
+    `bin` path is always dropped — an executable from an untrusted checkout
+    is an arbitrary-program entry point.
+  - HIL `kind = "la"` steps assert `expect_frequency_hz` / `expect_duty` /
+    `expect_edges` / `expect_decoded` at ladder rung 5 (physical): a
+    LOW-confidence measurement can never pass, dry-run forces FAIL.
+  - `firm doctor` probes sigrok-cli; capture is the only approval-gated
+    action.
+
 ## v0.7.3 (2026-08-31) — observation correctness pass
 
 - **HIL observe steps now validate `roi` the way the observe tool does**

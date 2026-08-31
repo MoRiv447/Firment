@@ -74,6 +74,7 @@ pub(crate) fn tool_activity(name: &str, args: &serde_json::Value) -> String {
         "flash" => "flashing",
         "run" => "running target",
         "monitor" => "monitoring serial",
+        "la" => "capturing logic",
         "verify" => "verifying",
         "shell" => "running shell command",
         other => other,

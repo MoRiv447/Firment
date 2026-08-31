@@ -71,7 +71,7 @@ Firment 不把模型当 shell 脚本生成器，而是明确分工：
 
 - **多提供商**：Anthropic 兼容（`/v1/messages`）与 OpenAI 兼容（`/chat/completions`，覆盖 DeepSeek / GLM / Qwen / Ollama）流式工具调用；DeepSeek V4 自动使用官方 `thinking` + `reasoning_effort`
 - **思考级别**：`off / low / medium / high / xhigh / max`
-- **内置工具**：`read_file`（带行号分页）、`write_file`、`edit_file`（锚点/行区间/hashline 编辑，回显统一 diff）、`list_dir`、`glob`、`grep`、`shell`、`web_search`（DuckDuckGo / Tavily / Brave）、`web_fetch`、`task`（只读研究子代理）、`todo`、`ask_user`、`hil`、`periph_init`、`elf_analyze`、`monitor`、`debug`
+- **内置工具**：`read_file`（带行号分页）、`write_file`、`edit_file`（锚点/行区间/hashline 编辑，回显统一 diff）、`list_dir`、`glob`、`grep`、`shell`、`web_search`（DuckDuckGo / Tavily / Brave）、`web_fetch`、`task`（只读研究子代理）、`todo`、`ask_user`、`hil`、`periph_init`、`elf_analyze`、`monitor`、`debug`、`observe`、`la`
 - **只读计划模式**：`--plan` / `/plan` 只暴露只读工具，要求给出可执行的完整计划
 - **并行工具调用**：独立调用并发执行；同文件读写与粗粒度工具自动串行
 - **工程级系统提示词**：沟通、工程原则、工具策略、验证、安全等分节，支持 `AGENTS.md` / `FIRMENT.md` 项目指令
@@ -84,6 +84,7 @@ Firment 不把模型当 shell 脚本生成器，而是明确分工：
 - **`periph_init`** —— MCU 外设初始化骨架 + 知识库 cheatsheet。STM32（F1/F4/G0/**G4**/**H7**）完整 UART/GPIO/I2C/SPI/TIM/ADC HAL 骨架，ESP32/ESP32-S3 指引，CubeMX/PlatformIO HAL 重复警告。内置知识库覆盖真实工程坑：**G4 的 DMAMUX**（没有固定 DMA 通道——F1→G4 迁移经典坑）与 **H7 的 D-Cache 一致性**（DMA TX 前 clean、RX 后 invalidate）
 - **`elf_analyze`** —— flash/RAM 占用、函数体积、`-fstack-usage` `.su` 文件的真实栈深度；每次编辑回合后自动重新分析。增长超过配置阈值时，完成会被拦截，直到你批准（headless + `strict` 模式则直到模型修复）；低于阈值的变化默认静默吞掉
 - **`monitor`** —— 串口监控，逐行时间戳 + 波特率自动检测；取消回合立即释放串口
+- **`la`** —— 逻辑分析仪，经 sigrok-cli 外部二进制（绝不链接进本程序）：有界采集存入 `.firment/la/`，对原始位流做确定性测量（频率只给区间、占空比、边沿计数、脉宽、波特率估算），每个结论带置信度；协议解码直接用 sigrok 自带的解码器（uart / spi / i2c / 1-wire / CAN 等）。HIL `la` 步骤在第 5 级断言 `expect_frequency_hz` / `expect_duty` / `expect_edges` / `expect_decoded`——低置信度测量永远无法通过
 - **`hil`** —— 硬件在环套件：一条命令串起 `build → flash → monitor`（带 `expect_contains`/`expect_regex` 断言）`→ elf_analyze`，支持 `.firment/hil.toml` 套件或内联 steps、`dry_run` 模拟、JSONL 回放（`hil replay`）、串口/波特率自动检测与总超时——替代手动串联 build/flash/monitor 的固件验证方式
 - **`build` / `flash` / `run`** —— CMake/Make/Keil 构建命令、probe-rs 烧录（芯片来自 `[tools] default_chip`），全部接入 Agent 循环
 - **`debug`** —— 通过探针做完整的片内调试（基于 probe-rs，不依赖 OpenOCD/GDB），Agent 可以自主调试自己写的固件：
@@ -112,6 +113,7 @@ Firment 不把模型当 shell 脚本生成器，而是明确分工：
 - **HIL 端到端套件**：`hil` 把 build → flash → 观测输出（`expect_contains`/`expect_regex` + `expect_count` 断言）→ ELF 分析串成可重复、可回放的一次性验证，`dry_run` 用于演练
 - **`observe` 门（物理层，自动化）**：对目标板的照片做确定性本地 CV——`mode=brightness` 回答"LED 亮没亮 / 亮区在哪"（带自动 ROI 建议）、`mode=motion` 回答"连拍序列里有没有东西动了"、`mode=blink` 回答"闪不闪、多快"（频率只给区间，不给伪精确值）、`mode=diff` 回答"改动前后像素真的变了吗"（before/after 对比）。每个结论都带置信度，HIL 步骤可断言这些结论（`expect_lit`/`expect_motion`/`expect_blink_hz` 等）——**低置信度的答案永远无法通过断言**——第 5 层证据可由 agent 自行验证，且不依赖视觉模型
 - **故障签名标记**：捕获的串口/RTT 输出会扫描故障签名（panic、HardFault、BusFault 等），命中即提示 agent 立刻执行 `debug forensic`——抢在看门狗复位毁掉现场之前
+- **`la` 门（物理层，自动化）**：波形证据——频率断言只有当目标值落在实测区间内、且估计不是低置信度时才通过；解码出的协议文本（例如总线上真实出现的 UART 字节）同样算物理证据
 
 ### SBC 端侧数据平面
 
