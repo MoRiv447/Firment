@@ -388,7 +388,22 @@ pub(crate) async fn run_probe_rs(
     cancel: Option<Cancellable>,
     envs: &[(String, String)],
 ) -> Result<(String, Option<i32>), String> {
-    let mut cmd = Command::new("probe-rs");
+    run_argv("probe-rs", args, cwd, timeout_ms, cancel, envs).await
+}
+
+/// Generalization of [`run_probe_rs`] to any external CLI invoked with an
+/// argv array and no shell — probe-rs today, sigrok-cli for the `la` tool.
+/// The program name appears in timeout/cancel messages so the user can tell
+/// which binary was killed.
+pub(crate) async fn run_argv(
+    program: &str,
+    args: Vec<String>,
+    cwd: &Path,
+    timeout_ms: u64,
+    cancel: Option<Cancellable>,
+    envs: &[(String, String)],
+) -> Result<(String, Option<i32>), String> {
+    let mut cmd = Command::new(program);
     cmd.args(&args)
         .current_dir(cwd)
         .stdout(Stdio::piped())
@@ -435,7 +450,7 @@ pub(crate) async fn run_probe_rs(
             let _ = child.wait().await;
             drain.abort();
             return Err(format!(
-                "[Timeout] probe-rs timed out after {timeout_ms} ms and was killed"
+                "[Timeout] {program} timed out after {timeout_ms} ms and was killed"
             ));
         }
         _ = async {
@@ -448,9 +463,9 @@ pub(crate) async fn run_probe_rs(
             let _ = child.kill().await;
             let _ = child.wait().await;
             drain.abort();
-            return Err(
-                "[Cancelled] probe-rs was interrupted by turn cancellation".to_string(),
-            );
+            return Err(format!(
+                "[Cancelled] {program} was interrupted by turn cancellation"
+            ));
         }
     };
     // Post-exit collection with a firm deadline: a grandchild holding the
