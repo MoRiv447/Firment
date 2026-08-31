@@ -93,3 +93,147 @@ impl PermissionChecker for PlanModePermission {
         self.inner.confirm(tool, args, reason).await
     }
 }
+
+/// Permission wrapper for the red team attacker: serial/MQTT targets are
+/// locked to the interfaces the approved suite declared. An attacker agent
+/// that wanders onto another port (or "auto") is attacking something nobody
+/// approved — deny before the inner checker ever sees it. Probe-side tools
+/// (`debug`, `la`) have no port argument: the probe IS the target, and their
+/// own approval prompts still reach the user through `inner`.
+pub struct TargetLockPermission {
+    inner: Arc<dyn PermissionChecker>,
+    /// Allowed `port` values for monitor, and allowed `node` values for
+    /// device_cmd. Exact match only — "auto" is a bypass and is denied.
+    pub ports: Vec<String>,
+}
+
+impl TargetLockPermission {
+    pub fn new(inner: Arc<dyn PermissionChecker>, ports: Vec<String>) -> Self {
+        Self { inner, ports }
+    }
+}
+
+#[async_trait]
+impl PermissionChecker for TargetLockPermission {
+    async fn confirm(&self, tool: &str, args: &Value, reason: &str) -> Result<(), PermissionError> {
+        let (key, what) = match tool {
+            "monitor" => ("port", "serial port"),
+            "device_cmd" => ("node", "device node"),
+            _ => return self.inner.confirm(tool, args, reason).await,
+        };
+        match args.get(key).and_then(|v| v.as_str()) {
+            Some(value) if self.ports.iter().any(|p| p == value) => {}
+            Some(value) => {
+                return Err(PermissionError::denied(format!(
+                    "red team target lock: {what} '{value}' is not one of the suite's declared \
+                     interfaces ({:?}) — the attacker may only touch what the approved suite \
+                     named",
+                    self.ports
+                )));
+            }
+            None => {
+                return Err(PermissionError::denied(format!(
+                    "red team target lock: {tool} without an explicit {key} (e.g. auto-detect) \
+                     could reach an unapproved target"
+                )));
+            }
+        }
+        self.inner.confirm(tool, args, reason).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    struct Recorder {
+        seen: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl PermissionChecker for Recorder {
+        async fn confirm(
+            &self,
+            tool: &str,
+            _args: &Value,
+            _reason: &str,
+        ) -> Result<(), PermissionError> {
+            self.seen.lock().unwrap().push(tool.to_string());
+            Ok(())
+        }
+    }
+
+    fn lock(ports: &[&str]) -> (TargetLockPermission, Arc<Recorder>) {
+        let rec = Arc::new(Recorder {
+            seen: std::sync::Mutex::new(Vec::new()),
+        });
+        (
+            TargetLockPermission::new(rec.clone(), ports.iter().map(|s| s.to_string()).collect()),
+            rec,
+        )
+    }
+
+    #[tokio::test]
+    async fn locked_port_passes_through_to_inner() {
+        let (p, rec) = lock(&["COM3"]);
+        p.confirm("monitor", &json!({"port": "COM3"}), "r")
+            .await
+            .unwrap();
+        assert_eq!(*rec.seen.lock().unwrap(), vec!["monitor"]);
+    }
+
+    #[tokio::test]
+    async fn unlocked_port_is_denied_before_inner_sees_it() {
+        let (p, rec) = lock(&["COM3"]);
+        let err = p
+            .confirm("monitor", &json!({"port": "COM9"}), "r")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("target lock"), "got {err}");
+        assert!(
+            rec.seen.lock().unwrap().is_empty(),
+            "inner must never see it"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_detect_is_a_bypass_and_denied() {
+        let (p, _) = lock(&["COM3"]);
+        assert!(
+            p.confirm("monitor", &json!({"port": "auto"}), "r")
+                .await
+                .is_err()
+        );
+        assert!(p.confirm("monitor", &json!({}), "r").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn device_cmd_locks_on_node() {
+        let (p, _) = lock(&["s3-node-1"]);
+        p.confirm(
+            "device_cmd",
+            &json!({"node": "s3-node-1", "command": "led on"}),
+            "r",
+        )
+        .await
+        .unwrap();
+        assert!(
+            p.confirm("device_cmd", &json!({"node": "other", "command": "x"}), "r")
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn non_target_tools_pass_through() {
+        let (p, rec) = lock(&["COM3"]);
+        p.confirm("debug", &json!({"action": "halt"}), "r")
+            .await
+            .unwrap();
+        p.confirm("read_file", &json!({"path": "x"}), "r")
+            .await
+            .unwrap();
+        assert_eq!(rec.seen.lock().unwrap().len(), 2);
+    }
+}

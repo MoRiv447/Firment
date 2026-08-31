@@ -194,6 +194,8 @@ pub struct Agent {
     monitor_baud: u32,
     /// Nested-agent runner exposed to the `task` tool.
     subagent: Option<Arc<dyn SubagentFactory>>,
+    /// Attacker-profile runner exposed to the `redteam` campaign.
+    attacker: Option<Arc<crate::subagent::SubagentRunner>>,
     /// Current subagent nesting depth (0 = main agent).
     subagent_depth: usize,
     /// Recursion limit for the `task` tool.
@@ -275,6 +277,7 @@ impl Agent {
             monitor_port: None,
             monitor_baud: 115_200,
             subagent: None,
+            attacker: None,
             subagent_depth: 0,
             max_subagent_depth: 2,
             asker: None,
@@ -467,6 +470,11 @@ impl Agent {
     /// Set the nested-agent runner exposed to the `task` tool.
     pub fn set_subagent_factory(&mut self, factory: Option<Arc<dyn SubagentFactory>>) {
         self.subagent = factory;
+    }
+
+    /// Expose the attacker-profile runner to the `redteam` campaign.
+    pub fn set_attacker_factory(&mut self, runner: Option<Arc<crate::subagent::SubagentRunner>>) {
+        self.attacker = runner;
     }
 
     /// Set the current subagent nesting depth (used by nested agents).
@@ -873,6 +881,7 @@ impl Agent {
             monitor_port: self.monitor_port.clone(),
             monitor_baud: self.monitor_baud,
             subagent: self.subagent.clone(),
+            attacker: self.attacker.clone(),
             subagent_depth: self.subagent_depth,
             max_subagent_depth: self.max_subagent_depth,
             asker: self.asker.clone(),

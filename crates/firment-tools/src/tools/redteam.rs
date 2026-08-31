@@ -28,6 +28,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
@@ -53,10 +54,10 @@ pub(crate) struct RedteamSuite {
     pub oracle: OracleCfg,
     pub mutation: Option<MutationCfg>,
     pub report: ReportCfg,
-    /// Opt the LLM attacker campaign into headless runs (default: interactive
-    /// only — an unattended model-driven attack is neither reviewable nor
-    /// reproducible).
-    #[allow(dead_code)] // wired by the campaign action in the next slice
+    /// Opt the LLM attacker campaign into a run (default off): the campaign
+    /// explores on top of the deterministic corpus but is interactive-only
+    /// unless explicitly enabled — an unattended model-driven attack is
+    /// neither reviewable nor reproducible.
     pub llm_phase: Option<bool>,
 }
 
@@ -670,6 +671,167 @@ fn dry_run_plan(suite_label: &str, suite: &RedteamSuite) -> Result<String, Strin
 }
 
 // ---------------------------------------------------------------------------
+// LLM attacker campaign (exploration layer on top of the corpus)
+// ---------------------------------------------------------------------------
+
+/// Prompt for the attacker subagent. The corpus summary is handed in so the
+/// model explores what the deterministic engine did NOT cover.
+pub(crate) fn campaign_prompt(label: &str, suite: &RedteamSuite, corpus_note: &str) -> String {
+    let ifaces: Vec<String> = suite
+        .interfaces
+        .iter()
+        .map(|i| {
+            format!(
+                "  - {}@{} (baud {})",
+                i.kind,
+                i.port
+                    .clone()
+                    .or_else(|| i.node.clone())
+                    .unwrap_or_default(),
+                i.baud.unwrap_or(115200)
+            )
+        })
+        .collect();
+    format!(
+        "You are the red team campaign for suite '{label}'. The deterministic corpus already \
+         ran: {corpus_note}\n\n\
+         Target interfaces (you may ONLY touch these — anything else is denied):\n{}\n\
+         Liveness oracle: heartbeat={} | boot banner={} | extra fault signatures={:?}\n\n\
+         Explore what the corpus missed: probe the protocol, craft structured-but-wrong frames, \
+         race two inputs, feed what the target's own logs hint at. Prefer cheap observations \
+         first (monitor a quiet window, read the ELF for parsers).\n\n\
+         Hard rules:\n\
+         - A finding is only real if captured output shows it — quote the exact line.\n\
+         - On a suspected crash, run debug action=forensic IMMEDIATELY (the scene is ephemeral).\n\
+         - Do NOT reflash or reset the target; the suite handles recovery.\n\
+         - End your reply with a fenced block (empty array is an honest answer):\n\
+         ```redteam-findings\n[{{\"severity\":\"high|medium|low\",\"class\":\"crash|reboot|hang\",\
+         \"payload_hex\":\"...\",\"interface\":\"uart@COM3\",\"observed\":\"exact line\",\
+         \"evidence\":[\"file.log\"],\"why\":\"one sentence\"}}]\n```\n\
+         A finding without payload_hex cannot be reproduced and will be marked UNVERIFIED.",
+        ifaces.join("\n"),
+        suite.oracle.heartbeat_regex.as_deref().unwrap_or("-"),
+        suite.oracle.boot_banner.as_deref().unwrap_or("-"),
+        suite.oracle.extra_fault_signatures,
+    )
+}
+
+/// Parse the campaign's fenced findings block. Malformed JSON or a missing
+/// block yields nothing — the campaign's TEXT report is still shown, but
+/// only structured, payload-bearing entries become findings.
+pub(crate) fn extract_findings_block(
+    text: &str,
+    suite_label: &str,
+    seed: u64,
+    next_id: usize,
+) -> Vec<Finding> {
+    let Some(open) = text.find("```redteam-findings") else {
+        return Vec::new();
+    };
+    let rest = &text[open + "```redteam-findings".len()..];
+    let Some(close) = rest.find("```") else {
+        return Vec::new();
+    };
+    let Ok(items) = serde_json::from_str::<Vec<Value>>(&rest[..close]) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let sev = match v.get("severity").and_then(|s| s.as_str()) {
+                Some("critical") => Severity::Critical,
+                Some("high") => Severity::High,
+                Some("medium") => Severity::Medium,
+                _ => Severity::Low,
+            };
+            Finding {
+                finding_id: format!("F-{:03}", next_id + i),
+                severity: sev,
+                class: v
+                    .get("class")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("crash")
+                    .to_string(),
+                strategy: "campaign".to_string(),
+                case_id: format!("campaign-{}", next_id + i),
+                seed,
+                payload_hex: v
+                    .get("payload_hex")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                interface: v
+                    .get("interface")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("?")
+                    .to_string(),
+                observed: v
+                    .get("observed")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                evidence: v
+                    .get("evidence")
+                    .and_then(|e| e.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                reproducer: findings::Reproducer {
+                    suite: suite_label.to_string(),
+                    case: format!("campaign-{}", next_id + i),
+                },
+                confidence: String::new(),
+            }
+        })
+        .collect()
+}
+
+/// Run the campaign: clone the attacker runner with a target-locked
+/// permission, hand it the prompt, parse its findings block.
+pub(crate) async fn run_campaign(
+    label: &str,
+    suite: &RedteamSuite,
+    ctx: &ToolContext,
+    corpus_note: &str,
+    next_id: usize,
+) -> Result<Vec<Finding>, String> {
+    use firment_core::SubagentFactory as _;
+    let base = ctx
+        .attacker
+        .as_ref()
+        .ok_or("[InvalidInput] campaign needs an attacker runner (interactive agent session)")?;
+    let locked: Vec<String> = suite
+        .interfaces
+        .iter()
+        .filter_map(|i| i.port.clone().or_else(|| i.node.clone()))
+        .collect();
+    let attacker = firment_core::SubagentRunner {
+        permission: Arc::new(firment_core::TargetLockPermission::new(
+            base.permission.clone(),
+            locked,
+        )),
+        ..(**base).clone()
+    };
+    let seed = suite.mutation.as_ref().and_then(|m| m.seed).unwrap_or(0);
+    let prompt = campaign_prompt(label, suite, corpus_note);
+    let text = attacker
+        .run_subagent(
+            &prompt,
+            ctx.cwd.clone(),
+            None,
+            None,
+            ctx.subagent_depth + 1,
+            ctx.cancel.clone(),
+        )
+        .await?;
+    Ok(extract_findings_block(&text, label, seed, next_id))
+}
+
+// ---------------------------------------------------------------------------
 // Suite file discovery
 // ---------------------------------------------------------------------------
 
@@ -793,9 +955,52 @@ impl Tool for Redteam {
                 ),
             });
         }
-        let outcome = run_suite_with(label, &suite, ctx, &LiveExecutor)
+        let mut outcome = run_suite_with(label, &suite, ctx, &LiveExecutor)
             .await
             .map_err(ToolError::new)?;
+        // Campaign layer: only when the suite opts in AND an interactive
+        // approver exists to watch the attack stream. Campaign findings are
+        // finalized against the run dir like corpus ones.
+        let mut campaign_note = String::new();
+        if suite.llm_phase == Some(true) {
+            if ctx.asker.is_some() && ctx.attacker.is_some() {
+                let note = format!(
+                    "{} cases sent, {} findings so far",
+                    outcome.cases_sent,
+                    outcome.findings.len()
+                );
+                match run_campaign(label, &suite, ctx, &note, outcome.findings.len() + 1).await {
+                    Ok(mut extra) => {
+                        let dir = outcome.dir.clone();
+                        for f in extra.iter_mut() {
+                            let d = dir.clone();
+                            f.finalize(|e| d.join(e).is_file());
+                        }
+                        campaign_note =
+                            format!("campaign added {} candidate finding(s)", extra.len());
+                        outcome.findings.extend(extra);
+                        // Rewrite reports with the campaign findings included.
+                        let jsonl: String =
+                            outcome.findings.iter().map(|f| f.to_json_line()).collect();
+                        let _ = std::fs::write(dir.join("findings.jsonl"), jsonl);
+                        let min = suite.report.min_severity.unwrap_or(Severity::Low);
+                        let shown: Vec<Finding> = outcome
+                            .findings
+                            .iter()
+                            .filter(|f| f.severity >= min)
+                            .cloned()
+                            .collect();
+                        let _ = std::fs::write(
+                            dir.join("report.md"),
+                            findings::render_report_md(label, &outcome.run_id, &shown),
+                        );
+                    }
+                    Err(e) => campaign_note = format!("campaign failed: {e}"),
+                }
+            } else {
+                campaign_note = "campaign skipped: needs an interactive session".to_string();
+            }
+        }
         let mut out = format!(
             "[redteam] suite '{label}' — {} cases sent, {} findings ({} verified)\n  run: {}\n  \
              report: {}\n",
@@ -822,6 +1027,9 @@ impl Tool for Redteam {
         }
         if let Some(reason) = &outcome.aborted {
             out.push_str(&format!("  aborted: {reason}\n"));
+        }
+        if !campaign_note.is_empty() {
+            out.push_str(&format!("  campaign: {campaign_note}\n"));
         }
         out.push_str(&format!(
             "\nevidence: reached level 5 (physical) — findings cite captured output\nreplay: \
@@ -1228,5 +1436,84 @@ strategies = ["oversize"]
     fn registered_in_all_and_absent_from_plan_registry() {
         assert!(crate::tools::all().iter().any(|t| t.name() == "redteam"));
         assert!(crate::plan_registry().get("redteam").is_none());
+    }
+
+    #[test]
+    fn attacker_registry_has_hardware_no_self_replication() {
+        let reg = crate::attacker_registry();
+        for name in [
+            "monitor",
+            "debug",
+            "la",
+            "elf_analyze",
+            "observe",
+            "device_cmd",
+        ] {
+            assert!(
+                reg.get(name).is_some(),
+                "{name} must be available to the attacker"
+            );
+        }
+        for name in [
+            "flash",
+            "run",
+            "shell",
+            "write_file",
+            "edit_file",
+            "task",
+            "redteam",
+        ] {
+            assert!(
+                reg.get(name).is_none(),
+                "{name} must NOT be reachable by the attacker"
+            );
+        }
+    }
+
+    #[test]
+    fn campaign_prompt_names_interfaces_and_the_findings_block() {
+        let p = campaign_prompt("uart-fuzz", &suite(), "35 cases, 0 findings");
+        assert!(p.contains("COM_FAKE"), "got: {p}");
+        assert!(p.contains("redteam-findings"), "got: {p}");
+        assert!(p.contains("35 cases"), "got: {p}");
+        assert!(p.contains("Do NOT reflash"), "got: {p}");
+    }
+
+    #[test]
+    fn extract_findings_block_parses_and_tolerates_garbage() {
+        let text = "prose …\n```redteam-findings\n[{\"severity\":\"high\",\"class\":\"crash\",\
+                    \"payload_hex\":\"55aa01a2\",\"interface\":\"uart@COM3\",\
+                    \"observed\":\"HardFault_Handler\",\"evidence\":[\"capture-F-001.log\"],\
+                    \"why\":\"bit flip in length byte\"}]\n```\ntrailing";
+        let fs = extract_findings_block(text, "uart-fuzz", 1234, 2);
+        assert_eq!(fs.len(), 1);
+        assert_eq!(fs[0].finding_id, "F-002");
+        assert_eq!(fs[0].severity, Severity::High);
+        assert_eq!(fs[0].strategy, "campaign");
+        assert_eq!(fs[0].payload_hex, "55aa01a2");
+
+        // No block / bad JSON / empty array → nothing.
+        assert!(extract_findings_block("no block here", "s", 1, 1).is_empty());
+        assert!(extract_findings_block("```redteam-findings\nnot json\n```", "s", 1, 1).is_empty());
+        assert!(extract_findings_block("```redteam-findings\n[]\n```", "s", 1, 1).is_empty());
+        // Missing payload_hex survives extraction but the finalize rule
+        // (no evidence file) will cap it — the payload is the reproducer.
+        let loose = extract_findings_block(
+            "```redteam-findings\n[{\"class\":\"hang\"}]\n```",
+            "s",
+            1,
+            1,
+        );
+        assert_eq!(loose.len(), 1);
+        assert!(loose[0].payload_hex.is_empty());
+    }
+
+    #[tokio::test]
+    async fn campaign_without_attacker_runner_is_actionable_error() {
+        let dir = tempdir().unwrap();
+        let err = run_campaign("x", &suite(), &ctx(dir.path()), "note", 1)
+            .await
+            .unwrap_err();
+        assert!(err.contains("attacker runner"), "got: {err}");
     }
 }

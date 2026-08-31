@@ -54,3 +54,32 @@ pub fn plan_registry() -> Arc<ToolRegistry> {
     }
     Arc::new(registry)
 }
+
+/// Attacker-profile registry for the `redteam` campaign subagent: the
+/// hardware-facing observation/probing tools, but NOT the ones that could
+/// brick the host or self-replicate — no shell, no write_file/edit_file, no
+/// flash/run (recovery is the suite's job, not the agent's), no task (no
+/// nested nesting). TargetLockPermission restricts which port/node the
+/// campaign may touch; the suite's approval covered the rest.
+pub fn attacker_registry() -> Arc<ToolRegistry> {
+    let mut registry = ToolRegistry::new();
+    for tool in tools::all() {
+        if matches!(
+            tool.name(),
+            "monitor"
+                | "debug"
+                | "elf_analyze"
+                | "la"
+                | "observe"
+                | "device_cmd"
+                | "device_log"
+                | "read_file"
+                | "grep"
+                | "glob"
+                | "list_dir"
+        ) {
+            registry.register(tool);
+        }
+    }
+    Arc::new(registry)
+}

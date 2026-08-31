@@ -7,7 +7,7 @@
 //! single wiring point: frontends supply their I/O adapters (sink,
 //! permission checker, asker) and get back a fully configured agent.
 
-use crate::{default_registry, plan_registry};
+use crate::{attacker_registry, default_registry, plan_registry};
 use firment_core::{
     Agent, Asker, Cancellable, Config, EventSink, PermissionChecker, PlanModePermission, Session,
     SessionMode, SessionStore, SubagentRunner,
@@ -64,6 +64,11 @@ pub fn assemble_agent(
     } else {
         permission.clone()
     };
+    // Keep a handle on the sink for the attacker runner (Agent::new moves it).
+    let attacker_sink = sink.clone();
+    // Same for the permission: the attacker runner is built after the
+    // research runner has consumed its clones.
+    let attacker_permission = agent_permission.clone();
 
     let mut agent = Agent::new(
         provider,
@@ -118,6 +123,27 @@ pub fn assemble_agent(
         permission,
     ));
     agent.set_subagent_factory(Some(subagent_factory));
+
+    // Attacker-profile runner for the `redteam` campaign: hardware-capable
+    // registry, the parent's sink (attack tool cards stream into the live
+    // UI), and the parent's permission — approval popups still reach the
+    // user; the campaign wraps it in TargetLockPermission at call time to
+    // confine the attack to the suite's declared interfaces.
+    if !plan {
+        let attacker = SubagentRunner {
+            max_iterations: 16,
+            sink: attacker_sink,
+            ..SubagentRunner::new(
+                Arc::new(merged.clone()),
+                attacker_registry(),
+                agent.session().provider.clone(),
+                agent.session().model.clone(),
+                None,
+                attacker_permission,
+            )
+        };
+        agent.set_attacker_factory(Some(Arc::new(attacker)));
+    }
 
     let (cancel_tx, cancel_signal) = agent.cancel_handle();
 

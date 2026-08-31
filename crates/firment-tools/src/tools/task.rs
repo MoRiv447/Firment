@@ -130,6 +130,7 @@ mod tests {
             monitor_port: None,
             monitor_baud: 115_200,
             subagent: factory.map(|f| Arc::new(f) as _),
+            attacker: None,
             subagent_depth: depth,
             max_subagent_depth: max_depth,
             asker: None,

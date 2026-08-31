@@ -1636,6 +1636,7 @@ async fn run_direct_tool(
         monitor_port: config.tools.monitor_port.clone(),
         monitor_baud: config.tools.monitor_baud,
         subagent: None,
+        attacker: None,
         subagent_depth: 0,
         max_subagent_depth: 2,
         asker: None,

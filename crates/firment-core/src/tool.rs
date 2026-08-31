@@ -37,6 +37,11 @@ pub struct ToolContext {
     pub monitor_baud: u32,
     /// Nested-agent runner for the `task` tool; `None` in direct tool runs.
     pub subagent: Option<Arc<dyn SubagentFactory>>,
+    /// Attacker-profile runner for the `redteam` campaign: same plumbing as
+    /// `subagent` but with the hardware-capable registry, so the campaign
+    /// can clone it and swap in the target-locked permission. `None` in
+    /// direct tool runs and plan mode.
+    pub attacker: Option<Arc<crate::subagent::SubagentRunner>>,
     /// Current subagent nesting depth (0 = main agent).
     pub subagent_depth: usize,
     /// Recursion limit for nested agents from `[tools] max_subagent_depth`.
@@ -99,6 +104,7 @@ impl ToolContext {
             monitor_port: None,
             monitor_baud: 115_200,
             subagent: None,
+            attacker: None,
             subagent_depth: 0,
             max_subagent_depth: 2,
             asker: None,

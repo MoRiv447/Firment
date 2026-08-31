@@ -198,6 +198,7 @@ mod tests {
             session_dir: Some(dir.join("session")),
             providers: Vec::new(),
             la: None,
+            attacker: None,
             allowed_roots: Vec::new(),
             cancel: firment_core::Cancellable::new(),
         }

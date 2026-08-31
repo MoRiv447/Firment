@@ -36,6 +36,11 @@ pub trait SubagentFactory: Send + Sync {
 /// the same `Config` (fresh client per nesting level), gives the nested agent a
 /// read-only research registry, and keeps its session in a temp directory so it
 /// never shows up in the user's session list.
+///
+/// `Clone` + public fields on purpose: the red team campaign clones the
+/// research runner and swaps registry/permission/max_iterations for the
+/// attacker profile, without re-plumbing provider construction.
+#[derive(Clone)]
 pub struct SubagentRunner {
     pub config: Arc<Config>,
     pub registry: Arc<ToolRegistry>,
@@ -46,6 +51,11 @@ pub struct SubagentRunner {
     pub web_search_provider: Option<String>,
     pub web_search_api_key: Option<String>,
     pub permission: Arc<dyn PermissionChecker>,
+    /// Where the nested agent's events go. Research subagents keep the
+    /// default [`NullSink`] (their output is the task tool's result text);
+    /// the red team campaign passes the parent's sink so attack tool cards
+    /// stream into the live UI.
+    pub sink: Arc<dyn EventSink>,
 }
 
 impl SubagentRunner {
@@ -70,6 +80,7 @@ impl SubagentRunner {
             model: model.into(),
             asker,
             permission,
+            sink: Arc::new(NullSink),
         }
     }
 
@@ -84,6 +95,7 @@ impl SubagentRunner {
             web_search_provider: self.web_search_provider.clone(),
             web_search_api_key: self.web_search_api_key.clone(),
             permission: self.permission.clone(),
+            sink: self.sink.clone(),
         })
     }
 }
@@ -123,7 +135,7 @@ impl SubagentFactory for SubagentRunner {
             session,
             store.clone(),
             self.permission.clone(),
-            Arc::new(NullSink),
+            self.sink.clone(),
             self.max_iterations,
         );
         nested.set_subagent_factory(Some(self.child()));

@@ -699,6 +699,7 @@ mod tests {
             ledger_path: None,
             providers: Vec::new(),
             la: None,
+            attacker: None,
             allowed_roots: Vec::new(),
             cancel: firment_core::Cancellable::new(),
         }
