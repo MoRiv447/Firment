@@ -107,7 +107,7 @@ struct CaptureMeta {
 }
 
 /// Where captures live inside the workspace.
-fn la_dir(cwd: &Path) -> PathBuf {
+pub(crate) fn la_dir(cwd: &Path) -> PathBuf {
     cwd.join(".firment").join("la")
 }
 
@@ -144,6 +144,31 @@ fn resolve_capture(ctx: &ToolContext, arg: &str) -> Result<(PathBuf, CaptureMeta
 /// otherwise a minute plus the capture window itself.
 fn exec_timeout(cfg: &LaConfig, time_ms: Option<u64>) -> u64 {
     cfg.timeout_ms.unwrap_or(60_000 + time_ms.unwrap_or(0))
+}
+
+/// A stored capture loaded for measurement: unpacked per-channel waves plus
+/// the metadata the analysers need. Shared with the HIL `la` step so the
+/// assertion logic reads exactly what `la measure` reads.
+pub(crate) struct LaCapture {
+    pub channel_count: usize,
+    pub samplerate_hz: Option<f64>,
+    pub waves: Vec<Vec<u8>>,
+}
+
+pub(crate) fn load_capture_waves(ctx: &ToolContext, arg: &str) -> Result<LaCapture, String> {
+    let (stem, meta) = resolve_capture(ctx, arg).map_err(|e| e.message)?;
+    let bytes = std::fs::read(stem.with_extension("bin")).map_err(|_| {
+        format!(
+            "capture {} has no raw-bit sidecar (export failed at capture time)",
+            meta.id
+        )
+    })?;
+    let waves = la_cmd::unpack_bitstream(&bytes, meta.channel_count)?;
+    Ok(LaCapture {
+        channel_count: meta.channel_count,
+        samplerate_hz: meta.samplerate_hz,
+        waves,
+    })
 }
 
 impl La {
@@ -745,68 +770,72 @@ impl Tool for La {
     }
 }
 
+/// Canned sigrok-cli for tests (this crate's, including the HIL `la` step
+/// tests): answers version/driver/info/decode queries and writes a fixed
+/// raw-bit file when asked to export binary.
+#[cfg(test)]
+pub(crate) struct FakeBackend {
+    pub bin_bytes: Vec<u8>,
+    pub decode_out: String,
+    pub fail_capture: bool,
+}
+
+#[cfg(test)]
+impl FakeBackend {
+    pub(crate) fn new(bin_bytes: Vec<u8>) -> Self {
+        Self {
+            bin_bytes,
+            decode_out: "uart: TX: (0x55)\n".to_string(),
+            fail_capture: false,
+        }
+    }
+}
+
+#[cfg(test)]
+#[async_trait]
+impl CaptureBackend for FakeBackend {
+    async fn exec(
+        &self,
+        _bin: &str,
+        argv: &[String],
+        _cwd: &Path,
+        _timeout_ms: u64,
+        _cancel: Option<Cancellable>,
+    ) -> Result<(String, Option<i32>), String> {
+        let joined = argv.join(" ");
+        if joined.contains("--version") {
+            return Ok(("sigrok-cli 0.7.2\n".to_string(), Some(0)));
+        }
+        if joined.contains("-L") {
+            return Ok(("fx2lafw\nsaleae-logic\nuart\n".to_string(), Some(0)));
+        }
+        if joined.contains("--show") {
+            return Ok(("samplerate list: 1m 8m\n".to_string(), Some(0)));
+        }
+        if joined.contains("-P") {
+            return Ok((self.decode_out.clone(), Some(0)));
+        }
+        if joined.contains("-O binary") {
+            let out = argv[argv.iter().position(|a| a == "-o").unwrap() + 1].clone();
+            std::fs::write(&out, &self.bin_bytes).unwrap();
+            return Ok((String::new(), Some(0)));
+        }
+        // the capture invocation itself
+        if self.fail_capture {
+            return Ok(("Device busy.".to_string(), Some(1)));
+        }
+        let out = argv[argv.iter().position(|a| a == "-o").unwrap() + 1].clone();
+        std::fs::write(&out, b"sr-stub").unwrap();
+        Ok((String::new(), Some(0)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use firment_core::{AutoApprove, EditJournal};
     use std::sync::Mutex;
     use tempfile::tempdir;
-
-    /// Canned sigrok-cli: answers version/driver/info/decode queries and
-    /// writes a fixed raw-bit file when asked to export binary.
-    struct FakeBackend {
-        bin_bytes: Vec<u8>,
-        decode_out: String,
-        fail_capture: bool,
-    }
-
-    impl FakeBackend {
-        fn new(bin_bytes: Vec<u8>) -> Self {
-            Self {
-                bin_bytes,
-                decode_out: "uart: TX: (0x55)\n".to_string(),
-                fail_capture: false,
-            }
-        }
-    }
-
-    #[async_trait]
-    impl CaptureBackend for FakeBackend {
-        async fn exec(
-            &self,
-            _bin: &str,
-            argv: &[String],
-            _cwd: &Path,
-            _timeout_ms: u64,
-            _cancel: Option<Cancellable>,
-        ) -> Result<(String, Option<i32>), String> {
-            let joined = argv.join(" ");
-            if joined.contains("--version") {
-                return Ok(("sigrok-cli 0.7.2\n".to_string(), Some(0)));
-            }
-            if joined.contains("-L") {
-                return Ok(("fx2lafw\nsaleae-logic\nuart\n".to_string(), Some(0)));
-            }
-            if joined.contains("--show") {
-                return Ok(("samplerate list: 1m 8m\n".to_string(), Some(0)));
-            }
-            if joined.contains("-P") {
-                return Ok((self.decode_out.clone(), Some(0)));
-            }
-            if joined.contains("-O binary") {
-                let out = argv[argv.iter().position(|a| a == "-o").unwrap() + 1].clone();
-                std::fs::write(&out, &self.bin_bytes).unwrap();
-                return Ok((String::new(), Some(0)));
-            }
-            // the capture invocation itself
-            if self.fail_capture {
-                return Ok(("Device busy.".to_string(), Some(1)));
-            }
-            let out = argv[argv.iter().position(|a| a == "-o").unwrap() + 1].clone();
-            std::fs::write(&out, b"sr-stub").unwrap();
-            Ok((String::new(), Some(0)))
-        }
-    }
 
     fn ctx_with(dir: &Path, la: Option<LaConfig>) -> ToolContext {
         ToolContext {

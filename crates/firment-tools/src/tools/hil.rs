@@ -87,6 +87,33 @@ struct HilStep {
     expect_motion: Option<bool>,
     #[serde(default)]
     expect_diff: Option<bool>,
+    // la step: capture from a logic analyzer (or assert against a stored
+    // capture via `capture`) and check measurements. See tools/la.rs.
+    // `duration_ms` doubles as the capture window (time_ms bound).
+    #[serde(default)]
+    driver: Option<String>,
+    #[serde(default)]
+    channels: Option<String>,
+    #[serde(default)]
+    samplerate: Option<String>,
+    #[serde(default)]
+    samples: Option<u64>,
+    #[serde(default)]
+    capture: Option<String>,
+    #[serde(default)]
+    channel: Option<usize>,
+    #[serde(default)]
+    decoder: Option<String>,
+    #[serde(default)]
+    decoder_opts: Option<std::collections::BTreeMap<String, String>>,
+    #[serde(default)]
+    expect_frequency_hz: Option<f64>,
+    #[serde(default)]
+    expect_duty: Option<f64>,
+    #[serde(default)]
+    expect_edges: Option<usize>,
+    #[serde(default)]
+    expect_decoded: Option<String>,
     // allow `expect` object form: { contains, regex, count }
     #[serde(default)]
     expect: Option<HilExpect>,
@@ -128,7 +155,7 @@ impl Tool for Hil {
             "type": "object",
             "properties": {
                 "suite": {"type": "string", "description": "Suite name defined in .firment/hil.toml"},
-                "steps": {"type": "array", "description": "Inline steps [{kind, file, elf, chip, probe, port, baud, clk_hz, timeout_ms, duration_ms, expect_contains, expect_regex, expect_count, mode, roi, threshold, expect_lit, save, paths, after, interval_ms, expect_blinking, expect_blink_hz, expect_motion, expect_diff}] — kinds: build/flash/run/monitor/trace/observe/elf_analyze/delay; flash/run/elf auto-infer .pio/build/*/firmware.elf when elf omitted; observe uses mode=brightness|motion|blink|diff with file/paths/after, roi [x,y,w,h], threshold, interval_ms (blink), save, and asserts via expect_lit/expect_motion/expect_diff/expect_blinking/expect_blink_hz"},
+                "steps": {"type": "array", "description": "Inline steps [{kind, file, elf, chip, probe, port, baud, clk_hz, timeout_ms, duration_ms, expect_contains, expect_regex, expect_count, mode, roi, threshold, expect_lit, save, paths, after, interval_ms, expect_blinking, expect_blink_hz, expect_motion, expect_diff, driver, channels, samplerate, samples, capture, channel, decoder, decoder_opts, expect_frequency_hz, expect_duty, expect_edges, expect_decoded}] — kinds: build/flash/run/monitor/trace/observe/la/elf_analyze/delay; flash/run/elf auto-infer .pio/build/*/firmware.elf when elf omitted; observe uses mode=brightness|motion|blink|diff with file/paths/after, roi [x,y,w,h], threshold, interval_ms (blink), save, and asserts via expect_lit/expect_motion/expect_diff/expect_blinking/expect_blink_hz; la captures via driver/channels/samplerate + samples|duration_ms (or asserts a stored capture= id) and checks expect_frequency_hz/expect_duty/expect_edges/expect_decoded (channel= selects the line, decoder/decoder_opts for decoded text)"},
                 "chip": {"type": "string", "description": "Override chip for flash/run/trace steps"},
                 "port": {"type": "string", "description": "Override serial port for monitor steps; 'auto' picks first detected port"},
                 "probe": {"type": "string", "description": "Override probe id"},
@@ -329,6 +356,7 @@ impl Tool for Hil {
                 "monitor" => run_monitor_step(&step.inner, ctx, dry_run, remaining).await,
                 "trace" => run_trace_step(&step.inner, ctx, dry_run, remaining).await,
                 "observe" => run_observe_step(&step.inner, ctx, dry_run, remaining).await,
+                "la" => run_la_step(&step.inner, ctx, dry_run, remaining).await,
                 "elf_analyze" | "elf" => run_elf_step(&step.inner, ctx, remaining).await,
                 "delay" | "sleep" => {
                     let ms = step
@@ -355,7 +383,7 @@ impl Tool for Hil {
                     Ok(format!("delay {ms} ms"))
                 }
                 _ => Err(format!(
-                    "[InvalidInput] unknown hil step kind: {kind} (expected build/flash/run/monitor/trace/observe/elf_analyze/delay)"
+                    "[InvalidInput] unknown hil step kind: {kind} (expected build/flash/run/monitor/trace/observe/la/elf_analyze/delay)"
                 )),
             };
 
@@ -415,6 +443,9 @@ impl Tool for Hil {
                     // behavior — level 5 belongs to the observe step.
                     "trace" => (4, "runtime"),
                     "observe" => (5, "physical"),
+                    // Waveforms are physical behaviour measured, not
+                    // asserted — same rung as observe.
+                    "la" => (5, "physical"),
                     _ => continue, // elf_analyze / delay do not advance the ladder
                 };
                 if l > level {
@@ -1619,6 +1650,212 @@ fn run_observe_diff(step: &HilStep, ctx: &ToolContext) -> Result<String, String>
     Ok(out)
 }
 
+/// la: capture from a logic analyzer (or assert against a stored capture)
+/// and check measurements. A LOW-confidence "yes" is not evidence — the
+/// same rule the observe steps apply.
+async fn run_la_step(
+    step: &HilStep,
+    ctx: &ToolContext,
+    dry_run: bool,
+    _remaining: u64,
+) -> Result<String, String> {
+    run_la_step_with(&crate::tools::la::La::default(), step, ctx, dry_run).await
+}
+
+async fn run_la_step_with(
+    tool: &crate::tools::la::La,
+    step: &HilStep,
+    ctx: &ToolContext,
+    dry_run: bool,
+) -> Result<String, String> {
+    use firment_core::Tool as _;
+    let mut wants = Vec::new();
+    if let Some(hz) = step.expect_frequency_hz {
+        wants.push(format!("expect_frequency_hz={hz}"));
+    }
+    if let Some(d) = step.expect_duty {
+        wants.push(format!("expect_duty={d}"));
+    }
+    if let Some(n) = step.expect_edges {
+        wants.push(format!("expect_edges={n}"));
+    }
+    if let Some(s) = &step.expect_decoded {
+        wants.push(format!("expect_decoded='{s}'"));
+    }
+    if dry_run {
+        let checked = if wants.is_empty() {
+            "nothing (no expectations)".to_string()
+        } else {
+            wants.join(", ")
+        };
+        return Ok(format!(
+            "[dry-run] la simulated — would capture and check {checked}\n\
+             [HIL_EXPECT:FAIL] dry-run cannot verify hardware output (no samples)"
+        ));
+    }
+    // The suite-level approval already covered hardware steps: auto-approve
+    // the child context (same mechanism as the elf step).
+    let child_ctx = firment_core::ToolContext {
+        permission: std::sync::Arc::new(firment_core::AutoApprove::everything()),
+        ..ctx.clone()
+    };
+    let id = match &step.capture {
+        Some(existing) => existing.clone(),
+        None => {
+            let mut args = serde_json::json!({"action": "capture"});
+            for (k, v) in [
+                ("driver", &step.driver),
+                ("channels", &step.channels),
+                ("samplerate", &step.samplerate),
+            ] {
+                if let Some(v) = v {
+                    args[k] = serde_json::json!(v);
+                }
+            }
+            if let Some(n) = step.samples {
+                args["samples"] = serde_json::json!(n);
+            }
+            if let Some(t) = step.duration_ms {
+                args["time_ms"] = serde_json::json!(t);
+            }
+            let out = tool.run(args, &child_ctx).await.map_err(|e| e.message)?;
+            out.text
+                .lines()
+                .next()
+                .and_then(|l| l.strip_prefix("[la] captured "))
+                .map(|s| s.trim().to_string())
+                .ok_or_else(|| "[Io] la capture returned no capture id".to_string())?
+        }
+    };
+    let mut out = format!("la capture {id}");
+    let needs_waves = step.expect_frequency_hz.is_some()
+        || step.expect_duty.is_some()
+        || step.expect_edges.is_some();
+    let cap = if needs_waves {
+        Some(crate::tools::la::load_capture_waves(&child_ctx, &id)?)
+    } else {
+        None
+    };
+    let channel = step.channel.unwrap_or(0);
+    let wave_of = || -> Result<&Vec<u8>, String> {
+        let cap = cap.as_ref().expect("loaded above");
+        cap.waves.get(channel).ok_or_else(|| {
+            format!(
+                "[InvalidInput] channel {channel} out of range ({} captured)",
+                cap.channel_count
+            )
+        })
+    };
+    let marker = |ok: bool| if ok { "PASS" } else { "FAIL" };
+    if let Some(want) = step.expect_frequency_hz {
+        let wave = wave_of()?;
+        let hz = cap.as_ref().unwrap().samplerate_hz.ok_or(
+            "[InvalidInput] expect_frequency_hz needs a capture with a known samplerate — set samplerate= on the step or [tools.la]",
+        )?;
+        let f = crate::la_measure::measure_frequency(wave, hz);
+        let (ok, why) = match &f {
+            Some(f)
+                if !matches!(f.confidence, crate::tools::observe::Confidence::Low)
+                    && f.hz_low <= want
+                    && want <= f.hz_high =>
+            {
+                (
+                    true,
+                    format!(
+                        "{want} Hz inside the measured {}..{} Hz range",
+                        f.hz_low, f.hz_high
+                    ),
+                )
+            }
+            Some(f) if matches!(f.confidence, crate::tools::observe::Confidence::Low) => {
+                (false, format!("low confidence — {}", f.note))
+            }
+            Some(f) => (
+                false,
+                format!(
+                    "{want} Hz outside the measured {}..{} Hz range",
+                    f.hz_low, f.hz_high
+                ),
+            ),
+            None => (
+                false,
+                "not periodic (fewer than two rising edges)".to_string(),
+            ),
+        };
+        out.push_str(&format!(
+            "\n[HIL_EXPECT:{}] la frequency: {why}",
+            marker(ok)
+        ));
+    }
+    if let Some(want) = step.expect_duty {
+        let wave = wave_of()?;
+        let d = crate::la_measure::measure_duty(wave);
+        let (ok, why) = match &d {
+            Some(d)
+                if !matches!(d.confidence, crate::tools::observe::Confidence::Low)
+                    && (d.fraction - want).abs() <= 0.1 =>
+            {
+                (
+                    true,
+                    format!(
+                        "duty {:.1}% within ±10 points of {want}",
+                        d.fraction * 100.0
+                    ),
+                )
+            }
+            Some(d) if matches!(d.confidence, crate::tools::observe::Confidence::Low) => {
+                (false, format!("low confidence — {}", d.note))
+            }
+            Some(d) => (
+                false,
+                format!(
+                    "duty {:.1}% more than 10 points from {want}",
+                    d.fraction * 100.0
+                ),
+            ),
+            None => (false, "not periodic (needs two rising edges)".to_string()),
+        };
+        out.push_str(&format!("\n[HIL_EXPECT:{}] la duty: {why}", marker(ok)));
+    }
+    if let Some(want) = step.expect_edges {
+        let wave = wave_of()?;
+        let got = crate::la_measure::count_edges(wave, crate::la_measure::EdgeKind::Both);
+        let ok = got == want;
+        out.push_str(&format!(
+            "\n[HIL_EXPECT:{}] la edges: {got} transitions, wanted {want}",
+            marker(ok)
+        ));
+    }
+    if let Some(want) = &step.expect_decoded {
+        let mut args = serde_json::json!({
+            "action": "decode", "capture": id,
+            "decoder": step.decoder.as_deref().unwrap_or("uart"),
+        });
+        if let Some(opts) = &step.decoder_opts {
+            args["decoder_opts"] = serde_json::to_value(opts).unwrap_or(serde_json::Value::Null);
+        }
+        let text = tool
+            .run(args, &child_ctx)
+            .await
+            .map_err(|e| e.message)?
+            .text;
+        let ok = text.contains(want.as_str());
+        out.push_str(&format!(
+            "\n[HIL_EXPECT:{}] la decoded: {}",
+            marker(ok),
+            if ok {
+                format!("'{want}' found in the decoded frames")
+            } else {
+                format!("'{want}' not present in the decoded output")
+            }
+        ));
+    }
+    if wants.is_empty() {
+        out.push_str("\n(no expectations — capture stored for later la measure/decode)");
+    }
+    Ok(out)
+}
+
 fn evaluate_expect(
     text: &str,
     contains: Option<&str>,
@@ -2339,6 +2576,186 @@ elf = "build/fw.elf"
             ..pass
         };
         let out = run_observe_step(&no_change, &ctx(dir.path()), false, 60_000)
+            .await
+            .unwrap();
+        assert!(out.contains("[HIL_EXPECT:FAIL]"), "got: {out}");
+    }
+
+    // ----- la step ---------------------------------------------------------
+
+    /// Write a stored capture (raw-bit sidecar + meta) straight to disk —
+    /// the assertion path reads files, it does not exec sigrok-cli.
+    fn write_capture(dir: &std::path::Path, id: &str, bytes: &[u8], sr_hz: Option<f64>) {
+        let la = dir.join(".firment").join("la");
+        std::fs::create_dir_all(&la).unwrap();
+        std::fs::write(la.join(format!("{id}.bin")), bytes).unwrap();
+        std::fs::write(la.join(format!("{id}.sr")), b"stub").unwrap();
+        let meta = serde_json::json!({
+            "id": id, "driver": "demo", "channels": "0", "channel_count": 1,
+            "samplerate": "8m", "samplerate_hz": sr_hz, "samples": bytes.len(),
+            "time_ms": null, "created_unix": 0, "has_binary": true
+        });
+        std::fs::write(la.join(format!("{id}.meta.json")), meta.to_string()).unwrap();
+    }
+
+    /// 1-channel square wave: `period` samples per cycle, 50% duty, starting
+    /// high. One byte per sample, channel 0 in bit 0.
+    fn square_bytes(period: usize, cycles: usize) -> Vec<u8> {
+        (0..period * cycles)
+            .map(|i| if i % period < period / 2 { 1 } else { 0 })
+            .collect()
+    }
+
+    #[test]
+    fn hil_toml_parses_la_step_fields() {
+        let toml_text = r#"
+[suite.wave]
+[[suite.wave.steps]]
+kind = "la"
+driver = "fx2lafw"
+channels = "0,1"
+samplerate = "8m"
+samples = 400000
+expect_frequency_hz = 1000000.0
+expect_edges = 9
+decoder = "uart"
+decoder_opts = { rx = "0", baudrate = "115200" }
+expect_decoded = "0x55"
+"#;
+        let file: HilFile = toml::from_str(toml_text).unwrap();
+        let s = &file.suite.get("wave").unwrap().steps[0];
+        assert_eq!(s.driver.as_deref(), Some("fx2lafw"));
+        assert_eq!(s.expect_frequency_hz, Some(1e6));
+        assert_eq!(s.expect_edges, Some(9));
+        assert_eq!(
+            s.decoder_opts
+                .as_ref()
+                .unwrap()
+                .get("baudrate")
+                .map(String::as_str),
+            Some("115200")
+        );
+        // deny_unknown_fields still guards the new surface.
+        assert!(
+            toml::from_str::<HilFile>(
+                "[suite.x]\n[[suite.x.steps]]\nkind = \"la\"\nexpect_freq = 1\n"
+            )
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn la_step_dry_run_fails_expectations() {
+        let dir = tempdir().unwrap();
+        let step = HilStep {
+            kind: "la".to_string(),
+            capture: Some("whatever".to_string()),
+            expect_frequency_hz: Some(1e6),
+            ..Default::default()
+        };
+        let out = run_la_step(&step, &ctx(dir.path()), true, 60_000)
+            .await
+            .unwrap();
+        assert!(out.contains("[dry-run]"), "got: {out}");
+        assert!(
+            out.contains("[HIL_EXPECT:FAIL]") && out.contains("no samples"),
+            "dry-run must not fake hardware evidence: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn la_step_asserts_stored_capture() {
+        let dir = tempdir().unwrap();
+        // 8-sample period at 8 MHz = 1 MHz, four rising edges (HIGH), nine
+        // transitions total.
+        write_capture(dir.path(), "t1", &square_bytes(8, 5), Some(8e6));
+        let freq = HilStep {
+            kind: "la".to_string(),
+            capture: Some("t1".to_string()),
+            expect_frequency_hz: Some(1e6),
+            ..Default::default()
+        };
+        let out = run_la_step(&freq, &ctx(dir.path()), false, 60_000)
+            .await
+            .unwrap();
+        assert!(out.contains("[HIL_EXPECT:PASS]"), "got: {out}");
+
+        let wrong = HilStep {
+            expect_frequency_hz: Some(5e6),
+            ..freq
+        };
+        let out = run_la_step(&wrong, &ctx(dir.path()), false, 60_000)
+            .await
+            .unwrap();
+        assert!(out.contains("[HIL_EXPECT:FAIL]"), "got: {out}");
+        assert!(out.contains("outside the measured"), "got: {out}");
+
+        let edges = HilStep {
+            expect_frequency_hz: None,
+            expect_edges: Some(9),
+            ..wrong
+        };
+        let out = run_la_step(&edges, &ctx(dir.path()), false, 60_000)
+            .await
+            .unwrap();
+        assert!(out.contains("[HIL_EXPECT:PASS]"), "got: {out}");
+
+        let duty = HilStep {
+            expect_edges: None,
+            expect_duty: Some(0.5),
+            ..edges
+        };
+        let out = run_la_step(&duty, &ctx(dir.path()), false, 60_000)
+            .await
+            .unwrap();
+        assert!(out.contains("[HIL_EXPECT:PASS]"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn la_step_low_confidence_cannot_pass() {
+        let dir = tempdir().unwrap();
+        // 3-sample period at 8 MHz: under 4x oversampling — the measurement
+        // is LOW confidence and must not carry an assertion.
+        write_capture(dir.path(), "t2", &square_bytes(3, 5), Some(8e6));
+        let step = HilStep {
+            kind: "la".to_string(),
+            capture: Some("t2".to_string()),
+            expect_frequency_hz: Some(8e6 / 3.0),
+            ..Default::default()
+        };
+        let out = run_la_step(&step, &ctx(dir.path()), false, 60_000)
+            .await
+            .unwrap();
+        assert!(
+            out.contains("[HIL_EXPECT:FAIL]") && out.contains("low confidence"),
+            "a LOW-confidence frequency must not pass: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn la_step_decoded_expectation_uses_the_backend() {
+        let dir = tempdir().unwrap();
+        write_capture(dir.path(), "t1", &square_bytes(8, 5), Some(8e6));
+        let tool = crate::tools::la::La::with_backend(std::sync::Arc::new(
+            crate::tools::la::FakeBackend::new(vec![]),
+        ));
+        let step = HilStep {
+            kind: "la".to_string(),
+            capture: Some("t1".to_string()),
+            decoder: Some("uart".to_string()),
+            expect_decoded: Some("0x55".to_string()),
+            ..Default::default()
+        };
+        let out = run_la_step_with(&tool, &step, &ctx(dir.path()), false)
+            .await
+            .unwrap();
+        assert!(out.contains("[HIL_EXPECT:PASS]"), "got: {out}");
+
+        let missing = HilStep {
+            expect_decoded: Some("0xEE".to_string()),
+            ..step
+        };
+        let out = run_la_step_with(&tool, &missing, &ctx(dir.path()), false)
             .await
             .unwrap();
         assert!(out.contains("[HIL_EXPECT:FAIL]"), "got: {out}");
