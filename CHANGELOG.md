@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **HIL observe steps now validate `roi` the way the observe tool does**
+  (w/h >= 1, inside the frame) instead of building the Rect unchecked and
+  letting the analysers clamp silently — a typo'd roi on a brightness
+  step used to measure an empty region and could pass
+  `expect_lit = false` on a measurement of nothing. `mode=blink`
+  additionally rejects a burst whose frames do not share one size
+  (motion/diff already errored on a size mismatch; blink now does too).
+
 ## v0.7.2 (2026-08-30) — physical observation, phase 2 + LAN proxy fix
 
 - **observe phase 2: three sequence analysers**. The v0.7.0 tool only
@@ -23,10 +33,14 @@
     reframed-camera guard (>60% of the frame changing → LOW).
 - **HIL observe step covers all four modes** (was brightness-only, other
   modes errored "not implemented"). New step expectations: `expect_motion`,
-  `expect_diff`, `expect_blinking`, `expect_blink_hz`. Low-confidence
-  verdicts can never pass an assertion: a "yes" on LOW confidence fails,
-  and `expect_blink_hz` additionally requires `interval_ms` and the wanted
-  value inside the measured range. dry-run now fails *any* expectation
+  `expect_diff`, `expect_blinking`, `expect_blink_hz`. A "yes" verdict on
+  LOW confidence is not evidence and fails the assertion — `expect_motion`
+  and `expect_diff` gate it directly, and `expect_blink_hz` additionally
+  requires `interval_ms`, a non-LOW confidence, and the wanted value
+  inside the measured range. The one deliberate exception is
+  `expect_blinking`, a plain boolean match: alternation is observable
+  even when the frequency is not (aliased sampling refuses the frequency,
+  not the alternation). dry-run now fails *any* expectation
   (it previously only handled `expect_lit`).
 - **HIL fixes**: the observe step no longer fake-passes on dry-run when it
   carries an expectation, and it now honors the suite's time budget

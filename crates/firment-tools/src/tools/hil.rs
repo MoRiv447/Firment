@@ -1271,6 +1271,33 @@ fn load_observe_frames(
     Ok(frames)
 }
 
+/// Validate an observe `roi` against the frame it will be applied to —
+/// the same rules as the observe tool's `parse_roi` (w/h >= 1, inside the
+/// frame; the `[u32; 4]` deserializer already guarantees four non-negative
+/// integers). HIL used to build the Rect unchecked: the analysers clamp
+/// out-of-range pixels silently, so a typo'd roi measured an empty region
+/// and a brightness step could pass `expect_lit = false` on a measurement
+/// of nothing.
+fn validate_observe_roi(
+    roi: Option<[u32; 4]>,
+    width: u32,
+    height: u32,
+) -> Result<Option<crate::tools::observe::Rect>, String> {
+    let Some(r) = roi else {
+        return Ok(None);
+    };
+    let (x, y, w, h) = (r[0], r[1], r[2], r[3]);
+    if w == 0 || h == 0 {
+        return Err("[InvalidInput] observe roi width/height must be >= 1".to_string());
+    }
+    if x.saturating_add(w) > width || y.saturating_add(h) > height {
+        return Err(format!(
+            "[InvalidInput] observe roi [{x},{y},{w},{h}] exceeds the frame ({width}x{height})"
+        ));
+    }
+    Ok(Some(crate::tools::observe::Rect { x, y, w, h }))
+}
+
 /// brightness: is the target lit, and how bright. The only still-frame mode;
 /// the verdict is asserted via expect_lit.
 async fn run_observe_brightness(step: &HilStep, ctx: &ToolContext) -> Result<String, String> {
@@ -1282,12 +1309,7 @@ async fn run_observe_brightness(step: &HilStep, ctx: &ToolContext) -> Result<Str
     let frame = image::open(&resolved)
         .map_err(|e| format!("[Io] cannot decode {}: {e}", resolved.display()))?
         .to_rgba8();
-    let roi = step.roi.map(|r| crate::tools::observe::Rect {
-        x: r[0],
-        y: r[1],
-        w: r[2],
-        h: r[3],
-    });
+    let roi = validate_observe_roi(step.roi, frame.width(), frame.height())?;
     let (b, suggested) = crate::tools::observe::analyze_brightness(
         &frame,
         &crate::tools::observe::Spec {
@@ -1366,12 +1388,7 @@ fn run_observe_motion(step: &HilStep, ctx: &ToolContext) -> Result<String, Strin
         );
     }
     let frames = load_observe_frames(ctx, paths)?;
-    let roi = step.roi.map(|r| crate::tools::observe::Rect {
-        x: r[0],
-        y: r[1],
-        w: r[2],
-        h: r[3],
-    });
+    let roi = validate_observe_roi(step.roi, frames[0].width(), frames[0].height())?;
     let m = crate::tools::observe::analyze_motion(
         &frames,
         roi,
@@ -1431,12 +1448,17 @@ fn run_observe_blink(step: &HilStep, ctx: &ToolContext) -> Result<String, String
         );
     }
     let frames = load_observe_frames(ctx, paths)?;
-    let roi = step.roi.map(|r| crate::tools::observe::Rect {
-        x: r[0],
-        y: r[1],
-        w: r[2],
-        h: r[3],
-    });
+    // One burst = one camera session: frames of mixed dimensions would
+    // silently produce a garbage luma series. motion/diff already error on
+    // a size mismatch — blink must too.
+    let (w0, h0) = (frames[0].width(), frames[0].height());
+    if frames.iter().any(|f| f.width() != w0 || f.height() != h0) {
+        return Err(
+            "[InvalidInput] observe mode=blink requires all frames to share the same dimensions"
+                .to_string(),
+        );
+    }
+    let roi = validate_observe_roi(step.roi, w0, h0)?;
     // A frequency needs a time base; a burst of photos carries none unless
     // the user states the gap. Without it the sample series is t_ms = 0
     // everywhere, which turns period into 0 and the range into `inf .. 1000
@@ -1528,12 +1550,7 @@ fn run_observe_diff(step: &HilStep, ctx: &ToolContext) -> Result<String, String>
     };
     let before = load(path)?;
     let after_frame = load(after)?;
-    let roi = step.roi.map(|r| crate::tools::observe::Rect {
-        x: r[0],
-        y: r[1],
-        w: r[2],
-        h: r[3],
-    });
+    let roi = validate_observe_roi(step.roi, before.width(), before.height())?;
     let d = crate::tools::observe::analyze_diff(
         &before,
         &after_frame,
@@ -2032,6 +2049,70 @@ elf = "build/fw.elf"
             .await
             .unwrap();
         assert!(out.contains("[HIL_EXPECT:FAIL]"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn observe_step_validates_roi_like_the_tool() {
+        let dir = tempdir().unwrap();
+        solid(240).save(dir.path().join("led.png")).unwrap();
+        // An in-bounds roi must behave exactly as before the validation.
+        let in_bounds = HilStep {
+            kind: "observe".to_string(),
+            file: Some("led.png".to_string()),
+            roi: Some([60, 60, 4, 4]),
+            expect_lit: Some(true),
+            ..Default::default()
+        };
+        let out = run_observe_step(&in_bounds, &ctx(dir.path()), false, 60_000)
+            .await
+            .unwrap();
+        assert!(out.contains("[HIL_EXPECT:PASS]"), "got: {out}");
+
+        // An out-of-bounds roi used to clamp to an empty measurement region
+        // and pass `expect_lit = false` on a measurement of nothing. It must
+        // fail loudly instead.
+        let out_of_bounds = HilStep {
+            roi: Some([60, 60, 10, 10]),
+            expect_lit: Some(false),
+            ..in_bounds
+        };
+        let err = run_observe_step(&out_of_bounds, &ctx(dir.path()), false, 60_000)
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("exceeds the frame"),
+            "a typo'd roi must fail loudly: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn observe_step_blink_rejects_mixed_frame_sizes() {
+        let dir = tempdir().unwrap();
+        for i in 0..3usize {
+            let luma = if i % 2 == 0 { 240u8 } else { 10u8 };
+            let f = if i == 2 {
+                image::RgbaImage::from_pixel(32, 32, image::Rgba([luma, luma, luma, 255]))
+            } else {
+                solid(luma)
+            };
+            f.save(dir.path().join(format!("b{i}.png"))).unwrap();
+        }
+        let paths: Vec<String> = (0..3).map(|i| format!("b{i}.png")).collect();
+        let step = HilStep {
+            kind: "observe".to_string(),
+            mode: Some("blink".to_string()),
+            paths: Some(paths),
+            interval_ms: Some(100),
+            expect_blinking: Some(true),
+            ..Default::default()
+        };
+        let err = run_observe_step(&step, &ctx(dir.path()), false, 60_000)
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("same dimensions"),
+            "a mixed-size burst must fail loudly, not produce garbage: {err}"
+        );
     }
 
     fn solid(luma: u8) -> image::RgbaImage {
