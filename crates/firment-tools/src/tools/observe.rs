@@ -398,20 +398,22 @@ pub(crate) fn analyze_motion(
     if frames.len() < 2 {
         return Err("motion needs at least 2 frames".to_string());
     }
-    let mut changed_fraction = 0f32;
-    let mut mean_abs_diff = 0f32;
-    let mut bbox = None;
-    let mut global_shift = 0f32;
+    // Every reported number comes from the SAME pair — the strongest one.
+    // Taking the max of each statistic independently mixed pairs: a quiet
+    // pair's sub-threshold drift could inflate `mean_abs_diff` and
+    // `global_shift` while `changed_fraction` came from the moving pair,
+    // so the exposure gate compared a drift the motion pair never had and
+    // demoted a clean verdict to LOW.
+    let mut best: Option<(f32, f32, f32, Option<Rect>)> = None;
     for pair in frames.windows(2) {
         let (frac, mean, box_here) = frame_diff_map(&pair[0], &pair[1], roi, pixel_threshold)?;
         let shift = (mean_luma(&pair[0], roi) - mean_luma(&pair[1], roi)).abs();
-        if frac > changed_fraction {
-            changed_fraction = frac;
-            bbox = box_here;
+        if best.as_ref().is_none_or(|b| frac > b.0) {
+            best = Some((frac, mean, shift, box_here));
         }
-        mean_abs_diff = mean_abs_diff.max(mean);
-        global_shift = global_shift.max(shift);
     }
+    // windows(2) is non-empty because frames.len() >= 2 was checked above.
+    let (changed_fraction, mean_abs_diff, global_shift, bbox) = best.expect("at least one pair");
     // Two gates, not one: the fraction alone is fooled by a single hot
     // pixel, and the mean alone is fooled by a uniform brightness drift.
     let moving = changed_fraction >= 0.01 && mean_abs_diff >= 2.0;
@@ -840,7 +842,7 @@ impl Tool for Observe {
                     "type": "integer",
                     "minimum": 0,
                     "maximum": 255,
-                    "description": "motion: per-pixel luma change that counts as 'this pixel moved' (default 16). Raise it on grainy shots."
+                    "description": "motion / diff: per-pixel luma change that counts as 'this pixel moved' (default 16). Raise it on grainy shots."
                 },
                 "roi": {
                     "type": "array",
@@ -858,7 +860,7 @@ impl Tool for Observe {
                 "save": {
                     "type": "boolean",
                     "default": false,
-                    "description": "Copy the measured image to .firment/observe/ for later review."
+                    "description": "Copy the measured image(s) to .firment/observe/ for later review: brightness copies the frame, motion/blink copy every frame of the sequence, diff copies both frames."
                 }
             },
             "required": ["mode"]
@@ -936,23 +938,8 @@ impl Tool for Observe {
         }
 
         if args.get("save").and_then(|s| s.as_bool()).unwrap_or(false) {
-            let dir = ctx.cwd.join(".firment").join("observe");
-            std::fs::create_dir_all(&dir)
-                .map_err(|e| ToolError::new(format!("[Io] create {}: {e}", dir.display())))?;
-            let file_name = resolved
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "frame.png".to_string());
-            let dest = dir.join(format!(
-                "{}-{file_name}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0)
-            ));
-            std::fs::copy(&resolved, &dest)
-                .map_err(|e| ToolError::new(format!("[Io] save {}: {e}", dest.display())))?;
-            text.push_str(&format!("\n  saved: {}", dest.display()));
+            let dest = save_copy(ctx, &resolved, "").map_err(ToolError::new)?;
+            push_saved(&mut text, &[dest]);
         }
 
         Ok(ToolOutput {
@@ -970,9 +957,12 @@ const CAMERA_CAVEAT: &str = "  note: pixel comparison cannot tell a light switch
 
 /// mode=motion: read a frame sequence in capture order and report whether
 /// anything moved.
-/// Load the `paths` sequence, in order, into frames. Shared by every
-/// sequence mode.
-fn load_frames(args: &Value, ctx: &ToolContext) -> Result<Vec<RgbaImage>, ToolError> {
+/// Load the `paths` sequence, in order, into frames; also returns the
+/// resolved source paths so `save` can copy the exact files measured.
+fn load_frames(
+    args: &Value,
+    ctx: &ToolContext,
+) -> Result<(Vec<RgbaImage>, Vec<std::path::PathBuf>), ToolError> {
     let paths = args
         .get("paths")
         .and_then(|v| v.as_array())
@@ -988,6 +978,7 @@ fn load_frames(args: &Value, ctx: &ToolContext) -> Result<Vec<RgbaImage>, ToolEr
         ));
     }
     let mut frames = Vec::with_capacity(paths.len());
+    let mut resolved_paths = Vec::with_capacity(paths.len());
     for (i, entry) in paths.iter().enumerate() {
         let Some(p) = entry.as_str() else {
             return Err(ToolError::new(format!(
@@ -1005,12 +996,66 @@ fn load_frames(args: &Value, ctx: &ToolContext) -> Result<Vec<RgbaImage>, ToolEr
             })?
             .to_rgba8();
         frames.push(img);
+        resolved_paths.push(resolved);
     }
-    Ok(frames)
+    Ok((frames, resolved_paths))
+}
+
+/// Copy one measured source image into `.firment/observe/` under a
+/// timestamp prefix so later review can tell runs apart. `tag` keeps
+/// sequence and before/after copies from colliding when frames share a
+/// file name ("" for the single-frame case, "-0"/"-before"/… otherwise).
+pub(crate) fn save_copy(
+    ctx: &ToolContext,
+    src: &std::path::Path,
+    tag: &str,
+) -> Result<std::path::PathBuf, String> {
+    let dir = ctx.cwd.join(".firment").join("observe");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("[Io] create {}: {e}", dir.display()))?;
+    let file_name = src
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "frame.png".to_string());
+    let dest = dir.join(format!(
+        "{}{tag}-{file_name}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    ));
+    std::fs::copy(src, &dest).map_err(|e| format!("[Io] save {}: {e}", dest.display()))?;
+    Ok(dest)
+}
+
+/// Append the `saved:` lines shared by every mode's save path.
+fn push_saved(text: &mut String, dests: &[std::path::PathBuf]) {
+    for dest in dests {
+        text.push_str(&format!("\n  saved: {}", dest.display()));
+    }
+}
+
+/// mode=motion / mode=blink: copy every frame of the measured sequence when
+/// `save` is set. The index tag keeps burst frames that share a file name
+/// (different directories) from overwriting each other.
+fn save_sequence(
+    args: &Value,
+    ctx: &ToolContext,
+    text: &mut String,
+    sources: &[std::path::PathBuf],
+) -> Result<(), ToolError> {
+    if !args.get("save").and_then(|s| s.as_bool()).unwrap_or(false) {
+        return Ok(());
+    }
+    let mut dests = Vec::with_capacity(sources.len());
+    for (i, src) in sources.iter().enumerate() {
+        dests.push(save_copy(ctx, src, &format!("-{i}")).map_err(ToolError::new)?);
+    }
+    push_saved(text, &dests);
+    Ok(())
 }
 
 fn run_motion(args: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
-    let frames = load_frames(args, ctx)?;
+    let (frames, sources) = load_frames(args, ctx)?;
     let paths_len = frames.len();
     let pixel_threshold = match args.get("pixel_threshold").and_then(|v| v.as_u64()) {
         Some(t) if t > 255 => {
@@ -1054,6 +1099,7 @@ fn run_motion(args: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> 
         frames[0].height(),
         paths_len
     ));
+    save_sequence(args, ctx, &mut text, &sources)?;
     text.push_str(CAMERA_CAVEAT);
 
     Ok(ToolOutput {
@@ -1064,7 +1110,7 @@ fn run_motion(args: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> 
 /// mode=blink: read a brightness sequence and report whether (and how fast)
 /// it alternates.
 fn run_blink(args: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
-    let frames = load_frames(args, ctx)?;
+    let (frames, sources) = load_frames(args, ctx)?;
     // A frequency needs a time base; a burst of photos carries none unless
     // the user says what the gap was. Refuse rather than invent one.
     let Some(interval_ms) = args.get("interval_ms").and_then(|v| v.as_u64()) else {
@@ -1123,6 +1169,7 @@ fn run_blink(args: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         frames[0].height(),
         frames.len()
     ));
+    save_sequence(args, ctx, &mut text, &sources)?;
     text.push_str(CAMERA_CAVEAT);
 
     Ok(ToolOutput {
@@ -1141,18 +1188,33 @@ fn run_diff(args: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         .get("after")
         .and_then(|p| p.as_str())
         .ok_or_else(|| ToolError::new("[InvalidInput] mode=diff requires 'after' (after frame)"))?;
-    let load = |p: &str| -> Result<RgbaImage, ToolError> {
+    let load = |p: &str| -> Result<(RgbaImage, std::path::PathBuf), ToolError> {
         let resolved = resolve_within(&ctx.cwd, p, &ctx.allowed_roots)
             .map_err(|e| ToolError::new(format!("[Permission] {p}: {e}")))?;
-        Ok(image::open(&resolved)
-            .map_err(|e| ToolError::new(format!("[Io] cannot decode {p}: {e}")))?
-            .to_rgba8())
+        Ok((
+            image::open(&resolved)
+                .map_err(|e| ToolError::new(format!("[Io] cannot decode {p}: {e}")))?
+                .to_rgba8(),
+            resolved,
+        ))
     };
-    let before_frame = load(before)?;
-    let after_frame = load(after)?;
+    let (before_frame, before_src) = load(before)?;
+    let (after_frame, after_src) = load(after)?;
     let roi = parse_roi(args, &before_frame)?;
-    let d = analyze_diff(&before_frame, &after_frame, roi, MOTION_PIXEL_THRESHOLD)
-        .map_err(ToolError::new)?;
+    // Same knob as mode=motion: the diff verdict must honour an explicit
+    // threshold instead of silently using the default (run_diff used to
+    // hardcode MOTION_PIXEL_THRESHOLD, so a raised threshold was ignored).
+    let pixel_threshold = match args.get("pixel_threshold").and_then(|v| v.as_u64()) {
+        Some(t) if t > 255 => {
+            return Err(ToolError::new(
+                "[InvalidInput] pixel_threshold must be 0..=255",
+            ));
+        }
+        Some(t) => t as u8,
+        None => MOTION_PIXEL_THRESHOLD,
+    };
+    let d =
+        analyze_diff(&before_frame, &after_frame, roi, pixel_threshold).map_err(ToolError::new)?;
 
     let mut text = format!(
         "[observe] mode=diff roi=[{},{}]\n  changed: {}\n  changed fraction: {:.1}% (pixel \
@@ -1162,7 +1224,7 @@ fn run_diff(args: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         roi.map(|r| r.y.to_string()).unwrap_or_else(|| "-".into()),
         if d.changed { "yes" } else { "no" },
         d.changed_fraction * 100.0,
-        MOTION_PIXEL_THRESHOLD,
+        pixel_threshold,
         d.mean_abs_diff,
         d.mean_delta,
         d.confidence.name(),
@@ -1185,6 +1247,15 @@ fn run_diff(args: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         before_frame.width(),
         before_frame.height()
     ));
+    if args.get("save").and_then(|s| s.as_bool()).unwrap_or(false) {
+        // Both frames, tagged: the pair is only meaningful together, and
+        // before/after often share a file name across directories.
+        let dests = [
+            save_copy(ctx, &before_src, "-before").map_err(ToolError::new)?,
+            save_copy(ctx, &after_src, "-after").map_err(ToolError::new)?,
+        ];
+        push_saved(&mut text, &dests);
+    }
     text.push_str(CAMERA_CAVEAT);
 
     Ok(ToolOutput {
@@ -1735,5 +1806,168 @@ mod tests {
     fn plan_registry_includes_observe() {
         let reg = crate::plan_registry();
         assert!(reg.get("observe").is_some());
+    }
+
+    /// Whole frame shifted by a constant luma (clamped): an exposure bump.
+    fn brighten(f: &RgbaImage, add: u8) -> RgbaImage {
+        let mut out = f.clone();
+        for px in out.pixels_mut() {
+            for c in 0..3 {
+                px[c] = px[c].saturating_add(add);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn motion_stats_come_from_the_strongest_pair() {
+        // Pair 0: the block moves (real motion). Pair 1: the whole frame
+        // brightens by 15 — below the pixel threshold, so no pixel "moved",
+        // yet its mean diff and luma drift used to leak into the verdict via
+        // per-statistic maxes taken across different pairs, and the exposure
+        // gate then demoted a clean motion finding to LOW.
+        let f0 = frame_with_block(10, 10, 8, 240);
+        let f1 = frame_with_block(30, 30, 8, 240);
+        let f2 = brighten(&f1, 15);
+        let m = analyze_motion(&[f0, f1, f2], None, MOTION_PIXEL_THRESHOLD).unwrap();
+        assert!(m.moving, "the block moved: {}", m.note);
+        assert!(
+            m.global_shift < 1.0,
+            "the moving pair had no luma drift: {}",
+            m.global_shift
+        );
+        assert!(
+            m.mean_abs_diff < 10.0,
+            "mean comes from the moving pair, not the drift pair: {}",
+            m.mean_abs_diff
+        );
+        assert_eq!(m.confidence.name(), "HIGH", "clean motion: {}", m.note);
+    }
+
+    #[tokio::test]
+    async fn diff_honours_pixel_threshold() {
+        let dir = tempdir().unwrap();
+        // 192 luma change on an 8x8 block: a real move at the default
+        // threshold of 16, nothing at all once the caller raises it past it.
+        solid(64, 64, 8)
+            .save(dir.path().join("before.png"))
+            .unwrap();
+        frame_with_block(10, 10, 8, 200)
+            .save(dir.path().join("after.png"))
+            .unwrap();
+        let out = Observe
+            .run(
+                json!({"mode": "diff", "path": "before.png", "after": "after.png"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap()
+            .text;
+        assert!(out.contains("changed: yes"), "got: {out}");
+        let out = Observe
+            .run(
+                json!({"mode": "diff", "path": "before.png", "after": "after.png",
+                       "pixel_threshold": 250}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap()
+            .text;
+        assert!(out.contains("changed: no"), "got: {out}");
+        assert!(out.contains("pixel threshold 250"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn save_copies_brightness_frame() {
+        let dir = tempdir().unwrap();
+        frame_with_block(10, 10, 8, 240)
+            .save(dir.path().join("led.png"))
+            .unwrap();
+        let out = Observe
+            .run(
+                json!({"mode": "brightness", "path": "led.png", "save": true}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap()
+            .text;
+        assert!(out.contains("saved:"), "got: {out}");
+        assert_eq!(
+            std::fs::read_dir(dir.path().join(".firment/observe"))
+                .unwrap()
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn save_copies_every_motion_frame() {
+        let dir = tempdir().unwrap();
+        frame_with_block(10, 10, 8, 240)
+            .save(dir.path().join("m1.png"))
+            .unwrap();
+        frame_with_block(30, 30, 8, 240)
+            .save(dir.path().join("m2.png"))
+            .unwrap();
+        let out = Observe
+            .run(
+                json!({"mode": "motion", "paths": ["m1.png", "m2.png"], "save": true}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap()
+            .text;
+        assert_eq!(out.matches("saved:").count(), 2, "got: {out}");
+        assert_eq!(
+            std::fs::read_dir(dir.path().join(".firment/observe"))
+                .unwrap()
+                .count(),
+            2,
+            "both frames of the measured sequence are copied"
+        );
+    }
+
+    #[tokio::test]
+    async fn save_copies_both_diff_frames() {
+        let dir = tempdir().unwrap();
+        solid(64, 64, 8)
+            .save(dir.path().join("before.png"))
+            .unwrap();
+        frame_with_block(10, 10, 8, 200)
+            .save(dir.path().join("after.png"))
+            .unwrap();
+        let out = Observe
+            .run(
+                json!({"mode": "diff", "path": "before.png", "after": "after.png",
+                       "save": true}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap()
+            .text;
+        assert!(out.contains("-before-before.png"), "got: {out}");
+        assert!(out.contains("-after-after.png"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn save_false_copies_nothing() {
+        let dir = tempdir().unwrap();
+        frame_with_block(10, 10, 8, 240)
+            .save(dir.path().join("m1.png"))
+            .unwrap();
+        frame_with_block(30, 30, 8, 240)
+            .save(dir.path().join("m2.png"))
+            .unwrap();
+        Observe
+            .run(
+                json!({"mode": "motion", "paths": ["m1.png", "m2.png"]}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(
+            !dir.path().join(".firment/observe").exists(),
+            "save defaults to off"
+        );
     }
 }
