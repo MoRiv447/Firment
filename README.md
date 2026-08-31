@@ -71,7 +71,7 @@ Firment separates responsibilities instead of treating the model as a shell scri
 
 - **Multi-provider**: Anthropic-compatible (`/v1/messages`) and OpenAI-compatible (`/chat/completions`, covering DeepSeek / GLM / Qwen / Ollama) streaming tool calls; DeepSeek V4 automatically uses official `thinking` + `reasoning_effort`
 - **Thinking levels**: `off / low / medium / high / xhigh / max`
-- **Built-in tools**: `read_file` (line-numbered pages), `write_file`, `edit_file` (anchor / line-range / hashline edits, unified diff echo), `list_dir`, `glob`, `grep`, `shell`, `web_search` (DuckDuckGo / Tavily / Brave), `web_fetch`, `task` (read-only research subagent), `todo`, `ask_user`, `hil`, `periph_init`, `elf_analyze`, `monitor`, `debug`, `observe`, `la`
+- **Built-in tools**: `read_file` (line-numbered pages), `write_file`, `edit_file` (anchor / line-range / hashline edits, unified diff echo), `list_dir`, `glob`, `grep`, `shell`, `web_search` (DuckDuckGo / Tavily / Brave), `web_fetch`, `task` (read-only research subagent), `todo`, `ask_user`, `hil`, `periph_init`, `elf_analyze`, `monitor`, `debug`, `observe`, `la`, `redteam`
 - **Read-only plan mode**: `--plan` / `/plan` exposes only read tools and requires a decision-complete plan
 - **Parallel tool calls**: independent calls run concurrently; same-file reads/writes and broad tools are ordered automatically
 - **Engineering-grade system prompt**: communication, engineering principles, tool policy, verification, and safety sections, plus `AGENTS.md` / `FIRMENT.md` project instructions
@@ -86,6 +86,7 @@ Firment separates responsibilities instead of treating the model as a shell scri
 - **`monitor`** — serial monitor with per-line timestamps and baud-rate autodetect; cancelling a turn releases the port immediately
 - **`la`** — logic analyzer over sigrok-cli (external binary, never linked): bounded captures stored under `.firment/la/`, deterministic measurements on the raw bits (frequency as a range, duty cycle, edge counts, pulse widths, bitrate) each with a confidence rating, and protocol decode through sigrok's own decoders (uart / spi / i2c / 1-wire / CAN …). HIL `la` steps assert `expect_frequency_hz` / `expect_duty` / `expect_edges` / `expect_decoded` at rung 5 — a low-confidence measurement can never pass
 - **`hil`** — hardware-in-the-loop suite: one-shot `build → flash → monitor (with `expect_contains`/`expect_regex` assertions) → elf_analyze` via `.firment/hil.toml` suites or inline steps, with `dry_run` simulation, replayable JSONL logs (`hil replay`), auto serial port/baud, and total timeout — replaces manual build/flash/monitor chaining for firmware verification
+- **`redteam`** — runtime adversarial verification: the agent attacks the firmware it wrote. Declarative suites in `.firment/redteam.toml` (same one-approval skeleton as HIL): uart interfaces + a valid baseline frame, a **seeded deterministic mutation corpus** (boundary / bitflip / oversize / format / delimiter / numeric — same seed, same byte sequence, so a finding's reproducer is `seed + case id`, no LLM needed), a crash oracle (fault signatures / boot-banner reappearance / heartbeat loss), budgets, and target recovery (reflash/reset — a board that cannot be revived aborts the run instead of poisoning later verdicts). Findings cite capture files; missing evidence caps severity to low/UNVERIFIED. An optional LLM attacker campaign explores on top of the corpus (interactive, target-locked to the suite's declared interfaces); headless live runs require an explicit `--live`
 - **`build` / `flash` / `run`** — CMake/Make/Keil build commands, probe-rs flashing (chip from `[tools] default_chip`), all wired into the agent loop
 - **`debug`** — full on-target debugging over the probe via probe-rs (no OpenOCD/GDB dependency), so the agent can debug its own firmware:
   - `analyze` — one-shot fault diagnosis: halts the target, reads PC/LR/SP and the Cortex-M fault registers (CFSR/HFSR/MMFAR/BFAR), decodes PC/LR against the firmware ELF (`func+0x12`) and explains each set fault flag (IACCVIOL / IBUSERR / UNDEFINSTR / FORCED / VECTTBL / STKOF, ...)
@@ -218,6 +219,7 @@ firm flash      flash a firmware ELF via probe-rs
 firm run        flash and run the target, streaming RTT logs
 firm monitor    serial monitor with optional ELF symbol decoding
 firm hil        run a hardware-in-the-loop suite (--suite/--steps/--replay/--dry-run)
+firm redteam    run a red-team attack suite (--suite/--replay/--list-suites/--dry-run/--live)
 firm tools      print the tool registry specs as JSON (single source of truth)
 firm --doctor   check config + provider connectivity
 firm --doctor --sbc
@@ -271,9 +273,9 @@ cd gui && npm ci && npx tsc --noEmit && npm run build   # + npm run tauri build 
 
 ## 🗺️ Roadmap
 
-- Logic analyzer integration: capture, measure and decode real waveforms as physical evidence (rung 5)
-- Red team: an adversarial agent attacks the firmware it wrote — malformed input, crash oracles, evidence-backed findings
 - Debugger depth: variable & expression evaluation at a halted site (fault forensics shipped in v0.7.0)
+- Logic analyzer phase 2: Saleae REST backend, SBC-side waveform nodes (the `CaptureBackend` seam is ready)
+- Red team phase 2: rtt / device_cmd attack interfaces, corpus back-port tooling for campaign findings
 - TUI command palette (fuzzy finder)
 - SWO/trace streaming deeper into the agent loop
 - Tree-sitter structural edits and completions

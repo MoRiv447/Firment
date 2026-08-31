@@ -71,7 +71,7 @@ Firment 不把模型当 shell 脚本生成器，而是明确分工：
 
 - **多提供商**：Anthropic 兼容（`/v1/messages`）与 OpenAI 兼容（`/chat/completions`，覆盖 DeepSeek / GLM / Qwen / Ollama）流式工具调用；DeepSeek V4 自动使用官方 `thinking` + `reasoning_effort`
 - **思考级别**：`off / low / medium / high / xhigh / max`
-- **内置工具**：`read_file`（带行号分页）、`write_file`、`edit_file`（锚点/行区间/hashline 编辑，回显统一 diff）、`list_dir`、`glob`、`grep`、`shell`、`web_search`（DuckDuckGo / Tavily / Brave）、`web_fetch`、`task`（只读研究子代理）、`todo`、`ask_user`、`hil`、`periph_init`、`elf_analyze`、`monitor`、`debug`、`observe`、`la`
+- **内置工具**：`read_file`（带行号分页）、`write_file`、`edit_file`（锚点/行区间/hashline 编辑，回显统一 diff）、`list_dir`、`glob`、`grep`、`shell`、`web_search`（DuckDuckGo / Tavily / Brave）、`web_fetch`、`task`（只读研究子代理）、`todo`、`ask_user`、`hil`、`periph_init`、`elf_analyze`、`monitor`、`debug`、`observe`、`la`、`redteam`
 - **只读计划模式**：`--plan` / `/plan` 只暴露只读工具，要求给出可执行的完整计划
 - **并行工具调用**：独立调用并发执行；同文件读写与粗粒度工具自动串行
 - **工程级系统提示词**：沟通、工程原则、工具策略、验证、安全等分节，支持 `AGENTS.md` / `FIRMENT.md` 项目指令
@@ -86,6 +86,7 @@ Firment 不把模型当 shell 脚本生成器，而是明确分工：
 - **`monitor`** —— 串口监控，逐行时间戳 + 波特率自动检测；取消回合立即释放串口
 - **`la`** —— 逻辑分析仪，经 sigrok-cli 外部二进制（绝不链接进本程序）：有界采集存入 `.firment/la/`，对原始位流做确定性测量（频率只给区间、占空比、边沿计数、脉宽、波特率估算），每个结论带置信度；协议解码直接用 sigrok 自带的解码器（uart / spi / i2c / 1-wire / CAN 等）。HIL `la` 步骤在第 5 级断言 `expect_frequency_hz` / `expect_duty` / `expect_edges` / `expect_decoded`——低置信度测量永远无法通过
 - **`hil`** —— 硬件在环套件：一条命令串起 `build → flash → monitor`（带 `expect_contains`/`expect_regex` 断言）`→ elf_analyze`，支持 `.firment/hil.toml` 套件或内联 steps、`dry_run` 模拟、JSONL 回放（`hil replay`）、串口/波特率自动检测与总超时——替代手动串联 build/flash/monitor 的固件验证方式
+- **`redteam`** —— 运行时对抗验证：agent 攻击自己写的固件。`.firment/redteam.toml` 声明式套件（与 HIL 同款"一次审批覆盖全程"骨架）：uart 接口 + 合法基线帧、**带种子的确定性变异语料**（boundary / bitflip / oversize / format / delimiter / numeric——同种子同字节序列，漏洞复现只需 `seed + case id`，不依赖大模型）、崩溃哨兵（故障签名 / 启动横幅重现 / 心跳丢失）、预算与目标恢复（重刷/复位——救不活的板子立即中止而非污染后续判定）。漏洞报告必须引用捕获文件，缺证据即封顶 low/UNVERIFIED。可选 LLM 攻击 campaign 在语料之上探索（仅交互会话、目标锁定在套件声明的接口）；headless 实弹需显式 `--live`
 - **`build` / `flash` / `run`** —— CMake/Make/Keil 构建命令、probe-rs 烧录（芯片来自 `[tools] default_chip`），全部接入 Agent 循环
 - **`debug`** —— 通过探针做完整的片内调试（基于 probe-rs，不依赖 OpenOCD/GDB），Agent 可以自主调试自己写的固件：
   - `analyze` —— 一键故障诊断：暂停目标，读取 PC/LR/SP 与 Cortex-M 故障寄存器（CFSR/HFSR/MMFAR/BFAR），对照固件 ELF 解码 PC/LR（`func+0x12`），并逐项解释置位的故障标志（IACCVIOL / IBUSERR / UNDEFINSTR / FORCED / VECTTBL / STKOF ...）
@@ -216,6 +217,7 @@ firm flash     通过 probe-rs 烧录固件 ELF
 firm run       烧录并运行目标，流式输出 RTT 日志
 firm monitor   串口监控，可选 ELF 符号解码
 firm hil       运行硬件在环套件（--suite/--steps/--replay/--dry-run）
+firm redteam   运行红队攻击套件（--suite/--replay/--list-suites/--dry-run/--live）
 firm tools     打印工具注册表 specs（JSON，唯一事实源）
 firm --doctor  检查配置与提供商连通性
 firm --doctor --sbc
@@ -269,9 +271,9 @@ cd gui && npm ci && npx tsc --noEmit && npm run build   # + npm run tauri build 
 
 ## 🗺️ 路线图
 
-- 逻辑分析仪集成：采集、测量、解码真实波形，作为物理证据（第 5 级）
-- 红队：对抗 agent 攻击自己写的固件——畸形输入、崩溃哨兵、带证据的漏洞报告
 - 调试器纵深：断点 halt 处的变量与表达式求值（故障法证已在 v0.7.0 交付）
+- 逻辑分析仪二期：Saleae REST 后端、SBC 侧波形节点（`CaptureBackend` 接缝已预留）
+- 红队二期：rtt / device_cmd 攻击接口、campaign 发现回填语料的工具链
 - TUI 命令面板（模糊查找）
 - SWO/trace 更深地接入 Agent 循环
 - tree-sitter 结构化编辑与补全

@@ -1,0 +1,73 @@
+# Firment red team suite examples — .firment/redteam.toml
+#
+# The runtime adversarial loop: the agent attacks the firmware it wrote and
+# only counts what the target's own output proves. Run with:
+#   firm redteam --list-suites
+#   firm redteam --suite uart-fuzz --dry-run     # rehearse the corpus, no hardware
+#   firm redteam --suite uart-fuzz --live        # headless live run (explicit!)
+# or in a session: redteam suite="uart-fuzz"
+#
+# SAFETY CONTRACT: a live run sends mutated binary frames at a real board and
+# may reset or re-flash it between cases. The precondition is that the target
+# can ALWAYS be revived through the probe (reflash) — if your bootloader can
+# be corrupted by the attack surface, do not declare "flash" in
+# allowed_actions. Recommend enabling IWDG on the firmware under test so a
+# hang self-recovers into the boot banner the oracle watches for.
+#
+# Every key is deny_unknown_fields: a typo'd expectation fails loudly instead
+# of silently dropping to a default.
+
+# ---------------------------------------------------------------------------
+# uart-fuzz: crash-hunt a UART command parser with the full strategy set.
+# ---------------------------------------------------------------------------
+[suite.uart-fuzz]
+chip = "stm32g431rb"
+elf = ".pio/build/nucleo_g431rb/firmware.elf"
+recovery = "reflash"                      # reflash | reset | none
+budget = { max_cases = 200, max_duration_ms = 600000, per_case_timeout_ms = 3000 }
+allowed_actions = ["send", "reset", "flash"]
+
+[[suite.uart-fuzz.interfaces]]
+kind = "uart"
+port = "COM3"
+baud = 115200
+baseline = "hex:55AA0102"                 # a VALID frame — mutations start here
+
+[suite.uart-fuzz.oracle]
+heartbeat_regex = "tick=\\d+"             # the firmware prints this every 100 ms
+boot_banner = "boot v2"                   # reappearing mid-run = unsolicited reboot
+extra_fault_signatures = ["stack underflow"]
+
+[suite.uart-fuzz.mutation]
+seed = 1234                               # REQUIRED: no seed, no reproducibility
+strategies = ["boundary", "bitflip", "oversize", "format", "delimiter", "numeric"]
+
+[suite.uart-fuzz.report]
+dir = ".firment/redteam"                  # findings.jsonl + report.md + captures
+min_severity = "medium"                   # low-severity items stay in the JSONL only
+
+# ---------------------------------------------------------------------------
+# clock-check: a smaller corpus + the LLM campaign on top (interactive only).
+# The campaign explores what the corpus missed; its findings must cite
+# captured output or they are capped to low/UNVERIFIED.
+# ---------------------------------------------------------------------------
+[suite.pwm-probe]
+chip = "stm32g431rb"
+elf = ".pio/build/nucleo_g431rb/firmware.elf"
+recovery = "reset"
+budget = { max_cases = 60, max_duration_ms = 120000, per_case_timeout_ms = 2000 }
+allowed_actions = ["send", "reset"]
+llm_phase = true                          # opt into the attacker subagent
+
+[[suite.pwm-probe.interfaces]]
+kind = "uart"
+port = "COM3"
+baud = 115200
+baseline = "text:mode pwm\n"
+
+[suite.pwm-probe.oracle]
+heartbeat_regex = "alive"
+
+[suite.pwm-probe.mutation]
+seed = 7
+strategies = ["boundary", "delimiter"]

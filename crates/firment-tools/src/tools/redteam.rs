@@ -1,7 +1,7 @@
 //! `redteam` — runtime adversarial verification: the agent attacks the
 //! firmware it wrote and only counts what the target's own output proves.
 //!
-//! Design (v0.9.0):
+//! Design (v0.8.0):
 //! * **Declarative suites** in `.firment/redteam.toml`, same skeleton as
 //!   HIL: `deny_unknown_fields` (a typo'd key must never silently drop an
 //!   expectation), one approval covering the whole suite, JSONL replay,
@@ -148,7 +148,7 @@ fn validate_suite(suite: &RedteamSuite) -> Result<(), String> {
             }
             "rtt" | "device_cmd" => {
                 return Err(format!(
-                    "[InvalidInput] interface kind='{}' is not implemented in v0.9.0 — use \
+                    "[InvalidInput] interface kind='{}' is not implemented in v0.8.0 — use \
                      uart (or the device_cmd tool directly for MQTT nodes)",
                     iface.kind
                 ));

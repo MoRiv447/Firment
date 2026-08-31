@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.8.0 (2026-08-31) — logic analyzer + red team
+
 - **`la` — logic analyzer integration**. Capture, measurement and protocol
   decode over sigrok-cli as an EXTERNAL binary (argv array, no shell, never
   a linked library — the GPL stays on the other side of the process
@@ -23,6 +25,36 @@
     LOW-confidence measurement can never pass, dry-run forces FAIL.
   - `firm doctor` probes sigrok-cli; capture is the only approval-gated
     action.
+- **`redteam` — runtime adversarial verification (the agent attacks the
+  firmware it wrote)**. Declarative suites in `.firment/redteam.toml`, same
+  one-approval skeleton as HIL (`deny_unknown_fields`, JSONL replay, dry-run
+  that can never claim evidence):
+  - **Deterministic mutation corpus** as the reproducibility floor: seeded
+    SplitMix64 + six protocol-agnostic strategies (boundary, bitflip,
+    oversize, format, delimiter, numeric). Same seed + baseline = byte-
+    identical case sequence, so a finding's reproducer is `seed + case id` —
+    no LLM in the loop. `mutation.seed` is REQUIRED.
+  - **Crash oracle**: built-in fault signatures (shared with the monitor's
+    `[FAULT-DETECTED]` scan) + custom strings, boot-banner reappearance
+    (unsolicited reboot), heartbeat loss (hang). Priority: crash > reboot >
+    hang — a crashed-then-restarted target is a crash, not a mystery.
+  - **Evidence-capped findings**: every finding cites capture files (and a
+    `debug forensic` snapshot on crashes, taken before the watchdog destroys
+    the scene); missing evidence caps severity to low/UNVERIFIED. Reports:
+    `findings.jsonl` + `report.md` per run.
+  - **Recovery**: reflash (through the shared HIL flash step) / reset / none;
+    a target that cannot be revived aborts the run instead of poisoning
+    later verdicts. `recovery=reflash` without a declared `flash`
+    allowed_action is refused at validation.
+  - **LLM attacker campaign** (opt-in `llm_phase`, interactive-only): a
+    hardware-capable subagent (`attacker_registry`: monitor/debug/la/
+    observe/device_cmd — no shell/write/flash/task) explores on top of the
+    corpus, locked to the suite's declared interfaces by
+    `TargetLockPermission` (auto-detect ports are a bypass and denied); its
+    findings go through the same evidence cap and must be back-ported into
+    corpus cases to become regressions.
+  - Headless live runs require an explicit `--live`; without it the tool
+    rehearses the corpus. `firm redteam` CLI; docs/redteam-example.toml.
 
 ## v0.7.3 (2026-08-31) — observation correctness pass
 
