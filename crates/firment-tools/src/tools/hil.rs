@@ -128,7 +128,7 @@ impl Tool for Hil {
             "type": "object",
             "properties": {
                 "suite": {"type": "string", "description": "Suite name defined in .firment/hil.toml"},
-                "steps": {"type": "array", "description": "Inline steps [{kind, file, elf, chip, probe, port, baud, clk_hz, timeout_ms, expect_contains, expect_regex, expect_count, duration_ms}] — kinds: build/flash/run/monitor/trace/observe/elf_analyze/delay; flash/run/elf auto-infer .pio/build/*/firmware.elf when elf omitted"},
+                "steps": {"type": "array", "description": "Inline steps [{kind, file, elf, chip, probe, port, baud, clk_hz, timeout_ms, duration_ms, expect_contains, expect_regex, expect_count, mode, roi, threshold, expect_lit, save, paths, after, interval_ms, expect_blinking, expect_blink_hz, expect_motion, expect_diff}] — kinds: build/flash/run/monitor/trace/observe/elf_analyze/delay; flash/run/elf auto-infer .pio/build/*/firmware.elf when elf omitted; observe uses mode=brightness|motion|blink|diff with file/paths/after, roi [x,y,w,h], threshold, interval_ms (blink), save, and asserts via expect_lit/expect_motion/expect_diff/expect_blinking/expect_blink_hz"},
                 "chip": {"type": "string", "description": "Override chip for flash/run/trace steps"},
                 "port": {"type": "string", "description": "Override serial port for monitor steps; 'auto' picks first detected port"},
                 "probe": {"type": "string", "description": "Override probe id"},
@@ -1253,8 +1253,9 @@ async fn run_observe_step(
 fn load_observe_frames(
     ctx: &ToolContext,
     paths: &[String],
-) -> Result<Vec<image::RgbaImage>, String> {
+) -> Result<(Vec<image::RgbaImage>, Vec<std::path::PathBuf>), String> {
     let mut frames = Vec::with_capacity(paths.len());
+    let mut sources = Vec::with_capacity(paths.len());
     for (i, p) in paths.iter().enumerate() {
         let resolved = crate::tools::util::resolve_within(&ctx.cwd, p, &ctx.allowed_roots)
             .map_err(|e| format!("[Permission] frames[{i}] ({p}): {e}"))?;
@@ -1267,8 +1268,9 @@ fn load_observe_frames(
             })?
             .to_rgba8();
         frames.push(img);
+        sources.push(resolved);
     }
-    Ok(frames)
+    Ok((frames, sources))
 }
 
 /// Validate an observe `roi` against the frame it will be applied to —
@@ -1341,21 +1343,7 @@ async fn run_observe_brightness(step: &HilStep, ctx: &ToolContext) -> Result<Str
         ));
     }
     if step.save == Some(true) {
-        let dir = ctx.cwd.join(".firment").join("observe");
-        std::fs::create_dir_all(&dir).map_err(|e| format!("[Io] create {}: {e}", dir.display()))?;
-        let dest = dir.join(format!(
-            "{}-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-            resolved
-                .file_name()
-                .map(|n| n.to_string_lossy())
-                .unwrap_or_default()
-        ));
-        std::fs::copy(&resolved, &dest)
-            .map_err(|e| format!("[Io] save {}: {e}", dest.display()))?;
+        let dest = crate::tools::observe::save_copy(ctx, &resolved, "")?;
         out.push_str(&format!(
             "
   saved: {}",
@@ -1387,7 +1375,7 @@ fn run_observe_motion(step: &HilStep, ctx: &ToolContext) -> Result<String, Strin
             "[InvalidInput] observe mode=motion requires at least 2 frames in paths".to_string(),
         );
     }
-    let frames = load_observe_frames(ctx, paths)?;
+    let (frames, sources) = load_observe_frames(ctx, paths)?;
     let roi = validate_observe_roi(step.roi, frames[0].width(), frames[0].height())?;
     let m = crate::tools::observe::analyze_motion(
         &frames,
@@ -1408,6 +1396,16 @@ fn run_observe_motion(step: &HilStep, ctx: &ToolContext) -> Result<String, Strin
         m.confidence.name(),
         m.note,
     );
+    if step.save == Some(true) {
+        for (i, src) in sources.iter().enumerate() {
+            let dest = crate::tools::observe::save_copy(ctx, src, &format!("-{i}"))?;
+            out.push_str(&format!(
+                "
+  saved: {}",
+                dest.display()
+            ));
+        }
+    }
     if let Some(want) = step.expect_motion {
         // A "yes" verdict on LOW confidence (e.g. exposure drift) is not
         // evidence — the analysis itself said it cannot tell motion from the
@@ -1447,7 +1445,7 @@ fn run_observe_blink(step: &HilStep, ctx: &ToolContext) -> Result<String, String
             "[InvalidInput] observe mode=blink requires at least 3 frames in paths".to_string(),
         );
     }
-    let frames = load_observe_frames(ctx, paths)?;
+    let (frames, sources) = load_observe_frames(ctx, paths)?;
     // One burst = one camera session: frames of mixed dimensions would
     // silently produce a garbage luma series. motion/diff already error on
     // a size mismatch — blink must too.
@@ -1496,6 +1494,16 @@ fn run_observe_blink(step: &HilStep, ctx: &ToolContext) -> Result<String, String
     if let (Some(low), Some(high)) = (b.hz_low, b.hz_high) {
         out.push_str(&format!("\n  frequency: {low:.2} .. {high:.2} Hz"));
     }
+    if step.save == Some(true) {
+        for (i, src) in sources.iter().enumerate() {
+            let dest = crate::tools::observe::save_copy(ctx, src, &format!("-{i}"))?;
+            out.push_str(&format!(
+                "
+  saved: {}",
+                dest.display()
+            ));
+        }
+    }
     if let Some(want) = step.expect_blinking {
         let marker = if b.blinking == want { "PASS" } else { "FAIL" };
         out.push_str(&format!(
@@ -1541,15 +1549,18 @@ fn run_observe_diff(step: &HilStep, ctx: &ToolContext) -> Result<String, String>
                 .to_string(),
         );
     };
-    let load = |p: &str| -> Result<image::RgbaImage, String> {
+    let load = |p: &str| -> Result<(image::RgbaImage, std::path::PathBuf), String> {
         let resolved = crate::tools::util::resolve_within(&ctx.cwd, p, &ctx.allowed_roots)
             .map_err(|e| format!("[Permission] {p}: {e}"))?;
-        Ok(image::open(&resolved)
-            .map_err(|e| format!("[Io] cannot decode {p}: {e}"))?
-            .to_rgba8())
+        Ok((
+            image::open(&resolved)
+                .map_err(|e| format!("[Io] cannot decode {p}: {e}"))?
+                .to_rgba8(),
+            resolved,
+        ))
     };
-    let before = load(path)?;
-    let after_frame = load(after)?;
+    let (before, before_src) = load(path)?;
+    let (after_frame, after_src) = load(after)?;
     let roi = validate_observe_roi(step.roi, before.width(), before.height())?;
     let d = crate::tools::observe::analyze_diff(
         &before,
@@ -1576,6 +1587,16 @@ fn run_observe_diff(step: &HilStep, ctx: &ToolContext) -> Result<String, String>
             "\n  change concentrates in: {q} ({:.0}% of it)",
             share * 100.0
         ));
+    }
+    if step.save == Some(true) {
+        for (src, tag) in [(&before_src, "-before"), (&after_src, "-after")] {
+            let dest = crate::tools::observe::save_copy(ctx, src, tag)?;
+            out.push_str(&format!(
+                "
+  saved: {}",
+                dest.display()
+            ));
+        }
     }
     if let Some(want) = step.expect_diff {
         let ok = if want {
@@ -2161,6 +2182,52 @@ elf = "build/fw.elf"
             .await
             .unwrap();
         assert!(out.contains("[HIL_EXPECT:FAIL]"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn observe_step_save_covers_sequence_and_diff_modes() {
+        // `save` used to be implemented for brightness only; motion and diff
+        // silently ignored it. Every mode must copy what it measured.
+        let dir = tempdir().unwrap();
+        frame_with_block(10, 10, 8, 240)
+            .save(dir.path().join("m1.png"))
+            .unwrap();
+        frame_with_block(30, 30, 8, 240)
+            .save(dir.path().join("m2.png"))
+            .unwrap();
+        let step = HilStep {
+            kind: "observe".to_string(),
+            mode: Some("motion".to_string()),
+            paths: Some(vec!["m1.png".to_string(), "m2.png".to_string()]),
+            save: Some(true),
+            ..Default::default()
+        };
+        let out = run_observe_step(&step, &ctx(dir.path()), false, 60_000)
+            .await
+            .unwrap();
+        assert_eq!(out.matches("saved:").count(), 2, "got: {out}");
+
+        let diff = HilStep {
+            kind: "observe".to_string(),
+            mode: Some("diff".to_string()),
+            file: Some("m1.png".to_string()),
+            after: Some("m2.png".to_string()),
+            save: Some(true),
+            ..Default::default()
+        };
+        let out = run_observe_step(&diff, &ctx(dir.path()), false, 60_000)
+            .await
+            .unwrap();
+        assert_eq!(out.matches("saved:").count(), 2, "got: {out}");
+        assert!(out.contains("-before-m1.png"), "got: {out}");
+        assert!(out.contains("-after-m2.png"), "got: {out}");
+        // 2 motion frames + 2 diff frames.
+        assert_eq!(
+            std::fs::read_dir(dir.path().join(".firment/observe"))
+                .unwrap()
+                .count(),
+            4
+        );
     }
 
     #[tokio::test]

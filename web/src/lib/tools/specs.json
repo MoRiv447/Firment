@@ -433,7 +433,7 @@
           "type": "string"
         },
         "steps": {
-          "description": "Inline steps [{kind, file, elf, chip, probe, port, baud, clk_hz, timeout_ms, expect_contains, expect_regex, expect_count, duration_ms}] — kinds: build/flash/run/monitor/trace/observe/elf_analyze/delay; flash/run/elf auto-infer .pio/build/*/firmware.elf when elf omitted",
+          "description": "Inline steps [{kind, file, elf, chip, probe, port, baud, clk_hz, timeout_ms, duration_ms, expect_contains, expect_regex, expect_count, mode, roi, threshold, expect_lit, save, paths, after, interval_ms, expect_blinking, expect_blink_hz, expect_motion, expect_diff}] — kinds: build/flash/run/monitor/trace/observe/elf_analyze/delay; flash/run/elf auto-infer .pio/build/*/firmware.elf when elf omitted; observe uses mode=brightness|motion|blink|diff with file/paths/after, roi [x,y,w,h], threshold, interval_ms (blink), save, and asserts via expect_lit/expect_motion/expect_diff/expect_blinking/expect_blink_hz",
           "type": "array"
         },
         "suite": {
@@ -559,7 +559,7 @@
           "type": "array"
         },
         "pixel_threshold": {
-          "description": "motion: per-pixel luma change that counts as 'this pixel moved' (default 16). Raise it on grainy shots.",
+          "description": "motion / diff: per-pixel luma change that counts as 'this pixel moved' (default 16). Raise it on grainy shots.",
           "maximum": 255,
           "minimum": 0,
           "type": "integer"
@@ -576,7 +576,7 @@
         },
         "save": {
           "default": false,
-          "description": "Copy the measured image to .firment/observe/ for later review.",
+          "description": "Copy the measured image(s) to .firment/observe/ for later review: brightness copies the frame, motion/blink copy every frame of the sequence, diff copies both frames.",
           "type": "boolean"
         },
         "threshold": {
