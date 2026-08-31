@@ -19,6 +19,7 @@ pub(crate) mod observe;
 mod periph_init;
 mod pinmap;
 mod read_file;
+mod redteam;
 pub(crate) mod run;
 mod shell;
 mod symbols;
@@ -42,6 +43,7 @@ pub fn all() -> Vec<Arc<dyn Tool>> {
         Arc::new(monitor::Monitor),
         Arc::new(observe::Observe),
         Arc::new(la::La::default()),
+        Arc::new(redteam::Redteam),
         Arc::new(hil::Hil),
         Arc::new(periph_init::PeriphInit),
         Arc::new(pinmap::Pinmap),

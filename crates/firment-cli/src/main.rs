@@ -205,6 +205,24 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Runtime red team: attack the target with a mutated-input corpus from .firment/redteam.toml.
+    Redteam {
+        /// Suite name defined in .firment/redteam.toml
+        #[arg(long)]
+        suite: Option<String>,
+        /// Replay a previous run by id, or "list" to list replays
+        #[arg(long)]
+        replay: Option<String>,
+        /// List suites defined in .firment/redteam.toml
+        #[arg(long)]
+        list_suites: bool,
+        /// Rehearse the corpus without touching hardware
+        #[arg(long)]
+        dry_run: bool,
+        /// Allow a live attack run without an interactive approver
+        #[arg(long)]
+        live: bool,
+    },
 }
 
 #[tokio::main]
@@ -381,6 +399,49 @@ async fn main() -> anyhow::Result<()> {
                     Ok(()) => {}
                     Err(e) => {
                         // hil returns Err on suite FAIL (with full log in the message); show it instead of a one-line error
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            Command::Redteam {
+                suite,
+                replay,
+                list_suites,
+                dry_run,
+                live,
+            } => {
+                let cwd = cli
+                    .cwd
+                    .clone()
+                    .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let config = load_config(&cli)?.merged_for(&cwd);
+                let mut args = serde_json::Map::new();
+                if let Some(s) = suite {
+                    args.insert("suite".to_string(), serde_json::json!(s));
+                }
+                if let Some(r) = replay {
+                    args.insert("replay".to_string(), serde_json::json!(r));
+                }
+                if *list_suites {
+                    args.insert("list_suites".to_string(), serde_json::json!(true));
+                }
+                if *dry_run {
+                    args.insert("dry_run".to_string(), serde_json::json!(true));
+                }
+                if *live {
+                    args.insert("live".to_string(), serde_json::json!(true));
+                }
+                match run_direct_tool(
+                    &config,
+                    cli.cwd.clone(),
+                    "redteam",
+                    serde_json::Value::Object(args),
+                )
+                .await
+                {
+                    Ok(()) => {}
+                    Err(e) => {
                         eprintln!("{e}");
                         std::process::exit(1);
                     }

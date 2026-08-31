@@ -799,6 +799,38 @@
     }
   },
   {
+    "name": "redteam",
+    "description": "Runtime red team: attack the firmware on the target with a deterministic mutated-input corpus and report only what the captured output proves. Suites live in .firment/redteam.toml: interfaces (uart port/baud + baseline frame), mutation (seed REQUIRED + strategies), oracle (heartbeat/boot-banner/fault signatures), budget (max_cases/max_duration_ms/per_case_timeout_ms), recovery (reflash|reset|none). One approval covers the whole suite; every finding cites capture files (missing evidence caps severity to low/UNVERIFIED) and is reproducible from seed + case id alone — no LLM needed. dry_run rehearses the corpus without touching hardware (and can never claim evidence). Supports replay (JSONL) and list_suites.",
+    "input_schema": {
+      "properties": {
+        "dry_run": {
+          "default": false,
+          "description": "Generate and report the corpus without touching hardware; cannot produce findings",
+          "type": "boolean"
+        },
+        "list_suites": {
+          "default": false,
+          "description": "List suites defined in .firment/redteam.toml",
+          "type": "boolean"
+        },
+        "live": {
+          "default": false,
+          "description": "Explicitly allow a live run in headless mode (interactive sessions approve via popup instead)",
+          "type": "boolean"
+        },
+        "replay": {
+          "description": "Replay a previous run by id, or 'list' to list replays",
+          "type": "string"
+        },
+        "suite": {
+          "description": "Suite name defined in .firment/redteam.toml",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
     "name": "run",
     "description": "Flash and run the firmware on the target via probe-rs, streaming RTT logs. Use a bounded timeout so you can observe the output.",
     "input_schema": {

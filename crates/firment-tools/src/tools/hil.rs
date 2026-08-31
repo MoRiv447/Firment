@@ -25,9 +25,11 @@ struct HilSuite {
 // deny_unknown_fields: a typo'd expectation key (`expect_contins`) would
 // otherwise be silently dropped and the step trivially PASS without
 // verifying anything.
+// pub(crate): the red team runner passes a recovery step through
+// `flash_recovery_step` + `run_flash_step` without touching the fields.
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-struct HilStep {
+pub(crate) struct HilStep {
     kind: String,
     #[serde(default)]
     file: Option<String>,
@@ -828,7 +830,22 @@ async fn run_build_step(
     }
 }
 
-async fn run_flash_step(
+/// Construct the flash step the red team runner uses to revive a crashed
+/// target: same fields, same code path as a suite's own flash step.
+pub(crate) fn flash_recovery_step(elf: &str, chip: Option<&str>, probe: Option<&str>) -> HilStep {
+    HilStep {
+        kind: "flash".to_string(),
+        elf: Some(elf.to_string()),
+        chip: chip.map(|c| c.to_string()),
+        probe: probe.map(|p| p.to_string()),
+        ..Default::default()
+    }
+}
+
+/// Shared with the red team runner: recovery after a crash re-flashes the
+/// suite's ELF through exactly this code path (one implementation, no
+/// verbatim copy — see the build-step lesson comment near the bottom).
+pub(crate) async fn run_flash_step(
     step: &HilStep,
     ctx: &ToolContext,
     dry_run: bool,
