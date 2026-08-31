@@ -4,6 +4,7 @@ pub mod forensic;
 pub mod hardware;
 pub mod la_cmd;
 pub mod la_measure;
+pub mod redteam;
 pub mod tools;
 pub mod utf8;
 
