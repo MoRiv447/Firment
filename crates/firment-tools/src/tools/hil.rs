@@ -1674,9 +1674,16 @@ async fn run_la_step(
     step: &HilStep,
     ctx: &ToolContext,
     dry_run: bool,
-    _remaining: u64,
+    remaining: u64,
 ) -> Result<String, String> {
-    run_la_step_with(&crate::tools::la::La::default(), step, ctx, dry_run).await
+    run_la_step_with(
+        &crate::tools::la::La::default(),
+        step,
+        ctx,
+        dry_run,
+        remaining,
+    )
+    .await
 }
 
 async fn run_la_step_with(
@@ -1684,6 +1691,7 @@ async fn run_la_step_with(
     step: &HilStep,
     ctx: &ToolContext,
     dry_run: bool,
+    remaining: u64,
 ) -> Result<String, String> {
     use firment_core::Tool as _;
     let mut wants = Vec::new();
@@ -1732,11 +1740,29 @@ async fn run_la_step_with(
                     args[k] = serde_json::json!(v);
                 }
             }
+            // The suite's total-time budget is a hard ceiling: a capture
+            // window that cannot fit in the remaining ms must be refused
+            // (or clamped for time-based windows), not silently overrun.
             if let Some(n) = step.samples {
+                let sr = step
+                    .samplerate
+                    .as_deref()
+                    .or(ctx.la.as_ref().and_then(|l| l.samplerate.as_deref()))
+                    .and_then(crate::la_cmd::samplerate_hz);
+                if let Some(sr) = sr {
+                    let est_ms = n as f64 / sr * 1000.0;
+                    if est_ms > remaining as f64 {
+                        return Err(format!(
+                            "[InvalidInput] la capture of {n} samples at {sr:.0} Hz needs \
+                             ~{est_ms:.0} ms but only {remaining} ms of suite budget remain — \
+                             shorten the window or raise the suite timeout_ms"
+                        ));
+                    }
+                }
                 args["samples"] = serde_json::json!(n);
             }
             if let Some(t) = step.duration_ms {
-                args["time_ms"] = serde_json::json!(t);
+                args["time_ms"] = serde_json::json!(t.min(remaining.max(1)));
             }
             let out = tool.run(args, &child_ctx).await.map_err(|e| e.message)?;
             out.text
@@ -2684,6 +2710,25 @@ expect_decoded = "0x55"
     }
 
     #[tokio::test]
+    async fn la_step_capture_window_respects_suite_budget() {
+        // 1e9 samples at 8 MHz is a 125-second window — with only 1 s of
+        // suite budget left the step must refuse BEFORE touching hardware.
+        let dir = tempdir().unwrap();
+        let step = HilStep {
+            kind: "la".to_string(),
+            driver: Some("demo".to_string()),
+            channels: Some("0".to_string()),
+            samplerate: Some("8m".to_string()),
+            samples: Some(1_000_000_000),
+            ..Default::default()
+        };
+        let err = run_la_step(&step, &ctx(dir.path()), false, 1_000)
+            .await
+            .unwrap_err();
+        assert!(err.contains("budget"), "got: {err}");
+    }
+
+    #[tokio::test]
     async fn la_step_dry_run_without_expectations_does_not_fail_the_suite() {
         let dir = tempdir().unwrap();
         // A dry run with nothing to assert is not a failed expectation — it
@@ -2787,7 +2832,7 @@ expect_decoded = "0x55"
             expect_decoded: Some("0x55".to_string()),
             ..Default::default()
         };
-        let out = run_la_step_with(&tool, &step, &ctx(dir.path()), false)
+        let out = run_la_step_with(&tool, &step, &ctx(dir.path()), false, 60_000)
             .await
             .unwrap();
         assert!(out.contains("[HIL_EXPECT:PASS]"), "got: {out}");
@@ -2796,7 +2841,7 @@ expect_decoded = "0x55"
             expect_decoded: Some("0xEE".to_string()),
             ..step
         };
-        let out = run_la_step_with(&tool, &missing, &ctx(dir.path()), false)
+        let out = run_la_step_with(&tool, &missing, &ctx(dir.path()), false, 60_000)
             .await
             .unwrap();
         assert!(out.contains("[HIL_EXPECT:FAIL]"), "got: {out}");

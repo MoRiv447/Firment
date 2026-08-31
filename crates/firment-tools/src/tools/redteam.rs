@@ -226,6 +226,21 @@ fn validate_suite(suite: &RedteamSuite) -> Result<(), String> {
              as a crash"
         ));
     }
+    // Fail at validation, not mid-attack: every pure thing the live loop
+    // does (baseline parsing, oracle regex compiling) is checked here so a
+    // dry-run that passes cannot blow up after payloads are already flying.
+    for iface in &suite.interfaces {
+        parse_baseline(iface.baseline.as_deref())?;
+    }
+    if let Some(hb) = suite.oracle.heartbeat_regex.as_deref() {
+        regex::Regex::new(hb).map_err(|e| {
+            format!("[InvalidInput] oracle.heartbeat_regex is not a valid regex: {e}")
+        })?;
+    }
+    if let Some(bb) = suite.oracle.boot_banner.as_deref() {
+        regex::Regex::new(bb)
+            .map_err(|e| format!("[InvalidInput] oracle.boot_banner is not a valid regex: {e}"))?;
+    }
     Ok(())
 }
 
@@ -252,20 +267,33 @@ pub(crate) trait TargetLink: Send {
         cancel: &Cancellable,
     ) -> Result<Capture, String>;
     /// Read-only window (no payload) — used to check liveness after recovery.
-    async fn listen(&mut self, window_ms: u64, oracle: &OracleCfg) -> Result<Capture, String>;
+    /// Takes the turn's cancellation: a liveness probe must not outrun an
+    /// interrupt.
+    async fn listen(
+        &mut self,
+        window_ms: u64,
+        oracle: &OracleCfg,
+        cancel: &Cancellable,
+    ) -> Result<Capture, String>;
 }
 
 /// The hardware-facing seams of a run, injectable for tests.
 #[async_trait]
 pub(crate) trait Executor: Send + Sync {
     async fn open_link(&self, iface: &Interface) -> Result<Box<dyn TargetLink>, String>;
-    /// Revive the target; returns whether it answered the liveness probe.
+    /// Revive the target (reflash / reset). The runner has ALREADY dropped
+    /// its serial link when this is called, and re-opens one afterwards to
+    /// probe liveness — recovery must never touch the port itself (a second
+    /// open of an owned serial port fails on both Windows and Linux, and
+    /// after a USB re-enumeration the old handle is dead anyway).
+    /// `budget_ms` caps the recovery work so a stuck probe-rs cannot
+    /// overrun the suite budget.
     async fn recover(
         &self,
         suite: &RedteamSuite,
-        iface: &Interface,
         ctx: &ToolContext,
-    ) -> Result<bool, String>;
+        budget_ms: u64,
+    ) -> Result<(), String>;
     /// Fault post-mortem text, if the probe can produce one.
     async fn forensic(&self, suite: &RedteamSuite, ctx: &ToolContext) -> Option<String>;
 }
@@ -273,9 +301,19 @@ pub(crate) trait Executor: Send + Sync {
 /// Production executor: real serial ports, probe-rs recovery, Debug forensic.
 pub(crate) struct LiveExecutor;
 
+/// The port lives in an Option so the blocking IO closure can take it out
+/// and hand it back — serialport reads/writes are blocking syscalls and run
+/// on `spawn_blocking` (the monitor/hil precedent), never on the async
+/// worker that drives the TUI/GUI event pump.
 struct UartLink {
-    port: Box<dyn serialport::SerialPort>,
+    port: Option<Box<dyn serialport::SerialPort>>,
 }
+
+/// How long to keep listening after a heartbeat was seen: a payload that
+/// corrupts state can kill the target a few hundred ms AFTER its last tick,
+/// and closing the window on the first heartbeat would attribute that crash
+/// to the NEXT case.
+const HEARTBEAT_TAIL_MS: u64 = 300;
 
 fn read_window(
     port: &mut dyn serialport::SerialPort,
@@ -289,6 +327,7 @@ fn read_window(
         .and_then(|h| regex::Regex::new(h).ok());
     let start = Instant::now();
     let deadline = start + Duration::from_millis(window_ms);
+    let mut tail_deadline: Option<Instant> = None;
     let mut buf = [0u8; 4096];
     let mut acc: Vec<u8> = Vec::new();
     let mut timed_out = true;
@@ -297,24 +336,34 @@ fn read_window(
             timed_out = false;
             break;
         }
-        if Instant::now() >= deadline {
+        let stop = match tail_deadline {
+            Some(t) => t.min(deadline),
+            None => deadline,
+        };
+        if Instant::now() >= stop {
             break;
         }
         match port.read(&mut buf) {
             Ok(n) if n > 0 => {
                 acc.extend_from_slice(&buf[..n]);
                 let text = String::from_utf8_lossy(&acc);
-                // Early exit: a fault scene is ephemeral (watchdog!), and a
-                // heartbeat means the case is already survived.
-                let decided = crate::forensic::fault_detected_marker(&text).is_some()
+                // A fault scene is ephemeral (watchdog!) — exit on it
+                // immediately.
+                let fault = crate::forensic::fault_detected_marker(&text).is_some()
                     || oracle
                         .extra_fault_signatures
                         .iter()
-                        .any(|s| text.contains(s.as_str()))
-                    || heartbeat.as_ref().is_some_and(|rx| rx.is_match(&text));
-                if decided {
+                        .any(|s| !s.is_empty() && text.contains(s.as_str()));
+                if fault {
                     timed_out = false;
                     break;
+                }
+                // A heartbeat means the case is survived — but keep a short
+                // tail window so a delayed crash still lands on THIS case.
+                if tail_deadline.is_none()
+                    && heartbeat.as_ref().is_some_and(|rx| rx.is_match(&text))
+                {
+                    tail_deadline = Some(Instant::now() + Duration::from_millis(HEARTBEAT_TAIL_MS));
                 }
             }
             Ok(_) => {}
@@ -332,6 +381,75 @@ fn read_window(
     }
 }
 
+/// Blocking half of `send_and_capture`: chunked write under a deadline,
+/// then the read window. Runs on the blocking pool; the port travels in and
+/// back out so the link stays reusable.
+fn blocking_send_capture(
+    mut port: Box<dyn serialport::SerialPort>,
+    payload: &[u8],
+    window_ms: u64,
+    oracle: &OracleCfg,
+    cancel: &Cancellable,
+) -> (Box<dyn serialport::SerialPort>, Result<Capture, String>) {
+    use std::io::Write;
+    // A 64 KiB oversize case at 9600 baud is ~67 s of writing — it must
+    // stay cancellable and bounded, so write in chunks and check the clock
+    // between them.
+    let write_deadline = Instant::now() + Duration::from_millis(window_ms.saturating_add(10_000));
+    let mut sent = 0usize;
+    while sent < payload.len() {
+        if cancel.is_cancelled() {
+            return (
+                port,
+                Err("[Cancelled] redteam write interrupted by turn cancel".to_string()),
+            );
+        }
+        if Instant::now() >= write_deadline {
+            return (
+                port,
+                Err(format!(
+                    "[Timeout] uart write stalled after {sent}/{} bytes — the target is not \
+                     draining the line (baud mismatch?)",
+                    payload.len()
+                )),
+            );
+        }
+        let end = (sent + 1024).min(payload.len());
+        if let Err(e) = port.write_all(&payload[sent..end]) {
+            return (
+                port,
+                Err(format!("[Io] uart write failed after {sent} bytes: {e}")),
+            );
+        }
+        let _ = port.flush();
+        sent = end;
+    }
+    let cap = read_window(&mut *port, window_ms, oracle, cancel);
+    (port, Ok(cap))
+}
+
+impl UartLink {
+    /// Run a blocking closure with the port on the blocking pool, returning
+    /// the port to the link afterwards.
+    async fn with_port<T, F>(&mut self, f: F) -> Result<T, String>
+    where
+        T: Send + 'static,
+        F: FnOnce(Box<dyn serialport::SerialPort>) -> (Box<dyn serialport::SerialPort>, T)
+            + Send
+            + 'static,
+    {
+        let port = self
+            .port
+            .take()
+            .ok_or("[Io] redteam link already closed (used after drop)")?;
+        let (port, out) = tokio::task::spawn_blocking(move || f(port))
+            .await
+            .map_err(|e| format!("[Io] serial task failed: {e}"))?;
+        self.port = Some(port);
+        Ok(out)
+    }
+}
+
 #[async_trait]
 impl TargetLink for UartLink {
     async fn send_and_capture(
@@ -341,23 +459,28 @@ impl TargetLink for UartLink {
         oracle: &OracleCfg,
         cancel: &Cancellable,
     ) -> Result<Capture, String> {
-        use std::io::Write;
-        self.port
-            .write_all(payload)
-            .map_err(|e| format!("[Io] uart write failed: {e}"))?;
-        self.port
-            .flush()
-            .map_err(|e| format!("[Io] uart flush failed: {e}"))?;
-        Ok(read_window(&mut *self.port, window_ms, oracle, cancel))
+        let payload = payload.to_vec();
+        let oracle = oracle.clone();
+        let cancel = cancel.clone();
+        self.with_port(move |port| {
+            blocking_send_capture(port, &payload, window_ms, &oracle, &cancel)
+        })
+        .await?
     }
 
-    async fn listen(&mut self, window_ms: u64, oracle: &OracleCfg) -> Result<Capture, String> {
-        Ok(read_window(
-            &mut *self.port,
-            window_ms,
-            oracle,
-            &Cancellable::new(),
-        ))
+    async fn listen(
+        &mut self,
+        window_ms: u64,
+        oracle: &OracleCfg,
+        cancel: &Cancellable,
+    ) -> Result<Capture, String> {
+        let oracle = oracle.clone();
+        let cancel = cancel.clone();
+        self.with_port(move |mut port| {
+            let cap = read_window(&mut *port, window_ms, &oracle, &cancel);
+            (port, Ok(cap))
+        })
+        .await?
     }
 }
 
@@ -372,16 +495,26 @@ impl Executor for LiveExecutor {
         let port = serialport::new(port_name, baud)
             .timeout(Duration::from_millis(200))
             .open()
-            .map_err(|e| format!("[Io] cannot open {port_name}: {e}"))?;
-        Ok(Box::new(UartLink { port }))
+            .map_err(|e| {
+                format!(
+                    "[Io] cannot open {port_name} at {baud} baud: {e} — is it plugged in, and \
+                     is the baud right? (another program holding the port, or a stale COM number \
+                     after a USB re-enumeration, also lands here)"
+                )
+            })?;
+        Ok(Box::new(UartLink { port: Some(port) }))
     }
 
     async fn recover(
         &self,
         suite: &RedteamSuite,
-        iface: &Interface,
         ctx: &ToolContext,
-    ) -> Result<bool, String> {
+        budget_ms: u64,
+    ) -> Result<(), String> {
+        // The runner dropped its serial link before calling this; recovery
+        // is probe-side only (reflash / reset). Liveness is probed by the
+        // runner on a FRESH link — after a reflash the USB serial may have
+        // re-enumerated and the old handle is worthless.
         match suite.recovery.as_deref().unwrap_or("reset") {
             "reflash" => {
                 let hil_step = crate::tools::hil::flash_recovery_step(
@@ -389,7 +522,8 @@ impl Executor for LiveExecutor {
                     suite.chip.as_deref().or(ctx.default_chip.as_deref()),
                     suite.probe.as_deref(),
                 );
-                super::hil::run_flash_step(&hil_step, ctx, false, 180_000).await?;
+                let timeout = 180_000.min(budget_ms.max(1_000));
+                super::hil::run_flash_step(&hil_step, ctx, false, timeout).await?;
             }
             "reset" => {
                 let chip = suite
@@ -403,27 +537,24 @@ impl Executor for LiveExecutor {
                     args.push("--probe".to_string());
                     args.push(crate::tools::util::token_arg(p, "probe")?);
                 }
+                let timeout = 15_000.min(budget_ms.max(1_000));
                 crate::tools::util::run_probe_rs(
                     args,
                     &ctx.cwd,
-                    15_000,
+                    timeout,
                     Some(ctx.cancel.clone()),
                     &[],
                 )
                 .await
                 .map_err(|e| crate::tools::util::probe_rs_err(e).message)?;
             }
-            _ => return Ok(false),
+            other => {
+                return Err(format!(
+                    "[InvalidInput] recovery='{other}' cannot revive the target"
+                ));
+            }
         }
-        // Liveness probe: does the heartbeat come back?
-        let mut link = self.open_link(iface).await?;
-        let cap = link.listen(3_000, &suite.oracle).await?;
-        Ok(match suite.oracle.heartbeat_regex.as_deref() {
-            Some(hb) => regex::Regex::new(hb)
-                .map(|rx| rx.is_match(&cap.text))
-                .unwrap_or(true),
-            None => !cap.text.trim().is_empty(),
-        })
+        Ok(())
     }
 
     async fn forensic(&self, suite: &RedteamSuite, ctx: &ToolContext) -> Option<String> {
@@ -462,14 +593,36 @@ pub(crate) struct RunOutcome {
     pub dir: PathBuf,
 }
 
-fn redteam_dir_for(ctx: &ToolContext, suite: &RedteamSuite, run_id: &str) -> PathBuf {
+fn redteam_dir_for(
+    ctx: &ToolContext,
+    suite: &RedteamSuite,
+    run_id: &str,
+) -> Result<PathBuf, String> {
     let base = match suite.report.dir.as_deref() {
-        Some(d) => {
-            resolve_within(&ctx.cwd, d, &ctx.allowed_roots).unwrap_or_else(|_| ctx.cwd.join(d))
-        }
+        // No silent fallback: a report.dir that escapes the workspace roots
+        // must be an error, not a path quietly joined onto cwd (an absolute
+        // `d` would REPLACE the base and write evidence outside any root).
+        Some(d) => resolve_within(&ctx.cwd, d, &ctx.allowed_roots).map_err(|e| {
+            format!(
+                "[Permission] report.dir {:?} is outside the workspace: {e}",
+                d
+            )
+        })?,
         None => ctx.cwd.join(".firment").join("redteam"),
     };
-    base.join(run_id)
+    Ok(base.join(run_id))
+}
+
+/// Did the target answer the liveness probe? The regexes were compiled at
+/// validation time, so a compile failure here can only mean the caller
+/// bypassed validation — treat it as alive rather than silently dead.
+fn heartbeat_seen(text: &str, oracle: &OracleCfg) -> bool {
+    match oracle.heartbeat_regex.as_deref() {
+        Some(hb) => regex::Regex::new(hb)
+            .map(|rx| rx.is_match(text))
+            .unwrap_or(true),
+        None => !text.trim().is_empty(),
+    }
 }
 
 fn replay_dir(ctx: &ToolContext) -> PathBuf {
@@ -479,8 +632,26 @@ fn replay_dir(ctx: &ToolContext) -> PathBuf {
         .join("redteam")
 }
 
+fn write_replay_line(path: &Path, line: &Value) {
+    if let Ok(s) = serde_json::to_string(line) {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = writeln!(f, "{s}");
+        }
+    }
+}
+
 /// Core loop, injectable executor. One approval covered the whole suite, so
 /// links/recovery run without further prompts.
+///
+/// Error discipline: once hardware has been attacked, NOTHING may lose the
+/// evidence. Mid-run failures (port busy, write stall, bad classify input)
+/// set `aborted` and fall through to the report writers instead of `?` —
+/// findings already captured are the whole point of the run.
 pub(crate) async fn run_suite_with(
     suite_label: &str,
     suite: &RedteamSuite,
@@ -491,7 +662,7 @@ pub(crate) async fn run_suite_with(
     let m = suite.mutation.as_ref().expect("validated");
     let seed = m.seed.expect("validated");
     let run_id = uuid::Uuid::new_v4().to_string();
-    let dir = redteam_dir_for(ctx, suite, &run_id);
+    let dir = redteam_dir_for(ctx, suite, &run_id)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("[Io] create {}: {e}", dir.display()))?;
     let replay_path = replay_dir(ctx).join(format!("{run_id}.jsonl"));
     if let Some(parent) = replay_path.parent() {
@@ -504,9 +675,20 @@ pub(crate) async fn run_suite_with(
     let mut aborted = None;
 
     'interfaces: for iface in &suite.interfaces {
+        // Baselines and oracle regexes were validated up front, so these
+        // pure re-parses cannot fail here.
         let baseline = parse_baseline(iface.baseline.as_deref())?;
         let cases = mutate::corpus(seed, &baseline, &m.strategies);
-        let mut link = exec.open_link(iface).await?;
+        let iface_label = format!("{}@{}", iface.kind, iface.port.as_deref().unwrap_or("-"));
+        let mut link = match exec.open_link(iface).await {
+            Ok(link) => link,
+            Err(e) => {
+                aborted = Some(format!(
+                    "interface {iface_label}: {e} — run stopped early, findings so far are valid"
+                ));
+                break 'interfaces;
+            }
+        };
         let mut saw_traffic = false;
         for case in &cases {
             if cases_sent >= suite.budget.max_cases {
@@ -527,16 +709,34 @@ pub(crate) async fn run_suite_with(
                 aborted = Some("cancelled by turn interrupt".to_string());
                 break 'interfaces;
             }
-            let cap = link
+            let cap = match link
                 .send_and_capture(
                     &case.payload,
                     suite.budget.per_case_timeout_ms,
                     &suite.oracle,
                     &ctx.cancel,
                 )
-                .await?;
+                .await
+            {
+                Ok(cap) => cap,
+                Err(e) => {
+                    aborted = Some(format!(
+                        "case {} on {iface_label}: {e} — run stopped early, findings so far are \
+                         valid",
+                        case.id
+                    ));
+                    break 'interfaces;
+                }
+            };
             cases_sent += 1;
-            let verdict = oracle::classify(&cap.text, saw_traffic, cap.timed_out, &suite.oracle)?;
+            let verdict =
+                match oracle::classify(&cap.text, saw_traffic, cap.timed_out, &suite.oracle) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        aborted = Some(format!("case {}: {e}", case.id));
+                        break 'interfaces;
+                    }
+                };
             if !cap.text.trim().is_empty() {
                 saw_traffic = true;
             }
@@ -548,75 +748,114 @@ pub(crate) async fn run_suite_with(
             };
             let mut line = json!({
                 "case": case.id,
-                "interface": format!("{}@{}", iface.kind, iface.port.as_deref().unwrap_or("-")),
+                "interface": iface_label,
                 "verdict": class.unwrap_or("alive"),
             });
-            if let Some(class) = class {
-                let fid = format!("F-{:03}", findings.len() + 1);
-                let mut ev: Vec<String> = Vec::new();
-                if !cap.text.trim().is_empty() {
-                    let log = dir.join(format!("capture-{fid}.log"));
-                    let _ = std::fs::write(&log, &cap.text);
-                    ev.push(format!("capture-{fid}.log"));
-                }
-                if class == "crash"
-                    && let Some(report) = exec.forensic(suite, ctx).await
-                {
-                    let fpath = dir.join(format!("forensic-{fid}.txt"));
-                    let _ = std::fs::write(&fpath, &report);
-                    ev.push(format!("forensic-{fid}.txt"));
-                }
-                let mut f = Finding {
-                    finding_id: fid.clone(),
-                    severity: findings::default_severity(class),
-                    class: class.to_string(),
-                    strategy: mutate::strategy_name(case.strategy).to_string(),
-                    case_id: case.id.clone(),
-                    seed,
-                    payload_hex: findings::hex_encode(&case.payload),
-                    interface: format!("{}@{}", iface.kind, iface.port.as_deref().unwrap_or("-")),
-                    observed: match &verdict {
-                        Verdict::Crash(r) => r.clone(),
-                        Verdict::Reboot => "boot banner reappeared mid-stream".to_string(),
-                        Verdict::Hang => "no heartbeat within the window".to_string(),
-                        Verdict::Alive => unreachable!(),
-                    },
-                    evidence: ev,
-                    reproducer: findings::Reproducer {
-                        suite: suite_label.to_string(),
-                        case: case.id.clone(),
-                    },
-                    confidence: String::new(),
-                };
-                let dir_for_check = dir.clone();
-                f.finalize(|e| dir_for_check.join(e).is_file());
-                line["finding"] = json!(&f.finding_id);
-                findings.push(f);
-                // Recovery before the next case — a dead target would turn
-                // every later verdict into a false hang.
-                let alive = exec.recover(suite, iface, ctx).await?;
-                if !alive {
+            let Some(class) = class else {
+                write_replay_line(&replay_path, &line);
+                continue;
+            };
+            let fid = format!("F-{:03}", findings.len() + 1);
+            let mut ev: Vec<String> = Vec::new();
+            if !cap.text.trim().is_empty() {
+                let log = dir.join(format!("capture-{fid}.log"));
+                let _ = std::fs::write(&log, &cap.text);
+                ev.push(format!("capture-{fid}.log"));
+            }
+            if class == "crash"
+                && let Some(report) = exec.forensic(suite, ctx).await
+            {
+                let fpath = dir.join(format!("forensic-{fid}.txt"));
+                let _ = std::fs::write(&fpath, &report);
+                ev.push(format!("forensic-{fid}.txt"));
+            }
+            let mut f = Finding {
+                finding_id: fid.clone(),
+                severity: findings::default_severity(class),
+                class: class.to_string(),
+                strategy: mutate::strategy_name(case.strategy).to_string(),
+                case_id: case.id.clone(),
+                seed,
+                payload_hex: findings::hex_encode(&case.payload),
+                interface: iface_label.clone(),
+                observed: match &verdict {
+                    Verdict::Crash(r) => r.clone(),
+                    Verdict::Reboot => "boot banner reappeared mid-stream".to_string(),
+                    Verdict::Hang => "no heartbeat within the window".to_string(),
+                    Verdict::Alive => unreachable!(),
+                },
+                evidence: ev,
+                reproducer: findings::Reproducer {
+                    suite: suite_label.to_string(),
+                    case: case.id.clone(),
+                },
+                confidence: String::new(),
+            };
+            let dir_for_check = dir.clone();
+            f.finalize(|e| dir_for_check.join(e).is_file());
+            line["finding"] = json!(&f.finding_id);
+            findings.push(f);
+            // Record the finding BEFORE attempting recovery: a failed revive
+            // must not erase the replay line of what was already proven.
+            write_replay_line(&replay_path, &line);
+            // Recovery: drop the link first (the port must be free — and
+            // after a reflash the USB serial may have re-enumerated, so the
+            // old handle is worthless), revive, reopen, probe liveness.
+            let recovery = suite.recovery.as_deref().unwrap_or("reset");
+            drop(link);
+            if recovery == "none" {
+                aborted = Some(format!(
+                    "target {} on case {} and recovery='none' — run aborted, findings so far \
+                     are valid",
+                    class, case.id
+                ));
+                break 'interfaces;
+            }
+            let remaining = suite
+                .budget
+                .max_duration_ms
+                .saturating_sub(overall.elapsed().as_millis() as u64);
+            let alive = match exec.recover(suite, ctx, remaining).await {
+                Err(e) => {
                     aborted = Some(format!(
-                        "target dead after {} on case {} (recovery='{}' did not revive it) — \
-                         run aborted, findings so far are valid",
-                        class,
-                        case.id,
-                        suite.recovery.as_deref().unwrap_or("reset")
+                        "recovery failed after {} on case {}: {e} — run aborted, findings so far \
+                         are valid",
+                        class, case.id
                     ));
                     break 'interfaces;
                 }
-                saw_traffic = true;
+                Ok(()) => match exec.open_link(iface).await {
+                    Err(e) => {
+                        aborted = Some(format!(
+                            "cannot reopen {iface_label} after recovery: {e} — run aborted, \
+                             findings so far are valid"
+                        ));
+                        break 'interfaces;
+                    }
+                    Ok(fresh) => {
+                        link = fresh;
+                        match link.listen(3_000, &suite.oracle, &ctx.cancel).await {
+                            Ok(probe) => heartbeat_seen(&probe.text, &suite.oracle),
+                            Err(e) => {
+                                aborted = Some(format!(
+                                    "liveness probe on {iface_label} failed: {e} — run aborted, \
+                                     findings so far are valid"
+                                ));
+                                break 'interfaces;
+                            }
+                        }
+                    }
+                },
+            };
+            if !alive {
+                aborted = Some(format!(
+                    "target dead after {} on case {} (recovery='{}' did not revive it) — run \
+                     aborted, findings so far are valid",
+                    class, case.id, recovery
+                ));
+                break 'interfaces;
             }
-            if let Ok(s) = serde_json::to_string(&line) {
-                use std::io::Write;
-                if let Ok(mut f) = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&replay_path)
-                {
-                    let _ = writeln!(f, "{s}");
-                }
-            }
+            saw_traffic = true;
         }
     }
 
@@ -1167,6 +1406,24 @@ mod tests {
     }
 
     #[test]
+    fn bad_oracle_regex_or_baseline_fails_validation_before_hardware() {
+        // Everything the live loop does purely must be checked at validation
+        // time: a dry-run that passes cannot blow up after payloads fly.
+        let mut s = suite();
+        s.oracle.heartbeat_regex = Some("(unclosed".to_string());
+        let err = validate_suite(&s).unwrap_err();
+        assert!(err.contains("heartbeat_regex"), "got: {err}");
+
+        let mut s = suite();
+        s.oracle.boot_banner = Some("*bad".to_string());
+        assert!(validate_suite(&s).unwrap_err().contains("boot_banner"));
+
+        let mut s = suite();
+        s.interfaces[0].baseline = Some("55AA".to_string());
+        assert!(validate_suite(&s).unwrap_err().contains("prefix"));
+    }
+
+    #[test]
     fn empty_fault_signature_is_rejected() {
         // `"".contains` is true for every window: leaving an empty entry in
         // extra_fault_signatures would mark every single case as a crash.
@@ -1185,10 +1442,13 @@ mod tests {
         assert!(validate_suite(&s).is_ok());
     }
 
-    /// Scripted link: crashes on the Nth send, alive otherwise.
+    /// Scripted link: the executor's GLOBAL send counter crashes on the
+    /// configured send index — so a link reopened after recovery continues
+    /// the same script instead of crashing again at its own send zero.
     struct ScriptLink {
         crash_at: usize,
-        n: std::cell::Cell<usize>,
+        total: Arc<std::sync::atomic::AtomicUsize>,
+        listen_text: &'static str,
     }
 
     #[async_trait]
@@ -1200,8 +1460,7 @@ mod tests {
             _oracle: &OracleCfg,
             _cancel: &Cancellable,
         ) -> Result<Capture, String> {
-            let i = self.n.get();
-            self.n.set(i + 1);
+            let i = self.total.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if i == self.crash_at {
                 return Ok(Capture {
                     text: "tick=41\nHardFault_Handler\n".to_string(),
@@ -1213,34 +1472,69 @@ mod tests {
                 timed_out: false,
             })
         }
-        async fn listen(&mut self, _w: u64, _o: &OracleCfg) -> Result<Capture, String> {
+        async fn listen(
+            &mut self,
+            _w: u64,
+            _o: &OracleCfg,
+            _cancel: &Cancellable,
+        ) -> Result<Capture, String> {
             Ok(Capture {
-                text: String::new(),
-                timed_out: true,
+                text: self.listen_text.to_string(),
+                timed_out: false,
             })
         }
     }
 
     struct MockExecutor {
         crash_at: usize,
+        /// false → recover() returns Err (the runner must abort with
+        /// "recovery failed" and STILL write the reports).
         revive: bool,
+        /// What the liveness probe on the reopened link sees.
+        listen_text: &'static str,
+        /// open_link fails from this call number on (0 = never).
+        fail_open_from: usize,
+        opens: Arc<std::sync::atomic::AtomicUsize>,
+        total: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl MockExecutor {
+        fn alive(crash_at: usize) -> Self {
+            Self {
+                crash_at,
+                revive: true,
+                listen_text: "tick=99\n",
+                fail_open_from: 0,
+                opens: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                total: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            }
+        }
     }
 
     #[async_trait]
     impl Executor for MockExecutor {
         async fn open_link(&self, _iface: &Interface) -> Result<Box<dyn TargetLink>, String> {
+            let n = self.opens.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            if self.fail_open_from != 0 && n >= self.fail_open_from {
+                return Err("mock: port busy".to_string());
+            }
             Ok(Box::new(ScriptLink {
                 crash_at: self.crash_at,
-                n: std::cell::Cell::new(0),
+                total: self.total.clone(),
+                listen_text: self.listen_text,
             }))
         }
         async fn recover(
             &self,
             _suite: &RedteamSuite,
-            _iface: &Interface,
             _ctx: &ToolContext,
-        ) -> Result<bool, String> {
-            Ok(self.revive)
+            _budget_ms: u64,
+        ) -> Result<(), String> {
+            if self.revive {
+                Ok(())
+            } else {
+                Err("mock: revive failed".to_string())
+            }
         }
         async fn forensic(&self, _suite: &RedteamSuite, _ctx: &ToolContext) -> Option<String> {
             Some("forensic scene: PC=0x08001234 HardFault".to_string())
@@ -1250,18 +1544,10 @@ mod tests {
     #[tokio::test]
     async fn crash_produces_evidence_backed_finding_and_aborts_when_dead() {
         let dir = tempdir().unwrap();
-        let s = suite(); // recovery none → MockExecutor revives=false → abort
-        let outcome = run_suite_with(
-            "uart-fuzz",
-            &s,
-            &ctx(dir.path()),
-            &MockExecutor {
-                crash_at: 2,
-                revive: false,
-            },
-        )
-        .await
-        .unwrap();
+        let s = suite(); // recovery none → runner aborts without reviving
+        let outcome = run_suite_with("uart-fuzz", &s, &ctx(dir.path()), &MockExecutor::alive(2))
+            .await
+            .unwrap();
         assert_eq!(outcome.findings.len(), 1, "one crash before abort");
         let f = &outcome.findings[0];
         assert_eq!(f.class, "crash");
@@ -1269,11 +1555,112 @@ mod tests {
         assert_eq!(f.severity, Severity::High);
         assert!(f.evidence.iter().any(|e| e.starts_with("capture-")));
         assert!(f.evidence.iter().any(|e| e.starts_with("forensic-")));
-        assert!(outcome.aborted.as_ref().unwrap().contains("target dead"));
+        assert!(
+            outcome
+                .aborted
+                .as_ref()
+                .unwrap()
+                .contains("recovery='none'"),
+            "got: {:?}",
+            outcome.aborted
+        );
         // Reports on disk.
         assert!(outcome.dir.join("findings.jsonl").is_file());
         let md = std::fs::read_to_string(outcome.dir.join("report.md")).unwrap();
         assert!(md.contains("F-001"), "got: {md}");
+    }
+
+    #[tokio::test]
+    async fn recovery_drops_and_reopens_the_link_then_continues() {
+        // The port-exclusivity regression: recovery must NOT probe liveness
+        // on the link it still holds. The runner drops the link, recovers,
+        // and opens a FRESH one — proven by the open counter reaching 2.
+        let dir = tempdir().unwrap();
+        let mut s = suite();
+        s.recovery = Some("reset".to_string());
+        s.allowed_actions = vec!["send".to_string(), "reset".to_string()];
+        s.budget.max_cases = 5;
+        let exec = MockExecutor::alive(0); // crash on the very first send
+        let outcome = run_suite_with("uart-fuzz", &s, &ctx(dir.path()), &exec)
+            .await
+            .unwrap();
+        assert_eq!(outcome.findings.len(), 1, "the crash is found once");
+        assert_eq!(
+            exec.opens.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "initial open + reopen after recovery"
+        );
+        assert!(
+            outcome.aborted.as_ref().unwrap().contains("max_cases"),
+            "the run CONTINUED past the crash: {:?}",
+            outcome.aborted
+        );
+        assert_eq!(outcome.cases_sent, 5);
+    }
+
+    #[tokio::test]
+    async fn failed_recovery_keeps_findings_and_reports() {
+        let dir = tempdir().unwrap();
+        let mut s = suite();
+        s.recovery = Some("reset".to_string());
+        s.allowed_actions = vec!["send".to_string(), "reset".to_string()];
+        let mut exec = MockExecutor::alive(0);
+        exec.revive = false;
+        let outcome = run_suite_with("uart-fuzz", &s, &ctx(dir.path()), &exec)
+            .await
+            .unwrap();
+        assert_eq!(outcome.findings.len(), 1);
+        assert!(
+            outcome
+                .aborted
+                .as_ref()
+                .unwrap()
+                .contains("recovery failed"),
+            "got: {:?}",
+            outcome.aborted
+        );
+        assert!(outcome.dir.join("findings.jsonl").is_file());
+        assert!(outcome.dir.join("report.md").is_file());
+    }
+
+    #[tokio::test]
+    async fn reopen_failure_after_recovery_still_writes_reports() {
+        let dir = tempdir().unwrap();
+        let mut s = suite();
+        s.recovery = Some("reset".to_string());
+        s.allowed_actions = vec!["send".to_string(), "reset".to_string()];
+        let mut exec = MockExecutor::alive(0);
+        exec.fail_open_from = 2; // the reopen after recovery fails
+        let outcome = run_suite_with("uart-fuzz", &s, &ctx(dir.path()), &exec)
+            .await
+            .unwrap();
+        assert_eq!(outcome.findings.len(), 1);
+        assert!(
+            outcome.aborted.as_ref().unwrap().contains("cannot reopen"),
+            "got: {:?}",
+            outcome.aborted
+        );
+        assert!(outcome.dir.join("findings.jsonl").is_file());
+    }
+
+    #[tokio::test]
+    async fn dead_liveness_probe_aborts_with_reports() {
+        let dir = tempdir().unwrap();
+        let mut s = suite();
+        s.recovery = Some("reset".to_string());
+        s.allowed_actions = vec!["send".to_string(), "reset".to_string()];
+        let mut exec = MockExecutor::alive(0);
+        exec.listen_text = ""; // reopened link hears nothing → target dead
+        let outcome = run_suite_with("uart-fuzz", &s, &ctx(dir.path()), &exec)
+            .await
+            .unwrap();
+        assert_eq!(outcome.findings.len(), 1);
+        assert!(
+            outcome.aborted.as_ref().unwrap().contains("target dead"),
+            "got: {:?}",
+            outcome.aborted
+        );
+        assert!(outcome.dir.join("report.md").is_file());
     }
 
     #[tokio::test]
@@ -1283,10 +1670,7 @@ mod tests {
             "uart-fuzz",
             &suite(),
             &ctx(dir.path()),
-            &MockExecutor {
-                crash_at: usize::MAX,
-                revive: true,
-            },
+            &MockExecutor::alive(usize::MAX),
         )
         .await
         .unwrap();
@@ -1307,10 +1691,7 @@ mod tests {
             "uart-fuzz",
             &s,
             &ctx(dir.path()),
-            &MockExecutor {
-                crash_at: usize::MAX,
-                revive: true,
-            },
+            &MockExecutor::alive(usize::MAX),
         )
         .await
         .unwrap();
@@ -1338,7 +1719,12 @@ mod tests {
                     timed_out: false,
                 })
             }
-            async fn listen(&mut self, _w: u64, _o: &OracleCfg) -> Result<Capture, String> {
+            async fn listen(
+                &mut self,
+                _w: u64,
+                _o: &OracleCfg,
+                _c: &Cancellable,
+            ) -> Result<Capture, String> {
                 Ok(Capture {
                     text: String::new(),
                     timed_out: true,
@@ -1354,10 +1740,10 @@ mod tests {
             async fn recover(
                 &self,
                 _s: &RedteamSuite,
-                _i: &Interface,
                 _c: &ToolContext,
-            ) -> Result<bool, String> {
-                Ok(false)
+                _b: u64,
+            ) -> Result<(), String> {
+                Ok(())
             }
             async fn forensic(&self, _s: &RedteamSuite, _c: &ToolContext) -> Option<String> {
                 None
