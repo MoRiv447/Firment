@@ -89,6 +89,44 @@ pub fn sanitize_samplerate(value: &str) -> Result<String, String> {
     Ok(value.to_string())
 }
 
+/// Numeric Hz behind a validated samplerate token (`8m` -> 8e6). `None` for
+/// malformed input — the measurement layer refuses to divide by a guess.
+pub fn samplerate_hz(token: &str) -> Option<f64> {
+    let (num, mult) = match token.as_bytes().last()? {
+        b'k' | b'K' => (&token[..token.len() - 1], 1e3),
+        b'm' | b'M' => (&token[..token.len() - 1], 1e6),
+        b'g' | b'G' => (&token[..token.len() - 1], 1e9),
+        _ => (token, 1.0),
+    };
+    num.parse::<f64>()
+        .ok()
+        .map(|v| v * mult)
+        .filter(|v| *v > 0.0)
+}
+
+/// Number of channels a sigrok channel spec selects: `0,1,2-3` -> 4,
+/// `0=SCLK,1=MOSI` -> 2. `None` on malformed input (the unpack layer needs
+/// an exact count; guessing one would mis-decode every sample).
+pub fn count_channels(spec: &str) -> Option<usize> {
+    let mut total = 0usize;
+    for item in spec.split(',') {
+        let item = item.split('=').next()?.trim();
+        if item.contains('-') {
+            let mut ends = item.splitn(2, '-');
+            let lo: usize = ends.next()?.parse().ok()?;
+            let hi: usize = ends.next()?.parse().ok()?;
+            if hi < lo {
+                return None;
+            }
+            total += hi - lo + 1;
+        } else {
+            item.parse::<usize>().ok()?;
+            total += 1;
+        }
+    }
+    if total == 0 { None } else { Some(total) }
+}
+
 /// Validate a decoder option key: bare identifier (`rx`, `baudrate`, …).
 fn sanitize_opt_key(value: &str) -> Result<String, String> {
     if !value.is_empty()
@@ -406,6 +444,29 @@ mod tests {
             build_export_binary_argv(&PathBuf::from("c.sr"), &PathBuf::from("c.bin")),
             vec!["-i", "c.sr", "-O", "binary", "-o", "c.bin"]
         );
+    }
+
+    #[test]
+    fn samplerate_tokens_become_hz() {
+        assert_eq!(samplerate_hz("8m"), Some(8e6));
+        assert_eq!(samplerate_hz("100k"), Some(1e5));
+        assert_eq!(samplerate_hz("1.6m"), Some(1.6e6));
+        assert_eq!(samplerate_hz("2000000"), Some(2e6));
+        assert_eq!(samplerate_hz("8x"), None);
+        assert_eq!(samplerate_hz(""), None);
+    }
+
+    #[test]
+    fn channel_specs_count_exactly() {
+        assert_eq!(count_channels("0,1,2-3"), Some(4));
+        assert_eq!(count_channels("0=SCLK,1=MOSI"), Some(2));
+        assert_eq!(count_channels("0-7"), Some(8));
+        assert_eq!(count_channels("3"), Some(1));
+        // Malformed specs must NOT guess a count — a wrong count mis-decodes
+        // every sample downstream.
+        assert_eq!(count_channels("5-2"), None);
+        assert_eq!(count_channels("a,b"), None);
+        assert_eq!(count_channels(""), None);
     }
 
     #[test]

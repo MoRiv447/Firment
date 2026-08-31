@@ -11,6 +11,7 @@ mod glob;
 mod grep;
 mod hil;
 mod html;
+mod la;
 mod list_dir;
 pub mod models;
 pub mod monitor;
@@ -40,6 +41,7 @@ pub fn all() -> Vec<Arc<dyn Tool>> {
         Arc::new(run::Run),
         Arc::new(monitor::Monitor),
         Arc::new(observe::Observe),
+        Arc::new(la::La::default()),
         Arc::new(hil::Hil),
         Arc::new(periph_init::PeriphInit),
         Arc::new(pinmap::Pinmap),

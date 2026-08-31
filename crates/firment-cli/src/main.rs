@@ -1189,6 +1189,30 @@ fn doctor_tools(cwd: &Path, tools: &firment_core::config::ToolsConfig) {
              probe-rs-tools` or the probe-rs GitHub releases"
         ),
     }
+    let sigrok_bin = tools
+        .la
+        .as_ref()
+        .and_then(|la| la.bin.clone())
+        .unwrap_or_else(|| "sigrok-cli".to_string());
+    match std::process::Command::new(&sigrok_bin)
+        .arg("--version")
+        .output()
+    {
+        Ok(o) if o.status.success() => {
+            let version = String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            println!("  {sigrok_bin} : found {version} — required for the la tool");
+        }
+        _ => println!(
+            "  {sigrok_bin} : NOT FOUND — the la tool will fail; install sigrok-cli (Windows: \
+             the self-extracting package from sigrok.org/download, then add it to PATH or point \
+             [tools.la] bin at sigrok-cli.exe; Linux: your distro's package; macOS: brew)"
+        ),
+    }
 
     println!("\nserial ports:");
     let ports = firment_tools::tools::monitor::enumerate_ports();
@@ -1221,6 +1245,18 @@ fn doctor_tools(cwd: &Path, tools: &firment_core::config::ToolsConfig) {
         None => println!("  monitor_port : not set — monitor will ask to pick one"),
     }
     println!("  monitor_baud : {}", tools.monitor_baud);
+    match &tools.la {
+        Some(la) => println!(
+            "  la           : driver={} samplerate={} channels={}",
+            la.driver,
+            la.samplerate.as_deref().unwrap_or("(device default)"),
+            la.channels.as_deref().unwrap_or("(all)"),
+        ),
+        None => println!(
+            "  la           : not configured — la capture then needs an explicit driver/channels \
+             per call"
+        ),
+    }
     match &tools.build_command {
         Some(cmd) => println!(
             "  build_command: {}",
@@ -1548,6 +1584,7 @@ async fn run_direct_tool(
         // Direct CLI tool runs are session-less: no ledger to correlate.
         ledger_path: None,
         providers: firment_core::config::provider_endpoints(config),
+        la: config.tools.la.clone(),
         allowed_roots: Vec::new(),
         cancel: firment_core::Cancellable::new(),
     };

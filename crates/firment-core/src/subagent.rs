@@ -138,6 +138,7 @@ impl SubagentFactory for SubagentRunner {
         );
         nested.set_session_dir(Some(store.dir.join("work")));
         nested.set_elf_config(self.config.tools.elf.clone());
+        nested.set_la_config(self.config.tools.la.clone());
         // Propagate the parent turn's cancellation into the nested agent so
         // interrupting the parent also stops the subagent (and the processes
         // it spawned, via its own tool layer). The handle is kept and aborted

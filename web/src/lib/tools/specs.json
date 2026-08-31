@@ -450,6 +450,89 @@
     }
   },
   {
+    "name": "la",
+    "description": "Logic analyzer: capture digital waveforms through sigrok-cli and turn them into PHYSICAL evidence (verification ladder rung 5). Actions: detect (is sigrok-cli installed, does it know the driver), info (device capabilities), capture (bounded acquisition stored under .firment/la/), measure (frequency as a range, duty, edge counts, pulse widths, bitrate — deterministic math on the raw bits, every verdict carries a confidence), decode (protocol annotations via sigrok decoders: uart/spi/i2c/1-wire/NEC/CAN …), list_captures. Configure the device once in [tools.la] (sigrok driver name); capture is the only action that touches hardware and it asks for approval. The .sr sessions are archived for PulseView; measurements never parse them.",
+    "input_schema": {
+      "properties": {
+        "action": {
+          "description": "detect: probe the sigrok-cli install. info: device capabilities. capture: acquire a bounded window. measure: frequency/duty/edges/pulse_widths/bitrate on a stored capture. decode: run a sigrok protocol decoder on a stored capture. list_captures: what is on disk.",
+          "enum": [
+            "detect",
+            "info",
+            "capture",
+            "measure",
+            "decode",
+            "list_captures"
+          ],
+          "type": "string"
+        },
+        "capture": {
+          "description": "measure/decode: capture id (from capture/list_captures) or a workspace path to a stored session.",
+          "type": "string"
+        },
+        "channel": {
+          "description": "measure: which captured channel to analyse (default 0).",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "channels": {
+          "description": "capture: sigrok channel spec, e.g. \"0,1,2-3\" or \"0=SCLK,1=MOSI\" (falls back to [tools.la] channels). Required for measure-capable captures.",
+          "type": "string"
+        },
+        "decoder": {
+          "description": "decode: sigrok protocol decoder name (uart, spi, i2c, 1-wire, nfc-*, can, …).",
+          "type": "string"
+        },
+        "decoder_opts": {
+          "description": "decode: decoder options, e.g. {\"rx\":\"0\",\"baudrate\":\"115200\"}.",
+          "type": "object"
+        },
+        "driver": {
+          "description": "capture/info/detect: sigrok driver name (falls back to [tools.la] driver).",
+          "type": "string"
+        },
+        "edge": {
+          "description": "measure what=edges: which transitions to count (default both).",
+          "enum": [
+            "rising",
+            "falling",
+            "both"
+          ],
+          "type": "string"
+        },
+        "samplerate": {
+          "description": "capture: sigrok samplerate token, e.g. \"8m\" (8 MHz). Without it frequency/pulse/bitrate measures cannot run.",
+          "type": "string"
+        },
+        "samples": {
+          "description": "capture: sample count to acquire (bounded by [tools.la] max_samples).",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "time_ms": {
+          "description": "capture: wall-clock window in ms — the other way to bound an acquisition.",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "what": {
+          "description": "measure: what to measure (default frequency).",
+          "enum": [
+            "frequency",
+            "duty",
+            "edges",
+            "pulse_widths",
+            "bitrate"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "name": "list_dir",
     "description": "List entries in a directory. Set recursive=true to walk subdirectories.",
     "input_schema": {

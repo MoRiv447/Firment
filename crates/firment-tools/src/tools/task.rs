@@ -139,6 +139,7 @@ mod tests {
             session_dir: None,
             ledger_path: None,
             providers: Vec::new(),
+            la: None,
             cancel: firment_core::Cancellable::new(),
             allowed_roots: Vec::new(),
         }

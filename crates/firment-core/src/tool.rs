@@ -64,6 +64,10 @@ pub struct ToolContext {
     /// already resolved (inline → env → auth.json). Backs the `models`
     /// discovery tool so the agent can see what each backend serves.
     pub providers: Vec<ProviderEndpoint>,
+    /// Logic-analyzer defaults from config.toml [tools.la] (sigrok driver,
+    /// samplerate, channel spec, sample cap). `None` = not configured; the
+    /// `la` tool then requires every parameter explicitly.
+    pub la: Option<crate::config::LaConfig>,
 }
 
 /// One callable model endpoint for the `models` discovery tool.
@@ -105,6 +109,7 @@ impl ToolContext {
             cancel: Cancellable::new(),
             device_log_dir: None,
             providers: Vec::new(),
+            la: None,
         }
     }
 }

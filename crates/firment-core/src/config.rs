@@ -146,6 +146,102 @@ impl<'de> Deserialize<'de> for ElfConfig {
     }
 }
 
+/// Logic-analyzer capture policy for the `la` tool. Written as a string
+/// (driver name only) in config.toml for brevity, or as a table for full
+/// control — the same dual form as [`ElfConfig`].
+///
+/// sigrok-cli is invoked as an EXTERNAL binary (argv array, no shell): the
+/// GPL of sigrok/libsigrok does not reach this MIT program through a process
+/// boundary, the same way probe-rs is used. Never link libsigrok.
+#[derive(Debug, Clone, Serialize)]
+pub struct LaConfig {
+    /// sigrok driver name (e.g. `fx2lafw`, `saleae-logic`, `demo`).
+    pub driver: String,
+    /// Path to the sigrok-cli binary; defaults to `sigrok-cli` on PATH.
+    /// A project-level config may NEVER set this (see `merged_for`): an
+    /// executable path from an untrusted checkout is an arbitrary-program
+    /// entry point.
+    #[serde(default)]
+    pub bin: Option<String>,
+    /// Default samplerate token (sigrok spelling: `8m`, `100k`, …).
+    #[serde(default)]
+    pub samplerate: Option<String>,
+    /// Default channel spec (e.g. `0,1,2-3`).
+    #[serde(default)]
+    pub channels: Option<String>,
+    /// Upper bound on samples per capture: protects the disk from a
+    /// runaway acquisition (10 M samples × 8 ch ≈ 1 MB of raw bits).
+    #[serde(default = "default_la_max_samples")]
+    pub max_samples: u64,
+    /// Outer timeout for one sigrok-cli invocation. Unset derives it from
+    /// the capture window plus headroom.
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+}
+
+fn default_la_max_samples() -> u64 {
+    10_000_000
+}
+
+impl Default for LaConfig {
+    fn default() -> Self {
+        Self {
+            driver: String::new(),
+            bin: None,
+            samplerate: None,
+            channels: None,
+            max_samples: default_la_max_samples(),
+            timeout_ms: None,
+        }
+    }
+}
+
+/// Accept both `la = "fx2lafw"` (driver string) and
+/// `[tools.la] driver = "..." samplerate = "8m"` (table) forms.
+impl<'de> Deserialize<'de> for LaConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Driver(String),
+            Table {
+                driver: String,
+                #[serde(default)]
+                bin: Option<String>,
+                #[serde(default)]
+                samplerate: Option<String>,
+                #[serde(default)]
+                channels: Option<String>,
+                #[serde(default = "default_la_max_samples")]
+                max_samples: u64,
+                #[serde(default)]
+                timeout_ms: Option<u64>,
+            },
+        }
+        match Raw::deserialize(d)? {
+            Raw::Driver(driver) => Ok(LaConfig {
+                driver,
+                ..LaConfig::default()
+            }),
+            Raw::Table {
+                driver,
+                bin,
+                samplerate,
+                channels,
+                max_samples,
+                timeout_ms,
+            } => Ok(LaConfig {
+                driver,
+                bin,
+                samplerate,
+                channels,
+                max_samples,
+                timeout_ms,
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolsConfig {
     /// Command run by the `verify` tool (platform shell), e.g. `cargo check`.
@@ -190,6 +286,12 @@ pub struct ToolsConfig {
     /// MCUs are not drowned out and big ones are not overly strict.
     #[serde(default)]
     pub elf: Option<ElfConfig>,
+    /// Logic analyzer for the `la` tool: sigrok driver + capture defaults.
+    /// When unset, `la` action=capture/decode still works with every
+    /// parameter passed explicitly; only the config-derived defaults
+    /// (driver, samplerate, channels) are missing.
+    #[serde(default)]
+    pub la: Option<LaConfig>,
 }
 
 /// Hand-written so the in-memory default matches the serde defaults used
@@ -210,6 +312,7 @@ impl Default for ToolsConfig {
             web_search_api_key_env: None,
             max_subagent_depth: default_max_subagent_depth(),
             elf: None,
+            la: None,
         }
     }
 }
@@ -430,6 +533,27 @@ impl Config {
                     existing.strict |= elf.strict;
                 }
                 None => config.tools.elf = Some(elf.clone()),
+            }
+        }
+        if let Some(la) = &project.tools.la {
+            match config.tools.la.as_mut() {
+                Some(existing) => {
+                    existing.driver = la.driver.clone();
+                    // `bin` is deliberately NOT taken from the project:
+                    // pointing the agent at an executable chosen by an
+                    // untrusted checkout is an arbitrary-program entry
+                    // point — the same reasoning that strips auto_approve
+                    // from project build/verify commands above.
+                    existing.samplerate = la.samplerate.clone();
+                    existing.channels = la.channels.clone();
+                    existing.max_samples = la.max_samples;
+                    existing.timeout_ms = la.timeout_ms;
+                }
+                None => {
+                    let mut v = la.clone();
+                    v.bin = None;
+                    config.tools.la = Some(v);
+                }
             }
         }
         if project.compaction_strategy != CompactionStrategy::default() {
@@ -789,6 +913,15 @@ model = "deepseek-v4-flash"
 # report_benign = false       # surface below-threshold diffs as a review round (default false: swallow noise)
 # strict = false              # headless/CI: block completion until fixed instead of downgrading to a soft report
 # max_subagent_depth = 2                  # recursion limit for the task subagent tool
+# Logic analyzer (la tool): sigrok driver + capture defaults. sigrok-cli must be installed separately (external binary, never linked).
+# la = "fx2lafw"                              # short form: driver name only
+# [tools.la]
+# driver = "fx2lafw"                      # sigrok driver (fx2lafw clones, saleae-logic, demo, …)
+# bin = "sigrok-cli"                      # explicit path if not on PATH (user config only — a project .firment.toml cannot set this)
+# samplerate = "8m"                       # default sample rate token (8m = 8 MHz)
+# channels = "0,1,2-3"                    # default channel spec
+# max_samples = 10000000                  # per-capture sample cap (disk protection)
+# timeout_ms = 60000                      # outer timeout per sigrok-cli invocation
 "#
 }
 
@@ -886,6 +1019,78 @@ mod tests {
     fn tools_elf_defaults_to_none() {
         let config: Config = toml::from_str("").unwrap();
         assert!(config.tools.elf.is_none());
+    }
+
+    #[test]
+    fn parses_tools_la_string_short_form() {
+        let text = r#"
+            [tools]
+            la = "fx2lafw"
+        "#;
+        let config: Config = toml::from_str(text).unwrap();
+        let la = config.tools.la.expect("la set");
+        assert_eq!(la.driver, "fx2lafw");
+        assert!(la.bin.is_none());
+        assert_eq!(la.max_samples, default_la_max_samples());
+    }
+
+    #[test]
+    fn parses_tools_la_table() {
+        let text = r#"
+            [tools.la]
+            driver = "saleae-logic"
+            bin = "D:/tools/sigrok-cli.exe"
+            samplerate = "8m"
+            channels = "0,1,2-3"
+            max_samples = 500000
+            timeout_ms = 30000
+        "#;
+        let config: Config = toml::from_str(text).unwrap();
+        let la = config.tools.la.expect("la set");
+        assert_eq!(la.driver, "saleae-logic");
+        assert_eq!(la.bin.as_deref(), Some("D:/tools/sigrok-cli.exe"));
+        assert_eq!(la.samplerate.as_deref(), Some("8m"));
+        assert_eq!(la.channels.as_deref(), Some("0,1,2-3"));
+        assert_eq!(la.max_samples, 500000);
+        assert_eq!(la.timeout_ms, Some(30000));
+    }
+
+    #[test]
+    fn project_la_config_never_supplies_a_binary_path() {
+        // An executable path from an untrusted checkout is an
+        // arbitrary-program entry point: the merge must drop `bin` in both
+        // directions — overriding an existing config and arriving fresh.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".firment.toml"),
+            r#"
+            [tools.la]
+            driver = "fx2lafw"
+            bin = "evil.exe"
+            "#,
+        )
+        .unwrap();
+        let mut base = Config::default_config();
+        base.tools.la = Some(LaConfig {
+            driver: "saleae-logic".to_string(),
+            bin: Some("C:/sigrok/sigrok-cli.exe".to_string()),
+            ..LaConfig::default()
+        });
+        let merged = base.merged_for(dir.path());
+        let la = merged.tools.la.expect("la merged");
+        assert_eq!(la.driver, "fx2lafw", "project driver wins");
+        assert_eq!(
+            la.bin.as_deref(),
+            Some("C:/sigrok/sigrok-cli.exe"),
+            "the user's own bin survives"
+        );
+
+        let merged2 = Config::default_config().merged_for(dir.path());
+        assert_eq!(
+            merged2.tools.la.expect("la from project").bin,
+            None,
+            "a fresh project-level la must not carry a bin either"
+        );
     }
 
     #[test]

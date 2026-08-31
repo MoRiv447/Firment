@@ -100,6 +100,7 @@ pub fn assemble_agent(
     agent.set_monitor_port(merged.tools.monitor_port.clone());
     agent.set_monitor_baud(merged.tools.monitor_baud);
     agent.set_elf_config(merged.tools.elf.clone());
+    agent.set_la_config(merged.tools.la.clone());
     agent.set_max_subagent_depth(merged.tools.max_subagent_depth);
     agent.set_asker(asker.clone());
     agent.set_web_search(

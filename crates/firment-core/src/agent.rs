@@ -1,5 +1,5 @@
 use crate::cancel::Cancellable;
-use crate::config::{CompactionStrategy, ElfConfig};
+use crate::config::{CompactionStrategy, ElfConfig, LaConfig};
 use crate::journal::{EditJournal, Ledger};
 use crate::provider::{Provider, ProviderError, ProviderEvent};
 use crate::session::{SessionStore, SessionSummary};
@@ -211,6 +211,8 @@ pub struct Agent {
     /// harness seeds a baseline and auto-runs `elf_analyze` before a finished
     /// turn is accepted; diffs above the thresholds block completion.
     elf_config: Option<ElfConfig>,
+    /// Logic-analyzer defaults for the `la` tool from `[tools.la]`.
+    la_config: Option<LaConfig>,
     /// True once the auto elf gate has run for the current edit batch; reset
     /// whenever a new mutation lands. Independent of `mutations_since_verify`
     /// so the gate still runs after the model verifies via the verify tool.
@@ -281,6 +283,7 @@ impl Agent {
             web_search_api_key: None,
             session_dir: None,
             elf_config: None,
+            la_config: None,
             elf_gate_done: false,
             elf_gate_dirty: false,
             elf_gate_required: false,
@@ -497,6 +500,12 @@ impl Agent {
     /// finished turn is accepted, blocking when thresholds are exceeded.
     pub fn set_elf_config(&mut self, config: Option<ElfConfig>) {
         self.elf_config = config;
+    }
+
+    /// Set the `[tools] la` logic-analyzer defaults; the `la` tool reads
+    /// them through the per-turn `ToolContext`.
+    pub fn set_la_config(&mut self, config: Option<LaConfig>) {
+        self.la_config = config;
     }
 
     /// At turn start, refresh the ELF baseline so edits are diffed against the
@@ -874,6 +883,7 @@ impl Agent {
             cancel: self.cancel.clone(),
             device_log_dir: self.device_log_dir.clone(),
             providers: self.provider_endpoints.clone(),
+            la: self.la_config.clone(),
         };
 
         self.seed_elf_baseline(&ctx).await;

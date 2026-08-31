@@ -1829,30 +1829,21 @@ async fn run_elf_step(
     // reuse the ElfAnalyze tool directly (bypass permission, call run)
     let tool = crate::tools::elf_analyze::ElfAnalyze;
     let args = json!({"file": file});
-    // Build a minimal child context that inherits session_dir for baseline caching
+    // Build a child context that inherits everything except the interactive
+    // and self-referential parts: permission is replaced with auto-approve
+    // (the suite approval already covered this step), and subagent/asker/web
+    // are stripped. Struct-update on a clone so the next ToolContext field
+    // does not silently miss the inheritance (the old full literal meant a
+    // new field was a compile error HERE, easy to fix wrong under time
+    // pressure).
     let child_ctx = ToolContext {
-        cwd: ctx.cwd.clone(),
         permission: std::sync::Arc::new(firment_core::AutoApprove::everything()),
-        allow_dangerous: ctx.allow_dangerous,
-        journal: ctx.journal.clone(),
-        verify_command: ctx.verify_command.clone(),
-        allowed_roots: ctx.allowed_roots.clone(),
-        symbols_backend: ctx.symbols_backend.clone(),
-        build_command: ctx.build_command.clone(),
-        default_chip: ctx.default_chip.clone(),
-        monitor_port: ctx.monitor_port.clone(),
-        monitor_baud: ctx.monitor_baud,
         subagent: None,
-        subagent_depth: ctx.subagent_depth,
-        max_subagent_depth: ctx.max_subagent_depth,
         asker: None,
         web_search_provider: None,
         web_search_api_key: None,
-        session_dir: ctx.session_dir.clone(),
-        ledger_path: ctx.ledger_path.clone(),
-        device_log_dir: ctx.device_log_dir.clone(),
         providers: Vec::new(),
-        cancel: ctx.cancel.clone(),
+        ..ctx.clone()
     };
     match tool.run(args, &child_ctx).await {
         Ok(out) => Ok(out.text),
