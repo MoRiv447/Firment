@@ -250,8 +250,11 @@ mod tests {
             .unwrap_err();
         assert!(err.message.contains("[NotAllowed]"), "got: {}", err.message);
 
-        // Allowed prefix passes the gate (fails later only if no broker is
-        // configured on the test machine — assert the gate, not the wire).
+        // Allowed prefix passes the gate. What happens AFTER the gate is
+        // this machine's business: no broker configured ([NoBroker]), or a
+        // broker configured but unreachable/refusing (a dead SBC on the
+        // developer's network) — both prove the gate let the command
+        // through. Only [NotAllowed] here would mean the whitelist broke.
         let result = DeviceCmd
             .run(
                 json!({"node": "s3-node-1", "command": "rgb:on"}),
@@ -259,8 +262,12 @@ mod tests {
             )
             .await;
         match result {
-            Ok(_) => { /* broker present on this machine */ }
-            Err(e) => assert!(e.message.contains("[NoBroker]"), "got: {}", e.message),
+            Ok(_) => { /* broker present and accepted the publish */ }
+            Err(e) => assert!(
+                !e.message.contains("[NotAllowed]"),
+                "the allowlist gate must not reject an allowed prefix, got: {}",
+                e.message
+            ),
         }
     }
 }
