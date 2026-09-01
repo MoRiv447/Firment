@@ -938,8 +938,10 @@ impl Tool for Observe {
         }
 
         if args.get("save").and_then(|s| s.as_bool()).unwrap_or(false) {
-            let dest = save_copy(ctx, &resolved, "").map_err(ToolError::new)?;
-            push_saved(&mut text, &[dest]);
+            match save_copy(ctx, &resolved, "") {
+                Ok(dest) => push_saved(&mut text, &[dest]),
+                Err(e) => text.push_str(&format!("\n  save failed: {e}")),
+            }
         }
 
         Ok(ToolOutput {
@@ -1037,21 +1039,33 @@ fn push_saved(text: &mut String, dests: &[std::path::PathBuf]) {
 /// mode=motion / mode=blink: copy every frame of the measured sequence when
 /// `save` is set. The index tag keeps burst frames that share a file name
 /// (different directories) from overwriting each other.
+///
+/// Archiving is a SIDE EFFECT of a measurement that already succeeded: a
+/// disk-full or permission error appends a `save failed` warning line but
+/// never discards the verdict (and, in HIL, the `[HIL_EXPECT]` marker that
+/// follows) — losing the conclusion because the copy failed is the worse
+/// failure.
 fn save_sequence(
     args: &Value,
     ctx: &ToolContext,
     text: &mut String,
     sources: &[std::path::PathBuf],
-) -> Result<(), ToolError> {
+) {
     if !args.get("save").and_then(|s| s.as_bool()).unwrap_or(false) {
-        return Ok(());
+        return;
     }
     let mut dests = Vec::with_capacity(sources.len());
     for (i, src) in sources.iter().enumerate() {
-        dests.push(save_copy(ctx, src, &format!("-{i}")).map_err(ToolError::new)?);
+        match save_copy(ctx, src, &format!("-{i}")) {
+            Ok(dest) => dests.push(dest),
+            Err(e) => {
+                push_saved(text, &dests);
+                text.push_str(&format!("\n  save failed: {e}"));
+                return;
+            }
+        }
     }
     push_saved(text, &dests);
-    Ok(())
 }
 
 fn run_motion(args: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
@@ -1099,7 +1113,7 @@ fn run_motion(args: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> 
         frames[0].height(),
         paths_len
     ));
-    save_sequence(args, ctx, &mut text, &sources)?;
+    save_sequence(args, ctx, &mut text, &sources);
     text.push_str(CAMERA_CAVEAT);
 
     Ok(ToolOutput {
@@ -1169,7 +1183,7 @@ fn run_blink(args: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         frames[0].height(),
         frames.len()
     ));
-    save_sequence(args, ctx, &mut text, &sources)?;
+    save_sequence(args, ctx, &mut text, &sources);
     text.push_str(CAMERA_CAVEAT);
 
     Ok(ToolOutput {
@@ -1249,11 +1263,19 @@ fn run_diff(args: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
     ));
     if args.get("save").and_then(|s| s.as_bool()).unwrap_or(false) {
         // Both frames, tagged: the pair is only meaningful together, and
-        // before/after often share a file name across directories.
-        let dests = [
-            save_copy(ctx, &before_src, "-before").map_err(ToolError::new)?,
-            save_copy(ctx, &after_src, "-after").map_err(ToolError::new)?,
-        ];
+        // before/after often share a file name across directories. A failed
+        // copy warns but does not discard the diff verdict.
+        let mut dests = Vec::new();
+        for (src, tag) in [(&before_src, "-before"), (&after_src, "-after")] {
+            match save_copy(ctx, src, tag) {
+                Ok(dest) => dests.push(dest),
+                Err(e) => {
+                    push_saved(&mut text, &dests);
+                    text.push_str(&format!("\n  save failed: {e}"));
+                    break;
+                }
+            }
+        }
         push_saved(&mut text, &dests);
     }
     text.push_str(CAMERA_CAVEAT);
@@ -1795,6 +1817,32 @@ mod tests {
             "got: {}",
             err.message
         );
+    }
+
+    #[tokio::test]
+    async fn save_failure_keeps_the_verdict() {
+        // Archiving is a side effect: a disk error must not discard the
+        // measurement. Force save_copy to fail by planting a FILE where the
+        // observe dir would be created.
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".firment")).unwrap();
+        std::fs::write(dir.path().join(".firment/observe"), b"not a dir").unwrap();
+        frame_with_block(10, 10, 8, 240)
+            .save(dir.path().join("m1.png"))
+            .unwrap();
+        frame_with_block(30, 30, 8, 240)
+            .save(dir.path().join("m2.png"))
+            .unwrap();
+        let out = Observe
+            .run(
+                json!({"mode": "motion", "paths": ["m1.png", "m2.png"], "save": true}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap()
+            .text;
+        assert!(out.contains("moving:"), "verdict survives: {out}");
+        assert!(out.contains("save failed"), "failure is reported: {out}");
     }
 
     #[test]

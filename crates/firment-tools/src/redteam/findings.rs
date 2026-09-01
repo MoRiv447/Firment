@@ -66,10 +66,9 @@ impl Finding {
     /// passes a real fs check; tests pass a closure).
     pub fn finalize(&mut self, evidence_exists: impl Fn(&str) -> bool) {
         let verified = !self.evidence.is_empty()
-            && self
-                .evidence
-                .iter()
-                .all(|e| is_safe_relative_path(e) && evidence_exists(e));
+            && self.evidence.iter().all(|e| {
+                is_safe_relative_path(evidence_path(e)) && evidence_exists(evidence_path(e))
+            });
         if verified {
             self.confidence = "HIGH".to_string();
         } else {
@@ -97,17 +96,18 @@ impl Finding {
         let observed = self.observed.clone();
         let evidence_ok = !self.evidence.is_empty()
             && self.evidence.iter().all(|e| {
-                if !is_safe_relative_path(e) {
+                let rel = evidence_path(e);
+                if !is_safe_relative_path(rel) {
                     return false;
                 }
-                let name = Path::new(e)
+                let name = Path::new(rel)
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 if name == "report.md" || name == "findings.jsonl" {
                     return false; // the run's own outputs are not evidence
                 }
-                let path = dir.join(e);
+                let path = dir.join(rel);
                 // join of a relative path cannot escape, but double-check.
                 path.is_file()
                     && path.starts_with(dir)
@@ -152,6 +152,13 @@ fn is_safe_relative_path(e: &str) -> bool {
                 Component::Prefix(_) | Component::RootDir | Component::ParentDir
             )
         })
+}
+
+/// Strip a `#Lline` (or `#anything`) suffix from an evidence reference so the
+/// path check and fs read target the file, not the line anchor. The anchor
+/// is kept in the report for the human; it is not part of the path.
+fn evidence_path(e: &str) -> &str {
+    e.split('#').next().unwrap_or(e)
 }
 
 /// Lowercase hex of a payload, for the report and the reproducer.
@@ -293,6 +300,16 @@ mod tests {
     fn hex_encoding_is_lowercase_and_padded() {
         assert_eq!(hex_encode(&[0x00, 0x0f, 0xff]), "000fff");
         assert_eq!(hex_encode(&[]), "");
+    }
+
+    #[test]
+    fn evidence_line_anchor_is_stripped_for_the_path_check() {
+        // `capture-F-001.log#L12` references a line, but the file path is
+        // what must exist — the #L suffix must not break verification.
+        let mut f = finding();
+        f.evidence = vec!["capture-F-001.log#L12".to_string()];
+        f.finalize(|e| e == "capture-F-001.log");
+        assert_eq!(f.confidence, "HIGH", "got: {f:?}");
     }
 
     #[test]

@@ -1199,16 +1199,16 @@ impl Tool for Redteam {
         // Headless live runs need an explicit --live: an unattended attack
         // loop with nobody to review the approval is how boards get bricked
         // in CI. Interactive sessions gate on the approval popup instead.
+        // This is an Err, not an Ok: a CI script that ran `firm redteam`
+        // expecting an attack must get a non-zero exit when none happened —
+        // a green "success" here would be a false pass.
         let live = args.get("live").and_then(|v| v.as_bool()).unwrap_or(false);
         if !live && ctx.asker.is_none() {
             let text = dry_run_plan(label, &suite).map_err(ToolError::new)?;
-            return Ok(ToolOutput {
-                text: format!(
-                    "[redteam] headless live run refused — pass live=true (CLI: --live) to \
-                     attack hardware without an interactive approver. Corpus rehearsal \
-                     instead:\n{text}"
-                ),
-            });
+            return Err(ToolError::new(format!(
+                "[redteam] headless live run refused — pass live=true (CLI: --live) to attack \
+                 hardware without an interactive approver. Corpus rehearsal instead:\n{text}"
+            )));
         }
         let mut outcome = run_suite_with(label, &suite, ctx, &LiveExecutor)
             .await
@@ -1846,14 +1846,14 @@ strategies = ["oversize"]
 "#,
         )
         .unwrap();
-        // asker: None → headless; live not set → must rehearse, not attack.
-        let out = Redteam
+        // asker: None → headless; live not set → must refuse (Err, so the
+        // CLI exits non-zero) and still show the corpus rehearsal.
+        let err = Redteam
             .run(json!({"suite": "s"}), &ctx(dir.path()))
             .await
-            .unwrap()
-            .text;
-        assert!(out.contains("refused"), "got: {out}");
-        assert!(out.contains("[dry-run]"), "got: {out}");
+            .unwrap_err();
+        assert!(err.message.contains("refused"), "got: {}", err.message);
+        assert!(err.message.contains("[dry-run]"), "got: {}", err.message);
     }
 
     #[test]

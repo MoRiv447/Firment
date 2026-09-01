@@ -67,6 +67,10 @@ pub(crate) struct HilStep {
     roi: Option<[u32; 4]>,
     #[serde(default)]
     threshold: Option<u8>,
+    // observe motion/diff: per-pixel luma change that counts as "moved"
+    // (same knob as the observe tool; default 16).
+    #[serde(default)]
+    pixel_threshold: Option<u8>,
     #[serde(default)]
     expect_lit: Option<bool>,
     #[serde(default)]
@@ -157,7 +161,7 @@ impl Tool for Hil {
             "type": "object",
             "properties": {
                 "suite": {"type": "string", "description": "Suite name defined in .firment/hil.toml"},
-                "steps": {"type": "array", "description": "Inline steps [{kind, file, elf, chip, probe, port, baud, clk_hz, timeout_ms, duration_ms, expect_contains, expect_regex, expect_count, mode, roi, threshold, expect_lit, save, paths, after, interval_ms, expect_blinking, expect_blink_hz, expect_motion, expect_diff, driver, channels, samplerate, samples, capture, channel, decoder, decoder_opts, expect_frequency_hz, expect_duty, expect_edges, expect_decoded}] — kinds: build/flash/run/monitor/trace/observe/la/elf_analyze/delay; flash/run/elf auto-infer .pio/build/*/firmware.elf when elf omitted; observe uses mode=brightness|motion|blink|diff with file/paths/after, roi [x,y,w,h], threshold, interval_ms (blink), save, and asserts via expect_lit/expect_motion/expect_diff/expect_blinking/expect_blink_hz; la captures via driver/channels/samplerate + samples|duration_ms (or asserts a stored capture= id) and checks expect_frequency_hz/expect_duty/expect_edges/expect_decoded (channel= selects the line, decoder/decoder_opts for decoded text)"},
+                "steps": {"type": "array", "description": "Inline steps [{kind, file, elf, chip, probe, port, baud, clk_hz, timeout_ms, duration_ms, expect_contains, expect_regex, expect_count, mode, roi, threshold, pixel_threshold, expect_lit, save, paths, after, interval_ms, expect_blinking, expect_blink_hz, expect_motion, expect_diff, driver, channels, samplerate, samples, capture, channel, decoder, decoder_opts, expect_frequency_hz, expect_duty, expect_edges, expect_decoded}] — kinds: build/flash/run/monitor/trace/observe/la/elf_analyze/delay; flash/run/elf auto-infer .pio/build/*/firmware.elf when elf omitted; observe uses mode=brightness|motion|blink|diff with file/paths/after, roi [x,y,w,h], threshold, interval_ms (blink), save, and asserts via expect_lit/expect_motion/expect_diff/expect_blinking/expect_blink_hz; la captures via driver/channels/samplerate + samples|duration_ms (or asserts a stored capture= id) and checks expect_frequency_hz/expect_duty/expect_edges/expect_decoded (channel= selects the line, decoder/decoder_opts for decoded text)"},
                 "chip": {"type": "string", "description": "Override chip for flash/run/trace steps"},
                 "port": {"type": "string", "description": "Override serial port for monitor steps; 'auto' picks first detected port"},
                 "probe": {"type": "string", "description": "Override probe id"},
@@ -1348,6 +1352,17 @@ fn validate_observe_roi(
     Ok(Some(crate::tools::observe::Rect { x, y, w, h }))
 }
 
+/// Copy one measured frame into `.firment/observe/` and append the result to
+/// the step output. Archiving is a side effect of a measurement that already
+/// succeeded: a failed copy warns but never discards the verdict or the
+/// `[HIL_EXPECT]` marker that follows.
+fn hil_save(ctx: &ToolContext, src: &std::path::Path, tag: &str, out: &mut String) {
+    match crate::tools::observe::save_copy(ctx, src, tag) {
+        Ok(dest) => out.push_str(&format!("\n  saved: {}", dest.display())),
+        Err(e) => out.push_str(&format!("\n  save failed: {e}")),
+    }
+}
+
 /// brightness: is the target lit, and how bright. The only still-frame mode;
 /// the verdict is asserted via expect_lit.
 async fn run_observe_brightness(step: &HilStep, ctx: &ToolContext) -> Result<String, String> {
@@ -1391,12 +1406,7 @@ async fn run_observe_brightness(step: &HilStep, ctx: &ToolContext) -> Result<Str
         ));
     }
     if step.save == Some(true) {
-        let dest = crate::tools::observe::save_copy(ctx, &resolved, "")?;
-        out.push_str(&format!(
-            "
-  saved: {}",
-            dest.display()
-        ));
+        hil_save(ctx, &resolved, "", &mut out);
     }
     if let Some(want) = step.expect_lit {
         let marker = if b.lit == want { "PASS" } else { "FAIL" };
@@ -1428,7 +1438,8 @@ fn run_observe_motion(step: &HilStep, ctx: &ToolContext) -> Result<String, Strin
     let m = crate::tools::observe::analyze_motion(
         &frames,
         roi,
-        crate::tools::observe::MOTION_PIXEL_THRESHOLD,
+        step.pixel_threshold
+            .unwrap_or(crate::tools::observe::MOTION_PIXEL_THRESHOLD),
     )
     .map_err(|e| format!("[InvalidInput] {e}"))?;
     let mut out = format!(
@@ -1446,12 +1457,7 @@ fn run_observe_motion(step: &HilStep, ctx: &ToolContext) -> Result<String, Strin
     );
     if step.save == Some(true) {
         for (i, src) in sources.iter().enumerate() {
-            let dest = crate::tools::observe::save_copy(ctx, src, &format!("-{i}"))?;
-            out.push_str(&format!(
-                "
-  saved: {}",
-                dest.display()
-            ));
+            hil_save(ctx, src, &format!("-{i}"), &mut out);
         }
     }
     if let Some(want) = step.expect_motion {
@@ -1544,12 +1550,7 @@ fn run_observe_blink(step: &HilStep, ctx: &ToolContext) -> Result<String, String
     }
     if step.save == Some(true) {
         for (i, src) in sources.iter().enumerate() {
-            let dest = crate::tools::observe::save_copy(ctx, src, &format!("-{i}"))?;
-            out.push_str(&format!(
-                "
-  saved: {}",
-                dest.display()
-            ));
+            hil_save(ctx, src, &format!("-{i}"), &mut out);
         }
     }
     if let Some(want) = step.expect_blinking {
@@ -1614,7 +1615,8 @@ fn run_observe_diff(step: &HilStep, ctx: &ToolContext) -> Result<String, String>
         &before,
         &after_frame,
         roi,
-        crate::tools::observe::MOTION_PIXEL_THRESHOLD,
+        step.pixel_threshold
+            .unwrap_or(crate::tools::observe::MOTION_PIXEL_THRESHOLD),
     )
     .map_err(|e| format!("[InvalidInput] {e}"))?;
     let mut out = format!(
@@ -1638,12 +1640,7 @@ fn run_observe_diff(step: &HilStep, ctx: &ToolContext) -> Result<String, String>
     }
     if step.save == Some(true) {
         for (src, tag) in [(&before_src, "-before"), (&after_src, "-after")] {
-            let dest = crate::tools::observe::save_copy(ctx, src, tag)?;
-            out.push_str(&format!(
-                "
-  saved: {}",
-                dest.display()
-            ));
+            hil_save(ctx, src, tag, &mut out);
         }
     }
     if let Some(want) = step.expect_diff {

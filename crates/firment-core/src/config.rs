@@ -597,8 +597,18 @@ impl Config {
                     // from project build/verify commands above.
                     existing.samplerate = la.samplerate.clone();
                     existing.channels = la.channels.clone();
-                    existing.max_samples = la.max_samples;
-                    existing.timeout_ms = la.timeout_ms;
+                    // Caps are TIGHTEN-only (like elf.strict): a checkout may
+                    // lower the disk/time ceilings, never raise them —
+                    // otherwise `max_samples = 999999999999` in a cloned repo
+                    // turns one approved capture into a disk DoS.
+                    existing.max_samples = existing.max_samples.min(la.max_samples);
+                    existing.max_time_ms = existing.max_time_ms.min(la.max_time_ms);
+                    existing.timeout_ms = match (existing.timeout_ms, la.timeout_ms) {
+                        (Some(u), Some(p)) => Some(u.min(p)),
+                        (Some(u), None) => Some(u),
+                        (None, Some(p)) => Some(p),
+                        (None, None) => None,
+                    };
                 }
                 None => {
                     let mut v = la.clone();
@@ -1143,6 +1153,54 @@ mod tests {
             None,
             "a fresh project-level la must not carry a bin either"
         );
+    }
+
+    #[test]
+    fn project_la_caps_are_tighten_only() {
+        // A checkout may LOWER the disk/time ceilings, never raise them —
+        // otherwise max_samples = 999999999999 in a cloned repo turns one
+        // approved capture into a disk DoS.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".firment.toml"),
+            r#"
+            [tools.la]
+            driver = "fx2lafw"
+            max_samples = 999999999999
+            max_time_ms = 999999999
+            "#,
+        )
+        .unwrap();
+        let mut base = Config::default_config();
+        base.tools.la = Some(LaConfig {
+            driver: "saleae-logic".to_string(),
+            max_samples: 1_000_000,
+            max_time_ms: 30_000,
+            ..LaConfig::default()
+        });
+        let merged = base.merged_for(dir.path());
+        let la = merged.tools.la.expect("la merged");
+        assert_eq!(
+            la.max_samples, 1_000_000,
+            "user cap holds against a looser project"
+        );
+        assert_eq!(la.max_time_ms, 30_000, "user time cap holds");
+
+        // A TIGHTER project value is honoured.
+        std::fs::write(
+            dir.path().join(".firment.toml"),
+            r#"
+            [tools.la]
+            driver = "fx2lafw"
+            max_samples = 500
+            max_time_ms = 1000
+            "#,
+        )
+        .unwrap();
+        let merged = base.merged_for(dir.path());
+        let la = merged.tools.la.expect("la merged");
+        assert_eq!(la.max_samples, 500, "a tighter project cap wins");
+        assert_eq!(la.max_time_ms, 1000);
     }
 
     #[test]
