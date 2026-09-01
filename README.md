@@ -12,9 +12,9 @@
   <img src="docs/screenshots/cli.png" alt="Firment TUI: ask_user dialog + tool call stack + status bar with git branch, thinking level and Esc×2 interrupt hint" width="900">
 </p>
 
-**Firment is an AI engineering agent for firmware and embedded development.** Named after *firmament* — the sky above every embedded engineer — with the second **a** dropped to fuse *firmware + agent*. It takes a natural-language requirement and drives the whole loop from the same conversation: write code, build with the real toolchain, flash over the debug probe, monitor serial output, analyze the ELF, and debug the target on-chip when it misbehaves.
+**Firment is an AI engineering agent for firmware and embedded development.** Named after *firmament* — the sky above every embedded engineer — with the second **a** dropped to fuse *firmware + agent*. It takes a natural-language requirement and drives the whole loop from the same conversation: write code, build with the real toolchain, flash over the debug probe, monitor serial output, analyze the ELF, debug the target on-chip when it misbehaves, observe its physical behavior through photos and logic-analyzer waveforms, and — on request — red-team the firmware it just wrote.
 
-The kernel is a Rust coding agent with an embedded-first toolchain. A firmware change is not "done" when the model prints code — it is done when it compiles, lands on the target, runs, and the observed output matches what was asked for.
+The kernel is a Rust coding agent with an embedded-first toolchain. A firmware change is not "done" when the model prints code — it is done when it compiles, lands on the target, runs, and the observed output matches what was asked for; at the top of the evidence ladder, "observed" means a photo shows the LED lit or a logic-analyzer capture measures the waveform, never the model's say-so.
 
 **One repo, three surfaces (monorepo):**
 

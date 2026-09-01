@@ -1,7 +1,5 @@
 # Changelog
 
-## Unreleased
-
 ## v0.8.0 (2026-08-31) — logic analyzer + red team
 
 - **`la` — logic analyzer integration**. Capture, measurement and protocol
