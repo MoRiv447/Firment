@@ -16,8 +16,8 @@
 use super::util::{resolve_within, run_argv, truncate};
 use crate::la_cmd::{
     self, CaptureRequest, build_capture_argv, build_decode_argv, build_export_binary_argv,
-    build_info_argv, count_channels, drivers_argv, parse_pd_annotations, parse_sigrok_version,
-    samplerate_hz, sanitize_channels, sanitize_driver, version_argv,
+    build_info_argv, build_session_show_argv, count_channels, drivers_argv, parse_pd_annotations,
+    parse_sigrok_version, samplerate_hz, sanitize_channels, sanitize_driver, version_argv,
 };
 use crate::la_measure::{
     EdgeKind, count_edges, estimate_bitrate, measure_duty, measure_frequency, measure_pulse_widths,
@@ -164,6 +164,7 @@ fn exec_timeout(cfg: &LaConfig, time_ms: Option<u64>) -> u64 {
 /// the metadata the analysers need. Shared with the HIL `la` step so the
 /// assertion logic reads exactly what `la measure` reads.
 pub(crate) struct LaCapture {
+    pub id: String,
     pub channel_count: usize,
     pub samplerate_hz: Option<f64>,
     pub waves: Vec<Vec<u8>>,
@@ -171,18 +172,57 @@ pub(crate) struct LaCapture {
 
 pub(crate) fn load_capture_waves(ctx: &ToolContext, arg: &str) -> Result<LaCapture, String> {
     let (stem, meta) = resolve_capture(ctx, arg).map_err(|e| e.message)?;
+    if !meta.has_binary {
+        return Err(format!(
+            "capture {} has no raw-bit sidecar (export failed at capture time) — measure is \
+             unavailable; decode still works",
+            meta.id
+        ));
+    }
     let bytes = std::fs::read(stem.with_extension("bin")).map_err(|_| {
         format!(
             "capture {} has no raw-bit sidecar (export failed at capture time)",
             meta.id
         )
     })?;
+    // Size sanity: a half-written export must not be measured as if it were
+    // the whole capture — truncated waveforms fabricate confident garbage.
+    if let Some(n) = meta.samples {
+        let expected = n as usize * meta.channel_count.div_ceil(8);
+        if bytes.len() != expected {
+            return Err(format!(
+                "[Io] capture {} bitstream is {} bytes, expected {expected} for {} samples × {} \
+                 channels — the export is truncated; re-capture",
+                meta.id,
+                bytes.len(),
+                n,
+                meta.channel_count
+            ));
+        }
+    }
     let waves = la_cmd::unpack_bitstream(&bytes, meta.channel_count)?;
     Ok(LaCapture {
+        id: meta.id,
         channel_count: meta.channel_count,
         samplerate_hz: meta.samplerate_hz,
         waves,
     })
+}
+
+/// `sigrok-cli -L` prints FIVE sections (hardware drivers, input formats,
+/// output formats, transform modules, protocol decoders). Matching a driver
+/// name against the whole blob would report `uart` (a decoder) or `srzip`
+/// (a format) as a supported driver — only the first section counts.
+fn drivers_section(text: &str) -> &str {
+    let start = match text.find("Supported hardware drivers:") {
+        Some(i) => i + "Supported hardware drivers:".len(),
+        None => return "",
+    };
+    let rest = &text[start..];
+    match rest.find("\nSupported ") {
+        Some(end) => &rest[..end],
+        None => rest,
+    }
 }
 
 impl La {
@@ -241,7 +281,7 @@ impl La {
             ),
         };
         if let Some(want) = want {
-            let listed = drv_text.lines().any(|l| {
+            let listed = drivers_section(&drv_text).lines().any(|l| {
                 l.split(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_')
                     .any(|tok| tok == want)
             });
@@ -258,8 +298,11 @@ impl La {
                 "\n  no driver configured — set [tools.la] driver=... or pass driver explicitly",
             );
         }
-        let n_drivers = drv_text.lines().filter(|l| !l.trim().is_empty()).count();
-        text.push_str(&format!("\n  {n_drivers} driver lines reported"));
+        let n_drivers = drivers_section(&drv_text)
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.starts_with("Supported"))
+            .count();
+        text.push_str(&format!("\n  {n_drivers} hardware driver lines reported"));
         Ok(ToolOutput {
             text: truncate(&text, 32_000),
         })
@@ -320,7 +363,7 @@ impl La {
         let channel_count = count_channels(channels).ok_or_else(|| {
             ToolError::new(format!(
                 "[InvalidInput] channels '{channels}' is not a parsable sigrok spec \
-                 (e.g. \"0,1,2-3\")"
+                 (e.g. \"D0,D1\" or \"0,1,2-3\")"
             ))
         })?;
         if let Some(n) = samples
@@ -330,6 +373,15 @@ impl La {
                 "[InvalidInput] samples {n} exceeds the configured cap max_samples = {} \
                  ([tools.la]) — shorten the window or raise the cap deliberately",
                 cfg.max_samples
+            )));
+        }
+        if let Some(t) = time_ms
+            && t > cfg.max_time_ms
+        {
+            return Err(ToolError::new(format!(
+                "[InvalidInput] time_ms {t} exceeds the configured cap max_time_ms = {} \
+                 ([tools.la]) — a one-hour window belongs in PulseView, not an agent turn",
+                cfg.max_time_ms
             )));
         }
         let req = CaptureRequest {
@@ -353,19 +405,69 @@ impl La {
         let cli_bin = cfg.bin.as_deref().unwrap_or("sigrok-cli");
         let timeout = exec_timeout(cfg, time_ms);
 
-        let (text, code) = self
+        let (text, code) = match self
             .backend
             .exec(cli_bin, &argv, &ctx.cwd, timeout, Some(ctx.cancel.clone()))
             .await
-            .map_err(|e| ToolError::new(la_cmd::sigrok_err_hint(&e)))?;
+        {
+            Ok(pair) => pair,
+            Err(e) => {
+                // A spawn/timeout failure can still leave a half-written .sr
+                // behind — sweep it so list_captures never sees a ghost.
+                let _ = std::fs::remove_file(&sr_path);
+                return Err(ToolError::new(la_cmd::sigrok_err_hint(&e)));
+            }
+        };
         if code != Some(0) {
             let _ = std::fs::remove_file(&sr_path);
             return Err(ToolError::new(la_cmd::sigrok_err_hint(&text)));
         }
 
+        // Read the session's REAL channel count and samplerate back from
+        // sigrok itself: the device snaps a requested rate to the nearest
+        // supported one (fx2lafw knows only 6/12/24/48 MHz), and measuring
+        // against the REQUESTED value would bias every frequency.
+        let mut actual_channels = channel_count;
+        let mut actual_hz = samplerate.and_then(samplerate_hz);
+        let mut readback_note = String::new();
+        match self
+            .backend
+            .exec(
+                cli_bin,
+                &build_session_show_argv(&sr_path),
+                &ctx.cwd,
+                timeout,
+                Some(ctx.cancel.clone()),
+            )
+            .await
+        {
+            Ok((show_text, Some(0))) => {
+                let info = la_cmd::parse_session_show(&show_text);
+                if let Some(n) = info.channels {
+                    actual_channels = n;
+                }
+                if let Some(hz) = info.samplerate_hz {
+                    if Some(hz) != actual_hz {
+                        readback_note = format!(
+                            "\n  note: device samplerate is {hz:.0} Hz (requested {})",
+                            samplerate.unwrap_or("default")
+                        );
+                    }
+                    actual_hz = Some(hz);
+                }
+            }
+            _ => {
+                readback_note =
+                    "\n  note: session readback failed — channel count and samplerate are the \
+                     requested values, frequencies may be biased if the device snapped the rate"
+                        .to_string();
+            }
+        }
+
         // Export the stored session to raw bits for the measurement layer.
         // A failure here is not fatal: the .sr is still valid for decode and
-        // for the user's PulseView.
+        // for the user's PulseView — but a half-written .bin IS fatal for
+        // measure (truncated waveforms are worse than none), so it is swept.
         let export_argv = build_export_binary_argv(&sr_path, &bin_path);
         let has_binary = matches!(
             self.backend
@@ -379,14 +481,17 @@ impl La {
                 .await,
             Ok((_, Some(0)))
         );
+        if !has_binary {
+            let _ = std::fs::remove_file(&bin_path);
+        }
 
         let meta = CaptureMeta {
             id: id.clone(),
             driver: driver.to_string(),
             channels: channels.to_string(),
-            channel_count,
+            channel_count: actual_channels,
             samplerate: samplerate.map(|s| s.to_string()),
-            samplerate_hz: samplerate.and_then(samplerate_hz),
+            samplerate_hz: actual_hz,
             samples,
             time_ms,
             created_unix: now.as_secs(),
@@ -405,9 +510,11 @@ impl La {
             (None, None) => unreachable!("argv builder required a bound"),
         };
         let mut text = format!(
-            "[la] captured {id}\n  driver: {driver}  channels: {channels} ({channel_count})  \
+            "[la] captured {id}\n  driver: {driver}  channels: {channels} ({actual_channels})  \
              samplerate: {}  window: {bound}\n  session: {}\n",
-            samplerate.unwrap_or("(device default)"),
+            actual_hz
+                .map(|h| format!("{h:.0} Hz"))
+                .unwrap_or_else(|| "(device default)".to_string()),
             sr_path.display(),
         );
         if has_binary {
@@ -418,6 +525,7 @@ impl La {
                  action=decode still works\n",
             );
         }
+        text.push_str(&readback_note);
         text.push_str(&format!(
             "  next: la measure capture={id} channel=0 what=frequency|duty|edges|pulse_widths|bitrate \
              · la decode capture={id} decoder=uart opts={{\"rx\":\"0\",\"baudrate\":\"115200\"}}"
@@ -437,22 +545,17 @@ impl La {
             .and_then(|v| v.as_str())
             .unwrap_or("frequency");
         let channel = args.get("channel").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-        let (stem, meta) = resolve_capture(ctx, capture)?;
-        if channel >= meta.channel_count {
+        // Shared loader: has_binary + size sanity + unpack in one place, so
+        // `la measure` and the HIL `la` step read exactly the same bytes.
+        let cap = load_capture_waves(ctx, capture).map_err(ToolError::new)?;
+        if channel >= cap.channel_count {
             return Err(ToolError::new(format!(
                 "[InvalidInput] channel {channel} out of range — capture has {} channel(s)",
-                meta.channel_count
+                cap.channel_count
             )));
         }
-        let bytes = std::fs::read(stem.with_extension("bin")).map_err(|_| {
-            ToolError::new(
-                "[Io] this capture has no raw-bit sidecar (export failed at capture time) — \
-                 measure is unavailable; decode still works",
-            )
-        })?;
-        let waves = la_cmd::unpack_bitstream(&bytes, meta.channel_count).map_err(ToolError::new)?;
-        let wave = &waves[channel];
-        let sr = meta.samplerate_hz;
+        let wave = &cap.waves[channel];
+        let sr = cap.samplerate_hz;
         let need_hz = |what: &str| -> Result<f64, ToolError> {
             sr.ok_or_else(|| {
                 ToolError::new(format!(
@@ -463,7 +566,7 @@ impl La {
         };
         let mut text = format!(
             "[la] measure capture={} channel={channel} ({what})\n  samples: {}\n",
-            meta.id,
+            cap.id,
             wave.len()
         );
         match what {
@@ -680,7 +783,7 @@ impl Tool for La {
                     "description": "detect: probe the sigrok-cli install. info: device capabilities. capture: acquire a bounded window. measure: frequency/duty/edges/pulse_widths/bitrate on a stored capture. decode: run a sigrok protocol decoder on a stored capture. list_captures: what is on disk."
                 },
                 "driver": {"type": "string", "description": "capture/info/detect: sigrok driver name (falls back to [tools.la] driver)."},
-                "channels": {"type": "string", "description": "capture: sigrok channel spec, e.g. \"0,1,2-3\" or \"0=SCLK,1=MOSI\" (falls back to [tools.la] channels). Required for measure-capable captures."},
+                "channels": {"type": "string", "description": "capture: sigrok channel spec — names as the driver reports them (fx2lafw/demo: \"D0,D1\", ranges like \"D0-D7\"), optionally labelled \"D0=SCLK,D1=MOSI\" (falls back to [tools.la] channels). Required for measure-capable captures."},
                 "samplerate": {"type": "string", "description": "capture: sigrok samplerate token, e.g. \"8m\" (8 MHz). Without it frequency/pulse/bitrate measures cannot run."},
                 "samples": {"type": "integer", "minimum": 1, "description": "capture: sample count to acquire (bounded by [tools.la] max_samples)."},
                 "time_ms": {"type": "integer", "minimum": 1, "description": "capture: wall-clock window in ms — the other way to bound an acquisition."},
@@ -821,10 +924,17 @@ impl CaptureBackend for FakeBackend {
             return Ok(("sigrok-cli 0.7.2\n".to_string(), Some(0)));
         }
         if joined.contains("-L") {
-            return Ok(("fx2lafw\nsaleae-logic\nuart\n".to_string(), Some(0)));
+            // Realistic five-section -L layout: the driver check must not
+            // mistake a protocol decoder for a hardware driver.
+            return Ok((
+                "Supported hardware drivers:\n  fx2lafw - FTDI 2-channel logic analyzer\n  \
+                 saleae-logic - Saleae Logic\n\nSupported protocol decoders:\n  uart - UART\n"
+                    .to_string(),
+                Some(0),
+            ));
         }
         if joined.contains("--show") {
-            return Ok(("samplerate list: 1m 8m\n".to_string(), Some(0)));
+            return Ok(("Channels: 2\nSamplerate: 8000000\n".to_string(), Some(0)));
         }
         if joined.contains("-P") {
             return Ok((self.decode_out.clone(), Some(0)));
@@ -1073,6 +1183,58 @@ mod tests {
         assert!(
             la.approval(&json!({"action": "decode", "capture": "x", "decoder": "uart"}))
                 .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn measure_refuses_truncated_or_missing_sidecar() {
+        let dir = tempdir().unwrap();
+        let ctx = ctx_with(dir.path(), Some(cfg()));
+        // A meta claiming 10 samples with a 4-byte sidecar: half-written
+        // export must NOT be measured as if complete.
+        let la_dir = dir.path().join(".firment/la");
+        std::fs::create_dir_all(&la_dir).unwrap();
+        std::fs::write(la_dir.join("t1.bin"), BITS).unwrap();
+        std::fs::write(la_dir.join("t1.sr"), b"stub").unwrap();
+        std::fs::write(
+            la_dir.join("t1.meta.json"),
+            json!({"id":"t1","driver":"demo","channels":"0,1","channel_count":2,
+                   "samplerate":"8m","samplerate_hz":8000000.0,"samples":10,
+                   "time_ms":null,"created_unix":0,"has_binary":true})
+            .to_string(),
+        )
+        .unwrap();
+        let err = La::default()
+            .run(
+                json!({"action": "measure", "capture": "t1", "what": "edges"}),
+                &ctx,
+            )
+            .await
+            .unwrap_err();
+        assert!(err.message.contains("truncated"), "got: {}", err.message);
+
+        // has_binary = false → measure refuses even if a stale .bin exists.
+        std::fs::write(
+            la_dir.join("t2.meta.json"),
+            json!({"id":"t2","driver":"demo","channels":"0,1","channel_count":2,
+                   "samplerate":"8m","samplerate_hz":8000000.0,"samples":4,
+                   "time_ms":null,"created_unix":0,"has_binary":false})
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(la_dir.join("t2.bin"), BITS).unwrap();
+        std::fs::write(la_dir.join("t2.sr"), b"stub").unwrap();
+        let err = La::default()
+            .run(
+                json!({"action": "measure", "capture": "t2", "what": "edges"}),
+                &ctx,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.message.contains("no raw-bit sidecar"),
+            "got: {}",
+            err.message
         );
     }
 

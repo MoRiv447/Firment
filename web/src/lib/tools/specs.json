@@ -476,7 +476,7 @@
           "type": "integer"
         },
         "channels": {
-          "description": "capture: sigrok channel spec, e.g. \"0,1,2-3\" or \"0=SCLK,1=MOSI\" (falls back to [tools.la] channels). Required for measure-capable captures.",
+          "description": "capture: sigrok channel spec — names as the driver reports them (fx2lafw/demo: \"D0,D1\", ranges like \"D0-D7\"), optionally labelled \"D0=SCLK,D1=MOSI\" (falls back to [tools.la] channels). Required for measure-capable captures.",
           "type": "string"
         },
         "decoder": {

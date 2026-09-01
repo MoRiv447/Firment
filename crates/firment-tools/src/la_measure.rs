@@ -66,14 +66,36 @@ pub struct Frequency {
 /// territory: the verdict is reported, but at LOW confidence.
 const MIN_SAMPLES_PER_PERIOD: f64 = 4.0;
 
-/// Measure the repetition rate of a periodic wave. Needs at least TWO
-/// rising edges — one edge is a transition, not a period (the observe
+/// The edge set a period is measured from: rising edges normally, falling
+/// edges as fallback. A square wave that STARTS high (`11110000…`) has one
+/// rising edge per two periods — refusing it because "rising < 2" would
+/// throw away a perfectly periodic wave. Either edge family spaced evenly
+/// still defines the period.
+fn period_edges(wave: &Wave) -> (Vec<usize>, &'static str) {
+    let rising = rising_indices(wave);
+    if rising.len() >= 2 {
+        return (rising, "rising");
+    }
+    let falling: Vec<usize> = wave
+        .windows(2)
+        .enumerate()
+        .filter(|(_, p)| p[0] != 0 && p[1] == 0)
+        .map(|(i, _)| i + 1)
+        .collect();
+    if falling.len() >= 2 {
+        return (falling, "falling");
+    }
+    (rising, "rising")
+}
+
+/// Measure the repetition rate of a periodic wave. Needs at least TWO edges
+/// of one family — one edge is a transition, not a period (the observe
 /// blink rule). Returns `None` when no period can be claimed.
 pub fn measure_frequency(wave: &Wave, samplerate_hz: f64) -> Option<Frequency> {
     if samplerate_hz <= 0.0 {
         return None;
     }
-    let edges = rising_indices(wave);
+    let (edges, family) = period_edges(wave);
     let n = edges.len();
     if n < 2 {
         return None;
@@ -100,7 +122,7 @@ pub fn measure_frequency(wave: &Wave, samplerate_hz: f64) -> Option<Frequency> {
              oversampling the range is all this wave can honestly support"
         )
     } else {
-        format!("{n} rising edges, {period:.1} samples per period")
+        format!("{n} {family} edges, {period:.1} samples per period")
     };
     Some(Frequency {
         hz,
@@ -122,11 +144,11 @@ pub struct Duty {
 }
 
 /// Measure duty cycle over the COMPLETE periods between the first and last
-/// rising edge — a trailing partial period would skew the fraction. The
-/// fraction is dimensionless, so no time base is needed; the confidence
-/// still cares about samples per period.
+/// edge of the chosen family — a trailing partial period would skew the
+/// fraction. The fraction is dimensionless, so no time base is needed; the
+/// confidence still cares about samples per period.
 pub fn measure_duty(wave: &Wave) -> Option<Duty> {
-    let edges = rising_indices(wave);
+    let (edges, _) = period_edges(wave);
     let n = edges.len();
     if n < 2 {
         return None;
@@ -167,9 +189,11 @@ pub struct PulseWidths {
     pub note: String,
 }
 
-/// Widths of the high runs. A shortest pulse under
-/// [`MIN_SAMPLES_PER_PERIOD`] samples is at the edge of what the sample
-/// rate can resolve, so the min is reported at LOW confidence.
+/// Widths of the high runs. A run still open at the window edge is TRUNCATED
+/// by the capture, not real — counting it would report a false maximum. A
+/// shortest pulse under [`MIN_SAMPLES_PER_PERIOD`] samples is at the edge of
+/// what the sample rate can resolve, so the min is reported at LOW
+/// confidence.
 pub fn measure_pulse_widths(wave: &Wave, samplerate_hz: f64) -> Option<PulseWidths> {
     if samplerate_hz <= 0.0 {
         return None;
@@ -184,9 +208,7 @@ pub fn measure_pulse_widths(wave: &Wave, samplerate_hz: f64) -> Option<PulseWidt
             run = 0;
         }
     }
-    if run > 0 {
-        pulses.push(run);
-    }
+    // `run > 0` here means the wave ended mid-pulse: truncated, discarded.
     if pulses.is_empty() {
         return None;
     }
@@ -294,6 +316,17 @@ mod tests {
             measure_frequency(&w, 1e6).is_none(),
             "a single power-on edge must not yield a frequency"
         );
+    }
+
+    #[test]
+    fn leading_high_square_measures_via_falling_edges() {
+        // 11110000 11110000: exactly ONE rising edge (index 8) but two
+        // falling edges — refusing it for "rising < 2" would throw away a
+        // perfectly periodic wave.
+        let w = [1u8, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0];
+        let f = measure_frequency(&w, 8e6).expect("falling edges define the period");
+        assert!((f.hz - 1e6).abs() < 1.0, "got {}", f.hz);
+        assert!(f.note.contains("falling"), "got: {}", f.note);
     }
 
     #[test]

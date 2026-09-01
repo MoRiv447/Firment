@@ -29,11 +29,30 @@ pub struct CaptureRequest {
     pub time_ms: Option<u64>,
 }
 
-/// Validate a driver/decoder token: plain command-token characters only,
-/// no leading dash (it would read as a flag). Reuses the same rules as
-/// chip/probe ids.
+/// Validate a driver token, optionally with sigrok's inline config after a
+/// colon: `fx2lafw`, `demo`, `demo:logic-channels=8`. The name part is a
+/// plain command token (no leading dash); the config part may carry
+/// `key=value` pairs — the `=` is what `token_arg` alone would reject, and
+/// without it the hardware-free `demo` driver (and CI) is unreachable.
 pub fn sanitize_driver(value: &str) -> Result<String, String> {
-    crate::tools::util::token_arg(value, "driver")
+    match value.split_once(':') {
+        Some((driver, config)) => {
+            crate::tools::util::token_arg(driver, "driver")?;
+            if config.is_empty()
+                || !config.bytes().all(|b| {
+                    b.is_ascii_alphanumeric()
+                        || matches!(b, b'-' | b'_' | b'.' | b'/' | b'=' | b',' | b';')
+                })
+            {
+                return Err(format!(
+                    "[InvalidInput] driver inline config '{config}' after ':' must be \
+                     key=value pairs (letters, digits and - _ . / = , ;)"
+                ));
+            }
+            Ok(value.to_string())
+        }
+        None => crate::tools::util::token_arg(value, "driver"),
+    }
 }
 
 /// Validate a sigrok channel spec: letters, digits, `,` `-` `=` (ranges and
@@ -105,23 +124,40 @@ pub fn samplerate_hz(token: &str) -> Option<f64> {
 }
 
 /// Number of channels a sigrok channel spec selects: `0,1,2-3` -> 4,
-/// `0=SCLK,1=MOSI` -> 2. `None` on malformed input (the unpack layer needs
-/// an exact count; guessing one would mis-decode every sample).
+/// `D0,D1` -> 2, `0=SCLK,1=MOSI` -> 2. `None` on malformed input (the
+/// unpack layer needs an exact count; guessing one would mis-decode every
+/// sample).
+///
+/// sigrok-cli matches channels BY NAME — and the mainstream drivers name
+/// them `D0..D7` (fx2lafw, demo), not `0..7`. So a non-numeric item is a
+/// named channel and counts as one; only ranges (`2-5`) require numbers,
+/// and — like sigrok's own parser — a range must be strict (`lo < hi`).
 pub fn count_channels(spec: &str) -> Option<usize> {
     let mut total = 0usize;
     for item in spec.split(',') {
         let item = item.split('=').next()?.trim();
-        if item.contains('-') {
-            let mut ends = item.splitn(2, '-');
-            let lo: usize = ends.next()?.parse().ok()?;
-            let hi: usize = ends.next()?.parse().ok()?;
-            if hi < lo {
+        if item.is_empty() {
+            return None;
+        }
+        if let Some((lo, hi)) = item.split_once('-') {
+            let lo: usize = lo.trim().parse().ok()?;
+            let hi: usize = hi.trim().parse().ok()?;
+            if hi <= lo {
                 return None;
             }
-            total += hi - lo + 1;
+            // checked all the way: `0-18446744073709551615` would overflow
+            // even the width of the range itself.
+            total = total.checked_add(hi.checked_sub(lo)?.checked_add(1)?)?;
+        } else if item.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+            // numeric index or named channel — either way, one line
+            total = total.checked_add(1)?;
         } else {
-            item.parse::<usize>().ok()?;
-            total += 1;
+            return None;
+        }
+        // Beyond this the bitstream unpacking is implausible anyway; also
+        // caps `0-18446744073709551615` style overflow attempts.
+        if total > 512 {
+            return None;
         }
     }
     if total == 0 { None } else { Some(total) }
@@ -318,14 +354,37 @@ pub struct PdFrame {
     pub text: String,
 }
 
+/// Strip sigrok's optional sample-range prefix: with an elevated loglevel
+/// annotation lines arrive as `1000-1008 uart: 0x55`.
+fn strip_sample_prefix(line: &str) -> &str {
+    let Some(sp) = line.find(' ') else {
+        return line;
+    };
+    let head = &line[..sp];
+    match head.split_once('-') {
+        Some((a, b))
+            if !a.is_empty()
+                && !b.is_empty()
+                && a.bytes().all(|c| c.is_ascii_digit())
+                && b.bytes().all(|c| c.is_ascii_digit()) =>
+        {
+            &line[sp + 1..]
+        }
+        _ => line,
+    }
+}
+
 /// Parse sigrok-cli's annotation output (`-P …` prints `decoder: payload`
-/// lines to stdout). Unknown shapes are skipped, not fatal: progress noise
-/// and future decoder output formats must not break a capture that decoded
-/// fine.
+/// lines to stdout). Unknown shapes are skipped, not fatal — but libsigrok
+/// LOG lines (`sr: …`, `sigrok-cli: …`) are filtered explicitly: they share
+/// the `word: text` shape and would otherwise masquerade as decoded frames.
 pub fn parse_pd_annotations(stdout: &str) -> Vec<PdFrame> {
     let mut frames = Vec::new();
     for line in stdout.lines() {
-        let line = line.trim_end_matches('\r');
+        let line = strip_sample_prefix(line.trim_end_matches('\r').trim_start());
+        if line.starts_with("sr:") || line.starts_with("sigrok-cli") {
+            continue;
+        }
         let Some((decoder, text)) = line.split_once(": ") else {
             continue;
         };
@@ -347,6 +406,59 @@ pub fn parse_pd_annotations(stdout: &str) -> Vec<PdFrame> {
         });
     }
     frames
+}
+
+/// Build the argv that inspects a stored session: `-i <capture.sr> --show`.
+/// sigrok-cli reports the session's REAL channel count and samplerate here —
+/// the device may have snapped the requested rate to the nearest supported
+/// one, and measuring against the requested value would bias every
+/// frequency.
+pub fn build_session_show_argv(capture_sr: &Path) -> Vec<String> {
+    vec![
+        "-i".to_string(),
+        capture_sr.display().to_string(),
+        "--show".to_string(),
+    ]
+}
+
+/// What `--show` revealed about a stored session.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SessionInfo {
+    pub channels: Option<usize>,
+    pub samplerate_hz: Option<f64>,
+}
+
+/// Lenient parse of `sigrok-cli -i … --show` output: the first integer
+/// after `Channels:` and after `Samplerate`. Anything unrecognized yields
+/// `None` — the caller falls back to the requested values and says so.
+pub fn parse_session_show(text: &str) -> SessionInfo {
+    let mut info = SessionInfo::default();
+    for line in text.lines() {
+        let lower = line.to_ascii_lowercase();
+        if info.channels.is_none()
+            && let Some(pos) = lower.find("channels:")
+        {
+            let rest = line[pos + "channels:".len()..].trim_start();
+            let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            info.channels = num.parse().ok().filter(|n: &usize| *n > 0);
+        }
+        if info.samplerate_hz.is_none()
+            && let Some(pos) = lower.find("samplerate")
+        {
+            let rest = &line[pos..];
+            let run: String = rest
+                .chars()
+                .skip_while(|c| !c.is_ascii_digit())
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
+            if let Ok(v) = run.parse::<f64>()
+                && v > 0.0
+            {
+                info.samplerate_hz = Some(v);
+            }
+        }
+    }
+    info
 }
 
 /// Map a raw sigrok-cli invocation failure to an actionable message. The
@@ -462,11 +574,22 @@ mod tests {
         assert_eq!(count_channels("0=SCLK,1=MOSI"), Some(2));
         assert_eq!(count_channels("0-7"), Some(8));
         assert_eq!(count_channels("3"), Some(1));
+        // sigrok-cli matches channels BY NAME and the mainstream drivers
+        // name them D0..D7 — named items must count, not be refused.
+        assert_eq!(count_channels("D0,D1"), Some(2));
+        assert_eq!(
+            count_channels("D0-D7"),
+            None,
+            "ranges are numeric-only in sigrok"
+        );
         // Malformed specs must NOT guess a count — a wrong count mis-decodes
         // every sample downstream.
         assert_eq!(count_channels("5-2"), None);
-        assert_eq!(count_channels("a,b"), None);
+        assert_eq!(count_channels("3-3"), None, "sigrok ranges are strict");
         assert_eq!(count_channels(""), None);
+        assert_eq!(count_channels("a,b"), Some(2), "named channels are legal");
+        // Overflow attempt: the range width alone would wrap a usize.
+        assert_eq!(count_channels("0-18446744073709551615"), None);
     }
 
     #[test]
@@ -569,12 +692,54 @@ mod tests {
 
     #[test]
     fn annotations_parse_leniently() {
-        let stdout = "uart: TX: (0x55)\nuart: RX: (0xAA)\nnot an annotation line\n\
+        // Default sigrok-cli output has no TX/RX words — just `decoder: payload`.
+        let stdout = "uart: 0x55\nuart: 0xAA\nnot an annotation line\n\
                       12345: bogus decoder name\n";
         let frames = parse_pd_annotations(stdout);
         assert_eq!(frames.len(), 2, "got {frames:?}");
         assert_eq!(frames[0].decoder, "uart");
-        assert_eq!(frames[0].text, "TX: (0x55)");
+        assert_eq!(frames[0].text, "0x55");
+    }
+
+    #[test]
+    fn annotations_strip_sample_prefix_and_filter_log_noise() {
+        // Elevated loglevel prefixes annotation lines with the sample range…
+        let stdout = "1000-1008 uart: 0x55\n";
+        let frames = parse_pd_annotations(stdout);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].decoder, "uart");
+        assert_eq!(frames[0].text, "0x55");
+        // …and libsigrok log lines share the `word: text` shape — they must
+        // not masquerade as decoded frames.
+        let noisy = "sr: uart: some internal log\nsigrok-cli: starting session\nuart: 0x41\n";
+        let frames = parse_pd_annotations(noisy);
+        assert_eq!(frames.len(), 1, "got {frames:?}");
+        assert_eq!(frames[0].text, "0x41");
+    }
+
+    #[test]
+    fn driver_inline_config_is_allowed_after_a_colon() {
+        // demo:logic-channels=8 is the hardware-free CI path; plain token_arg
+        // would reject the '='.
+        assert_eq!(
+            sanitize_driver("demo:logic-channels=8").unwrap(),
+            "demo:logic-channels=8"
+        );
+        assert_eq!(sanitize_driver("fx2lafw").unwrap(), "fx2lafw");
+        assert!(sanitize_driver("demo:").is_err(), "empty config");
+        assert!(sanitize_driver("demo:logic-channels=$(x)").is_err());
+        assert!(sanitize_driver("--evil").is_err());
+    }
+
+    #[test]
+    fn session_show_reads_back_channels_and_samplerate() {
+        let info = parse_session_show("Channels: 8\nSamplerate: 12000000 Hz\nLogic unitsize: 1\n");
+        assert_eq!(info.channels, Some(8));
+        assert_eq!(info.samplerate_hz, Some(12e6));
+        // Garbage yields None fields — the caller falls back and says so.
+        let info = parse_session_show("sigrok-cli 0.7.2\n");
+        assert_eq!(info.channels, None);
+        assert_eq!(info.samplerate_hz, None);
     }
 
     #[test]

@@ -159,7 +159,7 @@ timeout_ms = 180000
 [[suite.uart-clock.steps]]
 # Capture 400k samples of channel 0 at 8 MHz and assert the PWM on it.
 kind = "la"
-channels = "0,1"
+channels = "D0,D1"
 samplerate = "8m"
 samples = 400000
 channel = 0
@@ -170,7 +170,7 @@ expect_duty = 0.5                 # ±10 percentage points
 # Decode the UART line from a stored capture (or capture again): the text
 # sigrok's decoder puts on the wire must contain the expected payload.
 kind = "la"
-channels = "0,1"
+channels = "D0,D1"
 samplerate = "8m"
 samples = 800000
 decoder = "uart"

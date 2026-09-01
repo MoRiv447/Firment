@@ -173,6 +173,11 @@ pub struct LaConfig {
     /// runaway acquisition (10 M samples × 8 ch ≈ 1 MB of raw bits).
     #[serde(default = "default_la_max_samples")]
     pub max_samples: u64,
+    /// Upper bound on a time-based capture window (ms). `max_samples` caps
+    /// the sample-count path; without this, `time_ms = 3600000` would hold
+    /// the analyzer (and a tool worker) for an hour.
+    #[serde(default = "default_la_max_time_ms")]
+    pub max_time_ms: u64,
     /// Outer timeout for one sigrok-cli invocation. Unset derives it from
     /// the capture window plus headroom.
     #[serde(default)]
@@ -183,6 +188,10 @@ fn default_la_max_samples() -> u64 {
     10_000_000
 }
 
+fn default_la_max_time_ms() -> u64 {
+    60_000
+}
+
 impl Default for LaConfig {
     fn default() -> Self {
         Self {
@@ -191,6 +200,7 @@ impl Default for LaConfig {
             samplerate: None,
             channels: None,
             max_samples: default_la_max_samples(),
+            max_time_ms: default_la_max_time_ms(),
             timeout_ms: None,
         }
     }
@@ -198,47 +208,88 @@ impl Default for LaConfig {
 
 /// Accept both `la = "fx2lafw"` (driver string) and
 /// `[tools.la] driver = "..." samplerate = "8m"` (table) forms.
+///
+/// Deserialized through a generic Value rather than an untagged enum: an
+/// untagged failure reports "data did not match any variant" for a table
+/// that merely forgot `driver` — the user needs to be told WHICH key is
+/// missing, not that their TOML is structurally fine.
 impl<'de> Deserialize<'de> for LaConfig {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Raw {
-            Driver(String),
-            Table {
-                driver: String,
-                #[serde(default)]
-                bin: Option<String>,
-                #[serde(default)]
-                samplerate: Option<String>,
-                #[serde(default)]
-                channels: Option<String>,
-                #[serde(default = "default_la_max_samples")]
-                max_samples: u64,
-                #[serde(default)]
-                timeout_ms: Option<u64>,
-            },
+        use serde::de::Error as _;
+        let v = serde_json::Value::deserialize(d)?;
+        let mut out = LaConfig::default();
+        match v {
+            serde_json::Value::String(driver) => {
+                out.driver = driver;
+            }
+            serde_json::Value::Object(map) => {
+                let str_field = |key: &str| -> Result<Option<String>, D::Error> {
+                    match map.get(key) {
+                        None | Some(serde_json::Value::Null) => Ok(None),
+                        Some(serde_json::Value::String(s)) => Ok(Some(s.clone())),
+                        Some(other) => Err(D::Error::custom(format!(
+                            "[tools.la] {key} must be a string, got {other}"
+                        ))),
+                    }
+                };
+                let num_field = |key: &str| -> Result<Option<u64>, D::Error> {
+                    match map.get(key) {
+                        None | Some(serde_json::Value::Null) => Ok(None),
+                        Some(serde_json::Value::Number(n)) => {
+                            n.as_u64().map(Some).ok_or_else(|| {
+                                D::Error::custom(format!(
+                                    "[tools.la] {key} must be a positive integer"
+                                ))
+                            })
+                        }
+                        Some(other) => Err(D::Error::custom(format!(
+                            "[tools.la] {key} must be an integer, got {other}"
+                        ))),
+                    }
+                };
+                out.driver = str_field("driver")?.ok_or_else(|| {
+                    D::Error::custom(
+                        "[tools.la] table form needs a driver = \"...\" key (the sigrok driver \
+                         name, e.g. \"fx2lafw\")",
+                    )
+                })?;
+                out.bin = str_field("bin")?;
+                out.samplerate = str_field("samplerate")?;
+                out.channels = str_field("channels")?;
+                if let Some(n) = num_field("max_samples")? {
+                    out.max_samples = n;
+                }
+                if let Some(n) = num_field("max_time_ms")? {
+                    out.max_time_ms = n;
+                }
+                if let Some(n) = num_field("timeout_ms")? {
+                    out.timeout_ms = Some(n);
+                }
+                for key in map.keys() {
+                    if !matches!(
+                        key.as_str(),
+                        "driver"
+                            | "bin"
+                            | "samplerate"
+                            | "channels"
+                            | "max_samples"
+                            | "max_time_ms"
+                            | "timeout_ms"
+                    ) {
+                        return Err(D::Error::custom(format!(
+                            "[tools.la] unknown key '{key}' — check the spelling (known: driver, \
+                             bin, samplerate, channels, max_samples, max_time_ms, timeout_ms)"
+                        )));
+                    }
+                }
+            }
+            other => {
+                return Err(D::Error::custom(format!(
+                    "[tools.la] must be a driver string or a table, got {other}"
+                )));
+            }
         }
-        match Raw::deserialize(d)? {
-            Raw::Driver(driver) => Ok(LaConfig {
-                driver,
-                ..LaConfig::default()
-            }),
-            Raw::Table {
-                driver,
-                bin,
-                samplerate,
-                channels,
-                max_samples,
-                timeout_ms,
-            } => Ok(LaConfig {
-                driver,
-                bin,
-                samplerate,
-                channels,
-                max_samples,
-                timeout_ms,
-            }),
-        }
+        Ok(out)
     }
 }
 
@@ -918,9 +969,10 @@ model = "deepseek-v4-flash"
 # [tools.la]
 # driver = "fx2lafw"                      # sigrok driver (fx2lafw clones, saleae-logic, demo, …)
 # bin = "sigrok-cli"                      # explicit path if not on PATH (user config only — a project .firment.toml cannot set this)
-# samplerate = "8m"                       # default sample rate token (8m = 8 MHz)
-# channels = "0,1,2-3"                    # default channel spec
+# samplerate = "8m"                       # default sample rate token (8m = 8 MHz; fx2lafw supports 6/12/24/48m)
+# channels = "D0,D1"                      # default channel spec (sigrok names channels: fx2lafw/demo use D0..D7)
 # max_samples = 10000000                  # per-capture sample cap (disk protection)
+# max_time_ms = 60000                     # per-capture time-window cap
 # timeout_ms = 60000                      # outer timeout per sigrok-cli invocation
 "#
 }
