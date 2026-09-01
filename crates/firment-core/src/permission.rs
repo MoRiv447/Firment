@@ -116,15 +116,29 @@ impl TargetLockPermission {
 #[async_trait]
 impl PermissionChecker for TargetLockPermission {
     async fn confirm(&self, tool: &str, args: &Value, reason: &str) -> Result<(), PermissionError> {
-        // The attacker must not freeze the target on a breakpoint and then
-        // "discover" a hang it manufactured: memory writes are off the
-        // table, observation is not.
-        if tool == "debug" && args.get("action").and_then(|v| v.as_str()) == Some("write") {
-            return Err(PermissionError::denied(
-                "red team target lock: debug action=write is not allowed for the campaign — \
-                 the attacker observes the firmware's behaviour, it does not poke the target \
-                 into a fake hang",
-            ));
+        // The attacker must not stop the target and then "discover" a hang it
+        // manufactured. Deliberate stops are refused outright: poking memory
+        // (`write`) and the control-flow actions that park the core
+        // (`halt`, `break`, `step`).
+        //
+        // Honest limit: ANY debug action — `forensic` and `analyze` included —
+        // opens a probe-rs session that leaves the target halted on exit, so
+        // this gate is necessary but not sufficient. The campaign prompt says
+        // the same thing: silence captured after a debug session is the
+        // attacker's own artifact, not evidence of a hang.
+        if tool == "debug"
+            && matches!(
+                args.get("action").and_then(|v| v.as_str()),
+                Some("write" | "halt" | "break" | "step")
+            )
+        {
+            let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("?");
+            return Err(PermissionError::denied(format!(
+                "red team target lock: debug action={action} is not allowed for the campaign — \
+                 the attacker observes the firmware's behaviour, it does not stop the target \
+                 into a hang it then 'discovers' (allowed: regs, mem, analyze, forensic, \
+                 backtrace, trace, continue)"
+            )));
         }
         let (key, what) = match tool {
             "monitor" => ("port", "serial port"),
@@ -241,7 +255,9 @@ mod tests {
     #[tokio::test]
     async fn non_target_tools_pass_through() {
         let (p, rec) = lock(&["COM3"]);
-        p.confirm("debug", &json!({"action": "halt"}), "r")
+        // `regs` is an observation action with no port/node argument: it must
+        // fall through to the inner checker like any other non-target tool.
+        p.confirm("debug", &json!({"action": "regs"}), "r")
             .await
             .unwrap();
         p.confirm("read_file", &json!({"path": "x"}), "r")
@@ -261,23 +277,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn debug_memory_write_is_denied_to_the_attacker() {
-        // The attacker observes; it must not poke the target into a hang it
-        // then "discovers".
-        let (p, rec) = lock(&["COM3"]);
-        let err = p
-            .confirm(
-                "debug",
-                &json!({"action": "write", "addr": "0x20000000"}),
-                "r",
-            )
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("target lock"), "got {err}");
-        assert!(rec.seen.lock().unwrap().is_empty());
+    async fn debug_stops_and_writes_are_denied_to_the_attacker() {
+        // The attacker observes; it must not stop the target into a hang it
+        // then "discovers" — neither by poking memory nor by parking the core.
+        for action in ["write", "halt", "break", "step"] {
+            let (p, rec) = lock(&["COM3"]);
+            let err = p
+                .confirm(
+                    "debug",
+                    &json!({"action": action, "addr": "0x20000000"}),
+                    "r",
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("target lock") && err.to_string().contains(action),
+                "action={action} must be refused, got {err}"
+            );
+            assert!(
+                rec.seen.lock().unwrap().is_empty(),
+                "a refused call must not reach the inner checker"
+            );
+        }
         // Observation actions still pass.
-        p.confirm("debug", &json!({"action": "analyze"}), "r")
-            .await
-            .unwrap();
+        let (p, _) = lock(&["COM3"]);
+        for action in [
+            "regs",
+            "mem",
+            "analyze",
+            "forensic",
+            "backtrace",
+            "trace",
+            "continue",
+        ] {
+            p.confirm("debug", &json!({"action": action}), "r")
+                .await
+                .unwrap_or_else(|e| panic!("action={action} must stay allowed: {e}"));
+        }
     }
 }

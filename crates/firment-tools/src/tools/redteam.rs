@@ -959,6 +959,9 @@ pub(crate) fn campaign_prompt(label: &str, suite: &RedteamSuite, corpus_note: &s
          - A finding is only real if captured output shows it — quote the exact line.\n\
          - On a suspected crash, run debug action=forensic IMMEDIATELY (the scene is ephemeral).\n\
          - Do NOT reflash or reset the target; the suite handles recovery.\n\
+         - ATTENTION: every debug action (forensic included) leaves the target HALTED. Silence \
+           you capture after touching the debugger is YOUR artifact — never report it as a \
+           hang, and say in `why` that you halted the target.\n\
          - End your reply with a fenced block (empty array is an honest answer):\n\
          ```redteam-findings\n[{{\"severity\":\"high|medium|low\",\"class\":\"crash|reboot|hang\",\
          \"payload_hex\":\"...\",\"interface\":\"uart@COM3\",\"observed\":\"exact line\",\
@@ -1901,6 +1904,12 @@ strategies = ["oversize"]
         assert!(p.contains("redteam-findings"), "got: {p}");
         assert!(p.contains("35 cases"), "got: {p}");
         assert!(p.contains("Do NOT reflash"), "got: {p}");
+        // The debugger halts the target — the prompt must say so, or the
+        // attacker reports its own silence as a hang.
+        assert!(
+            p.contains("leaves the target HALTED"),
+            "the campaign must warn that debug stops the target: {p}"
+        );
     }
 
     #[test]
