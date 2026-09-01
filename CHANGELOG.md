@@ -55,6 +55,17 @@
     corpus cases to become regressions.
   - Headless live runs require an explicit `--live`; without it the tool
     rehearses the corpus. `firm redteam` CLI; docs/redteam-example.toml.
+- **Pre-release audit hardening** (the fixes a hardware-less review could
+  catch, each pinned by a test): recovery no longer double-opens the serial
+  port the runner still holds (it would fail on every real board and discard
+  the findings); mid-run errors keep the evidence and still write the
+  reports; campaign findings must cite a real, non-self-referential file
+  that contains the quoted line; `la` matches sigrok's real channel-name
+  model (`D0,D1`) and reads the device's actual samplerate back from the
+  session; a truncated raw-bit sidecar is refused rather than measured;
+  `[tools.la]` caps are tighten-only against a project checkout; a failed
+  `save` warns instead of eating the verdict; headless `firm redteam`
+  refusal now exits non-zero.
 
 ## v0.7.3 (2026-08-31) — observation correctness pass
 
