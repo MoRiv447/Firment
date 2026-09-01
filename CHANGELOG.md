@@ -63,7 +63,11 @@
   session; a truncated raw-bit sidecar is refused rather than measured;
   `[tools.la]` caps are tighten-only against a project checkout; a failed
   `save` warns instead of eating the verdict; headless `firm redteam`
-  refusal now exits non-zero.
+  refusal now exits non-zero; the target lock denies every `debug` action
+  that parks the core (`write` / `halt` / `break` / `step`) and matches port
+  names case-insensitively, so an attacker can neither halt the target and
+  then "discover" the hang it caused itself, nor slip past the lock on a
+  `COM3` vs `com3` mismatch.
 
 ## v0.7.3 (2026-08-31) — observation correctness pass
 
