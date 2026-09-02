@@ -5,6 +5,7 @@
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![CI](https://img.shields.io/badge/CI-Rust%20%2B%20Web%20%2B%20GUI-green)](.github/workflows/ci.yml)
+[![Website](https://img.shields.io/badge/website-Firment%20official-ff5c9d)](https://moriv447.github.io/Firment-site/)
 
 **English** | [简体中文](README.zh-CN.md)
 
