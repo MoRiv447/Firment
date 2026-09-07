@@ -26,6 +26,11 @@ pub enum ProviderEvent {
     ThinkingBlock(serde_json::Value),
     ToolCall(ToolCall),
     Stop(StopReason),
+    /// Liveness heartbeat: the stream delivered another network chunk, which
+    /// is all it proves. Emitted once per chunk by the SSE parsers so a model
+    /// that is slowly generating one huge tool payload keeps the inactivity
+    /// timer armed. Never persisted, never forwarded to the UI.
+    Activity,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

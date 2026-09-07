@@ -83,6 +83,18 @@ pub fn assemble_agent(
     agent.set_allow_dangerous(allow_dangerous);
     agent.set_verify_command(merged.tools.verify_command.clone());
     agent.set_context_budget_chars(merged.context_budget_chars);
+    // Timing knobs. All three are clamped to >= 1s: a zero-duration sleep
+    // fires immediately, which would read as "provider stalled" / "tool wave
+    // expired" on every single turn.
+    agent.set_stream_timeout(std::time::Duration::from_secs(
+        merged.stream_timeout_secs.max(1),
+    ));
+    agent.set_tool_wave_timeout(std::time::Duration::from_secs(
+        merged.tool_wave_timeout_secs.max(1),
+    ));
+    agent.set_tool_cancel_grace(std::time::Duration::from_secs(
+        merged.tool_cancel_grace_secs.max(1),
+    ));
     // Device-log location for the device_log tool: the desktop MQTT link
     // writes next to config.toml.
     agent.set_device_log_dir(Some(firment_core::config::config_dir()));

@@ -37,6 +37,20 @@ pub struct Config {
     /// or empty `broker` = feature off (single-player without an SBC).
     #[serde(default)]
     pub mqtt: MqttConfig,
+    /// Provider-stream inactivity cap in seconds. Re-armed by ANY event on the
+    /// stream — including the per-chunk liveness heartbeat — so it bounds how
+    /// long the connection may stay silent, not how long one reply may take.
+    /// Raise it for providers that stream a huge tool payload slowly.
+    #[serde(default = "default_stream_timeout")]
+    pub stream_timeout_secs: u64,
+    /// Hard cap on one wave of tool executions (a `run`/`build` that never
+    /// exits). Unlike `stream_timeout_secs` this is a real deadline.
+    #[serde(default = "default_tool_wave_timeout")]
+    pub tool_wave_timeout_secs: u64,
+    /// Grace given to a timed-out tool to exit after its kill signal, before
+    /// the turn reports the wave as cancelled.
+    #[serde(default = "default_tool_cancel_grace")]
+    pub tool_cancel_grace_secs: u64,
     /// Which command-bearing tool settings came from a project-local config
     /// file. Derived by `merged_for`, never persisted — `save` would otherwise
     /// write a repo-controlled fact into the user's own config.toml.
@@ -520,6 +534,9 @@ impl Config {
             max_output_tokens: None,
             compaction_strategy: CompactionStrategy::default(),
             mqtt: MqttConfig::default(),
+            stream_timeout_secs: default_stream_timeout(),
+            tool_wave_timeout_secs: default_tool_wave_timeout(),
+            tool_cancel_grace_secs: default_tool_cancel_grace(),
             commands_from_project: CommandProvenance::default(),
         }
     }
@@ -653,6 +670,17 @@ impl Config {
         }
         if project.context_budget_chars != default_context_budget() {
             config.context_budget_chars = project.context_budget_chars;
+        }
+        // Timeout knobs: availability, not trust — a project may legitimately
+        // need a slower stream budget (it cannot grant itself any tool).
+        if project.stream_timeout_secs != default_stream_timeout() {
+            config.stream_timeout_secs = project.stream_timeout_secs;
+        }
+        if project.tool_wave_timeout_secs != default_tool_wave_timeout() {
+            config.tool_wave_timeout_secs = project.tool_wave_timeout_secs;
+        }
+        if project.tool_cancel_grace_secs != default_tool_cancel_grace() {
+            config.tool_cancel_grace_secs = project.tool_cancel_grace_secs;
         }
         config
     }
@@ -971,6 +999,9 @@ model = "deepseek-v4-flash"
 # context_budget_chars = 262144   # session context budget in chars (256k binary default); older messages are compacted past this
 # max_output_tokens = 32768       # cap on output tokens per reply (32k default; overrides provider max_tokens)
 # compaction_strategy = "summarize"   # default summarize; drop (discard old turns) / off (no auto-compaction)
+# stream_timeout_secs = 120           # provider-stream SILENCE budget: any byte from the provider re-arms it, so a slow, huge reply is fine. Raise it if your provider stalls mid-response (clamped to >= 1s)
+# tool_wave_timeout_secs = 600        # hard deadline for one wave of tool calls (a run/build that never exits)
+# tool_cancel_grace_secs = 5          # time a killed tool gets to exit before the wave reports cancelled
 
 [tools]
 # After code changes, the agent must pass verify before declaring completion; empty disables the tool
@@ -1048,6 +1079,21 @@ fn default_max_subagent_depth() -> usize {
 
 fn default_context_budget() -> usize {
     256 * 1024 // 256k chars (binary)
+}
+
+/// Provider-stream inactivity budget. Matches the constant Firment shipped
+/// before these knobs existed; the timer is re-armed by every received chunk,
+/// so this only bites on a genuinely silent connection.
+fn default_stream_timeout() -> u64 {
+    120
+}
+
+fn default_tool_wave_timeout() -> u64 {
+    600
+}
+
+fn default_tool_cancel_grace() -> u64 {
+    5
 }
 
 /// Default cap on output tokens per reply when neither the config nor the
@@ -1301,6 +1347,64 @@ mod tests {
             merged.commands_from_project,
             CommandProvenance::default(),
             "the user's own commands stay trusted"
+        );
+    }
+
+    #[test]
+    fn timeout_knobs_default_merge_and_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".firment.toml"),
+            "stream_timeout_secs = 900\n",
+        )
+        .unwrap();
+        let base = Config::default_with_provider(
+            "default",
+            ProviderConfig {
+                r#type: "openai".to_string(),
+                base_url: None,
+                api_key_env: None,
+                api_key: None,
+                model: "m".to_string(),
+                max_tokens: None,
+                temperature: None,
+            },
+        );
+        assert_eq!(
+            (
+                base.stream_timeout_secs,
+                base.tool_wave_timeout_secs,
+                base.tool_cancel_grace_secs
+            ),
+            (120, 600, 5),
+            "the knobs must default to the constants agent.rs shipped with"
+        );
+
+        // A config.toml written before these keys existed must still load.
+        let legacy: Config = toml::from_str(
+            "default_provider = \"d\"\n[providers.d]\ntype = \"openai\"\nmodel = \"m\"\n",
+        )
+        .unwrap();
+        assert_eq!(legacy.stream_timeout_secs, 120);
+
+        let merged = base.merged_for(dir.path());
+        assert_eq!(
+            merged.stream_timeout_secs, 900,
+            "a project on a slow provider must be able to widen its own budget"
+        );
+        assert_eq!(
+            merged.tool_wave_timeout_secs, 600,
+            "untouched knobs keep their default"
+        );
+
+        let text = toml::to_string_pretty(&merged).unwrap();
+        assert!(
+            text.contains("stream_timeout_secs = 900"),
+            "the knob must persist: {text}"
+        );
+        assert_eq!(
+            toml::from_str::<Config>(&text).unwrap().stream_timeout_secs,
+            900
         );
     }
 

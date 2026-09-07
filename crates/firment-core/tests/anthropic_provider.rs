@@ -50,6 +50,7 @@ async fn anthropic_stream_parses_text_and_tool_use() {
             ProviderEvent::ThinkingBlock(_) => {}
             ProviderEvent::ToolCall(call) => calls.push(call),
             ProviderEvent::Stop(reason) => stop = Some(reason),
+            ProviderEvent::Activity => {}
         }
     }
     assert_eq!(texts, vec!["Hello"]);
@@ -103,6 +104,7 @@ async fn anthropic_stream_tolerates_openrouter_trailers() {
             ProviderEvent::ThinkingBlock(_) => {}
             ProviderEvent::ToolCall(_) => panic!("no tool calls expected"),
             ProviderEvent::Stop(reason) => stop = Some(reason),
+            ProviderEvent::Activity => {}
         }
     }
     assert_eq!(texts, vec!["Hi"]);
@@ -155,6 +157,7 @@ async fn anthropic_stream_parses_thinking_blocks() {
             ProviderEvent::ThinkingBlock(b) => thinking_blocks.push(b),
             ProviderEvent::ToolCall(_) => panic!("no tool calls expected"),
             ProviderEvent::Stop(_) => {}
+            ProviderEvent::Activity => {}
         }
     }
     assert_eq!(thoughts, vec!["9.8 is larger"]);
@@ -170,4 +173,50 @@ async fn anthropic_stream_parses_thinking_blocks() {
             .is_empty(),
         "signature must be captured for round-trip"
     );
+}
+
+#[tokio::test]
+async fn unparsable_frames_still_prove_the_stream_is_alive() {
+    // `ping` produces no ProviderEvent. Before Activity existed, a stream that
+    // only ever delivered such frames bought the agent nothing at all and was
+    // declared stalled — the model was answering, just not in a shape Firment
+    // recognized. Bytes must count as liveness.
+    let server = MockServer::start().await;
+    let body = sse(&[
+        r#"{"type":"ping"}"#,
+        r#"{"type":"ping"}"#,
+        r#"{"type":"message_stop"}"#,
+    ]);
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body, "text/event-stream"))
+        .mount(&server)
+        .await;
+
+    let provider = AnthropicProvider::new(server.uri(), "test-key", "anthropic-test", None, None);
+    let request = ChatRequest {
+        model: "anthropic-test".to_string(),
+        messages: vec![ChatMessage::User {
+            content: "hi".to_string(),
+        }],
+        tools: Vec::new(),
+        max_tokens: None,
+        temperature: None,
+        thinking: None,
+    };
+    let mut stream = provider.stream(request).await.unwrap();
+    let mut heartbeats = 0;
+    let mut stop = None;
+    while let Some(event) = stream.next().await {
+        match event.unwrap() {
+            ProviderEvent::Activity => heartbeats += 1,
+            ProviderEvent::Stop(reason) => stop = Some(reason),
+            other => panic!("ping frames must not surface as {other:?}"),
+        }
+    }
+    assert!(
+        heartbeats >= 1,
+        "bytes on the wire must produce a heartbeat, got {heartbeats}"
+    );
+    assert_eq!(stop, Some(StopReason::EndTurn));
 }

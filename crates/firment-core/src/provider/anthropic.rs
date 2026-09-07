@@ -267,6 +267,13 @@ impl Provider for AnthropicProvider {
                         return;
                     }
                 };
+                // One heartbeat per network chunk, before parsing: bytes on the
+                // wire mean the provider is alive even when no complete SSE
+                // frame has arrived yet (a slow, giant tool payload streams as
+                // many chunks with few parseable deltas).
+                if !chunk.is_empty() {
+                    yield Ok(ProviderEvent::Activity);
+                }
                 for &b in chunk.iter() {
                     line_buf.push(b);
                     if b != b'\n' {

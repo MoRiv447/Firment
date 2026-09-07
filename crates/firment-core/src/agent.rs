@@ -357,7 +357,9 @@ impl Agent {
         self.cancel.clone()
     }
 
-    /// Override the provider-stream no-events cap (default `STREAM_TIMEOUT`).
+    /// Override the provider-stream silence cap (default `STREAM_TIMEOUT`):
+    /// any event on the stream re-arms it, so it bounds dead air, not the
+    /// total length of a reply.
     /// Tests use tiny values to exercise the stall/timeout paths quickly.
     pub fn set_stream_timeout(&mut self, timeout: Duration) {
         self.stream_timeout = timeout;
@@ -951,10 +953,12 @@ impl Agent {
                         .await;
                     return Ok(String::new());
                 }
-                // Hard timeout: if the provider stream never returns (dead
-                // socket, model stalled, network blackhole) we must NOT
-                // hang the whole turn — surface the failure to the UI and
-                // end the turn so the user can react / retry.
+                // Creation timeout: bounds how long we wait for the stream to
+                // produce its *first* event (dead socket, network blackhole,
+                // gateway that accepted the request and never answered). Once
+                // an event arrives, the inactivity timer below takes over.
+                // Either way we must NOT hang the whole turn — surface the
+                // failure to the UI and end the turn so the user can retry.
                 _ = tokio::time::sleep(self.stream_timeout) => {
                     let rollback_note = match rollback_journal(&journal) {
                         Some(summary) => format!(" Partial edits rolled back: {summary}"),
@@ -987,10 +991,14 @@ impl Agent {
                     cancelled = true;
                     None
                 }
-                // Mid-stream stall: the provider produced events and then went
-                // silent (dead socket, connection dropped between chunks). The
-                // outer select only bounds stream *creation*; this bounds the
-                // iteration itself so a stall can never wedge the turn.
+                // Mid-stream inactivity timer: re-armed by *any* ProviderEvent,
+                // including the payload-free `Activity` heartbeat the parsers
+                // emit for every network chunk. A model slowly streaming one
+                // huge tool-call payload produces few parsed deltas while the
+                // socket is very much alive — bytes on the wire must not read
+                // as a stall. The outer select only bounds stream *creation*;
+                // this bounds the iteration itself so a truly dead connection
+                // can never wedge the turn.
                 _ = tokio::time::sleep(self.stream_timeout) => {
                     stalled = true;
                     None
@@ -1025,6 +1033,11 @@ impl Agent {
                     }
                     ProviderEvent::ToolCall(call) => tool_calls.push(call),
                     ProviderEvent::Stop { .. } => {}
+                    // Liveness only — reaching this arm already re-armed the
+                    // inactivity timer. Not persisted, and deliberately not
+                    // forwarded: one AgentEvent per network chunk would flood
+                    // the UI during a long generation.
+                    ProviderEvent::Activity => {}
                 }
             }
 
@@ -1062,7 +1075,7 @@ impl Agent {
                 };
                 self.sink
                     .event(AgentEvent::Info(format!(
-                        "⚠ Provider stream stalled (no events for {}s); ending turn.{rollback_note}",
+                        "⚠ Provider stream stalled (no bytes for {}s); ending turn.{rollback_note}",
                         self.stream_timeout.as_secs()
                     )))
                     .await;
@@ -2278,6 +2291,65 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, AgentEvent::TurnEnd { .. })),
             "expected TurnEnd after the stall, got: {events:?}"
+        );
+    }
+
+    /// Provider that keeps the connection busy without ever producing a parsed
+    /// event between heartbeats — exactly what a model streaming one enormous
+    /// tool-call payload looks like from the agent's side.
+    struct ActivityKeepAliveProvider;
+
+    #[async_trait]
+    impl Provider for ActivityKeepAliveProvider {
+        async fn stream(&self, _request: ChatRequest) -> Result<ProviderStream, ProviderError> {
+            let stream = async_stream::stream! {
+                for _ in 0..10 {
+                    tokio::time::sleep(Duration::from_millis(60)).await;
+                    yield Ok(ProviderEvent::Activity);
+                }
+                yield Ok(ProviderEvent::Text("done".to_string()));
+                yield Ok(ProviderEvent::Stop(StopReason::EndTurn));
+            };
+            Ok(Box::pin(stream))
+        }
+
+        fn model(&self) -> &str {
+            "keepalive"
+        }
+    }
+
+    #[tokio::test]
+    async fn a_live_but_slow_stream_is_not_a_stall() {
+        // 60ms chunks against a 100ms silence budget: no individual gap is
+        // long enough to be a stall, yet the turn takes 600ms — six times the
+        // budget. Before heartbeats counted as liveness this whole turn was
+        // declared stalled and every file it had already written was rolled
+        // back, which is the failure this fix exists for.
+        let (events, task) = harness(
+            Box::new(ActivityKeepAliveProvider),
+            ToolRegistry::new(),
+            Duration::from_millis(100),
+            Duration::from_secs(600),
+        );
+        tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .expect("a live stream must run to completion")
+            .unwrap();
+        let events = events.lock().unwrap();
+        let infos: Vec<String> = events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::Info(m) => Some(m.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !infos.iter().any(|m| m.contains("stalled")),
+            "a stream that never went silent was declared stalled: {infos:?}"
+        );
+        assert!(
+            matches!(events.last(), Some(AgentEvent::TurnEnd { text }) if text == "done"),
+            "expected the turn to finish with the model's text, got: {events:?}"
         );
     }
 
