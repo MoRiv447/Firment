@@ -68,6 +68,35 @@
   names case-insensitively, so an attacker can neither halt the target and
   then "discover" the hang it caused itself, nor slip past the lock on a
   `COM3` vs `com3` mismatch.
+- **Stream and session reliability audit** (six P0 behaviours, each pinned by
+  a test):
+  - A long, slow reply is no longer mistaken for a dead connection. The 120s
+    stream cap counted *parsed events*, so a model streaming one enormous
+    tool-call payload (`input_json_delta` accumulates silently) looked
+    stalled and the turn — including every file already written — was rolled
+    back. Byte-level liveness now re-arms the timer, and the notice says
+    "no bytes" instead of "no events".
+  - `stream_timeout_secs`, `tool_wave_timeout_secs` and
+    `tool_cancel_grace_secs` are configurable (defaults unchanged:
+    120 / 600 / 5).
+  - An error frame inside a stream (`overloaded_error`, OpenRouter's
+    mid-response `error`) is reported as a failure instead of being
+    converted into a clean end of turn that presented a half answer as done.
+    A reply cut off by `max_tokens` now says so, and keeps its work.
+  - A session can no longer be poisoned by two consecutive user messages: an
+    interrupted turn persisted its prompt, so the retry sent `[user, user]`
+    and both provider APIs rejected the session with HTTP 400 — permanently,
+    since the broken transcript was already on disk. Adjacent prompts are
+    merged (nothing the user typed is lost) and already-written sessions are
+    healed when they load.
+  - `firm -p` / `--yes` no longer re-grants auto-approval to a `verify` or
+    `build` command that `config.rs` had deliberately stripped because it
+    came from an untrusted project `.firment.toml`; the user's own commands
+    keep the one-shot convenience.
+  - `/new` followed by `/clear` crashed the TUI (a stale transcript index
+    panicked inside the event loop, in raw mode); `/clear` also left the
+    terminal in raw mode when a panic happened, so a hook now restores it
+    before the panic message prints.
 
 ## v0.7.3 (2026-08-31) — observation correctness pass
 
