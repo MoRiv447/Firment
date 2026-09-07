@@ -36,6 +36,12 @@ impl WebFetch {
         let Ok(ip) = host.parse::<IpAddr>() else {
             return false;
         };
+        // `::ffff:169.254.169.254` is the metadata endpoint wearing an IPv6
+        // spelling: judge an IPv4-mapped address by the IPv4 it delivers to.
+        let ip = match ip {
+            IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, IpAddr::V4),
+            ip => ip,
+        };
         match ip {
             IpAddr::V4(v4) => {
                 let o = v4.octets();
@@ -260,6 +266,10 @@ mod tests {
             "http://[fe80::1]/",
             "http://[fc00::1]/",
             "http://user:pass@10.0.0.1/x",
+            // IPv4-mapped IPv6: the packet still goes to the IPv4 endpoint.
+            "http://[::ffff:169.254.169.254]/latest/meta-data/",
+            "http://[::ffff:10.0.0.1]/",
+            "http://[::ffff:192.168.1.1]/admin",
         ] {
             let err = WebFetch::validate_url(url).unwrap_err();
             assert!(
@@ -279,6 +289,7 @@ mod tests {
             "https://docs.rs/foo/bar",
             "http://user:pass@example.com/x",
             "https://8.8.8.8/",
+            "https://[2001:4860:4860::8888]/",
         ] {
             assert!(WebFetch::validate_url(url).is_ok(), "should allow: {url}");
         }

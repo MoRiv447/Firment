@@ -3,9 +3,10 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::io::AsyncReadExt;
-use tokio::process::Command;
+use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::process::{ChildStderr, ChildStdout, Command};
 
 pub(crate) fn resolve(cwd: &Path, path: &str) -> PathBuf {
     let p = PathBuf::from(path);
@@ -70,7 +71,22 @@ fn canonicalize_for_check(path: &Path) -> std::io::Result<PathBuf> {
     }
 }
 
+/// Upper bound for a single text file the tools read into memory. `grep` and
+/// `symbols` call [`read_text`] for EVERY file they walk, so one 4 GB log or a
+/// build artifact on the path would otherwise be slurped whole.
+pub(crate) const MAX_TEXT_FILE_BYTES: u64 = 32 * 1024 * 1024;
+
 pub(crate) fn read_text(path: &Path) -> Result<String, String> {
+    let size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    if size > MAX_TEXT_FILE_BYTES {
+        return Err(format!(
+            "{} is {} bytes, over the {}-byte text cap; narrow the search path or read \
+             it with offset/limit instead of whole",
+            path.display(),
+            size,
+            MAX_TEXT_FILE_BYTES
+        ));
+    }
     let bytes = fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     if bytes.contains(&0) {
         return Err(format!(
@@ -117,7 +133,7 @@ pub(crate) fn truncate(text: &str, max_chars: usize) -> String {
     let head = max_chars * 2 / 3;
     let tail = max_chars - head - 1; // 1 for the ellipsis
     let mut out: Vec<char> = chars[..head].to_vec();
-    out.extend("…[{} chars dropped]…".chars());
+    out.extend(format!("…[{} chars dropped]…", chars.len() - head - tail).chars());
     let tail_start = chars.len() - tail;
     out.extend(chars[tail_start..].iter());
     out.into_iter().collect()
@@ -173,6 +189,78 @@ pub(crate) fn simple_diff(path: &Path, old: &str, new: &str, max_chars: usize) -
     out
 }
 
+/// Reads a child's stdout and stderr CONCURRENTLY into buffers the caller can
+/// inspect at any time.
+///
+/// Both properties are load-bearing. Reading the pipes one after the other
+/// deadlocks: a child blocked on a full stderr pipe never closes stdout, so
+/// the stdout read never reaches EOF. Keeping the buffers shared instead of
+/// moving them into the reader task means a caller that gives up on a deadline
+/// still holds what was captured — a timed-out build's compiler errors are
+/// precisely the output the agent needs.
+pub(crate) struct PipeDrain {
+    stdout: Arc<Mutex<Vec<u8>>>,
+    stderr: Arc<Mutex<Vec<u8>>>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl PipeDrain {
+    pub(crate) fn start(stdout: ChildStdout, stderr: ChildStderr) -> Self {
+        let out: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let err: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let task = {
+            let (out_handle, err_handle) = (out.clone(), err.clone());
+            tokio::spawn(async move {
+                tokio::join!(read_into(stdout, out_handle), read_into(stderr, err_handle));
+            })
+        };
+        Self {
+            stdout: out,
+            stderr: err,
+            task,
+        }
+    }
+
+    /// Wait up to `grace` for both pipes to reach EOF, then return the bytes
+    /// captured so far and whether the deadline cut collection short.
+    pub(crate) async fn finish(self, grace: Duration) -> (Vec<u8>, Vec<u8>, bool) {
+        let mut task = self.task;
+        let timed_out = !matches!(tokio::time::timeout(grace, &mut task).await, Ok(Ok(())));
+        if timed_out {
+            // Nothing left to wait for: the caller has the bytes read so far.
+            task.abort();
+        }
+        (
+            drain_buffer(&self.stdout),
+            drain_buffer(&self.stderr),
+            timed_out,
+        )
+    }
+}
+
+async fn read_into<R: AsyncRead + Unpin>(mut reader: R, buf: Arc<Mutex<Vec<u8>>>) {
+    let mut chunk = [0u8; 16 * 1024];
+    loop {
+        match reader.read(&mut chunk).await {
+            Ok(0) => break,
+            Ok(n) => {
+                // Lock only across the copy, never across an await.
+                lock_sharing(&buf).extend_from_slice(&chunk[..n]);
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+}
+
+fn drain_buffer(buf: &Mutex<Vec<u8>>) -> Vec<u8> {
+    std::mem::take(&mut *lock_sharing(buf))
+}
+
+fn lock_sharing(buf: &Mutex<Vec<u8>>) -> std::sync::MutexGuard<'_, Vec<u8>> {
+    buf.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Run a command through the platform shell, capture output, enforce a
 /// timeout. `cancel` (the turn-level cancellation signal) stops the process
 /// tree promptly when the turn is interrupted. Returns (formatted text, exit
@@ -224,11 +312,11 @@ pub(crate) async fn run_command(
     // terminated instead of orphaned (tokio does NOT kill on drop by
     // default). The tree-kill paths below remain the thorough mechanism.
 
-    let mut stdout = child
+    let stdout = child
         .stdout
         .take()
         .ok_or_else(|| "stdout handle unavailable".to_string())?;
-    let mut stderr = child
+    let stderr = child
         .stderr
         .take()
         .ok_or_else(|| "stderr handle unavailable".to_string())?;
@@ -236,13 +324,7 @@ pub(crate) async fn run_command(
     // Drive the drains CONCURRENTLY with wait(): a child emitting more than
     // the OS pipe buffer (~64 KB per pipe) blocks on write and would never
     // exit, turning long builds into spurious timeouts with all output lost.
-    let drain = tokio::spawn(async move {
-        let mut out_buf: Vec<u8> = Vec::new();
-        let mut err_buf: Vec<u8> = Vec::new();
-        let _ = AsyncReadExt::read_to_end(&mut stdout, &mut out_buf).await;
-        let _ = AsyncReadExt::read_to_end(&mut stderr, &mut err_buf).await;
-        (out_buf, err_buf)
-    });
+    let drain = PipeDrain::start(stdout, stderr);
 
     let cancel_fut = cancel.map(|c| Box::pin(c.cancelled()));
 
@@ -307,8 +389,9 @@ pub(crate) async fn run_command(
     };
     // Collect the output with a firm deadline: after the process exited, a
     // background grandchild holding the pipe write-ends would otherwise block
-    // forever. If the deadline fires we mark truncation instead of hanging.
-    let (out_buf, err_buf, drain_timed_out) = collect_drain(drain).await;
+    // forever. If the deadline fires we keep what was captured and mark
+    // truncation instead of hanging.
+    let (out_buf, err_buf, drain_timed_out) = drain.finish(Duration::from_secs(15)).await;
     let drain_note = if drain_timed_out {
         "\n[output truncated: the process finished but output was still streaming after 15s]"
     } else {
@@ -341,19 +424,6 @@ pub(crate) async fn run_command(
         ),
         code,
     ))
-}
-
-/// Join a spawned drain task with a firm deadline. After the process exited,
-/// a background grandchild holding the pipe write-ends would otherwise block
-/// forever; if the 15 s deadline fires we return empty buffers and let the
-/// caller mark the output as truncated.
-async fn collect_drain(
-    drain: tokio::task::JoinHandle<(Vec<u8>, Vec<u8>)>,
-) -> (Vec<u8>, Vec<u8>, bool) {
-    match tokio::time::timeout(Duration::from_secs(15), drain).await {
-        Ok(Ok((out, err))) => (out, err, false),
-        _ => (Vec::new(), Vec::new(), true),
-    }
 }
 
 /// Kill the direct child plus its whole tree (timeout or cancellation) and
@@ -421,11 +491,11 @@ pub(crate) async fn run_argv(
         .kill_on_drop(true) // same drop-safety net as run_command
         .spawn()
         .map_err(|e| format!("spawn failed: {e}"))?;
-    let mut stdout = child
+    let stdout = child
         .stdout
         .take()
         .ok_or_else(|| "stdout handle unavailable".to_string())?;
-    let mut stderr = child
+    let stderr = child
         .stderr
         .take()
         .ok_or_else(|| "stderr handle unavailable".to_string())?;
@@ -433,13 +503,7 @@ pub(crate) async fn run_argv(
     // Drain CONCURRENTLY with wait(): probe-rs emits progress/log lines the
     // whole run; without a concurrent reader, output beyond the OS pipe
     // buffer blocks the child and turns real runs into spurious timeouts.
-    let drain = tokio::spawn(async move {
-        let mut out_buf: Vec<u8> = Vec::new();
-        let mut err_buf: Vec<u8> = Vec::new();
-        let _ = AsyncReadExt::read_to_end(&mut stdout, &mut out_buf).await;
-        let _ = AsyncReadExt::read_to_end(&mut stderr, &mut err_buf).await;
-        (out_buf, err_buf)
-    });
+    let drain = PipeDrain::start(stdout, stderr);
 
     let status = tokio::select! {
         status = child.wait() => status,
@@ -448,9 +512,12 @@ pub(crate) async fn run_argv(
             // zombie on Unix until this process exits.
             let _ = child.kill().await;
             let _ = child.wait().await;
-            drain.abort();
+            // Whatever the program printed before it was killed IS the
+            // diagnostic; a bare timeout message leaves the agent guessing.
+            let (out_buf, err_buf, _) = drain.finish(Duration::ZERO).await;
             return Err(format!(
-                "[Timeout] {program} timed out after {timeout_ms} ms and was killed"
+                "[Timeout] {program} timed out after {timeout_ms} ms and was killed{}",
+                captured_note(&out_buf, &err_buf)
             ));
         }
         _ = async {
@@ -462,23 +529,125 @@ pub(crate) async fn run_argv(
         } => {
             let _ = child.kill().await;
             let _ = child.wait().await;
-            drain.abort();
+            let (out_buf, err_buf, _) = drain.finish(Duration::ZERO).await;
             return Err(format!(
-                "[Cancelled] {program} was interrupted by turn cancellation"
+                "[Cancelled] {program} was interrupted by turn cancellation{}",
+                captured_note(&out_buf, &err_buf)
             ));
         }
     };
     // Post-exit collection with a firm deadline: a grandchild holding the
     // pipe write-ends would otherwise hang here forever.
-    let (out_buf, err_buf) = match tokio::time::timeout(Duration::from_secs(15), drain).await {
-        Ok(Ok(buffers)) => buffers,
-        _ => (Vec::new(), Vec::new()),
-    };
+    let (out_buf, err_buf, drain_timed_out) = drain.finish(Duration::from_secs(15)).await;
     let code = status.map_err(|e| format!("wait failed: {e}"))?.code();
 
     let stdout = String::from_utf8_lossy(&out_buf).to_string();
     let stderr = String::from_utf8_lossy(&err_buf).to_string();
-    Ok((format!("{stdout}{stderr}"), code))
+    let mut text = format!("{stdout}{stderr}");
+    if drain_timed_out {
+        text.push_str(
+            "\n[output truncated: the process finished but output was still streaming after 15s]",
+        );
+    }
+    Ok((text, code))
+}
+
+/// Append whatever a killed child had already printed to an error message.
+fn captured_note(stdout: &[u8], stderr: &[u8]) -> String {
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(stdout),
+        String::from_utf8_lossy(stderr)
+    );
+    if text.trim().is_empty() {
+        return String::new();
+    }
+    format!("; captured output:\n{}", truncate(&text, 4_000))
+}
+
+/// Run a long-lived program with an argv array, streaming its output until it
+/// exits, `timeout_ms` elapses (0 = wait forever), or the turn is cancelled.
+/// Returns (captured output, exit code, cancelled); exit code `None` means the
+/// process was killed.
+///
+/// Split out of the `run` tool so the drain/wait race is testable with any
+/// program — probe-rs itself is not installed on CI runners.
+pub(crate) async fn run_streaming(
+    program: &str,
+    args: &[std::ffi::OsString],
+    cwd: &Path,
+    timeout_ms: u64,
+    cancel: &Cancellable,
+) -> Result<(String, Option<i32>, bool), String> {
+    let mut cmd = Command::new(program);
+    cmd.args(args);
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    // kill_on_drop is the drop-safety net for outer wave cancellation; the
+    // select branches below cover the awaited paths explicitly.
+    cmd.kill_on_drop(true)
+        .current_dir(cwd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd.spawn().map_err(|e| format!("spawn failed: {e}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "stdout handle unavailable".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "stderr handle unavailable".to_string())?;
+    let drain = PipeDrain::start(stdout, stderr);
+
+    enum Outcome {
+        Status(std::io::Result<std::process::ExitStatus>),
+        TimedOut,
+        Cancelled,
+    }
+    let outcome = if timeout_ms == 0 {
+        tokio::select! {
+            status = child.wait() => Outcome::Status(status),
+            _ = cancel.cancelled() => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                Outcome::Cancelled
+            }
+        }
+    } else {
+        tokio::select! {
+            status = child.wait() => Outcome::Status(status),
+            _ = tokio::time::sleep(Duration::from_millis(timeout_ms)) => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                Outcome::TimedOut
+            }
+            _ = cancel.cancelled() => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                Outcome::Cancelled
+            }
+        }
+    };
+    let (out_buf, err_buf, drain_timed_out) = drain.finish(Duration::from_secs(15)).await;
+
+    let mut text = String::from_utf8_lossy(&out_buf).to_string();
+    text.push_str(&String::from_utf8_lossy(&err_buf));
+    if drain_timed_out {
+        text.push_str("\n[output truncated: still streaming after 15s]");
+    }
+    match outcome {
+        Outcome::Cancelled => Ok((text, None, true)),
+        Outcome::TimedOut => Ok((text, None, false)),
+        Outcome::Status(s) => {
+            let code = s.map_err(|e| format!("wait failed: {e}"))?.code();
+            Ok((text, code, false))
+        }
+    }
 }
 
 /// Map a raw probe-rs invocation error into a tagged tool error.
@@ -684,5 +853,108 @@ mod tests {
             "cancel returned too late: {:?}",
             started.elapsed()
         );
+    }
+
+    #[tokio::test]
+    async fn run_streaming_drains_both_pipes_past_the_os_buffer() {
+        let dir = tempdir().unwrap();
+        // ~4x the 64 KB pipe buffer per stream: a reader that waits for
+        // stdout EOF before touching stderr, or that only starts draining
+        // after the child exits, deadlocks right here.
+        fs::write(dir.path().join("flood.txt"), "x".repeat(256 * 1024)).unwrap();
+        let args: Vec<std::ffi::OsString> = if cfg!(windows) {
+            vec!["/C".into(), "type flood.txt & type flood.txt 1>&2".into()]
+        } else {
+            vec!["-c".into(), "cat flood.txt; cat flood.txt >&2".into()]
+        };
+        let program = if cfg!(windows) { "cmd" } else { "sh" };
+        let started = std::time::Instant::now();
+        let (text, code, cancelled) =
+            run_streaming(program, &args, dir.path(), 30_000, &Cancellable::new())
+                .await
+                .expect("child runs");
+        assert_eq!(code, Some(0), "child exited abnormally: {text}");
+        assert!(!cancelled);
+        assert_eq!(
+            text.matches('x').count(),
+            2 * 256 * 1024,
+            "both pipes must reach EOF"
+        );
+        assert!(!text.contains("output truncated"), "got: {text}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "the pipes were not drained while the child ran: {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn abandoning_a_drain_keeps_the_bytes_already_read() {
+        let dir = tempdir().unwrap();
+        let (program, args): (&str, Vec<&str>) = if cfg!(windows) {
+            (
+                "cmd",
+                vec!["/C", "echo first-line& ping -n 30 127.0.0.1 >nul"],
+            )
+        } else {
+            ("sh", vec!["-c", "echo first-line; sleep 30"])
+        };
+        let mut child = Command::new(program)
+            .args(&args)
+            .current_dir(dir.path())
+            .kill_on_drop(true)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn");
+        let stdout = child.stdout.take().expect("stdout piped");
+        let stderr = child.stderr.take().expect("stderr piped");
+        let drain = PipeDrain::start(stdout, stderr);
+        // Let the reader actually observe the first line, then give up: the
+        // child is still alive, so EOF never arrives.
+        tokio::time::sleep(Duration::from_millis(1_500)).await;
+        let (out_buf, err_buf, timed_out) = drain.finish(Duration::ZERO).await;
+        let _ = child.kill().await;
+        assert!(
+            timed_out,
+            "a live child must not look like a finished drain"
+        );
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out_buf),
+            String::from_utf8_lossy(&err_buf)
+        );
+        assert!(
+            text.contains("first-line"),
+            "bytes already read must survive the abandoned drain, got: {text}"
+        );
+    }
+
+    #[test]
+    fn truncate_reports_the_real_dropped_char_count() {
+        let out = truncate(&"z".repeat(1_000), 100);
+        assert!(
+            out.contains("901 chars dropped"),
+            "the marker must interpolate the count, got: {out}"
+        );
+        assert!(!out.contains('{'), "got: {out}");
+    }
+
+    #[test]
+    fn read_text_refuses_files_over_the_cap() {
+        let dir = tempdir().unwrap();
+        let huge = dir.path().join("huge.log");
+        // Extend to the size without writing it: read_text must not find out
+        // by running out of memory.
+        fs::File::create(&huge)
+            .unwrap()
+            .set_len(MAX_TEXT_FILE_BYTES + 1)
+            .unwrap();
+        let err = read_text(&huge).unwrap_err();
+        assert!(err.contains("text cap"), "got: {err}");
+
+        let small = dir.path().join("small.txt");
+        fs::write(&small, "hello").unwrap();
+        assert_eq!(read_text(&small).unwrap(), "hello");
     }
 }

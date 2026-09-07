@@ -160,6 +160,46 @@ fn exec_timeout(cfg: &LaConfig, time_ms: Option<u64>) -> u64 {
     cfg.timeout_ms.unwrap_or(60_000 + time_ms.unwrap_or(0))
 }
 
+/// Hard ceiling on the unpacked wave buffers `measure`/`decode` build: one
+/// byte per sample per channel. `max_samples` and `max_time_ms` bound their
+/// own axes independently, so `10M samples × 512 channels` and `60s × 48MHz`
+/// both passed every existing check while asking for gigabytes.
+pub(crate) const MAX_WAVE_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Samples a capture will produce, when that is knowable before acquiring:
+/// an explicit count, or a time window at a known samplerate. `None` means
+/// the rate is the device's default and only the exported bitstream knows.
+fn estimated_samples(samples: Option<u64>, time_ms: Option<u64>, hz: Option<f64>) -> Option<u64> {
+    if let Some(n) = samples {
+        return Some(n);
+    }
+    let (t, hz) = (time_ms?, hz?);
+    // f64 on purpose: 60_000 ms × 48 MHz overflows nothing here but the
+    // product is not an integer type's friend; saturate instead of wrapping.
+    let n = (t as f64) * hz / 1000.0;
+    Some(clamp_samples(n))
+}
+
+/// Whole samples from a float sample count, clamped into `u64`.
+fn clamp_samples(n: f64) -> u64 {
+    if !n.is_finite() {
+        return u64::MAX;
+    }
+    if n <= 0.0 {
+        return 0;
+    }
+    n.min(u64::MAX as f64) as u64
+}
+
+/// Wave-buffer cost of one capture (see `MAX_WAVE_BYTES`).
+fn wave_bytes(samples: u64, channels: usize) -> u64 {
+    samples.saturating_mul(channels as u64)
+}
+
+fn mib(bytes: u64) -> u64 {
+    bytes / (1024 * 1024)
+}
+
 /// A stored capture loaded for measurement: unpacked per-channel waves plus
 /// the metadata the analysers need. Shared with the HIL `la` step so the
 /// assertion logic reads exactly what `la measure` reads.
@@ -179,7 +219,22 @@ pub(crate) fn load_capture_waves(ctx: &ToolContext, arg: &str) -> Result<LaCaptu
             meta.id
         ));
     }
-    let bytes = std::fs::read(stem.with_extension("bin")).map_err(|_| {
+    let bin_file = stem.with_extension("bin");
+    // Cost checked before the read: unpacking needs one byte per sample per
+    // channel, i.e. 8x the packed bitstream. A capture that predates the
+    // metadata fix (samples = None) has no size sanity check at all, so this
+    // is the one bound that must hold on the bytes themselves.
+    let bin_size = std::fs::metadata(&bin_file).map(|m| m.len()).unwrap_or(0);
+    if bin_size.saturating_mul(8) > MAX_WAVE_BYTES {
+        return Err(format!(
+            "[Io] capture {} bitstream is {} bytes, which would unpack into more than {} MiB of \
+             wave buffers — re-capture with fewer samples, channels or a lower samplerate",
+            meta.id,
+            bin_size,
+            mib(MAX_WAVE_BYTES)
+        ));
+    }
+    let bytes = std::fs::read(bin_file).map_err(|_| {
         format!(
             "capture {} has no raw-bit sidecar (export failed at capture time)",
             meta.id
@@ -384,6 +439,21 @@ impl La {
                 cfg.max_time_ms
             )));
         }
+        // The product neither cap ever looked at. Skipped only when the
+        // samplerate is the device default, in which case the real count is
+        // recorded in the metadata after the export.
+        if let Some(n) = estimated_samples(samples, time_ms, samplerate.and_then(samplerate_hz)) {
+            let cost = wave_bytes(n, channel_count);
+            if cost > MAX_WAVE_BYTES {
+                return Err(ToolError::new(format!(
+                    "[InvalidInput] {n} samples × {channel_count} channels = {} MiB of wave \
+                     buffers, over the {} MiB ceiling — lower the sample count, the channel \
+                     count, or the samplerate",
+                    mib(cost),
+                    mib(MAX_WAVE_BYTES)
+                )));
+            }
+        }
         let req = CaptureRequest {
             driver: driver.to_string(),
             channels: Some(channels.to_string()),
@@ -485,6 +555,17 @@ impl La {
             let _ = std::fs::remove_file(&bin_path);
         }
 
+        // A time-based capture has no requested sample count, but the stored
+        // count is what `load_capture_waves` checks the bitstream against —
+        // leaving it None silently skipped the truncation self-check forever.
+        // The exported bits know the truth: packed bytes ÷ bytes-per-sample.
+        let stored_samples = samples.or_else(|| {
+            if !has_binary {
+                return None;
+            }
+            let bytes = std::fs::metadata(&bin_path).ok()?.len();
+            Some(bytes / (actual_channels.div_ceil(8).max(1) as u64))
+        });
         let meta = CaptureMeta {
             id: id.clone(),
             driver: driver.to_string(),
@@ -492,7 +573,7 @@ impl La {
             channel_count: actual_channels,
             samplerate: samplerate.map(|s| s.to_string()),
             samplerate_hz: actual_hz,
-            samples,
+            samples: stored_samples,
             time_ms,
             created_unix: now.as_secs(),
             has_binary,
@@ -506,7 +587,10 @@ impl La {
 
         let bound = match (samples, time_ms) {
             (Some(n), _) => format!("{n} samples"),
-            (None, Some(t)) => format!("{t} ms"),
+            (None, Some(t)) => match stored_samples {
+                Some(n) => format!("{t} ms ({n} samples)"),
+                None => format!("{t} ms"),
+            },
             (None, None) => unreachable!("argv builder required a bound"),
         };
         let mut text = format!(
@@ -1075,6 +1159,85 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.message.contains("max_samples"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn estimated_samples_needs_a_known_rate_for_time_windows() {
+        assert_eq!(estimated_samples(Some(1000), None, None), Some(1000));
+        // 500 ms at 8 MHz = 4M samples.
+        assert_eq!(
+            estimated_samples(None, Some(500), samplerate_hz("8m")),
+            Some(4_000_000)
+        );
+        // Device default rate: unknowable until the bits are on disk.
+        assert_eq!(estimated_samples(None, Some(500), None), None);
+    }
+
+    #[tokio::test]
+    async fn capture_rejects_unbounded_wave_buffers() {
+        let dir = tempdir().unwrap();
+        let mut c = cfg();
+        c.samplerate = Some("48m".to_string());
+        // 60 s is inside max_time_ms and there is no `samples` to check
+        // against max_samples — only the product bound sees 2.88G × 2 ch.
+        let err = fake_la(vec![])
+            .run(
+                json!({"action": "capture", "time_ms": 60_000}),
+                &ctx_with(dir.path(), Some(c)),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.message.contains("wave buffers") && err.message.contains("MiB"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    #[tokio::test]
+    async fn time_based_capture_records_the_real_sample_count() {
+        let dir = tempdir().unwrap();
+        let out = fake_la(BITS.to_vec())
+            .run(
+                json!({"action": "capture", "time_ms": 500}),
+                &ctx_with(dir.path(), Some(cfg())),
+            )
+            .await
+            .unwrap()
+            .text;
+        // 4 packed bytes at 2 channels (1 byte per sample) = 4 samples; the
+        // meta carries it so load_capture_waves can check for truncation.
+        assert!(out.contains("window: 500 ms (4 samples)"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn measure_refuses_a_bitstream_too_big_to_unpack() {
+        let dir = tempdir().unwrap();
+        let la = fake_la(BITS.to_vec());
+        la.run(
+            json!({"action": "capture", "samples": 4}),
+            &ctx_with(dir.path(), Some(cfg())),
+        )
+        .await
+        .unwrap();
+        let id = capture_id(dir.path());
+        let bin = dir
+            .path()
+            .join(".firment/la")
+            .join(&id)
+            .with_extension("bin");
+        // Sparse: the bound must be decided from the metadata, not by
+        // allocating the file.
+        let file = std::fs::File::create(&bin).unwrap();
+        file.set_len(MAX_WAVE_BYTES / 8 + 1).unwrap();
+        let err = la
+            .run(
+                json!({"action": "measure", "capture": id, "channel": 0, "what": "edges"}),
+                &ctx_with(dir.path(), Some(cfg())),
+            )
+            .await
+            .unwrap_err();
+        assert!(err.message.contains("wave buffers"), "got: {}", err.message);
     }
 
     #[tokio::test]

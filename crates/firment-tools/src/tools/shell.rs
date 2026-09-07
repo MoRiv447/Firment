@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 pub struct Shell;
 
@@ -137,6 +138,12 @@ pub fn dangerous_reason(command: &str) -> Option<&'static str> {
         Some("git clean (discard untracked files)")
     } else if joined.contains("git reset") && joined.contains("--hard") {
         Some("git reset --hard (discard local changes)")
+    } else if joined.contains("git restore") {
+        Some("git restore (discard local changes)")
+    } else if joined.contains("git checkout")
+        && (tokens.contains(&"--") || tokens.contains(&".") || tokens.contains(&"./"))
+    {
+        Some("git checkout -- / git checkout . (discard local changes)")
     } else if joined.contains("git push")
         && (joined.contains("--force")
             // Glued short flags (-fu, -ff) are what models actually emit.
@@ -169,6 +176,54 @@ pub fn dangerous_reason(command: &str) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// Redirect operators: `>`, `>>`, `2>`, `1>>`, `&>` — after tokenizing on
+/// `>` (and on `&` only when it glues to one), these tokens carry no path.
+fn is_redirect_operator(token: &str) -> bool {
+    !token.is_empty()
+        && token.chars().all(|c| matches!(c, '>' | '&' | '0'..='9'))
+        && token.contains('>')
+}
+
+/// Where a command sends its redirected output. Quotes are dropped first
+/// because `> "my file.log"` names one path, not two.
+fn redirect_targets(command: &str) -> Vec<String> {
+    let normalized = command.replace('>', " > ").replace(['"', '\''], " ");
+    let tokens: Vec<&str> = normalized.split_whitespace().collect();
+    let mut targets: Vec<String> = Vec::new();
+    for (i, token) in tokens.iter().enumerate() {
+        if is_redirect_operator(token)
+            && let Some(target) = tokens.get(i + 1)
+            && !is_redirect_operator(target)
+            && !target.starts_with('&')
+        {
+            targets.push((*target).to_string());
+        }
+    }
+    targets
+}
+
+/// Discard sinks that are not files at all; rejecting them would break every
+/// `2>/dev/null` in existence without protecting anything.
+const NULL_SINKS: &[&str] = &["nul", "/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"];
+
+/// First redirect target that resolves outside `cwd`. A redirect is a write
+/// the file tools would refuse: `echo x > ../../outside.log` put the shell in
+/// charge of the workspace boundary instead of the code that checks it.
+fn outside_workspace_redirect(command: &str, cwd: &Path, roots: &[PathBuf]) -> Option<String> {
+    redirect_targets(command).into_iter().find(|target| {
+        if NULL_SINKS.contains(&target.as_str()) {
+            return false;
+        }
+        match resolve_within(cwd, target, roots) {
+            // Only the explicit boundary verdict blocks; a path we could not
+            // resolve for other reasons (permissions, a syntax the shell will
+            // itself reject) stays the shell's problem.
+            Err(e) => e.contains("outside the workspace"),
+            Ok(_) => false,
+        }
+    })
 }
 
 /// Models frequently wrap the whole command in double quotes (e.g.
@@ -248,6 +303,17 @@ impl Tool for Shell {
             Some(c) => resolve_within(&ctx.cwd, c, &ctx.allowed_roots).map_err(ToolError::new)?,
             None => ctx.cwd.clone(),
         };
+        // A redirect is a write the `write_file` tool would refuse. Not
+        // gated on allow_dangerous: the workspace boundary is a permission,
+        // not a destructive-preference switch.
+        if let Some(target) = outside_workspace_redirect(&command, &cwd, &ctx.allowed_roots) {
+            return Err(ToolError::new(format!(
+                "[Permission] The shell tool may not redirect to '{target}': it resolves \
+                 outside the workspace ({}).\nWrite inside the workspace, or use write_file \
+                 for a path the user has allowed.",
+                cwd.display()
+            )));
+        }
         let timeout_ms = match args.get("timeout_ms").and_then(|t| t.as_u64()) {
             // Schema says minimum 1, but args are not schema-enforced at this
             // layer: a model-supplied 0 would select run_command's "no
@@ -270,12 +336,15 @@ impl Tool for Shell {
 
 #[cfg(test)]
 mod tests {
-    use super::{dangerous_reason, strip_outer_quotes};
+    use super::{
+        dangerous_reason, outside_workspace_redirect, redirect_targets, strip_outer_quotes,
+    };
     use crate::tools::shell::Shell;
     use firment_core::{AutoApprove, Tool, ToolContext};
     use serde_json::json;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
+    use tempfile::tempdir;
 
     #[test]
     fn strip_outer_quotes_removes_model_wrapping() {
@@ -471,6 +540,102 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.message.contains("outside the workspace"), "got: {err}");
+    }
+
+    #[test]
+    fn detects_local_change_discard_commands() {
+        for cmd in [
+            "git restore src/main.rs",
+            "git restore .",
+            "git checkout -- src/main.rs",
+            "git checkout .",
+        ] {
+            assert!(
+                dangerous_reason(cmd).is_some(),
+                "should detect dangerous: {cmd}"
+            );
+        }
+        // Branch work is not a discard of local edits.
+        for cmd in [
+            "git checkout main",
+            "git checkout -b feature",
+            "git checkout HEAD~1",
+        ] {
+            assert!(dangerous_reason(cmd).is_none(), "should allow safe: {cmd}");
+        }
+    }
+
+    #[test]
+    fn redirect_targets_ignore_fd_duplication() {
+        assert_eq!(redirect_targets("build 2>&1 > out.log"), ["out.log"]);
+        assert_eq!(redirect_targets("cat a >> b.txt"), ["b.txt"]);
+        assert_eq!(redirect_targets("run > /dev/null 2>&1"), ["/dev/null"]);
+        assert!(redirect_targets("probe-rs --version 2>&1").is_empty());
+    }
+
+    #[test]
+    fn redirect_outside_the_workspace_is_the_one_that_blocks() {
+        let dir = tempdir().unwrap();
+        let cwd = dir.path();
+        let roots: Vec<PathBuf> = Vec::new();
+        assert_eq!(
+            outside_workspace_redirect("echo x > ../../escape.log", cwd, &roots).as_deref(),
+            Some("../../escape.log")
+        );
+        assert_eq!(
+            outside_workspace_redirect("echo x > build/log.txt", cwd, &roots),
+            None
+        );
+        let null_sink = if cfg!(windows) { "nul" } else { "/dev/null" };
+        assert_eq!(
+            outside_workspace_redirect(&format!("make 2>{null_sink} && echo done"), cwd, &roots),
+            None,
+            "a discard sink is not a file the workspace owns"
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_run_refuses_redirect_outside_workspace() {
+        let dir = tempdir().unwrap();
+        let tool = Shell;
+        let ctx = ToolContext {
+            cwd: dir.path().to_path_buf(),
+            permission: Arc::new(AutoApprove::everything()),
+            // Even the destructive-preference opt-out must not carry a write
+            // outside the workspace.
+            allow_dangerous: true,
+            journal: Arc::new(Mutex::new(firment_core::EditJournal::new(PathBuf::from(
+                ".",
+            )))),
+            verify_command: None,
+            symbols_backend: None,
+            build_command: None,
+            default_chip: None,
+            monitor_port: None,
+            monitor_baud: 115_200,
+            allowed_roots: Vec::new(),
+            ..ToolContext::default()
+        };
+        let err = tool
+            .run(
+                json!({"command": "echo pwned > ../firmment-escape.log"}),
+                &ctx,
+            )
+            .await
+            .unwrap_err();
+        assert!(err.message.contains("outside the workspace"), "got: {err}");
+        assert!(
+            !dir.path()
+                .parent()
+                .is_some_and(|p| p.join("firmment-escape.log").exists()),
+            "the guard must run before the shell does"
+        );
+        let out = tool
+            .run(json!({"command": "echo hi > inside.log"}), &ctx)
+            .await
+            .expect("an in-workspace redirect stays allowed");
+        assert!(out.text.contains("exit code: 0"), "got: {}", out.text);
+        assert!(dir.path().join("inside.log").exists());
     }
 
     #[tokio::test]

@@ -1,12 +1,8 @@
-use super::util::{probe_rs_err, resolve_within, shell_quote, token_arg};
+use super::util::{probe_rs_err, resolve_within, run_streaming, shell_quote, token_arg};
 use async_trait::async_trait;
 use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
 use std::path::Path;
-use std::process::Stdio;
-use std::time::Duration;
-use tokio::io::AsyncReadExt;
-use tokio::process::Command;
 
 pub struct Run;
 
@@ -39,91 +35,12 @@ async fn run_probe_rs_run(
     timeout_ms: u64,
     cancel: &firment_core::Cancellable,
 ) -> Result<(String, Option<i32>, bool), String> {
-    let mut cmd = Command::new("probe-rs");
-    cmd.arg("run").arg("--chip").arg(chip);
+    let mut args: Vec<std::ffi::OsString> = vec!["run".into(), "--chip".into(), chip.into()];
     if let Some(probe) = probe {
-        cmd.arg("--probe").arg(probe);
+        args.extend(["--probe".into(), probe.into()]);
     }
-    // kill_on_drop is the drop-safety net for outer wave cancellation; the
-    // select branches below cover the awaited paths explicitly.
-    cmd.kill_on_drop(true)
-        .arg(file)
-        .current_dir(cwd)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-
-    let mut child = cmd.spawn().map_err(|e| format!("spawn failed: {e}"))?;
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "stdout handle unavailable".to_string())?;
-    let mut stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "stderr handle unavailable".to_string())?;
-    let mut out_buf: Vec<u8> = Vec::new();
-    let mut err_buf: Vec<u8> = Vec::new();
-    let mut drain_timed_out = false;
-    let read_streams = async {
-        drain_timed_out = tokio::time::timeout(Duration::from_secs(15), async {
-            let _ = AsyncReadExt::read_to_end(&mut stdout, &mut out_buf).await;
-            let _ = AsyncReadExt::read_to_end(&mut stderr, &mut err_buf).await;
-        })
-        .await
-        .is_err();
-    };
-    let mut read_streams = Box::pin(read_streams);
-
-    enum Outcome {
-        Status(std::io::Result<std::process::ExitStatus>),
-        TimedOut,
-        Cancelled,
-    }
-    let outcome = if timeout_ms == 0 {
-        tokio::select! {
-            status = child.wait() => Outcome::Status(status),
-            _ = cancel.cancelled() => {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
-                Outcome::Cancelled
-            }
-        }
-    } else {
-        tokio::select! {
-            status = child.wait() => Outcome::Status(status),
-            _ = tokio::time::sleep(Duration::from_millis(timeout_ms)) => {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
-                Outcome::TimedOut
-            }
-            _ = cancel.cancelled() => {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
-                Outcome::Cancelled
-            }
-        }
-    };
-    let _ = (&mut read_streams).await;
-    drop(read_streams);
-
-    let mut text = String::from_utf8_lossy(&out_buf).to_string();
-    text.push_str(&String::from_utf8_lossy(&err_buf));
-    if drain_timed_out {
-        text.push_str("\n[output truncated: still streaming after 15s]");
-    }
-    match outcome {
-        Outcome::Cancelled => Ok((text, None, true)),
-        Outcome::TimedOut => Ok((text, None, false)),
-        Outcome::Status(s) => {
-            let code = s.map_err(|e| format!("wait failed: {e}"))?.code();
-            Ok((text, code, false))
-        }
-    }
+    args.push(file.as_os_str().to_os_string());
+    run_streaming("probe-rs", &args, cwd, timeout_ms, cancel).await
 }
 
 #[async_trait]

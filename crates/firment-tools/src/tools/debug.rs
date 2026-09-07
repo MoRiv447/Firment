@@ -201,6 +201,14 @@ fn cfsr_analysis(cfsr: u64, hfsr: u64, mmfar: u64, bfar: u64) -> Vec<String> {
     lines
 }
 
+/// Decode the block read at 0xE000_ED28: five consecutive words, CFSR, HFSR,
+/// DFSR, MMFAR, BFAR. DFSR is not decoded but sits between HFSR and MMFAR, so
+/// handing the first four words to [`cfsr_analysis`] reports DFSR as the
+/// faulting address and shifts every real address by one register.
+fn fault_analysis(words: &[u64]) -> Option<Vec<String>> {
+    (words.len() >= 5).then(|| cfsr_analysis(words[0], words[1], words[3], words[4]))
+}
+
 /// Probe-rs CLI argument arrays. `debug -c "<cmd>" -c "quit"` runs the console
 /// command then disconnects (skipping the interactive console), keeping the
 /// target halted on exit (disconnect with suspend_debuggee=true).
@@ -365,12 +373,8 @@ fn analysis_report(
         None => out.push_str("xpsr: (not parsed)\n"),
     }
 
-    if cfsr_words.len() >= 5 {
-        let cfsr = cfsr_words[0];
-        let hfsr = cfsr_words[1];
-        let mmfar = cfsr_words[3];
-        let bfar = cfsr_words[4];
-        for line in cfsr_analysis(cfsr, hfsr, mmfar, bfar) {
+    if let Some(lines) = fault_analysis(cfsr_words) {
+        for line in lines {
             out.push_str(&line);
             out.push('\n');
         }
@@ -814,8 +818,7 @@ impl Tool for Debug {
                 for (i, w) in fault_words.iter().take(5).enumerate() {
                     fault_regs[i] = *w;
                 }
-                let cfsr_lines =
-                    cfsr_analysis(fault_regs[0], fault_regs[1], fault_regs[2], fault_regs[3]);
+                let cfsr_lines = fault_analysis(&fault_regs).unwrap_or_default();
 
                 // 3. Stack window: exception frame + call-chain candidates.
                 let (stack_words, stack_addr) = match run_probe_rs_retry(
@@ -1200,6 +1203,26 @@ XPSR/PSR: 0x01000000
         assert_eq!(words[1], 0x4000_0000);
         let with_prefix = parse_hex_words("0x00010000 0x40000000");
         assert_eq!(with_prefix.len(), 2);
+    }
+
+    #[test]
+    fn fault_analysis_reads_the_ed28_block_in_register_order() {
+        // CFSR (MMFARVALID + BFARVALID), HFSR, DFSR, MMFAR, BFAR.
+        let words = [0x8080, 0x4000_0000, 0xdead_beef, 0x2000_0100, 0x0800_AAAA];
+        let joined = fault_analysis(&words).expect("five words").join("\n");
+        assert!(
+            joined.contains("MMFAR = 0x20000100 (valid"),
+            "MMFAR is word 3, got: {joined}"
+        );
+        assert!(
+            joined.contains("BFAR = 0x0800aaaa (valid"),
+            "BFAR is word 4, got: {joined}"
+        );
+        assert!(
+            !joined.contains("deadbeef"),
+            "DFSR must not be reported as a faulting address: {joined}"
+        );
+        assert!(fault_analysis(&words[..4]).is_none());
     }
 
     #[test]

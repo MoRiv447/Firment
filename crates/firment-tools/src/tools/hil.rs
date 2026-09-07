@@ -314,6 +314,10 @@ impl Tool for Hil {
         let mut output_sections: Vec<String> = Vec::new();
         let mut overall_ok = true;
         let mut failed_expect = false;
+        // What the suite actually proved, step by step — not what it planned.
+        let mut reached_level = 1u8;
+        let mut reached_name = "code";
+        let mut aborted_at: Option<usize> = None;
         let overall_start = Instant::now();
 
         output_sections.push(format!("hil suite: {suite_label} (dry_run={dry_run})"));
@@ -333,6 +337,7 @@ impl Tool for Hil {
                     step.inner.kind
                 ));
                 overall_ok = false;
+                aborted_at = Some(idx);
                 break;
             }
             if overall_start.elapsed().as_millis() as u64 > total_timeout {
@@ -347,6 +352,7 @@ impl Tool for Hil {
                     step.inner.kind
                 ));
                 overall_ok = false;
+                aborted_at = Some(idx);
                 break;
             }
 
@@ -404,6 +410,13 @@ impl Tool for Hil {
                         overall_ok = false;
                     }
                     write_replay_line(&replay_path, idx, kind, !expect_failed, &text, elapsed);
+                    if let Some((l, n)) = ladder_rung(kind)
+                        && !expect_failed
+                        && l > reached_level
+                    {
+                        reached_level = l;
+                        reached_name = n;
+                    }
                     output_sections.push(format!(
                         "\n── step {}/{}: {kind} ── ({} ms)\n{text}",
                         idx + 1,
@@ -423,6 +436,7 @@ impl Tool for Hil {
                         elapsed
                     ));
                     overall_ok = false;
+                    aborted_at = Some(idx);
                     // Hard failures stop the suite (build/flash/run timeouts, etc.)
                     // Monitor expect failures already handled as Ok with marker, so this is hard Io
                     break;
@@ -433,33 +447,21 @@ impl Tool for Hil {
         let total_elapsed = overall_start.elapsed().as_millis() as u64;
         let status = if overall_ok { "PASS" } else { "FAIL" };
         // Evidence tag (verification ladder in the system prompt): the
-        // highest level this suite ATTEMPTED, so a build-only suite is not
-        // mistaken for hardware validation.
+        // highest level the steps that ACTUALLY RAN reached, so an aborted
+        // suite is never mistaken for the hardware validation it planned.
         let evidence = if dry_run {
             "dry-run — nothing was executed".to_string()
         } else {
-            let mut level = 1u8;
-            let mut name = "code";
-            for s in &resolved_steps {
-                let (l, n) = match s.inner.kind.as_str() {
-                    "build" => (2, "build"),
-                    "flash" => (3, "deploy"),
-                    "run" | "monitor" => (4, "runtime"),
-                    // SWO/ITM is RUNTIME observability, not physical
-                    // behavior — level 5 belongs to the observe step.
-                    "trace" => (4, "runtime"),
-                    "observe" => (5, "physical"),
-                    // Waveforms are physical behaviour measured, not
-                    // asserted — same rung as observe.
-                    "la" => (5, "physical"),
-                    _ => continue, // elf_analyze / delay do not advance the ladder
-                };
-                if l > level {
-                    level = l;
-                    name = n;
-                }
+            let reached = format!("reached level {reached_level} ({reached_name})");
+            match aborted_at {
+                Some(i) if i + 1 < resolved_steps.len() => format!(
+                    "{reached} — aborted at step {}/{}, {} later step(s) never ran",
+                    i + 1,
+                    resolved_steps.len(),
+                    resolved_steps.len() - i - 1
+                ),
+                _ => reached,
             }
-            format!("reached level {level} ({name})")
         };
         let mut footer = format!(
             "\nhil: {status} suite={suite_label} in {total_elapsed} ms — replay: {replay_id}"
@@ -512,6 +514,24 @@ fn replay_path_for(ctx: &ToolContext, id: &str) -> PathBuf {
         .clone()
         .unwrap_or_else(|| ctx.cwd.join(".firment").join("work"));
     base.join("hil").join(format!("{id}.jsonl"))
+}
+
+/// Verification ladder rung a hil step reaches when it succeeds. Level 1
+/// ("code") is the floor every suite starts from; `elf_analyze` and `delay`
+/// do not advance the ladder.
+fn ladder_rung(kind: &str) -> Option<(u8, &'static str)> {
+    match kind {
+        "build" => Some((2, "build")),
+        "flash" => Some((3, "deploy")),
+        "run" | "monitor" => Some((4, "runtime")),
+        // SWO/ITM is RUNTIME observability, not physical behavior — level 5
+        // belongs to the observe step.
+        "trace" => Some((4, "runtime")),
+        // Waveforms are physical behaviour measured, not asserted — same
+        // rung as observe.
+        "observe" | "la" => Some((5, "physical")),
+        _ => None,
+    }
 }
 
 fn write_replay_line(path: &Path, idx: usize, kind: &str, ok: bool, text: &str, elapsed_ms: u64) {
@@ -2240,6 +2260,53 @@ elf = "build/fw.elf"
         let msg = res.unwrap_err().message;
         assert!(msg.contains("hil:"), "got: {msg}");
         assert!(msg.contains("replay:"), "got: {msg}");
+    }
+
+    #[test]
+    fn ladder_rung_maps_steps_to_verification_levels() {
+        assert_eq!(ladder_rung("build"), Some((2, "build")));
+        assert_eq!(ladder_rung("flash"), Some((3, "deploy")));
+        assert_eq!(ladder_rung("run"), Some((4, "runtime")));
+        // SWO/ITM is runtime observability, not physical behavior.
+        assert_eq!(ladder_rung("trace"), Some((4, "runtime")));
+        assert_eq!(ladder_rung("observe"), Some((5, "physical")));
+        assert_eq!(ladder_rung("la"), Some((5, "physical")));
+        assert_eq!(ladder_rung("delay"), None);
+        assert_eq!(ladder_rung("elf_analyze"), None);
+    }
+
+    #[tokio::test]
+    async fn aborted_suite_reports_only_the_level_it_reached() {
+        let dir = tempdir().unwrap();
+        let mut c = ctx(dir.path());
+        // Any real command that exists makes the build step pass.
+        c.build_command = Some("cargo --version".to_string());
+        let err = Hil
+            .run(
+                json!({"steps": [
+                    {"kind": "build"},
+                    // No elf/file: a hard [InvalidInput] failure that stops
+                    // the suite before the observe step ever runs.
+                    {"kind": "flash"},
+                    {"kind": "observe", "file": "frame.png"}
+                ]}),
+                &c,
+            )
+            .await
+            .unwrap_err();
+        let msg = err.message;
+        assert!(
+            msg.contains("reached level 2 (build)"),
+            "must report the rung the succeeding steps reached: {msg}"
+        );
+        assert!(
+            !msg.contains("level 5"),
+            "a never-run observe step must not buy physical evidence: {msg}"
+        );
+        assert!(
+            msg.contains("aborted at step 2/3, 1 later step(s) never ran"),
+            "got: {msg}"
+        );
     }
 
     #[tokio::test]

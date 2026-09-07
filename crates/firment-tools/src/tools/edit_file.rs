@@ -148,19 +148,41 @@ fn compute_edit(resolved: &Path, original: &str, args: &Value) -> Result<String,
     // always write LF anchors; normalize to LF for matching, then restore the
     // file's own line endings in the written result (so a CRLF file does not
     // end up with mixed endings or an LF-only diff).
-    let crlf = original.contains("\r\n");
-    let original_norm = original.replace("\r\n", "\n");
+    //
+    // Decided by MAJORITY: `contains("\r\n")` let one stray CRLF in a
+    // mostly-LF file rewrite every line ending of the file.
+    let lf_lines = original.matches('\n').count();
+    let crlf_lines = original.matches("\r\n").count();
+    let crlf = crlf_lines * 2 > lf_lines;
+    // A UTF-8 BOM is invisible in the rendered line 1, so an `old_text` anchor
+    // starting at the beginning of the file never matches the raw first
+    // character. The text/line paths match against the BOM-free body and
+    // re-attach it on save; the hashline path must NOT, because read_file
+    // hashes line 1 exactly as the file stores it.
+    let body = original.strip_prefix('\u{FEFF}');
+    let has_bom = body.is_some();
+    let body = body.unwrap_or(original);
+    let original_norm = body.replace("\r\n", "\n");
     let new_norm = new_text.replace("\r\n", "\n");
-    let restore = |text: String| {
+    let crlf_restore = |text: String| {
         if crlf {
             text.replace('\n', "\r\n")
         } else {
             text
         }
     };
+    let restore = |text: String| {
+        let text = crlf_restore(text);
+        if has_bom {
+            format!("\u{FEFF}{text}")
+        } else {
+            text
+        }
+    };
 
     if let Some(hashline) = hashline {
-        return edit_by_hashline(&original_norm, hashline, end_hashline, &new_norm).map(restore);
+        let hash_source = original.replace("\r\n", "\n");
+        return edit_by_hashline(&hash_source, hashline, end_hashline, &new_norm).map(crlf_restore);
     }
 
     if let Some(old) = old_text {
@@ -370,6 +392,53 @@ mod tests {
             "LF file must stay LF: {:?}",
             String::from_utf8_lossy(&content)
         );
+    }
+
+    #[tokio::test]
+    async fn one_stray_crlf_does_not_convert_the_whole_file() {
+        // A mostly-LF file with a single hand-edited CRLF line: line endings
+        // are decided by majority, so the edit must not rewrite every ending.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("mixed.txt");
+        std::fs::write(&path, "aaa\nbbb\r\nccc\nddd\n").unwrap();
+        let out = EditFile
+            .run(
+                json!({"path": "mixed.txt", "old_text": "ddd", "new_text": "DDD"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(out.text.contains("Edited"), "got: {}", out.text);
+        let content = std::fs::read_to_string(&path).unwrap();
+        let crlf = content.matches("\r\n").count();
+        assert_eq!(
+            crlf, 0,
+            "LF-dominant file must stay LF, not become all-CRLF: {content:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bom_file_matches_bomless_anchor_and_keeps_bom() {
+        // The BOM is invisible in the rendered line 1, so a model-written
+        // anchor for the first line must still match — and the saved file must
+        // keep the BOM Visual Studio expects.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("bom.c");
+        std::fs::write(&path, "\u{FEFF}int main(void)\n{\n}\n").unwrap();
+        let out = EditFile
+            .run(
+                json!({"path": "bom.c", "old_text": "int main(void)", "new_text": "int app_main(void)"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(out.text.contains("Edited"), "got: {}", out.text);
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            content.starts_with('\u{FEFF}'),
+            "BOM must survive the edit: {content:?}"
+        );
+        assert_eq!(content, "\u{FEFF}int app_main(void)\n{\n}\n");
     }
 
     #[tokio::test]

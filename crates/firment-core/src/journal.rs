@@ -171,6 +171,38 @@ pub struct EditJournal {
     stamp: u128,
 }
 
+/// Lexical `.`/`..` folding, for paths whose file does not exist yet and so
+/// cannot be canonicalized.
+fn lexical_key(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                let at_root = matches!(
+                    out.components().next_back(),
+                    Some(std::path::Component::RootDir) | Some(std::path::Component::Prefix(_))
+                );
+                if !at_root {
+                    out.pop();
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Do these two spellings name the same file? `PathEq` alone said no for
+/// `src\a.rs` and `src/./a.rs`, which recorded the same path twice in one
+/// turn — and the second backup captured content the first edit had already
+/// changed.
+fn same_path(a: &Path, b: &Path) -> bool {
+    a == b
+        || lexical_key(a) == lexical_key(b)
+        || matches!((a.canonicalize(), b.canonicalize()), (Ok(x), Ok(y)) if x == y)
+}
+
 impl EditJournal {
     pub fn new(dir: PathBuf) -> Self {
         Self {
@@ -196,7 +228,7 @@ impl EditJournal {
     /// Record a path before it is mutated. The first call per path keeps the
     /// original bytes; later mutations to the same path reuse that backup.
     pub fn begin(&mut self, path: &Path) -> Result<(), String> {
-        if self.entries.iter().any(|e| e.path == path) {
+        if self.entries.iter().any(|e| same_path(&e.path, path)) {
             return Ok(());
         }
         let existed = path.exists();
@@ -266,6 +298,10 @@ impl EditJournal {
             entries: self.entries.clone(),
         };
         let name = self.index_name(self.next_seq);
+        // The slot must be this commit's own: `next_seq` only moves when a
+        // backup is taken, so a turn that edited brand-new files would reuse
+        // the previous turn's name and overwrite its undo entry.
+        self.next_seq += 1;
         let text = serde_json::to_string_pretty(&record).map_err(|e| e.to_string())?;
         fs::write(self.dir.join(name), text).map_err(|e| e.to_string())?;
 
@@ -297,7 +333,9 @@ impl EditJournal {
         let record: IndexRecord = serde_json::from_str(&text).map_err(|e| e.to_string())?;
         let mut restored = Vec::new();
         let mut errors = Vec::new();
-        for entry in &record.entries {
+        // Reverse order, like `rollback`: the last mutation of the turn is
+        // the first one unwound.
+        for entry in record.entries.iter().rev() {
             match restore_entry(dir, entry) {
                 Ok(()) => restored.push(entry.path.to_string_lossy().into_owned()),
                 Err(e) => errors.push(e),
@@ -443,6 +481,69 @@ mod tests {
         fs::write(&file, "v2").unwrap();
         let _ = journal.rollback().unwrap();
         assert_eq!(fs::read_to_string(&file).unwrap(), "v1");
+    }
+
+    #[test]
+    fn begin_dedupes_the_same_file_named_two_ways() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("sub")).unwrap();
+        let file = dir.path().join("a.txt");
+        fs::write(&file, "v1").unwrap();
+        let mut journal = EditJournal::new(dir.path().join("undo"));
+        journal.begin(&file).unwrap();
+        // A roundabout spelling of the same file: a second entry would back up
+        // the content the FIRST edit already wrote and "restore" that instead.
+        let roundabout = dir.path().join("sub").join("..").join("a.txt");
+        journal.begin(&roundabout).unwrap();
+        assert_eq!(journal.entries.len(), 1, "one file, one backup entry");
+        fs::write(&file, "v2").unwrap();
+        journal.rollback().unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), "v1");
+    }
+
+    #[test]
+    fn same_path_folds_dot_components() {
+        assert!(same_path(
+            Path::new("/x/y/a.rs"),
+            Path::new("/x/./y/../y/a.rs")
+        ));
+        assert!(!same_path(Path::new("/x/a.rs"), Path::new("/x/b.rs")));
+    }
+
+    #[test]
+    fn each_committed_turn_keeps_its_own_undo_entry() {
+        let dir = tempdir().unwrap();
+        let undo = dir.path().join("undo");
+        let mut journal = EditJournal::new(undo.clone());
+        let a = dir.path().join("a.txt");
+        fs::write(&a, "v1").unwrap();
+        journal.begin(&a).unwrap();
+        fs::write(&a, "v2").unwrap();
+        journal.commit().unwrap();
+        // Second turn touches only a NEW file, so no backup was taken and the
+        // sample counter never moved — the index name used to collide with the
+        // previous turn's and overwrite it.
+        let b = dir.path().join("b.txt");
+        journal.begin(&b).unwrap();
+        fs::write(&b, "new").unwrap();
+        journal.commit().unwrap();
+
+        let indexes: Vec<String> = fs::read_dir(&undo)
+            .unwrap()
+            .filter_map(|e| {
+                let name = e.unwrap().file_name().to_string_lossy().into_owned();
+                name.starts_with("undo-").then_some(name)
+            })
+            .collect();
+        assert_eq!(indexes.len(), 2, "two turns, two undo files: {indexes:?}");
+
+        EditJournal::undo_latest(&undo).unwrap();
+        assert!(
+            !b.exists(),
+            "undo of the newest turn removes the file it created"
+        );
+        EditJournal::undo_latest(&undo).unwrap();
+        assert_eq!(fs::read_to_string(&a).unwrap(), "v1");
     }
 
     #[test]

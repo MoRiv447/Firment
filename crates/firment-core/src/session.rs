@@ -222,7 +222,14 @@ impl SessionStore {
         let mut messages: Vec<ChatMessage> = Vec::new();
         let mut corrupt_lines = 0usize;
         for line in std::io::BufReader::new(file).lines() {
-            let Ok(line) = line else { continue };
+            let Ok(line) = line else {
+                // Not every lost record is bad JSON: a non-UTF-8 byte (a
+                // hand-edited or half-flushed transcript) surfaces here as an
+                // I/O error. It is still a skipped line, so it must arm the
+                // dangling-tool-call repair below like any other corruption.
+                corrupt_lines += 1;
+                continue;
+            };
             if line.trim().is_empty() {
                 continue;
             }
@@ -687,6 +694,56 @@ fn relevant_decisions(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ToolCall;
+
+    /// An undecodable byte surfaces as an I/O error from `Lines::next`, not as
+    /// bad JSON. It used to be skipped without counting, so the tool result it
+    /// hid left the assistant tool_call dangling — and every later request 400d.
+    #[test]
+    fn unreadable_line_still_arms_dangling_tool_call_repair() {
+        let dir = tempfile::tempdir().unwrap();
+        let store_dir = dir.path().join("sessions");
+        fs::create_dir_all(&store_dir).unwrap();
+        let store = SessionStore::new(store_dir);
+        let mut session = Session::new(dir.path().to_path_buf(), "p", "m");
+        session.id = "garbage-line".into();
+        session.messages.push(ChatMessage::User {
+            content: "hi".into(),
+        });
+        session.messages.push(ChatMessage::Assistant {
+            content: "calling".into(),
+            tool_calls: vec![ToolCall {
+                id: "call-1".into(),
+                name: "shell".into(),
+                arguments: serde_json::json!({}),
+            }],
+            thinking_blocks: Vec::new(),
+        });
+        session.messages.push(ChatMessage::Tool {
+            tool_call_id: "call-1".into(),
+            name: "shell".into(),
+            content: "ok".into(),
+        });
+        store.save(&session).unwrap();
+
+        let path = store.path_for("garbage-line");
+        let text = fs::read_to_string(&path).unwrap();
+        let mut lines: Vec<&str> = text.lines().collect();
+        assert!(lines.len() >= 4, "meta + 3 messages: {text}");
+        lines.pop(); // the tool-result line
+        let mut bytes = lines.join("\n").into_bytes();
+        bytes.extend_from_slice(b"\n\xff\xfe this is not valid utf-8\n");
+        fs::write(&path, &bytes).unwrap();
+
+        let loaded = store.load("garbage-line").unwrap();
+        let dangling = loaded.messages.iter().any(
+            |m| matches!(m, ChatMessage::Assistant { tool_calls, .. } if !tool_calls.is_empty()),
+        );
+        assert!(
+            !dangling,
+            "the unreadable line must count as corruption and repair it"
+        );
+    }
 
     /// Regression: sessions persisted before the Normal/Mainline/Branch
     /// triple carry `"session_kind": "main"` (the old enum had no Normal,

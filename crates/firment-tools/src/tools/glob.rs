@@ -54,6 +54,7 @@ impl Tool for Glob {
         }
 
         let mut out = Vec::new();
+        let mut stopped_early = false;
         for entry in WalkBuilder::new(&resolved).hidden(!include_hidden).build() {
             let entry = match entry {
                 Ok(e) => e,
@@ -66,12 +67,69 @@ impl Tool for Glob {
             if glob.is_match(&rel) {
                 out.push(rel);
                 if out.len() >= limit {
+                    stopped_early = true;
                     break;
                 }
             }
         }
+        // Same marker as grep/list_dir/symbols: without it a capped list is
+        // indistinguishable from a complete one.
+        if stopped_early {
+            out.push(format!("... stopped at {limit} files"));
+        }
         Ok(ToolOutput {
             text: out.join("\n"),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+    use tempfile::tempdir;
+
+    fn ctx(dir: &Path) -> ToolContext {
+        ToolContext {
+            cwd: dir.to_path_buf(),
+            ..ToolContext::default()
+        }
+    }
+
+    async fn glob_files(dir: &Path, limit: u64) -> Vec<String> {
+        let out = Glob
+            .run(json!({"pattern": "**/*.rs", "limit": limit}), &ctx(dir))
+            .await
+            .unwrap();
+        out.text.lines().map(|l| l.to_string()).collect()
+    }
+
+    #[tokio::test]
+    async fn limit_truncation_is_reported() {
+        let dir = tempdir().unwrap();
+        for name in ["a.rs", "b.rs", "c.rs"] {
+            std::fs::write(dir.path().join(name), "fn main() {}\n").unwrap();
+        }
+        let lines = glob_files(dir.path(), 2).await;
+        assert_eq!(
+            lines.last().map(|l| l.as_str()),
+            Some("... stopped at 2 files"),
+            "capped result must say so: {lines:?}"
+        );
+        assert_eq!(lines.len(), 3, "2 paths + marker: {lines:?}");
+    }
+
+    #[tokio::test]
+    async fn complete_result_has_no_marker() {
+        let dir = tempdir().unwrap();
+        for name in ["a.rs", "b.rs", "c.rs"] {
+            std::fs::write(dir.path().join(name), "fn main() {}\n").unwrap();
+        }
+        let lines = glob_files(dir.path(), 10).await;
+        assert_eq!(lines.len(), 3, "got: {lines:?}");
+        assert!(
+            !lines.iter().any(|l| l.contains("stopped at")),
+            "uncapped result must not claim truncation: {lines:?}"
+        );
     }
 }

@@ -33,6 +33,18 @@ impl AnthropicProvider {
         }
     }
 
+    /// Messages endpoint. A base that already carries the `/v1` prefix (e.g.
+    /// `https://openrouter.ai/api/v1`, the form `ProviderConfig::models_url`
+    /// accepts) must NOT get a second one — `/api/v1/v1/messages` is a
+    /// guaranteed 404.
+    fn messages_url(&self) -> String {
+        if self.base_url.ends_with("/v1") {
+            format!("{}/messages", self.base_url)
+        } else {
+            format!("{}/v1/messages", self.base_url)
+        }
+    }
+
     fn convert(
         &self,
         messages: &[ChatMessage],
@@ -234,7 +246,7 @@ impl AnthropicProvider {
 #[async_trait]
 impl Provider for AnthropicProvider {
     async fn stream(&self, request: ChatRequest) -> Result<super::ProviderStream, ProviderError> {
-        let url = format!("{}/v1/messages", self.base_url);
+        let url = self.messages_url();
         let response = self
             .client
             .post(&url)
@@ -498,6 +510,31 @@ enum Block {
 mod tests {
     use super::*;
     use crate::ChatMessage;
+
+    #[test]
+    fn messages_url_does_not_double_the_v1_prefix() {
+        for (base, want) in [
+            (
+                "https://api.anthropic.com",
+                "https://api.anthropic.com/v1/messages",
+            ),
+            (
+                "https://api.anthropic.com/",
+                "https://api.anthropic.com/v1/messages",
+            ),
+            (
+                "https://openrouter.ai/api/v1",
+                "https://openrouter.ai/api/v1/messages",
+            ),
+            (
+                "https://gw.example.com/v1/",
+                "https://gw.example.com/v1/messages",
+            ),
+        ] {
+            let p = AnthropicProvider::new(base, "k", "m", None, None);
+            assert_eq!(p.messages_url(), want, "base {base}");
+        }
+    }
 
     #[test]
     fn convert_guarantees_non_empty_content_blocks() {

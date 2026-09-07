@@ -32,6 +32,45 @@
     terminal in raw mode when a panic happened, so a hook now restores it
     before the panic message prints.
 
+- **Tool-layer audit hardening** (the P1s a hardware-less review could
+  confirm, each pinned by a test):
+  - Process handling: stdout and stderr are drained concurrently, so a
+    child that floods one pipe can no longer deadlock against the 64 KB
+    OS buffer while the parent waits on the other; a command that times
+    out or is cancelled now returns the output it had already produced
+    instead of discarding it; `probe-rs run` streams its output rather
+    than buffering the whole session. Reading a file is capped at 32 MiB
+    (a giant log used to be slurped into memory), and a truncation notice
+    reports how many characters were actually dropped.
+  - Escapes that were only checked on one path: `[::ffff:169.254.169.254]`
+    — an IPv4 link-local address written as an IPv6 literal — cleared the
+    SSRF blocklist; a shell redirect writing outside the workspace is now
+    refused unconditionally rather than only when `allow_dangerous` is
+    off; `git restore` and `git checkout --` are recognised as the
+    destructive rollback they are.
+  - Edit fidelity: a file with one stray CRLF line used to be rewritten
+    entirely in CRLF (line endings are now decided by majority vote), and
+    a UTF-8 BOM was silently dropped — and made an anchor on line 1
+    unmatchable, since the BOM was in the file but not in the comparison.
+  - Verdict honesty: `glob` reported a result truncated at its limit as a
+    complete listing; a HIL suite that aborted at the flash step still
+    claimed "reached level 5 (physical)", so the evidence footer now
+    names only the rung actually reached and how many later steps never
+    ran; `debug` fault analysis read the Cortex-M fault registers in the
+    wrong order, so a precise-bus fault was reported as a usage fault.
+  - Boundaries that could exhaust memory: an `la` capture is now refused
+    before acquisition when `samples × channels` exceeds 512 MiB of wave
+    buffers, a time-window capture records the sample count derived from
+    the bitstream actually exported (so the truncation self-check finally
+    applies to it), and loading an old or foreign capture checks the size
+    before reading it.
+  - Wiring and bookkeeping: an Anthropic `base_url` ending in `/v1` built
+    `/v1/v1/messages`; `EditJournal` gave a turn that only created new
+    files the same undo index as the turn before it — silently erasing
+    that turn's restore data — and recorded the same file twice when a
+    tool named it two different ways; a final non-UTF-8 byte in a session
+    file discarded the dangling-tool-call repair along with it.
+
 ## v0.8.0 (2026-08-31) — logic analyzer + red team
 
 - **`la` — logic analyzer integration**. Capture, measurement and protocol
