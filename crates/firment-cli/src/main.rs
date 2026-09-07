@@ -846,6 +846,11 @@ impl EventSink for CliSink {
                 THINKING_SHOWN.store(false, std::sync::atomic::Ordering::Relaxed);
             }
             AgentEvent::Error(message) => eprintln!("⚠ {message}"),
+            // Every stall / stream-timeout / max_tokens-truncation / gate
+            // notice rides on Info. Without this arm a turn the agent gave up
+            // on printed nothing at all and exited 0 — indistinguishable from
+            // a successful empty reply.
+            AgentEvent::Info(message) => eprintln!("{message}"),
             _ => {}
         }
     }

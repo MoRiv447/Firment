@@ -71,6 +71,12 @@
     tool named it two different ways; a final non-UTF-8 byte in a session
     file discarded the dangling-tool-call repair along with it.
 - **CLI and installer audit hardening**:
+  - `firm -p` says why a turn ended instead of ending silently. Stalls,
+    stream timeouts, `max_tokens` truncations and gate notices all reach the
+    UI as `Info` events, and the one-shot sink dropped that variant: a turn
+    the agent had given up on printed nothing at all and exited 0,
+    indistinguishable from a successful empty reply (verified live — a
+    stalled stream now names the byte budget it ran out of).
   - `firm doctor` now probes with the key it says it has. The status text
     resolved through `auth.json`, the request did not, so a provider whose
     key lives in `auth.json` printed "configured (auth.json)" and was
