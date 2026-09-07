@@ -3,6 +3,7 @@ import { ArrowDownOutlined, SendOutlined, StopOutlined } from '@ant-design/icons
 import { useEffect, useRef, useState } from 'react';
 import { MessageList, Markdown } from '../components/MessageList';
 import { ToolCard } from '../components/ToolCard';
+import { shouldShowStallNotice, stallNotice } from '../lib/stallHint';
 import type { RunningTurn, SessionDto } from '../types';
 
 const { Text } = Typography;
@@ -37,12 +38,14 @@ export function ChatView({
 
   // Detect a stuck agent: running is on but nothing has changed in the
   // visible turn (text delta, new tool, or a tool finishing) for too long.
-  // Cheap proxy for "the provider stream is dead but Rust has not yet
-  // emitted TurnEnd" — shows a banner telling the user to hit Stop instead
-  // of waiting forever. Tool STATUS transitions count as change: a 90s
-  // build is a running tool, not a wedged turn.
+  // Tool STATUS transitions count as change: a 90s build is a running tool,
+  // not a wedged turn. What does NOT count here is a model writing one huge
+  // tool-call argument — the turn is alive downstream but invisible to this
+  // key, which is why the notice waits until past the agent's own 120s
+  // stream budget (see STALL_NOTICE_SECS) rather than crying at 60s.
   const lastChangeRef = useRef<number>(Date.now());
   const [stuck, setStuck] = useState(false);
+  const notice = stallNotice(idleSecs);
   const turnKey = `${turn?.text.length}:${
     turn?.thinking.length ?? 0
   }:${turn?.tools ? Object.values(turn.tools).map((t) => t.status).join('') : ''}`;
@@ -60,7 +63,7 @@ export function ChatView({
     const tick = setInterval(() => {
       const idle = Math.floor((Date.now() - lastChangeRef.current) / 1000);
       setIdleSecs(idle);
-      if (idle > 60) setStuck(true);
+      if (shouldShowStallNotice(idle)) setStuck(true);
     }, 1000);
     return () => clearInterval(tick);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -164,8 +167,8 @@ export function ChatView({
                 type="warning"
                 showIcon
                 style={{ margin: '8px 0', borderRadius: 0 }}
-                message="Agent has been running with no new events for 60s."
-                description="The provider stream may be stalled. Click Stop below to cancel the turn — your input will be re-enabled."
+                message={notice.message}
+                description={notice.description}
               />
             )}
             {toolList.map((t) => (

@@ -141,7 +141,7 @@ pub async fn monitor_send(shared: Arc<Shared>, port: &str, data: &str) -> Result
     let monitor = shared
         .monitors
         .lock()
-        .unwrap()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(port)
         .cloned()
         .ok_or_else(|| format!("no monitor running on {port}"))?;

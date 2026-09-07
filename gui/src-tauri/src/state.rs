@@ -28,6 +28,12 @@ pub type CancelHandles = (watch::Sender<bool>, Cancellable);
 pub struct AgentSlot {
     pub cancel: Arc<Mutex<Option<CancelHandles>>>,
     pub running: Arc<AtomicBool>,
+    /// Stop pressed while `cancel` was still empty: the agent for a turn is
+    /// built AFTER the slot is reserved, so a cancel landing in that window
+    /// has no handles to fire and records the request here instead.
+    /// `start_turn` clears it when it reserves the slot and honours it as
+    /// soon as it publishes the handles.
+    pub cancel_requested: Arc<AtomicBool>,
 }
 
 impl AgentSlot {
@@ -35,6 +41,7 @@ impl AgentSlot {
         Self {
             cancel: Arc::new(Mutex::new(None)),
             running: Arc::new(AtomicBool::new(false)),
+            cancel_requested: Arc::new(AtomicBool::new(false)),
         }
     }
 }

@@ -227,20 +227,19 @@ export async function webFetch(rawUrl: string): Promise<string> {
   const url = await assertSafeUrl(rawUrl);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20000);
-  let response: Response;
   try {
-    response = await fetchWithSafeRedirect(url, {
+    const response = await fetchWithSafeRedirect(url, {
       headers: { 'User-Agent': 'Firment/0.4' },
       signal: controller.signal,
     });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const html = await response.text();
+    return htmlToText(html);
   } catch (err: any) {
-    clearTimeout(timer);
     throw new Error(`Fetch failed: ${err?.message || 'timeout or network error'}`);
+  } finally {
+    clearTimeout(timer);
   }
-  clearTimeout(timer);
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const html = await response.text();
-  return htmlToText(html);
 }
 
 // Convert raw HTML into a compact, readable text blob for the model context.

@@ -24,6 +24,16 @@ impl Drop for RunningGuard {
     }
 }
 
+/// Fire a turn's cancellation. Both call sites (an immediate Stop and one that
+/// was parked while the agent was still being built) go through here so they
+/// cannot drift apart. Idempotent: the watch sender and the core cancel flag
+/// are both one-way.
+fn fire_cancel(handles: &crate::state::CancelHandles) {
+    let (tx, signal) = handles;
+    let _ = tx.send(true);
+    signal.cancel();
+}
+
 #[tauri::command]
 pub async fn start_turn(
     shared: tauri::State<'_, Arc<Shared>>,
@@ -44,6 +54,8 @@ pub async fn start_turn(
         if slot.running.swap(true, Ordering::SeqCst) {
             return Err("this session already has a turn running - cancel it first".to_string());
         }
+        // Parked Stops belong to whatever turn asked for them, not to this one.
+        slot.cancel_requested.store(false, Ordering::SeqCst);
         slot.clone()
     };
     let _reservation = RunningGuard(slot.running.clone());
@@ -79,9 +91,16 @@ pub async fn start_turn(
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(s) = map.get(&session_id) {
+            // Read the parked-Stop flag while still holding the map lock:
+            // cancel_turn decides "fire now or park" under that same lock, so
+            // one of the two paths always wins.
+            let parked = s.cancel_requested.swap(false, Ordering::SeqCst);
             *s.cancel
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(handles);
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(handles.clone());
+            if parked {
+                fire_cancel(&handles);
+            }
         }
     }
     tauri::async_runtime::spawn(async move {
@@ -115,21 +134,29 @@ pub async fn cancel_turn(
     // Must NOT go through the agent lock: run_turn holds it for the whole
     // turn, so a cancel waiting on the lock would block until the turn
     // finishes and never take effect. Fire the pre-extracted handles instead.
-    let handles = {
-        let map = shared
-            .agents
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        map.get(&session_id).and_then(|slot| {
-            slot.cancel
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .clone()
-        })
-    };
-    if let Some((tx, signal)) = handles {
-        let _ = tx.send(true);
-        signal.cancel();
+    //
+    // The map lock is held across the whole decision so a Stop racing with
+    // start_turn's publish either fires directly or is parked — never lost.
+    let map = shared
+        .agents
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let slot = map
+        .get(&session_id)
+        .ok_or_else(|| format!("no turn has been started for session {session_id}"))?;
+    match slot
+        .cancel
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+    {
+        Some(handles) => fire_cancel(&handles),
+        // The agent is still being built: remember the Stop, start_turn will
+        // fire it the moment the handles exist (before the first provider call
+        // can produce output).
+        None => {
+            slot.cancel_requested.store(true, Ordering::SeqCst);
+        }
     }
     Ok(())
 }

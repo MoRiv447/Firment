@@ -72,6 +72,23 @@ export default function App() {
     (session ? turnsById[session.id] : undefined) ?? initialTurnState();
   const { running, turn } = currentTurnState;
   const anyRunning = Object.values(turnsById).some((t) => t.running);
+  // The chat the user is looking at. When it changes, a finished turn kept by
+  // that chat's slot is superseded by the transcript now on screen: turn_end
+  // only refreshes and syncs the chat that was OPEN, so a chat that finished
+  // in the background kept its retained copy — reopening it rendered the same
+  // reply twice (transcript + live copy) and leaked the slot for the rest of
+  // the app's life. A turn still running keeps its buffer (switching to a
+  // ⚡ chat mid-stream must not blind it).
+  const openChatId = session?.id ?? null;
+  const shownChatRef = useRef<string | null>(openChatId);
+  useEffect(() => {
+    if (shownChatRef.current === openChatId) return;
+    shownChatRef.current = openChatId;
+    const slot = openChatId ? turnsById[openChatId] : undefined;
+    if (slot && !slot.running) {
+      dispatchTurn({ type: 'turn_synced', session_id: openChatId });
+    }
+  }, [openChatId, turnsById]);
   // Info events (stall / tool-wave timeout / compaction notices) surfaced in
   // the chat they belong to. Auto-expire after 15s (sweep below); ids come
   // from a counter — Date.now() collided for same-millisecond entries.
@@ -533,7 +550,7 @@ export default function App() {
 
   const handleCancel = () => {
     if (sessionRef.current) {
-      void api.cancelTurn(sessionRef.current.id);
+      void api.cancelTurn(sessionRef.current.id).catch(console.error);
     }
   };
 

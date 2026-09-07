@@ -103,6 +103,10 @@ export function turnReducer(state: TurnState, e: FrontendEvent): TurnState {
     case 'turn_synced':
       // The refreshed transcript now contains the reply; drop the retained
       // live copy (same React batch as setSession, so no double render).
+      // A turn still RUNNING must survive this: switching chats reloads the
+      // transcript of a chat that may be mid-stream, and every later delta
+      // is ignored once the slot has no turn to append to.
+      if (state.running) return state;
       return { running: false, turn: null };
 
     case 'error':

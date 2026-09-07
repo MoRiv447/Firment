@@ -160,3 +160,27 @@ describe('turnReducer thinking phase', () => {
     expect(s.turn).toBeNull();
   });
 });
+
+describe('turn_synced (transcript replaces the live copy)', () => {
+  it('leaves a still-running turn alone', () => {
+    // App dispatches this whenever the open chat changes, and the chat being
+    // opened may still be streaming: nulling its slot would make every later
+    // delta a no-op and blank the reply the user just switched to read.
+    let s = turnReducer(initialTurnState(), { type: 'turn_start' });
+    s = turnReducer(s, { type: 'text_delta', text: 'half a repl' });
+    const synced = turnReducer(s, { type: 'turn_synced' });
+    expect(synced).toBe(s);
+    expect(turnReducer(synced, { type: 'text_delta', text: 'y' }).turn?.text).toBe('half a reply');
+  });
+
+  it('drops a finished turn a background chat had retained', () => {
+    // turn_end only refreshes the chat that is open, so a chat that finished
+    // out of sight keeps its copy until it is reopened.
+    let state = turnsReducer({}, { type: 'turn_start', session_id: 'bg' });
+    state = turnsReducer(state, { type: 'text_delta', session_id: 'bg', text: 'answer' });
+    state = turnsReducer(state, { type: 'turn_end', session_id: 'bg', text: 'answer' });
+    expect(state.bg?.turn?.finished).toBe(true);
+    state = turnsReducer(state, { type: 'turn_synced', session_id: 'bg' });
+    expect(state.bg).toBeUndefined();
+  });
+});

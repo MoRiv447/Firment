@@ -97,6 +97,33 @@
     `workbench.toml` and from JSONL on disk, and a single non-ASCII byte
     made the listing panic.
 
+- **GUI and web frontend audit hardening**:
+  - Switching chats no longer erases a reply that is still arriving. The
+    transcript-sync message cleared its turn slot unconditionally, so a chat
+    that was mid-stream when you moved away lost its partial answer and every
+    later chunk — the stream kept running with nothing left to append to. A
+    running slot now survives the sync, and the finished copy a background
+    chat had been holding is released when you actually look at it (so the
+    transcript and the live copy stop rendering the same reply twice).
+  - The "no new events" warning is honest about the deadline it is watching.
+    It fired after 60s of silence while the agent itself gives a stream 120s,
+    so a healthy slow turn was nagged as stalled a full minute before it could
+    be one — and a long tool call that prints nothing was indistinguishable
+    from a dead connection. The notice now appears past the stream's own
+    budget, shows the seconds actually elapsed, and says what Stop will and
+    will not undo; the threshold lives in one module, pinned by a test that
+    names the backend value it must stay ahead of.
+  - Stop works from the first millisecond of a turn. Cancellation handles are
+    published only after the agent is built, and a click landing in that
+    window found none, did nothing, and reported success. The press is now
+    remembered and fired the moment the handles exist; the command fails only
+    for a session that never started a turn. (A poisoned monitor mutex in the
+    serial panel panicked where its siblings recover.)
+  - `web_fetch`'s timeout covered headers only: the deadline was cleared the
+    moment the response started, so a server that stalled mid-body hung the
+    tool forever — with no abort left to hang it on. The timer now runs until
+    the body is read, like the search paths already did.
+
 ## v0.8.0 (2026-08-31) — logic analyzer + red team
 
 - **`la` — logic analyzer integration**. Capture, measurement and protocol
