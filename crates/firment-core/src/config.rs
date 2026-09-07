@@ -37,6 +37,22 @@ pub struct Config {
     /// or empty `broker` = feature off (single-player without an SBC).
     #[serde(default)]
     pub mqtt: MqttConfig,
+    /// Which command-bearing tool settings came from a project-local config
+    /// file. Derived by `merged_for`, never persisted — `save` would otherwise
+    /// write a repo-controlled fact into the user's own config.toml.
+    #[serde(default, skip)]
+    pub commands_from_project: CommandProvenance,
+}
+
+/// Trust provenance of the two settings that make `verify`/`build` execute an
+/// arbitrary command line. `merged_for` strips those tools from `auto_approve`
+/// when the project supplied the command; anything else that decides whether
+/// to run one must read this instead of re-deriving it, so the two decisions
+/// cannot drift apart.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CommandProvenance {
+    pub verify: bool,
+    pub build: bool,
 }
 
 /// `[mqtt]` in config.toml.
@@ -504,6 +520,7 @@ impl Config {
             max_output_tokens: None,
             compaction_strategy: CompactionStrategy::default(),
             mqtt: MqttConfig::default(),
+            commands_from_project: CommandProvenance::default(),
         }
     }
 
@@ -542,6 +559,7 @@ impl Config {
             // checkout) must not run without an explicit human approval, even
             // if the user's own config auto-approves it.
             config.auto_approve.retain(|t| t != "verify");
+            config.commands_from_project.verify = true;
         }
         if let Some(value) = project.tools.symbols_backend {
             config.tools.symbols_backend = Some(value);
@@ -549,6 +567,7 @@ impl Config {
         if let Some(value) = project.tools.build_command {
             config.tools.build_command = Some(value);
             config.auto_approve.retain(|t| t != "build");
+            config.commands_from_project.build = true;
         }
         if let Some(value) = project.tools.default_chip {
             config.tools.default_chip = Some(value);
@@ -943,6 +962,7 @@ model = "deepseek-v4-flash"
 
 # Tools that skip confirmation prompts (write_file, edit_file, shell).
 # build is auto-approved by default (it runs a user-configured command); flash always asks.
+# A verify/build command defined in a project's firment.toml is never auto-approved.
 # auto_approve = ["build"]
 
 # Max tool-calling rounds per turn.
@@ -1248,6 +1268,14 @@ mod tests {
             "project-provided verify command must not be auto-approved: {:?}",
             merged.auto_approve
         );
+        assert_eq!(
+            merged.commands_from_project,
+            CommandProvenance {
+                verify: true,
+                build: true,
+            },
+            "granting code needs the same signal that stripped auto_approve"
+        );
     }
 
     #[test]
@@ -1269,6 +1297,29 @@ mod tests {
         let merged = base.merged_for(dir.path());
         assert!(merged.auto_approve.iter().any(|t| t == "build"));
         assert_eq!(merged.tools.build_command, None);
+        assert_eq!(
+            merged.commands_from_project,
+            CommandProvenance::default(),
+            "the user's own commands stay trusted"
+        );
+    }
+
+    #[test]
+    fn command_provenance_is_not_persisted() {
+        // A checkout must not be able to write a trust flag into the user's
+        // own config.toml by way of `save`, which serializes the whole struct.
+        let merged = Config::default_config();
+        let text = toml::to_string_pretty(&merged).unwrap();
+        assert!(
+            !text.contains("commands_from_project"),
+            "provenance must stay out of config.toml: {text}"
+        );
+        assert_eq!(
+            toml::from_str::<Config>(&text)
+                .unwrap()
+                .commands_from_project,
+            CommandProvenance::default()
+        );
     }
 
     #[test]

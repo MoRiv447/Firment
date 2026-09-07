@@ -550,6 +550,25 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// One-shot mode has no chat loop to fall back on, so the completion-gate
+/// tools (`verify`, `build`) are auto-approved to let the run finish. Not when
+/// the command line came from a project config: that would run an untrusted
+/// checkout's arbitrary command with no human in the loop. `merged_for` strips
+/// both from `auto_approve` in exactly that case — `commands_from_project` is
+/// the same signal for code that *grants* approval, so the two can't disagree.
+fn one_shot_auto_approve(config: &Config) -> Vec<String> {
+    let mut auto = config.auto_approve.clone();
+    for (tool, from_project) in [
+        ("verify", config.commands_from_project.verify),
+        ("build", config.commands_from_project.build),
+    ] {
+        if !from_project && !auto.iter().any(|t| t == tool) {
+            auto.push(tool.to_string());
+        }
+    }
+    auto
+}
+
 async fn run_once(
     config: &Config,
     session: Session,
@@ -559,16 +578,7 @@ async fn run_once(
 ) -> anyhow::Result<()> {
     let config = config.merged_for(&session.cwd);
     let store = SessionStore::default();
-    // The verify tool runs the user-configured command from config.toml; in
-    // one-shot mode it is part of the completion gate, so it is always
-    // auto-approved (the dangerous-command guard still applies).
-    let mut auto_approve = config.auto_approve.clone();
-    if !auto_approve.iter().any(|t| t == "verify") {
-        auto_approve.push("verify".to_string());
-    }
-    if !auto_approve.iter().any(|t| t == "build") {
-        auto_approve.push("build".to_string());
-    }
+    let auto_approve = one_shot_auto_approve(&config);
     let permission: Arc<dyn PermissionChecker> = Arc::new(CliPermission::new(yes, auto_approve));
     let mut assembly = firment_tools::assembly::assemble_agent(
         &config,
@@ -1719,4 +1729,58 @@ fn format_ts(secs: u64) -> String {
     chrono::DateTime::from_timestamp(secs as i64, 0)
         .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
         .unwrap_or_else(|| secs.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use firment_core::config::CommandProvenance;
+
+    fn config(auto: &[&str], from_project: CommandProvenance) -> Config {
+        let mut config = Config::default_config();
+        config.auto_approve = auto.iter().map(|t| t.to_string()).collect();
+        config.commands_from_project = from_project;
+        config
+    }
+
+    #[test]
+    fn one_shot_never_auto_approves_project_commands() {
+        // Cloning a repo that sets verify_command/build_command must not get
+        // its arbitrary command line run just because the user chose -p.
+        let auto = one_shot_auto_approve(&config(
+            &[],
+            CommandProvenance {
+                verify: true,
+                build: true,
+            },
+        ));
+        assert!(!auto.iter().any(|t| t == "verify"), "{auto:?}");
+        assert!(!auto.iter().any(|t| t == "build"), "{auto:?}");
+    }
+
+    #[test]
+    fn one_shot_still_auto_approves_the_users_own_commands() {
+        let auto = one_shot_auto_approve(&config(&[], CommandProvenance::default()));
+        assert!(auto.iter().any(|t| t == "verify"), "{auto:?}");
+        assert!(auto.iter().any(|t| t == "build"), "{auto:?}");
+    }
+
+    #[test]
+    fn one_shot_grants_per_tool_not_per_file() {
+        let auto = one_shot_auto_approve(&config(
+            &[],
+            CommandProvenance {
+                verify: true,
+                build: false,
+            },
+        ));
+        assert!(!auto.iter().any(|t| t == "verify"), "{auto:?}");
+        assert!(auto.iter().any(|t| t == "build"), "{auto:?}");
+    }
+
+    #[test]
+    fn one_shot_does_not_duplicate_existing_entries() {
+        let auto = one_shot_auto_approve(&config(&["build"], CommandProvenance::default()));
+        assert_eq!(auto.iter().filter(|t| *t == "build").count(), 1, "{auto:?}");
+    }
 }
