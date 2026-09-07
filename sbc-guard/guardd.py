@@ -81,16 +81,21 @@ def load_rules(path: Path) -> list:
 def compile_rules(rules: list) -> list:
     out = []
     for r in rules:
+        # rules.toml is hand-edited: one rule with a missing key (or a `rule`
+        # entry that is not a table at all) must skip THAT rule, not crash the
+        # daemon on startup and leave the board unwatched.
         try:
+            name = r["name"]  # raises first for every bad shape
             sev = r.get("sev", "warn")
             if sev not in ("debug", "info", "warn", "error"):
                 print(
-                    f"[rules] {r['name']}: unknown sev {sev!r} — treated as error",
+                    f"[rules] {name}: unknown sev {sev!r} — treated as error",
                     flush=True,
                 )
-            out.append((r["name"], re.compile(r["pattern"]), sev))
-        except re.error as e:
-            print(f"[rules] skipping {r.get('name')}: {e}", flush=True)
+            out.append((name, re.compile(r["pattern"]), sev))
+        except (re.error, KeyError, TypeError) as e:
+            label = r.get("name") if isinstance(r, dict) else repr(r)
+            print(f"[rules] skipping {label or '<unnamed>'}: {e}", flush=True)
     return out
 
 
@@ -190,6 +195,9 @@ class Guard:
         alert. Classification never runs on the paho callback thread — the
         broker keepalive would expire mid-call."""
         self.publish_alert(node, rule, sev, hit, full, revised=False)
+        # One hit, one count — publish_alert also runs for the REVISED alert,
+        # so the bump lives here rather than doubling every match.
+        self.bump("matches")
         self.work_queue.put((node, rule, sev, hit, full))
 
     def _worker(self):
@@ -262,7 +270,6 @@ class Guard:
         if revised:
             alert["revised"] = True
         mqtt_client.publish(f"firment/device/{node}/alert", json.dumps(alert), qos=1)
-        self.bump("matches")
 
     def heartbeat(self):
         status = {

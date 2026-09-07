@@ -124,6 +124,17 @@
     tool forever — with no abort left to hang it on. The timer now runs until
     the body is read, like the search paths already did.
 
+- **sbc-guard daemon audit hardening**:
+  - A hand-edited `rules.toml` can no longer leave the board unwatched. One
+    rule missing a `pattern` key — or a `rule` entry that is not a table at
+    all — crashed the daemon on startup, before it subscribed to anything, and
+    every systemd restart crashed on the same byte. That rule is now skipped
+    with a line naming it; the rest keep watching.
+  - The heartbeat's `matches` counter counted every hit twice, once for the
+    raw alert and once for the model-revised alert that follows it, so the
+    guard's own report of how much it escalated was off by exactly a factor of
+    two whenever the small model was enabled.
+
 ## v0.8.0 (2026-08-31) — logic analyzer + red team
 
 - **`la` — logic analyzer integration**. Capture, measurement and protocol
