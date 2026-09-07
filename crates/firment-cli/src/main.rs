@@ -486,9 +486,15 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
     if cli.doctor || cli.sbc {
+        // Same parity as `firm doctor`: the merged (project-effective) config
+        // and all three probe stages, or the two entry points report different
+        // truths about one checkout.
+        let cwd = cli.cwd.clone().unwrap_or(env::current_dir()?);
+        let config = config.merged_for(&cwd);
         if cli.doctor {
             doctor(&config, &config_path).await?;
             doctor_install();
+            doctor_tools(&cwd, &config.tools);
         }
         if cli.sbc {
             doctor_sbc(&config).await;
@@ -658,11 +664,8 @@ async fn guard_watch(cli: &Cli, cwd: PathBuf, once: bool) -> anyhow::Result<()> 
 
     // Stable client id across restarts + clean_session=false: the broker
     // queues QoS1 alerts published while this watcher is down or busy.
-    let mut opts = rumqttc::MqttOptions::new(
-        format!("firm-guard-{}", &mainline[..8.min(mainline.len())]),
-        &host,
-        port,
-    );
+    let mut opts =
+        rumqttc::MqttOptions::new(format!("firm-guard-{}", short_id(&mainline)), &host, port);
     opts.set_clean_session(false);
     opts.set_keep_alive(Duration::from_secs(60));
     let (client, mut conn) = rumqttc::Client::new(opts, 64);
@@ -672,7 +675,7 @@ async fn guard_watch(cli: &Cli, cwd: PathBuf, once: bool) -> anyhow::Result<()> 
     println!(
         "[guard-watch] project={} mainline={} threshold>={} nodes={} mode=plan(read-only)",
         cwd.display(),
-        &mainline[..8.min(mainline.len())],
+        short_id(&mainline),
         threshold,
         nodes.join(",")
     );
@@ -908,6 +911,14 @@ impl PermissionChecker for CliPermission {
     }
 }
 
+/// First characters of an id, for display and for stable names derived from
+/// it. Ids are normally ASCII UUIDs, but a mainline id comes from a
+/// hand-written `workbench.toml` and a parent id from a JSONL record, so a
+/// byte-index prefix here would panic on the user's own file.
+fn short_id(id: &str) -> String {
+    id.chars().take(8).collect()
+}
+
 fn list_sessions() -> anyhow::Result<()> {
     let store = SessionStore::default();
     let sessions = store.list()?;
@@ -925,7 +936,7 @@ fn list_sessions() -> anyhow::Result<()> {
         let kind_tag = match (&summary.kind, &summary.parent_session) {
             (firment_core::SessionKind::Mainline, _) => "[mainline] ".to_string(),
             (firment_core::SessionKind::Branch, Some(parent)) => {
-                format!("[branch of {}] ", &parent[..8.min(parent.len())])
+                format!("[branch of {}] ", short_id(parent))
             }
             (firment_core::SessionKind::Branch, None) => "[branch] ".to_string(),
             _ => String::new(),
@@ -1049,6 +1060,37 @@ fn run_config(config_path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The key `doctor` will send, and the label that says where it came from.
+/// Both come out of one resolution (`Config::api_key_for`, inline ->
+/// auth.json -> env, blank meaning unset) — the status text and the probe
+/// request used to resolve independently, so an auth-only provider reported
+/// "configured (auth.json)" and then probed with no key at all.
+fn doctor_key(
+    config: &Config,
+    name: &str,
+    provider: &firment_core::config::ProviderConfig,
+) -> (Option<String>, String) {
+    let key = config.api_key_for(provider, name);
+    let label = match &key {
+        Some(_) if provider.api_key.as_deref().is_some_and(|k| !k.is_empty()) => {
+            "configured (inline)".to_string()
+        }
+        Some(_) if load_auth().contains_key(name) => "configured (auth.json)".to_string(),
+        Some(_) => format!(
+            "configured via ${}",
+            provider.api_key_env.as_deref().unwrap_or_default()
+        ),
+        None => match provider.api_key_env.as_deref() {
+            Some(env_name) if env::var(env_name).is_ok() => {
+                format!("MISSING (${env_name} is empty)")
+            }
+            Some(env_name) => format!("MISSING (${env_name} not set)"),
+            None => "MISSING (no api_key or api_key_env)".to_string(),
+        },
+    };
+    (key, label)
+}
+
 async fn doctor(config: &Config, path: &Path) -> anyhow::Result<()> {
     println!("config file: {}", path.display());
     if config.providers.is_empty() {
@@ -1056,19 +1098,7 @@ async fn doctor(config: &Config, path: &Path) -> anyhow::Result<()> {
         return Ok(());
     }
     for (name, provider) in &config.providers {
-        let key_status = if provider.api_key.is_some() {
-            "configured (inline)".to_string()
-        } else if load_auth().contains_key(name) {
-            "configured (auth.json)".to_string()
-        } else if let Some(env_name) = &provider.api_key_env {
-            if env::var(env_name).is_ok() {
-                format!("configured via ${env_name}")
-            } else {
-                format!("MISSING (${env_name} not set)")
-            }
-        } else {
-            "MISSING (no api_key or api_key_env)".to_string()
-        };
+        let (key, key_status) = doctor_key(config, name, provider);
         println!(
             "provider {name}: type={} model={}",
             provider.r#type, provider.model
@@ -1080,10 +1110,6 @@ async fn doctor(config: &Config, path: &Path) -> anyhow::Result<()> {
             .timeout(Duration::from_secs(10))
             .build()?;
         let mut request = client.get(&probe_url);
-        let key = provider
-            .api_key
-            .clone()
-            .or_else(|| provider.api_key_env.as_ref().and_then(|e| env::var(e).ok()));
         if provider.r#type == "anthropic" {
             if let Some(key) = key {
                 request = request.header("x-api-key", key);
@@ -1507,7 +1533,7 @@ async fn doctor_sbc(config: &Config) {
                 .unwrap_or_else(|| "http://localhost:11434/v1".to_string())
                 .trim_end_matches('/')
                 .to_string();
-            let key = provider_key(name, p);
+            let key = config.api_key_for(p, name);
             let Some(http) = http.clone() else {
                 println!("  ⚠ {name}: could not build HTTP client");
                 continue;
@@ -1600,21 +1626,6 @@ fn url_host(url: &str) -> Option<&str> {
         .or_else(|| url.strip_prefix("http://"))
         .unwrap_or(url);
     rest.split(['/', ':']).next().filter(|h| !h.is_empty())
-}
-
-/// API key for a provider: inline api_key → $API_KEY_ENV → auth.json[name].
-fn provider_key(name: &str, p: &firment_core::config::ProviderConfig) -> Option<String> {
-    if let Some(k) = &p.api_key {
-        return Some(k.clone());
-    }
-    if let Some(v) = p
-        .api_key_env
-        .as_ref()
-        .and_then(|env_name| env::var(env_name).ok())
-    {
-        return Some(v);
-    }
-    load_auth().get(name).cloned()
 }
 
 fn load_config(cli: &Cli) -> anyhow::Result<Config> {
@@ -1782,5 +1793,60 @@ mod tests {
     fn one_shot_does_not_duplicate_existing_entries() {
         let auto = one_shot_auto_approve(&config(&["build"], CommandProvenance::default()));
         assert_eq!(auto.iter().filter(|t| *t == "build").count(), 1, "{auto:?}");
+    }
+
+    #[test]
+    fn doctor_sends_the_key_it_claims_is_configured() {
+        // The status text used to consult auth.json while the probe request
+        // built its key from config.toml alone: an auth-only provider printed
+        // "configured (auth.json)" and then asked the API without a key (401).
+        let dir = tempfile::tempdir().unwrap();
+        let previous = env::var("FIRMENT_CONFIG_DIR").ok();
+        // SAFETY: this crate's tests run single-threaded (AGENTS.md
+        // --test-threads=1), so nothing else reads the environment meanwhile.
+        unsafe { env::set_var("FIRMENT_CONFIG_DIR", dir.path()) };
+
+        let config = Config::default_config();
+        let mut provider = config.providers["default"].clone();
+        // A blank inline key means unset: it must fall through to auth.json
+        // instead of sending an empty key on every request.
+        provider.api_key = Some(String::new());
+        config.set_api_key("default", "sk-auth-only").unwrap();
+
+        let (key, label) = doctor_key(&config, "default", &provider);
+        assert_eq!(key.as_deref(), Some("sk-auth-only"), "got: {label}");
+        assert_eq!(label, "configured (auth.json)");
+
+        let mut envp = provider.clone();
+        envp.api_key = None;
+        envp.api_key_env = Some("FIRMENT_TEST_UNSET_KEY".to_string());
+        let (key, label) = doctor_key(&config, "envp", &envp);
+        assert!(key.is_none());
+        assert_eq!(label, "MISSING ($FIRMENT_TEST_UNSET_KEY not set)");
+
+        unsafe { env::set_var("FIRMENT_TEST_UNSET_KEY", "") };
+        let (key, label) = doctor_key(&config, "envp", &envp);
+        assert!(key.is_none(), "an empty env value is not a key");
+        assert_eq!(label, "MISSING ($FIRMENT_TEST_UNSET_KEY is empty)");
+
+        unsafe {
+            env::remove_var("FIRMENT_TEST_UNSET_KEY");
+            match previous {
+                Some(value) => env::set_var("FIRMENT_CONFIG_DIR", value),
+                None => env::remove_var("FIRMENT_CONFIG_DIR"),
+            }
+        }
+    }
+
+    #[test]
+    fn short_id_counts_characters_not_bytes() {
+        // A mainline id is read from a hand-written workbench.toml and a
+        // parent id from a JSONL record, so the old `&id[..8]` panicked
+        // mid-character: `firm sessions` died on the listing, guard-watch died
+        // before it connected.
+        assert_eq!(short_id("会话0f3a9b2c"), "会话0f3a9b");
+        assert_eq!(short_id("0f3a9b2c-1111-2222"), "0f3a9b2c");
+        assert_eq!(short_id("abc"), "abc");
+        assert_eq!(short_id(""), "");
     }
 }

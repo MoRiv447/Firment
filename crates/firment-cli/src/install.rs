@@ -26,11 +26,26 @@ pub fn install(to: Option<PathBuf>, files_only: bool) -> Result<()> {
     let dir = to.unwrap_or_else(default_bin_dir);
     let (target, completions) = install_files(&source, &dir)?;
 
+    let mut path_is_settled = true;
     if !files_only {
         match add_user_path(&dir) {
-            Ok(true) => println!("Added {} to the user PATH", dir.display()),
-            Ok(false) => println!("User PATH already contains {}; skipped", dir.display()),
-            Err(e) => eprintln!("⚠ Failed to update the user PATH: {e:#}"),
+            Ok(PathOutcome::Added) => println!("Added {} to the user PATH", dir.display()),
+            Ok(PathOutcome::AlreadyPresent) => {
+                println!("User PATH already contains {}; skipped", dir.display())
+            }
+            Ok(PathOutcome::CannotEdit) => {
+                path_is_settled = false;
+                println!(
+                    "This platform's user PATH is not edited here — add {} yourself, e.g. in \
+                     ~/.bashrc or ~/.zshrc:\n  export PATH=\"{}:$PATH\"",
+                    dir.display(),
+                    dir.display()
+                );
+            }
+            Err(e) => {
+                path_is_settled = false;
+                eprintln!("⚠ Failed to update the user PATH: {e:#}");
+            }
         }
         match discover_profile() {
             Some(profile) => match ensure_profile_completion(&profile, &completions) {
@@ -54,8 +69,10 @@ pub fn install(to: Option<PathBuf>, files_only: bool) -> Result<()> {
     );
     if files_only {
         println!("(files-only: PATH and PowerShell profile were not modified)");
-    } else {
+    } else if path_is_settled {
         println!("Open a new terminal; from now on you can launch firm directly.");
+    } else {
+        println!("Until PATH points at it, launch firm with its full path.");
     }
     Ok(())
 }
@@ -115,7 +132,7 @@ pub fn update(source: Option<PathBuf>, to: Option<PathBuf>) -> Result<()> {
                 target.display()
             )
         })?;
-    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let version = probe_version(&output, &target)?;
     println!(
         "Updated: {} -> {}\nNew version: {}",
         source.display(),
@@ -123,6 +140,36 @@ pub fn update(source: Option<PathBuf>, to: Option<PathBuf>) -> Result<()> {
         version
     );
     Ok(())
+}
+
+/// Judge the fresh binary's `--version` run. `update_impl` has already
+/// replaced the file at this point, so a probe that fails must be reported as
+/// a failed update — printing "Updated" would send the user off with a binary
+/// that cannot run and no copy of the one that could.
+fn probe_version(output: &std::process::Output, target: &Path) -> Result<String> {
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        bail!(
+            "verification failed: {} exited {} on --version{}. The previous install was already \
+             replaced — run `firm install` again from a binary that works.",
+            target.display(),
+            output.status,
+            if detail.is_empty() {
+                String::new()
+            } else {
+                format!(" (stderr: {detail})")
+            }
+        );
+    }
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if version.is_empty() {
+        bail!(
+            "verification failed: {} ran --version and printed no version. The previous install \
+             was already replaced — run `firm install` again from a binary that works.",
+            target.display()
+        );
+    }
+    Ok(version)
 }
 
 pub fn update_impl(source: &Path, target: &Path, current: &Path) -> Result<()> {
@@ -193,7 +240,17 @@ fn replace_file(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn add_user_path(dir: &Path) -> Result<bool> {
+/// What `add_user_path` actually did to the user PATH.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PathOutcome {
+    Added,
+    AlreadyPresent,
+    /// This platform's user PATH is not something the installer can write
+    /// (no registry on Unix) — the caller must tell the user to do it.
+    CannotEdit,
+}
+
+pub fn add_user_path(dir: &Path) -> Result<PathOutcome> {
     add_user_path_impl(&RegistryPathEnv, dir)
 }
 
@@ -203,30 +260,44 @@ pub trait PathEnv {
     /// 2 = REG_EXPAND_SZ. `None` on non-Windows or when the value is absent.
     fn read_user_path_kind(&self) -> Result<Option<u32>>;
     fn write_user_path_with_kind(&self, value: &str, kind: Option<u32>) -> Result<()>;
+    /// Whether writing through `write_user_path_with_kind` changes anything.
+    /// False off Windows, where there is no user-PATH store to edit.
+    fn edits_user_path(&self) -> bool {
+        true
+    }
 }
 
-/// Append `dir` to the user PATH once (case-insensitive, `;` separated).
-/// Returns true when the entry was added. Aborts (leaving PATH untouched)
-/// when the current PATH cannot be read.
-pub fn add_user_path_impl(env: &dyn PathEnv, dir: &Path) -> Result<bool> {
+/// List separator of this platform's PATH.
+#[cfg(windows)]
+const PATH_SEPARATOR: &str = ";";
+#[cfg(not(windows))]
+const PATH_SEPARATOR: &str = ":";
+
+/// Append `dir` to the user PATH once (case-insensitive, `PATH_SEPARATOR`
+/// separated). Reports what it did. Aborts (leaving PATH untouched) when the
+/// current PATH cannot be read.
+pub fn add_user_path_impl(env: &dyn PathEnv, dir: &Path) -> Result<PathOutcome> {
+    if !env.edits_user_path() {
+        return Ok(PathOutcome::CannotEdit);
+    }
     let current = env.read_user_path()?;
     let kind = env.read_user_path_kind().unwrap_or(None);
     let needle = normalize_path(dir);
     let mut parts: Vec<String> = current
-        .split(';')
+        .split(PATH_SEPARATOR)
         .filter(|p| !p.trim().is_empty())
         .map(|p| p.to_string())
         .collect();
     if parts.iter().any(|p| normalize_path(Path::new(p)) == needle) {
-        return Ok(false);
+        return Ok(PathOutcome::AlreadyPresent);
     }
     let dir_str = dir
         .to_string_lossy()
         .trim_end_matches(['\\', '/'])
         .to_string();
     parts.push(dir_str);
-    env.write_user_path_with_kind(&parts.join(";"), kind)?;
-    Ok(true)
+    env.write_user_path_with_kind(&parts.join(PATH_SEPARATOR), kind)?;
+    Ok(PathOutcome::Added)
 }
 
 pub struct RegistryPathEnv;
@@ -238,7 +309,15 @@ impl PathEnv for RegistryPathEnv {
         use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         let env = hkcu.open_subkey_with_flags("Environment", KEY_READ)?;
-        Ok(env.get_value("Path").unwrap_or_default())
+        match env.get_value("Path") {
+            Ok(value) => Ok(value),
+            // A user with no personal PATH entry legitimately has an empty
+            // one. Any other failure must NOT look like an empty PATH: the
+            // caller would write back a value holding only our directory and
+            // wipe whatever the user really has.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+            Err(e) => Err(e.into()),
+        }
     }
 
     fn read_user_path_kind(&self) -> Result<Option<u32>> {
@@ -289,6 +368,10 @@ impl PathEnv for RegistryPathEnv {
         broadcast_environment_change();
         Ok(())
     }
+
+    fn edits_user_path(&self) -> bool {
+        false
+    }
 }
 
 /// Does the effective PATH (process PATH + user registry PATH) contain `dir`?
@@ -299,7 +382,7 @@ pub fn user_path_contains(dir: &Path) -> bool {
         sources.push(user);
     }
     sources.iter().any(|path| {
-        path.split(';')
+        path.split(PATH_SEPARATOR)
             .any(|p| normalize_path(Path::new(p)) == needle)
     })
 }
@@ -433,24 +516,63 @@ mod tests {
         }
     }
 
+    /// Stands in for the non-Windows impl: a PATH store this installer cannot
+    /// edit, where even an attempted write would be a lie waiting to happen.
+    struct ReadOnlyPathEnv {
+        value: Arc<Mutex<String>>,
+        wrote: std::cell::Cell<bool>,
+    }
+
+    impl PathEnv for ReadOnlyPathEnv {
+        fn read_user_path(&self) -> Result<String> {
+            Ok(self
+                .value
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone())
+        }
+
+        fn read_user_path_kind(&self) -> Result<Option<u32>> {
+            Ok(None)
+        }
+
+        fn write_user_path_with_kind(&self, value: &str, _kind: Option<u32>) -> Result<()> {
+            self.wrote.set(true);
+            *self
+                .value
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = value.to_string();
+            Ok(())
+        }
+
+        fn edits_user_path(&self) -> bool {
+            false
+        }
+    }
+
     #[test]
     fn path_append_is_case_insensitive_and_deduplicated() {
         // Windows-style paths exercise case-insensitive dedup; Unix-style
-        // paths exercise exact dedup on non-Windows CI runners.
+        // paths exercise exact dedup on non-Windows CI runners. The separator
+        // comes from PATH_SEPARATOR so each platform is tested with the one it
+        // actually uses.
         let dir = if cfg!(windows) {
             PathBuf::from(r"C:\Users\me\.firment\bin")
         } else {
             PathBuf::from("/home/me/.firment/bin")
         };
         let existing = if cfg!(windows) {
-            r"C:\Windows;C:\Users\ME\.FIRMENT\BIN\".to_string()
+            format!(r"C:\Windows{PATH_SEPARATOR}C:\Users\ME\.FIRMENT\BIN\")
         } else {
-            "/usr/bin;/home/me/.firment/bin/".to_string()
+            format!("/usr/bin{PATH_SEPARATOR}/home/me/.firment/bin/")
         };
         let env = MemoryPathEnv {
             value: Arc::new(Mutex::new(existing.clone())),
         };
-        assert!(!add_user_path_impl(&env, &dir).unwrap());
+        assert_eq!(
+            add_user_path_impl(&env, &dir).unwrap(),
+            PathOutcome::AlreadyPresent
+        );
         assert_eq!(
             *env.value
                 .lock()
@@ -466,13 +588,69 @@ mod tests {
         let env = MemoryPathEnv {
             value: Arc::new(Mutex::new(base.clone())),
         };
-        assert!(add_user_path_impl(&env, &dir).unwrap());
+        assert_eq!(add_user_path_impl(&env, &dir).unwrap(), PathOutcome::Added);
         assert_eq!(
             *env.value
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()),
-            format!("{base};{}", dir.display())
+            format!("{base}{PATH_SEPARATOR}{}", dir.display())
         );
+    }
+
+    #[test]
+    fn a_store_that_cannot_be_edited_is_reported_instead_of_claimed() {
+        // The non-Windows PathEnv writes nothing; claiming success there told
+        // users their PATH had been updated when the shell had not changed.
+        let value = Arc::new(Mutex::new(String::new()));
+        let env = ReadOnlyPathEnv {
+            value: value.clone(),
+            wrote: std::cell::Cell::new(false),
+        };
+        assert_eq!(
+            add_user_path_impl(&env, Path::new("/home/me/.firment/bin")).unwrap(),
+            PathOutcome::CannotEdit
+        );
+        assert!(!env.wrote.get());
+        assert!(
+            value
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_failing_version_probe_fails_the_update() {
+        // update_impl has already replaced the binary by the time the probe
+        // runs, so a non-zero exit cannot be reported as "Updated".
+        let target = Path::new("firm");
+        let mut command = if cfg!(windows) {
+            let mut c = std::process::Command::new("cmd");
+            c.args(["/C", "exit /b 3"]);
+            c
+        } else {
+            std::process::Command::new("/bin/false")
+        };
+        let failed = command.output().unwrap();
+        let err = probe_version(&failed, target).unwrap_err().to_string();
+        assert!(err.contains("verification failed"), "got: {err}");
+        assert!(err.contains("--version"), "got: {err}");
+
+        let mut command = if cfg!(windows) {
+            let mut c = std::process::Command::new("cmd");
+            c.args(["/C", "ver"]);
+            c
+        } else {
+            std::process::Command::new("/bin/echo")
+        };
+        let mut ok = command.output().unwrap();
+        ok.stdout = b"firm 0.8.1".to_vec();
+        assert_eq!(probe_version(&ok, target).unwrap(), "firm 0.8.1");
+
+        // Runs, exits 0, prints nothing: still not a verified upgrade.
+        ok.stdout = Vec::new();
+        let err = probe_version(&ok, target).unwrap_err().to_string();
+        assert!(err.contains("printed no version"), "got: {err}");
     }
 
     #[test]

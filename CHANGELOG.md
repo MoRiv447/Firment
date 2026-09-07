@@ -70,6 +70,32 @@
     that turn's restore data — and recorded the same file twice when a
     tool named it two different ways; a final non-UTF-8 byte in a session
     file discarded the dangling-tool-call repair along with it.
+- **CLI and installer audit hardening**:
+  - `firm doctor` now probes with the key it says it has. The status text
+    resolved through `auth.json`, the request did not, so a provider whose
+    key lives in `auth.json` printed "configured (auth.json)" and was
+    answered 401 (verified live: that provider now probes 200). The three
+    conflicting key resolutions in the binary collapsed onto the one
+    authoritative `Config::api_key_for`, and an empty value — inline or in
+    the environment — is reported as missing, not configured.
+  - `firm --doctor` / `--sbc` reach the same verdict as `firm doctor`: the
+    project-effective (merged) config, plus the toolchain and `[tools]`
+    probe stage the flag path skipped entirely.
+  - `firm update` checks the exit status of its own `--version` probe. The
+    old binary is already gone by then, so a build that could not start was
+    announced as "Updated" with an empty version line.
+  - PATH registration says what it did. Where there is no user-PATH store
+    to edit it no longer claims "Added to the user PATH" — it prints the
+    `export PATH=` line to add yourself and stops promising that a new
+    terminal will find `firm`; the list separator is the platform's own
+    instead of always `;`; and a registry read that failed for any reason
+    beyond "no such value" no longer reads as an empty PATH, which the next
+    write would have replaced with a PATH holding only Firment's own
+    directory.
+  - Session id prefixes (`firm sessions`, `firm guard-watch`) are counted
+    in characters, not bytes: those ids come from a hand-written
+    `workbench.toml` and from JSONL on disk, and a single non-ASCII byte
+    made the listing panic.
 
 ## v0.8.0 (2026-08-31) — logic analyzer + red team
 
