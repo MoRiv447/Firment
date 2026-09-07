@@ -1869,10 +1869,13 @@ async fn context_compaction_replaces_old_messages_with_digest() {
     let dir = tempdir().unwrap();
     let store = SessionStore::new(dir.path().to_path_buf());
     let mut session = Session::new(dir.path().to_path_buf(), "default", "fake");
-    for i in 0..14 {
+    // Alternating turns, not 14 bare user messages: a real transcript never
+    // repeats a role, and this filler must survive role normalization.
+    for i in 0..7 {
         session.push(ChatMessage::User {
             content: format!("message {i} {}", "x".repeat(200)),
         });
+        session.push(assistant(&format!("reply {i} {}", "y".repeat(200))));
     }
     let mut agent = Agent::new(
         Some(Box::new(provider)),
@@ -2148,4 +2151,177 @@ async fn cancel_during_tool_wave_stops_the_turn_promptly() {
         "the cancelled tool_call_id must still be answered: {}",
         text
     );
+}
+
+fn adjacent_user_pairs(messages: &[ChatMessage]) -> usize {
+    messages
+        .windows(2)
+        .filter(|w| {
+            matches!(
+                (&w[0], &w[1]),
+                (ChatMessage::User { .. }, ChatMessage::User { .. })
+            )
+        })
+        .count()
+}
+
+fn assistant(content: &str) -> ChatMessage {
+    ChatMessage::Assistant {
+        content: content.to_string(),
+        tool_calls: Vec::new(),
+        thinking_blocks: Vec::new(),
+    }
+}
+
+fn user(content: &str) -> ChatMessage {
+    ChatMessage::User {
+        content: content.to_string(),
+    }
+}
+
+/// A turn that died before the model answered leaves its prompt on disk, so a
+/// retry appends a second user message — and both provider APIs reject
+/// `[user, user]` with HTTP 400, which would keep a session broken even after
+/// the interruption itself was resolved.
+#[test]
+fn load_heals_consecutive_user_messages() {
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let mut session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    session.push(user("first"));
+    session.push(assistant("ok"));
+    session.push(user("interrupted attempt"));
+    session.push(user("retry"));
+    store.save(&session).unwrap();
+
+    let loaded = store.load(&session.id).unwrap();
+    let roles: Vec<&str> = loaded
+        .messages
+        .iter()
+        .map(|m| match m {
+            ChatMessage::User { .. } => "user",
+            ChatMessage::Assistant { .. } => "assistant",
+            ChatMessage::Tool { .. } => "tool",
+            ChatMessage::System { .. } => "system",
+        })
+        .collect();
+    assert_eq!(roles, vec!["user", "assistant", "user"]);
+    let ChatMessage::User { content } = &loaded.messages[2] else {
+        panic!("expected the merged user message");
+    };
+    assert!(
+        content.contains("interrupted attempt") && content.contains("retry"),
+        "merging must not lose what the user typed: {content:?}"
+    );
+}
+
+#[tokio::test]
+async fn provider_request_never_carries_consecutive_users() {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let mut session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    session.push(user("a turn that was interrupted"));
+    let mut agent = Agent::new(
+        Some(Box::new(RecordingProvider {
+            requests: requests.clone(),
+        })),
+        registry_with(vec![]),
+        session,
+        store,
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(Arc::new(Mutex::new(Vec::new())))),
+        10,
+    );
+
+    agent.run_turn("retry the same work").await.unwrap();
+    let request = requests.lock().unwrap().pop().expect("one request sent");
+    assert_eq!(
+        adjacent_user_pairs(&request.messages),
+        0,
+        "the provider must never see [user, user]"
+    );
+    let users: Vec<&str> = request
+        .messages
+        .iter()
+        .filter_map(|m| match m {
+            ChatMessage::User { content } => Some(content.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        users.len(),
+        1,
+        "both prompts survive in one message: {users:?}"
+    );
+    assert!(users[0].contains("interrupted") && users[0].contains("retry"));
+}
+
+/// A stall with no text at all pushes an assistant with nothing in it; sent
+/// back verbatim it reads as an empty content block, which the APIs reject too.
+#[tokio::test]
+async fn provider_request_drops_the_empty_assistant_left_by_a_stall() {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let mut session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    session.push(user("write the big file"));
+    session.push(assistant(""));
+    let mut agent = Agent::new(
+        Some(Box::new(RecordingProvider {
+            requests: requests.clone(),
+        })),
+        registry_with(vec![]),
+        session,
+        store,
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(Arc::new(Mutex::new(Vec::new())))),
+        10,
+    );
+
+    agent.run_turn("continue").await.unwrap();
+    let request = requests.lock().unwrap().pop().expect("one request sent");
+    assert!(
+        !request.messages.iter().any(
+            |m| matches!(m, ChatMessage::Assistant { content, tool_calls, thinking_blocks }
+                if content.is_empty() && tool_calls.is_empty() && thinking_blocks.is_empty())
+        ),
+        "an empty assistant must not reach the provider: {:?}",
+        request.messages
+    );
+}
+
+#[test]
+fn merging_never_crosses_an_assistant_tool_boundary() {
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let mut session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    session.push(user("go"));
+    session.push(ChatMessage::Assistant {
+        content: String::new(),
+        tool_calls: vec![firment_core::ToolCall {
+            id: "call_1".to_string(),
+            name: "echo".to_string(),
+            arguments: json!({}),
+        }],
+        thinking_blocks: Vec::new(),
+    });
+    session.push(ChatMessage::Tool {
+        tool_call_id: "call_1".to_string(),
+        name: "echo".to_string(),
+        content: "done".to_string(),
+    });
+    session.push(user("and now?"));
+    store.save(&session).unwrap();
+
+    let loaded = store.load(&session.id).unwrap();
+    assert_eq!(
+        loaded.messages.len(),
+        4,
+        "a clean transcript must be untouched"
+    );
+    let ChatMessage::Assistant { tool_calls, .. } = &loaded.messages[1] else {
+        panic!("assistant expected");
+    };
+    assert_eq!(tool_calls.len(), 1, "its tool_call must survive");
 }

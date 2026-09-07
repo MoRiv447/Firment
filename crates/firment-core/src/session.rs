@@ -268,6 +268,10 @@ impl SessionStore {
         if corrupt_lines > 0 {
             repair_dangling_tool_calls(&mut messages);
         }
+        // Ungated on purpose: a consecutive-user transcript is made of valid
+        // JSON lines, so `corrupt_lines` never counts it, yet it 400s every
+        // request. Sessions written before this rule healed are on disk now.
+        normalize_role_alternation(&mut messages);
         let model = migrate_legacy_model(&meta.model);
         let session = Session {
             id: meta.id,
@@ -457,6 +461,59 @@ fn repair_dangling_tool_calls(messages: &mut [ChatMessage]) {
             }
         }
     }
+}
+
+fn is_empty_assistant(message: &ChatMessage) -> bool {
+    matches!(
+        message,
+        ChatMessage::Assistant {
+            content,
+            tool_calls,
+            thinking_blocks,
+        } if content.is_empty() && tool_calls.is_empty() && thinking_blocks.is_empty()
+    )
+}
+
+/// Collapse consecutive same-role messages the provider APIs reject.
+///
+/// A turn that ends before the model ever answers (interrupted, stream timed
+/// out, stream creation failed) has still persisted its `user` prompt — the
+/// UI already showed it, so deleting it would lose what the user typed. The
+/// NEXT turn then appends a second user message, and both APIs reject
+/// `[user, user]` with HTTP 400, which leaves the session broken even after a
+/// successful retry. Merging adjacent user messages keeps every character the
+/// user typed and restores the alternation invariant.
+///
+/// Deliberately narrow: only `User` + `User` merges, an `Assistant` and its
+/// `Tool` results are never reordered or dropped (that is
+/// [`repair_dangling_tool_calls`]'s job), and no assistant message is
+/// invented — an empty content block is itself rejected. A fully empty
+/// assistant carries no information and is dropped.
+pub(crate) fn normalize_role_alternation(messages: &mut Vec<ChatMessage>) {
+    let mut merged = 0usize;
+    let mut dropped = 0usize;
+    let mut kept: Vec<ChatMessage> = Vec::with_capacity(messages.len());
+    for message in std::mem::take(messages) {
+        if let ChatMessage::User { content } = &message {
+            if let Some(ChatMessage::User { content: prev }) = kept.last_mut() {
+                prev.push_str("\n\n");
+                prev.push_str(content);
+                merged += 1;
+                continue;
+            }
+        } else if is_empty_assistant(&message) {
+            dropped += 1;
+            continue;
+        }
+        kept.push(message);
+    }
+    if merged > 0 || dropped > 0 {
+        tracing::warn!(
+            "session repair: merged {merged} consecutive user message(s), \
+             dropped {dropped} empty assistant message(s)"
+        );
+    }
+    *messages = kept;
 }
 
 fn serialize_session(session: &Session) -> Result<String, SessionError> {

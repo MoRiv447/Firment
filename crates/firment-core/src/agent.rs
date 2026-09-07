@@ -788,30 +788,31 @@ impl Agent {
         // hitting; the change-ledger delta is merged into the NEWEST user
         // message at request time only — the transcript stores raw input so
         // the UI never shows bookkeeping inside the user's bubble.
-        let last_user = self
-            .session
-            .messages
+        //
+        // This is the one chokepoint every provider request passes, so it is
+        // also where role alternation is enforced: a turn that ended before
+        // the model answered leaves its user prompt behind, and compaction or
+        // a branch can add another.
+        let mut messages = self.session.messages.clone();
+        crate::session::normalize_role_alternation(&mut messages);
+        if let Some(i) = messages
             .iter()
-            .rposition(|m| matches!(m, ChatMessage::User { .. }));
-        let mut messages = vec![ChatMessage::System {
-            content: format!(
-                "{}{}",
-                system_prompt_for(&self.session.cwd, self.session.mode),
-                crate::context::delegation_section(&self.providers)
-            ),
-        }];
-        for (i, m) in self.session.messages.iter().enumerate() {
-            if Some(i) == last_user
-                && !self.ledger_prefix.is_empty()
-                && let ChatMessage::User { content } = m
-            {
-                messages.push(ChatMessage::User {
-                    content: format!("{}{}", self.ledger_prefix, content),
-                });
-                continue;
-            }
-            messages.push(m.clone());
+            .rposition(|m| matches!(m, ChatMessage::User { .. }))
+            && !self.ledger_prefix.is_empty()
+            && let ChatMessage::User { content } = &mut messages[i]
+        {
+            *content = format!("{}{}", self.ledger_prefix, content);
         }
+        messages.insert(
+            0,
+            ChatMessage::System {
+                content: format!(
+                    "{}{}",
+                    system_prompt_for(&self.session.cwd, self.session.mode),
+                    crate::context::delegation_section(&self.providers)
+                ),
+            },
+        );
         ChatRequest {
             model: self.session.model.clone(),
             messages,
