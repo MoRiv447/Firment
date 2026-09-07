@@ -1378,7 +1378,12 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(50)).await;
             let stream = futures::stream::unfold((), |()| async move {
                 tokio::time::sleep(Duration::from_secs(30)).await;
-                Some((Err(firment_core::ProviderError::StreamEnded), ()))
+                Some((
+                    Err(firment_core::ProviderError::StreamEnded(
+                        "test stream never delivers".to_string(),
+                    )),
+                    (),
+                ))
             });
             Ok(Box::pin(stream))
         }

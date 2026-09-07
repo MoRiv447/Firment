@@ -50,8 +50,12 @@ pub enum ProviderError {
     Api { status: u16, message: String },
     #[error("invalid response: {0}")]
     InvalidResponse(String),
-    #[error("stream ended unexpectedly")]
-    StreamEnded,
+    /// The provider reported an error *inside* an already-open stream (HTTP
+    /// 200 was spent on the response headers, so there is no status worth
+    /// showing) — overloaded capacity, a content-filter abort, a gateway
+    /// failure mid-response. Carries the server's own message.
+    #[error("stream error: {0}")]
+    StreamEnded(String),
 }
 
 /// Compact an HTTP error body for display. Error payloads occasionally come

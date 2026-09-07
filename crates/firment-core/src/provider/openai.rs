@@ -264,6 +264,23 @@ impl Provider for OpenAIProvider {
                         }
                     };
 
+                    // Gateways report failures mid-stream as a top-level
+                    // `error` object on a 200 response. Only fatal while the
+                    // turn is still open: unlike the Anthropic parser, this one
+                    // keeps reading frames after `finish_reason`, and a stray
+                    // trailer must not turn a completed reply into a failure.
+                    if !stop_emitted
+                        && let Some(err) = payload.get("error")
+                    {
+                        let message = err
+                            .get("message")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("provider reported an error")
+                            .to_string();
+                        yield Err(ProviderError::StreamEnded(message));
+                        return;
+                    }
+
                     if let Some(delta) = payload.pointer("/choices/0/delta") {
                         // Reasoning deltas (never persisted into the
                         // transcript — they only drive the "model is

@@ -451,6 +451,19 @@ impl Provider for AnthropicProvider {
                                 stop_emitted = true;
                             }
                         }
+                        "error" => {
+                            // Reported mid-stream over a 200 response (capacity,
+                            // content filter, gateway abort). Falling through the
+                            // catch-all here used to end the turn as if the model
+                            // had simply finished.
+                            let message = payload
+                                .pointer("/error/message")
+                                .and_then(|m| m.as_str())
+                                .unwrap_or("provider reported an error")
+                                .to_string();
+                            yield Err(ProviderError::StreamEnded(message));
+                            return;
+                        }
                         _ => {}
                     }
                 }

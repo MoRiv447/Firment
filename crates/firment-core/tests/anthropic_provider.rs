@@ -1,5 +1,5 @@
 use firment_core::{
-    AnthropicProvider, ChatMessage, ChatRequest, Provider, ProviderEvent, StopReason,
+    AnthropicProvider, ChatMessage, ChatRequest, Provider, ProviderError, ProviderEvent, StopReason,
 };
 use futures::StreamExt;
 use wiremock::matchers::{method, path};
@@ -219,4 +219,61 @@ async fn unparsable_frames_still_prove_the_stream_is_alive() {
         "bytes on the wire must produce a heartbeat, got {heartbeats}"
     );
     assert_eq!(stop, Some(StopReason::EndTurn));
+}
+
+#[tokio::test]
+async fn mid_stream_error_is_not_disguised_as_a_finished_turn() {
+    // "Overloaded" arrives as an SSE event on an already-200 response. The
+    // parser used to drop it on the floor, then its own
+    // `if !stop_emitted { yield Stop(EndTurn) }` fallback reported a clean
+    // end — the agent rolled nothing back and the model's half-answer stood.
+    let server = MockServer::start().await;
+    let body = sse(&[
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Sure"}}"#,
+        r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
+        r#"{"type":"text_delta","index":0,"delta":{"type":"text_delta","text":"ignored"}}"#,
+    ]);
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body, "text/event-stream"))
+        .mount(&server)
+        .await;
+
+    let provider = AnthropicProvider::new(server.uri(), "test-key", "anthropic-test", None, None);
+    let request = ChatRequest {
+        model: "anthropic-test".to_string(),
+        messages: vec![ChatMessage::User {
+            content: "hi".to_string(),
+        }],
+        tools: Vec::new(),
+        max_tokens: None,
+        temperature: None,
+        thinking: None,
+    };
+    let mut stream = provider.stream(request).await.unwrap();
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event);
+    }
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Ok(ProviderEvent::Text(t)) if t == "Sure")),
+        "text before the error must still reach the caller"
+    );
+    let error = events
+        .iter()
+        .find_map(|e| e.as_ref().err())
+        .expect("an `error` frame must surface as Err");
+    assert!(
+        matches!(error, ProviderError::StreamEnded(msg) if msg == "Overloaded"),
+        "expected StreamEnded(\"Overloaded\"), got {error:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Ok(ProviderEvent::Stop(_)))),
+        "a failed stream must not also report a clean Stop"
+    );
 }

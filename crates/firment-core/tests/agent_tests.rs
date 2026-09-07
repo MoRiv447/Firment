@@ -2325,3 +2325,53 @@ fn merging_never_crosses_an_assistant_tool_boundary() {
     };
     assert_eq!(tool_calls.len(), 1, "its tool_call must survive");
 }
+
+/// A reply that hit the output cap is incomplete. Firment used to discard the
+/// stop reason entirely, so the turn ended as if the model had finished.
+#[tokio::test]
+async fn max_tokens_truncation_is_surfaced_without_rollback() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([vec![
+            ProviderEvent::Text("half a file".to_string()),
+            ProviderEvent::Stop(StopReason::MaxTokens),
+        ]]))),
+        model: "fake".to_string(),
+    };
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(Vec::new()),
+        session,
+        store,
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(events.clone())),
+        10,
+    );
+
+    let text = agent.run_turn("go").await.unwrap();
+    assert_eq!(text, "half a file", "partial text is still progress");
+    let events = events.lock().unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Info(m) if m.contains("truncated"))),
+        "expected a truncation notice, got: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|e| matches!(e, AgentEvent::Error(_))),
+        "truncation is not a failed turn"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Info(m) if m.contains("rolled back"))),
+        "a truncated reply must not be rolled back: {events:?}"
+    );
+    assert!(
+        matches!(events.last(), Some(AgentEvent::TurnEnd { text }) if text == "half a file"),
+        "expected a normal TurnEnd, got: {events:?}"
+    );
+}

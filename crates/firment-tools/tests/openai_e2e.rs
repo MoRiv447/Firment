@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use firment_core::{
-    Agent, AgentEvent, AutoApprove, Config, EventSink, PlanModePermission, ProviderConfig, Session,
-    SessionMode, SessionStore,
+    Agent, AgentEvent, AutoApprove, Config, EventSink, PlanModePermission, Provider,
+    ProviderConfig, Session, SessionMode, SessionStore,
 };
 use firment_tools::{default_registry, plan_registry};
 use serde_json::{Value, json};
@@ -211,5 +211,102 @@ async fn plan_mode_end_to_end_only_runs_read_tools() {
     assert!(
         write_result.contains("unknown tool: write_file") || write_result.contains("plan mode"),
         "unexpected write result: {write_result}"
+    );
+}
+
+async fn openai_stream(
+    server: &MockServer,
+) -> Vec<Result<firment_core::ProviderEvent, firment_core::ProviderError>> {
+    use futures::StreamExt;
+    let provider =
+        firment_core::OpenAIProvider::new(server.uri(), "test-key", "gpt-test", None, None);
+    let request = firment_core::ChatRequest {
+        model: "gpt-test".to_string(),
+        messages: vec![firment_core::ChatMessage::User {
+            content: "hi".to_string(),
+        }],
+        tools: Vec::new(),
+        max_tokens: None,
+        temperature: None,
+        thinking: None,
+    };
+    let mut stream = provider.stream(request).await.unwrap();
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event);
+    }
+    events
+}
+
+#[tokio::test]
+async fn openai_mid_stream_error_is_not_disguised_as_a_finished_turn() {
+    let server = MockServer::start().await;
+    let body = sse(&[
+        openai_chunk(json!({"content": "partial answer"}), None),
+        json!({"error": {"message": "Upstream service disrupted", "type": "server_error"}}),
+    ]);
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body, "text/event-stream"))
+        .mount(&server)
+        .await;
+
+    let events = openai_stream(&server).await;
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            Ok(firment_core::ProviderEvent::Text(t)) if t == "partial answer"
+        )),
+        "the text before the error must reach the caller, got: {events:?}"
+    );
+    let error = events
+        .iter()
+        .find_map(|e| e.as_ref().err())
+        .expect("an `error` frame must surface as Err");
+    assert!(
+        matches!(
+            error,
+            firment_core::ProviderError::StreamEnded(msg) if msg == "Upstream service disrupted"
+        ),
+        "expected StreamEnded with the gateway message, got {error:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Ok(firment_core::ProviderEvent::Stop(_)))),
+        "a failed stream must not also report a clean Stop: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn openai_error_trailer_after_stop_does_not_fail_the_turn() {
+    // The OpenAI parser has no "discard frames after message_stop" guard,
+    // which is why its error check is gated on `!stop_emitted`. Gateways do
+    // append junk after the finish chunk, and a reply that already completed
+    // must not be retroactively turned into a failure by it.
+    let server = MockServer::start().await;
+    let body = sse(&[
+        openai_chunk(json!({"content": "done"}), Some("stop")),
+        json!({"error": {"message": "trailing noise"}}),
+    ]);
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body, "text/event-stream"))
+        .mount(&server)
+        .await;
+
+    let events = openai_stream(&server).await;
+    assert!(
+        events.iter().all(|e| e.is_ok()),
+        "a trailer must not fail a finished stream: {events:?}"
+    );
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            Ok(firment_core::ProviderEvent::Stop(
+                firment_core::StopReason::EndTurn
+            ))
+        )),
+        "expected the normal EndTurn stop, got: {events:?}"
     );
 }

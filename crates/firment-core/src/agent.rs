@@ -1,7 +1,7 @@
 use crate::cancel::Cancellable;
 use crate::config::{CompactionStrategy, ElfConfig, LaConfig};
 use crate::journal::{EditJournal, Ledger};
-use crate::provider::{Provider, ProviderError, ProviderEvent};
+use crate::provider::{Provider, ProviderError, ProviderEvent, StopReason};
 use crate::session::{SessionStore, SessionSummary};
 use crate::tool::{ToolContext, ToolRegistry};
 use crate::types::{ChatMessage, ChatRequest, SessionMode, ThinkingLevel, ToolCall};
@@ -984,6 +984,7 @@ impl Agent {
             let mut thinking_blocks: Vec<serde_json::Value> = Vec::new();
             let mut cancelled = false;
             let mut stalled = false;
+            let mut stop_reason: Option<StopReason> = None;
 
             while let Some(event) = tokio::select! {
                 next = stream.next() => next,
@@ -1032,7 +1033,7 @@ impl Agent {
                         thinking_blocks.push(block);
                     }
                     ProviderEvent::ToolCall(call) => tool_calls.push(call),
-                    ProviderEvent::Stop { .. } => {}
+                    ProviderEvent::Stop(reason) => stop_reason = Some(reason),
                     // Liveness only — reaching this arm already re-armed the
                     // inactivity timer. Not persisted, and deliberately not
                     // forwarded: one AgentEvent per network chunk would flood
@@ -1066,6 +1067,20 @@ impl Agent {
                     })
                     .await;
                 return Ok(content);
+            }
+
+            // Truncation is not a failure: the partial text is real progress
+            // and rolling it back would destroy work for nothing. But the
+            // reply *is* incomplete — silently treating it as finished is how
+            // a half-emitted tool call ends up looking like a normal turn.
+            if matches!(stop_reason, Some(StopReason::MaxTokens)) {
+                self.sink
+                    .event(AgentEvent::Info(
+                        "⚠ Response hit the max_tokens cap and was truncated; \
+                         raise max_output_tokens or shorten the request."
+                            .to_string(),
+                    ))
+                    .await;
             }
 
             if stalled {
