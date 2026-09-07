@@ -342,7 +342,11 @@ impl App {
                 // Keep anything the user added after `/new` (e.g. a message
                 // typed and sent while the fresh session was loading).
                 let keep = if was_new {
-                    self.items.split_off(self.pending_new_baseline)
+                    // Clamped: `/clear` empties `items` while a new session is
+                    // still loading, and an out-of-range split_off would panic
+                    // inside the event loop (raw mode included).
+                    self.items
+                        .split_off(self.pending_new_baseline.min(self.items.len()))
                 } else {
                     Vec::new()
                 };
@@ -1810,6 +1814,10 @@ impl App {
             }
             "clear" => {
                 self.items.clear();
+                // Paired with the `pending_new_baseline = items.len()` in
+                // `/new`: the baseline indexes into `items`, so emptying them
+                // has to invalidate it.
+                self.pending_new_baseline = 0;
                 self.follow = true;
                 self.scroll = 0;
             }

@@ -130,6 +130,9 @@ pub async fn run(
     });
 
     let mut terminal = init_terminal()?;
+    // The terminal is now in raw mode on the alternate screen: from this line
+    // on, a panic must put it back, not just print into it.
+    install_terminal_panic_hook();
     let mut app = App::new(
         cmd_tx,
         always,
@@ -172,14 +175,49 @@ fn init_terminal() -> anyhow::Result<Tui> {
 }
 
 fn restore_terminal(terminal: &mut Tui) -> anyhow::Result<()> {
-    execute!(
+    // Raw mode first, and always both. Chained `?` used to mean a failing
+    // `execute!` returned before `disable_raw_mode` ever ran, leaving the
+    // shell in raw mode: no echo, Enter does nothing, and the user has to
+    // blind-type `reset`. A stale mouse-reporting flag is recoverable by
+    // comparison, so neither step is allowed to skip the other.
+    let raw = disable_raw_mode();
+    let sequences = execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
         DisableMouseCapture,
         DisableBracketedPaste
-    )?;
-    disable_raw_mode()?;
+    );
+    raw?;
+    sequences?;
     Ok(())
+}
+
+/// Put the terminal back when the process is about to die on a panic.
+///
+/// `restore_terminal` only ran on the success path, so any panic inside the
+/// loop left raw mode and the alternate screen active — the panic message
+/// scrolled past unreadable and the shell stayed broken. The previous hook is
+/// chained so the panic location is still reported.
+fn install_terminal_panic_hook() {
+    use std::io::Write;
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            // Already unwinding: every failure here is ignored on purpose.
+            let _ = disable_raw_mode();
+            let mut stdout = io::stdout();
+            let _ = execute!(
+                stdout,
+                LeaveAlternateScreen,
+                DisableMouseCapture,
+                DisableBracketedPaste
+            );
+            let _ = writeln!(stdout, "\nfirm TUI panicked; terminal restored");
+            let _ = stdout.flush();
+            previous(info);
+        }));
+    });
 }
 
 async fn run_loop(
@@ -1009,6 +1047,52 @@ mod tests {
         assert!(matches!(
             app.items[1],
             Item::User(ref text) if text == "new message"
+        ));
+    }
+
+    /// `/new` derives `pending_new_baseline` from `items.len()`; `/clear` used
+    /// to empty `items` without invalidating it, so the `split_off` in
+    /// `SessionLoaded` indexed past the end and panicked — killing the process
+    /// while the terminal was in raw mode.
+    #[test]
+    fn clear_after_new_does_not_panic_when_the_session_loads() {
+        let (cmd_tx, _cmd_rx) = mpsc::channel(16);
+        let mut app = App::new(
+            cmd_tx,
+            Arc::new(Mutex::new(HashSet::new())),
+            "test-model".to_string(),
+            PathBuf::from("."),
+            "default".to_string(),
+            ThinkingLevel::Off,
+            SessionMode::Agent,
+            PathBuf::from("config.toml"),
+            None,
+            Vec::new(),
+        );
+        app.run_command("new");
+        assert!(
+            app.pending_new_baseline > 0,
+            "/new must leave a baseline pointing at its own hint"
+        );
+
+        app.run_command("clear");
+        assert!(app.items.is_empty());
+        assert_eq!(
+            app.pending_new_baseline, 0,
+            "emptying items must invalidate the baseline"
+        );
+
+        let fresh = Session::new(PathBuf::from("."), "default", "m");
+        app.on_agent(AgentEvent::SessionLoaded(fresh));
+        assert!(!app.pending_new_session);
+        assert_eq!(
+            app.items.len(),
+            1,
+            "expected only the post-load notice in the transcript"
+        );
+        assert!(matches!(
+            app.items[0],
+            Item::System(ref text) if text == "New conversation started"
         ));
     }
 
