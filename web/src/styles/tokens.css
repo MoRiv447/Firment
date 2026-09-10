@@ -69,8 +69,133 @@
   --duration-standard: 200ms;
   --duration-exit: 120ms;
 
+  /* Interaction and progress. Same names as gui/src/styles/tokens.ts. */
+  --hover: rgba(255, 255, 255, 0.08);
+  --focus-ring: #b4f779;
+  --step-done-bg: #14532d;
+  --step-done-ink: #86efac;
+  --step-current-ink: #e4e4e7;
+  --step-rule: #b4f779;
+  --step-pending-ink: #a1a1aa;
+
+  /* Slant geometry: the cut run, and the extra left padding that puts the
+   * label back on the optical centre (see docs/design/tokens.md). */
+  --slant-cut: 12px;
+  --slant-gap: 8px;
+  --slant-optical-pad-left: 5px;
+  --control-height: 40px;
+
   /* Kept so this file can land without changing anything: the existing names
    * now resolve to the token values. */
   --background: var(--bg);
   --foreground: var(--ink);
+}
+
+/*
+ * The light scheme.
+ *
+ * Applied by putting `data-theme="light"` on <html>, from `ui.theme` in
+ * config.toml. `auto` is the media query below, so a caller has three states to
+ * set and CSS resolves the OS one itself:
+ *
+ *   data-theme="dark"   -> this block is skipped, :root above applies
+ *   data-theme="light"  -> this block applies regardless of the OS
+ *   data-theme="auto"   -> applies only when the OS says light
+ *
+ * Leaving the attribute off keeps the dark scheme, which is why this file can
+ * still land without a visual change. Wiring the attribute onto <html> and
+ * setting it from the same setting the GUI reads is what makes the web client
+ * themeable; nothing consumes it yet.
+ *
+ * Every value mirrors gui/src/styles/tokens.ts, and the ratios are in
+ * docs/design/tokens.md (with the ground each was measured against -- #F7F7F5
+ * and #FFFFFF are close enough that a bare ratio is ambiguous).
+ */
+:root[data-theme="light"] {
+  --bg: #f7f7f5;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --ink: #18181b;
+  /* 4.51:1 on --bg, which is the AA floor: the hover below must not darken it. */
+  --muted: #71717a;
+  --line: #e4e4e7;
+  --line-strong: #d4d4d8;
+
+  /* 1.27:1 here. Fill only, never text: green-and-readable uses --brand-ink. */
+  --brand-acid: #b4f779;
+  --on-acid: #15200d;
+  --brand-ink: #3b6d11;
+
+  --success-bg: #dcfce7;
+  /* 5.02:1 on --surface. Not #16a34a, which is unusable as text here. */
+  --success-ink: #15803d;
+  --success-border: #bbf7d0;
+
+  /* The dark theme's #7dd3fc and #eab308 are ~2:1 on this ground. */
+  --info-bg: #e0f2fe;
+  --info-ink: #0369a1;
+  --warn-bg: #fef3c7;
+  --warn-ink: #b45309;
+
+  --diff-added-bg: #dcfce7;
+  --diff-added-ink: #15803d;
+  --diff-removed-bg: #fee2e2;
+  --diff-removed-ink: #9f1239;
+  --diff-meta-ink: #71717a;
+
+  /* Black in both schemes: the neo-brutalist frame is the signature, and it
+   * reads on either ground. Softness on controls comes from --line-strong. */
+  --outline: #000000;
+
+  /* An acid tint rather than a grey: every neutral dark enough to read as a
+   * hover drops --muted under AA on this ground (4.40:1 at #f4f4f5). */
+  --hover: #f6feef;
+  /* Not the acid: that is 1.27:1 and a keyboard user cannot see it. */
+  --focus-ring: #3b6d11;
+  --step-done-bg: #eaf3de;
+  --step-done-ink: #3f6212;
+  --step-current-ink: #18181b;
+  --step-rule: #b4f779;
+  --step-pending-ink: #6b7280;
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme="auto"] {
+    --bg: #f7f7f5;
+    --surface: #ffffff;
+    --surface-raised: #ffffff;
+    --ink: #18181b;
+    --muted: #71717a;
+    --line: #e4e4e7;
+    --line-strong: #d4d4d8;
+
+    --brand-acid: #b4f779;
+    --on-acid: #15200d;
+    --brand-ink: #3b6d11;
+
+    --success-bg: #dcfce7;
+    --success-ink: #15803d;
+    --success-border: #bbf7d0;
+
+    --info-bg: #e0f2fe;
+    --info-ink: #0369a1;
+    --warn-bg: #fef3c7;
+    --warn-ink: #b45309;
+
+    --diff-added-bg: #dcfce7;
+    --diff-added-ink: #15803d;
+    --diff-removed-bg: #fee2e2;
+    --diff-removed-ink: #9f1239;
+    --diff-meta-ink: #71717a;
+
+    --outline: #000000;
+
+    --hover: #f6feef;
+    --focus-ring: #3b6d11;
+    --step-done-bg: #eaf3de;
+    --step-done-ink: #3f6212;
+    --step-current-ink: #18181b;
+    --step-rule: #b4f779;
+    --step-pending-ink: #6b7280;
+  }
 }
