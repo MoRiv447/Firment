@@ -195,6 +195,9 @@ enum Command {
         /// Also run the SBC edge-model data-plane checks (MQTT, devices).
         #[arg(long)]
         sbc: bool,
+        /// Machine-readable toolchain report on stdout, exit code still set.
+        #[arg(long)]
+        json: bool,
     },
     /// Hardware-in-the-loop suite: build → flash → monitor with expectations → elf_analyze, with replay.
     Hil {
@@ -351,18 +354,33 @@ async fn main() -> anyhow::Result<()> {
                 let path = cli.config.clone().unwrap_or_else(config_path);
                 run_config(&path)?;
             }
-            Command::Doctor { sbc } => {
+            Command::Doctor { sbc, json } => {
                 let cwd = cli
                     .cwd
                     .clone()
                     .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
                 let config = load_config(&cli)?.merged_for(&cwd);
                 let path = cli.config.clone().unwrap_or_else(config_path);
-                doctor::doctor(&config, &path).await?;
-                doctor::doctor_install();
-                doctor::doctor_tools(&cwd, &config.tools);
-                if *sbc {
-                    doctor::doctor_sbc(&config).await;
+                if *json {
+                    // Machine-readable: only the toolchain report on stdout, so
+                    // a caller does not have to strip prose before parsing.
+                    let checks = doctor::doctor_tools(&cwd, &config.tools, true);
+                    println!("{}", serde_json::to_string_pretty(&checks)?);
+                } else {
+                    doctor::doctor(&config, &path).await?;
+                    doctor::doctor_install();
+                    let checks = doctor::doctor_tools(&cwd, &config.tools, false);
+                    if *sbc {
+                        doctor::doctor_sbc(&config).await;
+                    }
+                    // Exit code: 0 clean, 2 something REQUIRED is missing.
+                    // Warnings stay 0 -- a missing logic analyser is not a
+                    // failure, and turning it into one would make `doctor`
+                    // useless as a setup gate.
+                    if let Some(missing) = doctor::first_required_missing(&checks) {
+                        eprintln!("\n✗ required tool missing: {missing}");
+                        std::process::exit(2);
+                    }
                 }
             }
             Command::Hil {
@@ -509,7 +527,11 @@ async fn main() -> anyhow::Result<()> {
         if cli.doctor {
             doctor::doctor(&config, &config_path).await?;
             doctor::doctor_install();
-            doctor::doctor_tools(&cwd, &config.tools);
+            let checks = doctor::doctor_tools(&cwd, &config.tools, false);
+            if let Some(missing) = doctor::first_required_missing(&checks) {
+                eprintln!("\n✗ required tool missing: {missing}");
+                std::process::exit(2);
+            }
         }
         if cli.sbc {
             doctor::doctor_sbc(&config).await;

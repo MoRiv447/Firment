@@ -146,6 +146,283 @@ pub(crate) fn doctor_install() {
     );
 }
 
+/// How much a missing check matters.
+///
+/// The distinction is what lets `doctor` end with a useful exit code: "you have
+/// no compiler for your chip" and "you have no logic analyser" are both
+/// "not found", but only the first should fail a setup check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum State {
+    Ok,
+    /// Not installed, and nothing works without it.
+    Required,
+    /// Not installed; only the matching feature is unavailable.
+    Optional,
+}
+
+impl State {
+    /// Whether this state means the machine is not ready. Drives the exit code.
+    fn is_blocking(self) -> bool {
+        self == State::Required
+    }
+}
+
+/// One toolchain probe, kept as data so the text and `--json` views cannot
+/// disagree about what was checked or how it came out.
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct Check {
+    pub name: String,
+    pub state: State,
+    /// What it is for, or the version when found.
+    pub detail: String,
+    /// The exact command that fixes it, per platform. Empty when found.
+    pub fix: String,
+}
+
+impl Check {
+    fn found(name: &str, detail: impl Into<String>) -> Self {
+        Self {
+            name: name.to_string(),
+            state: State::Ok,
+            detail: detail.into(),
+            fix: String::new(),
+        }
+    }
+
+    fn missing(
+        name: &str,
+        state: State,
+        detail: impl Into<String>,
+        fix: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.to_string(),
+            state,
+            detail: detail.into(),
+            fix: fix.into(),
+        }
+    }
+}
+
+/// The per-platform install command for a missing tool.
+///
+/// Windows names the actual manager or download page rather than `winget
+/// install <guess>`: a wrong package id is worse than no hint, because it looks
+/// authoritative and fails.
+fn install_hint(what: &str) -> &'static str {
+    match what {
+        "rust" => {
+            if cfg!(windows) {
+                "winget install Rustlang.Rustup   (or https://rustup.rs)"
+            } else {
+                "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+            }
+        }
+        "arm-gcc" => {
+            if cfg!(windows) {
+                "winget install Arm.GnuArmEmbeddedToolchain   (or the xPack build from \
+                 https://github.com/xpack-dev-tools/arm-none-eabi-gcc-xpack/releases)"
+            } else if cfg!(target_os = "macos") {
+                "brew install --cask gcc-arm-embedded"
+            } else {
+                "sudo apt install gcc-arm-none-eabi   (or your distro's equivalent)"
+            }
+        }
+        "probe-rs" => "cargo install probe-rs-tools   (needed by flash / run)",
+        "openocd" => {
+            if cfg!(windows) {
+                "download from https://github.com/openocd-org/openocd/releases, or install the \
+                 xPack build"
+            } else if cfg!(target_os = "macos") {
+                "brew install open-ocd"
+            } else {
+                "sudo apt install openocd"
+            }
+        }
+        "stlink" => {
+            if cfg!(windows) {
+                "winget install stlink   (ST's STM32CubeProgrammer also ships st-link tools)"
+            } else if cfg!(target_os = "macos") {
+                "brew install stlink"
+            } else {
+                "sudo apt install stlink-tools"
+            }
+        }
+        "stm32flash" => {
+            if cfg!(windows) {
+                "get stm32flash.exe from https://sourceforge.net/projects/stm32flash/ and put it \
+                 on PATH"
+            } else {
+                "sudo apt install stm32flash"
+            }
+        }
+        "sigrok" => {
+            if cfg!(windows) {
+                "the self-extracting package from https://sigrok.org/wiki/Downloads, then add it \
+                 to PATH or point [tools.la] bin at sigrok-cli.exe"
+            } else if cfg!(target_os = "macos") {
+                "brew install sigrok-cli"
+            } else {
+                "sudo apt install sigrok-cli"
+            }
+        }
+        "node" => "https://nodejs.org (the web client is a Next.js app)",
+        "python" => "https://python.org (needed by PlatformIO's tooling)",
+        "git" => "https://git-scm.com (needed for the workbench branch view)",
+        _ => "",
+    }
+}
+
+/// Probes one command with `--version` and returns its first output line.
+///
+/// Used only for tools that are safe to execute; `which` covers the ones with
+/// GUI side effects (see its doc).
+fn version_of(bin: &str, args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new(bin).args(args).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = if out.stdout.is_empty() {
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    } else {
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let line = text.lines().find(|l| !l.trim().is_empty())?.trim();
+    Some(line.chars().take(80).collect())
+}
+
+/// Whether this directory looks like a firmware project, which is what makes
+/// the cross-compiler REQUIRED rather than merely useful.
+///
+/// The same binary is used on a docs repo and on a CubeMX checkout; failing
+/// `doctor` for a missing `arm-none-eabi-gcc` in the first case would be wrong.
+fn looks_like_firmware_project(cwd: &Path) -> bool {
+    const MARKERS: &[&str] = &[
+        "platformio.ini",
+        "Makefile",
+        "makefile",
+        "CMakeLists.txt",
+        "STM32CubeMX",
+    ];
+    if MARKERS.iter().any(|m| cwd.join(m).is_file()) {
+        return true;
+    }
+    // Any *.uvprojx / *.ioc at the top level is decisive on its own.
+    let Ok(entries) = std::fs::read_dir(cwd) else {
+        return false;
+    };
+    entries.flatten().any(|e| {
+        let name = e.file_name().to_string_lossy().to_ascii_lowercase();
+        name.ends_with(".uvprojx") || name.ends_with(".ioc")
+    })
+}
+
+/// The toolchain block: everything a firmware project may need, each with the
+/// command that installs it.
+///
+/// Required-vs-optional is decided by `cwd`: a cross-compiler is required in a
+/// firmware project and optional everywhere else, so `doctor` can be run in a
+/// docs repo without failing.
+pub(crate) fn toolchain_checks(
+    cwd: &Path,
+    tools: &firment_core::config::ToolsConfig,
+) -> Vec<Check> {
+    let firmware = looks_like_firmware_project(cwd);
+    let mut checks = Vec::new();
+
+    // The one thing that is required regardless of project type: `firm` is a
+    // Rust binary and its build/probe helpers are cargo subcommands.
+    match version_of("rustc", &["--version"]) {
+        Some(v) => checks.push(Check::found("rustc", v)),
+        None => checks.push(Check::missing(
+            "rustc",
+            State::Required,
+            "Rust toolchain",
+            install_hint("rust"),
+        )),
+    }
+
+    for (bin, what, detail) in [
+        (
+            "arm-none-eabi-gcc",
+            "arm-gcc",
+            "ARM cross-compiler for bare-metal C/C++",
+        ),
+        (
+            "probe-rs",
+            "probe-rs",
+            "flashing and running (flash/run tools)",
+        ),
+        (
+            "openocd",
+            "openocd",
+            "alternative debug-probe driver (GDB server)",
+        ),
+        ("stlink", "stlink", "ST-Link CLI — alternative flasher"),
+        ("stm32flash", "stm32flash", "serial-bootloader flasher"),
+        ("git", "git", "version control (workbench branch view)"),
+        ("node", "node", "web client build (Next.js)"),
+        ("python", "python", "PlatformIO and vendor tooling"),
+    ] {
+        // Only the cross-compiler is promoted by project type; a probe driver
+        // is optional because `la`/`observe` can be the whole workflow.
+        let state = if what == "arm-gcc" && firmware {
+            State::Required
+        } else {
+            State::Optional
+        };
+        match version_of(bin, &["--version"]) {
+            Some(v) => checks.push(Check::found(bin, v)),
+            None => checks.push(Check::missing(bin, state, detail, install_hint(what))),
+        }
+    }
+
+    // Build systems, via PATH only: Keil's uv4 opens a GUI when invoked bare,
+    // and doctor must never open a window.
+    for (bin, what) in [
+        ("pio", "PlatformIO CLI — platformio.ini projects"),
+        ("cmake", "CMake — CMakeLists.txt projects"),
+        ("make", "GNU make — Makefile projects"),
+        ("uv4", "Keil MDK uVision — *.uvprojx projects"),
+    ] {
+        match which(bin) {
+            Some(_) => checks.push(Check::found(bin, what)),
+            None => checks.push(Check::missing(bin, State::Optional, what, String::new())),
+        }
+    }
+
+    // Logic analyser, honouring a configured binary name.
+    let sigrok_bin = tools
+        .la
+        .as_ref()
+        .and_then(|la| la.bin.clone())
+        .unwrap_or_else(|| "sigrok-cli".to_string());
+    match version_of(&sigrok_bin, &["--version"]) {
+        Some(v) => checks.push(Check::found(&sigrok_bin, v)),
+        None => checks.push(Check::missing(
+            &sigrok_bin,
+            State::Optional,
+            "the la tool — logic captures and waveform measurements",
+            install_hint("sigrok"),
+        )),
+    }
+
+    checks
+}
+
+/// The first check that must be installed for `firm` to do its job, if any.
+///
+/// Drives the exit code: `doctor` is a setup gate, so it has to be able to say
+/// "this machine is not ready" in a way a script can read. Warnings deliberately
+/// do not count.
+pub(crate) fn first_required_missing(checks: &[Check]) -> Option<String> {
+    checks
+        .iter()
+        .find(|c| c.state.is_blocking())
+        .map(|c| c.name.clone())
+}
+
 /// Minimal PATH lookup without execution. Used for toolchain checks instead
 /// of running each tool with `--version`: some (Keil's uv4) have GUI side
 /// effects when invoked bare, and doctor must never open windows.
@@ -203,72 +480,50 @@ fn build_command_resolves(command: &str) -> bool {
 /// fails HERE with a fix hint instead of mid-task with a confusing error.
 /// detect_build_command only looks for manifest FILES — doctor is the first
 /// place that checks whether the toolchain binaries themselves exist.
-pub(crate) fn doctor_tools(cwd: &Path, tools: &firment_core::config::ToolsConfig) {
-    println!("\ntoolchain (optional, only needed for matching project types):");
-    for (name, what) in [
-        ("pio", "PlatformIO CLI — platformio.ini projects"),
-        ("cmake", "CMake — CMakeLists.txt projects"),
-        ("make", "GNU make — Makefile projects"),
-        ("uv4", "Keil MDK uVision — *.uvprojx projects"),
-    ] {
-        println!(
-            "  {:<8}: {:<24} {}",
-            name,
-            if which(name).is_some() {
-                "found"
-            } else {
-                "not found"
-            },
-            what
-        );
+pub(crate) fn doctor_tools(
+    cwd: &Path,
+    tools: &firment_core::config::ToolsConfig,
+    as_json: bool,
+) -> Vec<Check> {
+    let checks = toolchain_checks(cwd, tools);
+    if as_json {
+        // Only the machine-readable block goes to stdout when --json is set:
+        // a caller parsing it must not have to strip human prose first.
+        return checks;
     }
-    match std::process::Command::new("probe-rs")
-        .arg("--version")
-        .output()
-    {
-        Ok(o) if o.status.success() => {
-            let version = String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .next()
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            println!("  probe-rs : found {version} — required for flash/run");
-        }
-        _ => println!(
-            "  probe-rs : NOT FOUND — flash/run will fail; install via `cargo install \
-             probe-rs-tools` or the probe-rs GitHub releases"
-        ),
-    }
-    let sigrok_bin = tools
-        .la
-        .as_ref()
-        .and_then(|la| la.bin.clone())
-        .unwrap_or_else(|| "sigrok-cli".to_string());
-    match std::process::Command::new(&sigrok_bin)
-        .arg("--version")
-        .output()
-    {
-        Ok(o) if o.status.success() => {
-            let version = String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .next()
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            println!("  {sigrok_bin} : found {version} — required for the la tool");
-        }
-        _ => println!(
-            "  {sigrok_bin} : NOT FOUND — the la tool will fail; install sigrok-cli (Windows: \
-             the self-extracting package from sigrok.org/download, then add it to PATH or point \
-             [tools.la] bin at sigrok-cli.exe; Linux: your distro's package; macOS: brew)"
-        ),
-    }
+    print_toolchain(&checks);
 
     println!("\nserial ports:");
     let ports = firment_tools::tools::monitor::enumerate_ports();
     println!("  {ports}");
 
+    print_tools_config(cwd, tools);
+    checks
+}
+
+/// The toolchain block, one line per probe, each missing one followed by the
+/// command that installs it.
+fn print_toolchain(checks: &[Check]) {
+    println!("\ntoolchain:");
+    for check in checks {
+        let marker = match check.state {
+            State::Ok => "✓",
+            State::Required => "✗",
+            State::Optional => "·",
+        };
+        let suffix = if check.state == State::Required {
+            " — REQUIRED"
+        } else {
+            ""
+        };
+        println!("  {:<18} {marker} {}{suffix}", check.name, check.detail);
+        if !check.fix.is_empty() {
+            println!("  {:<18}   fix: {}", "", check.fix);
+        }
+    }
+}
+
+fn print_tools_config(cwd: &Path, tools: &firment_core::config::ToolsConfig) {
     println!("\n[tools] config ({}):", cwd.display());
     match &tools.default_chip {
         Some(chip) => println!("  default_chip : {chip}"),
@@ -580,4 +835,166 @@ fn url_host(url: &str) -> Option<&str> {
         .or_else(|| url.strip_prefix("http://"))
         .unwrap_or(url);
     rest.split(['/', ':']).next().filter(|h| !h.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    /// The gate has to distinguish "you are missing a cross-compiler in a
+    /// firmware checkout" from "you are missing a logic analyser", or `doctor`
+    /// is useless as a setup check: one blocks, the other is a note.
+    #[test]
+    fn only_required_gaps_block() {
+        let checks = vec![
+            Check::found("rustc", "1.97"),
+            Check::missing(
+                "sigrok-cli",
+                State::Optional,
+                "the la tool",
+                "brew install sigrok-cli",
+            ),
+        ];
+        assert_eq!(first_required_missing(&checks), None);
+
+        let checks = vec![
+            Check::found("rustc", "1.97"),
+            Check::missing(
+                "arm-none-eabi-gcc",
+                State::Required,
+                "cross-compiler",
+                "apt install x",
+            ),
+        ];
+        assert_eq!(
+            first_required_missing(&checks).as_deref(),
+            Some("arm-none-eabi-gcc")
+        );
+    }
+
+    #[test]
+    fn a_firmware_checkout_promotes_the_cross_compiler() {
+        // An empty directory is not a firmware project: nothing is required
+        // there beyond the Rust toolchain, so doctor must not fail on a docs
+        // repo.
+        let plain = tempdir().unwrap();
+        assert!(!looks_like_firmware_project(plain.path()));
+
+        for marker in ["platformio.ini", "Makefile", "CMakeLists.txt"] {
+            let dir = tempdir().unwrap();
+            std::fs::write(dir.path().join(marker), "").unwrap();
+            assert!(
+                looks_like_firmware_project(dir.path()),
+                "{marker} marks a firmware project"
+            );
+        }
+
+        let cubemx = tempdir().unwrap();
+        std::fs::write(cubemx.path().join("blink.ioc"), "").unwrap();
+        assert!(looks_like_firmware_project(cubemx.path()));
+
+        let keil = tempdir().unwrap();
+        std::fs::write(keil.path().join("project.uvprojx"), "").unwrap();
+        assert!(looks_like_firmware_project(keil.path()));
+    }
+
+    /// A missing tool with no install command is a dead end for the user, which
+    /// is the whole reason the hints exist. Every key `install_hint` knows must
+    /// answer, and every hint must be a real command rather than a placeholder.
+    #[test]
+    fn every_probed_tool_can_name_its_fix() {
+        for what in [
+            "rust",
+            "arm-gcc",
+            "probe-rs",
+            "openocd",
+            "stlink",
+            "stm32flash",
+            "sigrok",
+            "node",
+            "python",
+            "git",
+        ] {
+            let hint = install_hint(what);
+            assert!(!hint.is_empty(), "{what} has no install hint");
+            assert!(
+                hint.contains("install")
+                    || hint.contains("http")
+                    || hint.contains("brew")
+                    || hint.contains("download")
+                    || hint.contains("get "),
+                "{what} hint is not actionable: {hint}"
+            );
+        }
+        // An unknown key is not a crash, just no hint.
+        assert_eq!(install_hint("no-such-tool"), "");
+    }
+
+    /// The probes must actually cover what the plan promises, and each name
+    /// must be unique so the JSON report cannot contain the same row twice.
+    #[test]
+    fn the_probe_list_covers_the_documented_set() {
+        let dir = tempdir().unwrap();
+        let checks = toolchain_checks(dir.path(), &firment_core::config::ToolsConfig::default());
+        let names: Vec<&str> = checks.iter().map(|c| c.name.as_str()).collect();
+        for expected in [
+            "rustc",
+            "arm-none-eabi-gcc",
+            "probe-rs",
+            "openocd",
+            "stlink",
+            "stm32flash",
+            "git",
+            "node",
+            "python",
+            "pio",
+            "cmake",
+            "make",
+            "uv4",
+            "sigrok-cli",
+        ] {
+            assert!(names.contains(&expected), "missing probe: {expected}");
+        }
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            names.len(),
+            "duplicate probe names: {names:?}"
+        );
+
+        // A non-firmware dir must not mark anything REQUIRED: the runner would
+        // otherwise exit 2 on a machine that can do everything it was asked to.
+        assert!(
+            checks.iter().all(|c| c.state != State::Required),
+            "nothing should be required outside a firmware project"
+        );
+    }
+
+    /// In a firmware checkout the cross-compiler blocks, so a CI setup step can
+    /// gate on `doctor`'s exit code.
+    #[test]
+    fn a_firmware_checkout_marks_a_missing_cross_compiler_required() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("platformio.ini"), "").unwrap();
+        let checks = toolchain_checks(dir.path(), &firment_core::config::ToolsConfig::default());
+        let gcc = checks
+            .iter()
+            .find(|c| c.name == "arm-none-eabi-gcc")
+            .expect("the cross-compiler is probed");
+        // On a machine that HAS the toolchain this is Ok; either way the state
+        // must be one of the two that mean "this matters here".
+        assert!(
+            matches!(gcc.state, State::Ok | State::Required),
+            "in a firmware project the cross-compiler cannot be merely optional, got {:?}",
+            gcc.state
+        );
+        if gcc.state == State::Ok {
+            assert!(!gcc.detail.is_empty(), "a found tool reports its version");
+        } else {
+            assert!(!gcc.fix.is_empty(), "a required gap must name its fix");
+        }
+    }
 }
