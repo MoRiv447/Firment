@@ -61,3 +61,6 @@ Desktop.ini
 # 宣传文章（不纳入版本库）
 /articles
 .zcode/
+
+# 落地页素材（本地暂存，尚未成形，不纳入版本库）
+/site
