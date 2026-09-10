@@ -569,6 +569,118 @@ async fn agent_loop_runs_tools() {
     assert_eq!(roles, vec!["user", "assistant", "tool", "assistant"]);
 }
 
+/// Stands in for the real `edit_file`: the output text is shaped exactly like
+/// the editor's (one-line header, then a unified diff). Only the NAME decides
+/// whether `detail` is populated, so a stub is enough to pin the contract.
+struct DiffShapedTool;
+
+#[async_trait]
+impl Tool for DiffShapedTool {
+    fn name(&self) -> &'static str {
+        "edit_file"
+    }
+
+    fn description(&self) -> &'static str {
+        "fake edit tool"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+
+    async fn run(&self, _args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+        Ok(ToolOutput {
+            text: "Edited src/main.c (2 lines -> 2 lines)\n--- src/main.c\n+++ src/main.c\n\
+                   @@ -1,2 +1,2 @@\n-  htim2.Init.Period = 999;\n\
+                   +  htim2.Init.Period = 499;\n"
+                .to_string(),
+        })
+    }
+}
+
+/// A tool whose output is long but NOT a diff: the event must stay `None` for
+/// it, or every `grep`/`shell` call would ship its whole output to the UI.
+struct ChattyTool;
+
+#[async_trait]
+impl Tool for ChattyTool {
+    fn name(&self) -> &'static str {
+        "shell"
+    }
+
+    fn description(&self) -> &'static str {
+        "fake chatty tool"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+
+    async fn run(&self, _args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+        Ok(ToolOutput {
+            text: format!("line one\n{}", "noise\n".repeat(500)),
+        })
+    }
+}
+
+#[tokio::test]
+async fn tool_end_detail_carries_the_diff_only_for_diff_tools() {
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_1".to_string(),
+                    name: "edit_file".to_string(),
+                    arguments: json!({}),
+                }),
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_2".to_string(),
+                    name: "shell".to_string(),
+                    arguments: json!({}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            vec![ProviderEvent::Stop(StopReason::EndTurn)],
+        ]))),
+        model: "fake".to_string(),
+    };
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(vec![Arc::new(DiffShapedTool), Arc::new(ChattyTool)]),
+        session,
+        store,
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(events.clone())),
+        10,
+    );
+
+    agent.run_turn("tweak the timer").await.unwrap();
+
+    let collected = events.lock().unwrap();
+    let detail_for = |name: &str| {
+        collected.iter().find_map(|e| match e {
+            AgentEvent::ToolEnd {
+                name: n, detail, ..
+            } if n == name => Some(detail.clone()),
+            _ => None,
+        })
+    };
+    let edit = detail_for("edit_file").expect("edit_file ToolEnd");
+    let edit = edit.expect("a diff tool must ship its body");
+    assert!(edit.contains("@@ -1,2 +1,2 @@"), "got: {edit}");
+    assert!(edit.contains("-  htim2.Init.Period = 999;"), "got: {edit}");
+
+    let shell = detail_for("shell").expect("shell ToolEnd");
+    assert!(
+        shell.is_none(),
+        "a non-diff tool must not ship its whole output: {shell:?}"
+    );
+}
+
 #[tokio::test]
 async fn permission_denied_is_reported_to_model() {
     let provider = FakeProvider {

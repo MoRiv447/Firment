@@ -147,7 +147,9 @@ impl App {
             self.row_cache = Some((self.row_version, width, vec![None; self.items.len()]));
         }
         let mut rows = Vec::new();
+        let mut starts: Vec<usize> = Vec::with_capacity(self.items.len() + 1);
         for (idx, item) in self.items.iter().enumerate() {
+            starts.push(rows.len());
             let dynamic = self.is_row_dynamic(idx, item);
             if !dynamic
                 && let Some(Some(cached)) = self.row_cache.as_ref().and_then(|c| c.2.get(idx))
@@ -165,6 +167,8 @@ impl App {
             }
             rows.extend(wrapped);
         }
+        starts.push(rows.len());
+        self.item_row_starts = starts;
         rows
     }
 
@@ -213,6 +217,8 @@ impl App {
                 running,
                 ok,
                 summary,
+                detail,
+                expanded,
             } => {
                 // Finished cards dim into the background: the eye should go
                 // to what is RUNNING, not to a wall of bright history.
@@ -229,9 +235,56 @@ impl App {
                 } else {
                     Style::default().fg(color)
                 };
-                let line = format!("{symbol} {name}  {}", truncate_chars(summary, 140));
+                let body = detail.as_deref().filter(|b| crate::util::is_diff_body(b));
+                let counts = body.map(|b| {
+                    let added = b.lines().filter(|l| l.starts_with('+')).count();
+                    let removed = b.lines().filter(|l| l.starts_with('-')).count();
+                    format!("  +{added} -{removed}")
+                });
+                let marker = if body.is_some() {
+                    if *expanded { "▾" } else { "▸" }
+                } else {
+                    " "
+                };
+                let line = format!(
+                    "{symbol} {name} {marker} {}{}",
+                    truncate_chars(summary, 120),
+                    counts.unwrap_or_default()
+                );
                 for seg in wrap_text(&line, width.saturating_sub(1)) {
                     rows.push(Line::from(Span::styled(seg, style)));
+                }
+                // The body is the whole tool text, whose FIRST line is the
+                // summary already rendered above — skip it so the header does
+                // not appear twice.
+                if *expanded && let Some(body) = body {
+                    for body_line in body.lines().skip(1) {
+                        // A diff line carries its own leading marker; anything
+                        // else is context. `@@` headers are dim on purpose:
+                        // they locate the change without competing with it.
+                        let (marker_style, text) = if let Some(rest) = body_line.strip_prefix("@@")
+                        {
+                            (Style::default().fg(Color::DarkGray), format!("  @@{rest}"))
+                        } else if let Some(rest) = body_line.strip_prefix('+') {
+                            (
+                                Style::default().fg(Color::Black).bg(Color::Green),
+                                format!("  +{rest}"),
+                            )
+                        } else if let Some(rest) = body_line.strip_prefix('-') {
+                            (
+                                Style::default().fg(Color::Black).bg(Color::Red),
+                                format!("  -{rest}"),
+                            )
+                        } else {
+                            (
+                                Style::default().fg(Color::DarkGray),
+                                format!("  {body_line}"),
+                            )
+                        };
+                        for seg in wrap_text(&text, width.saturating_sub(1)) {
+                            rows.push(Line::from(Span::styled(seg, marker_style)));
+                        }
+                    }
                 }
             }
             Item::Permission { tool, reason } => {

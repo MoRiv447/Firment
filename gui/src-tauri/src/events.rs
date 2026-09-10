@@ -38,6 +38,10 @@ pub enum FrontendEvent {
         name: String,
         ok: bool,
         summary: String,
+        /// Full tool output (a unified diff for edit/write tools), so the card
+        /// can render the change instead of a one-line summary. `None` when
+        /// the path produced no output at all.
+        detail: Option<String>,
         seq: u64,
     },
     TurnEnd {
@@ -158,12 +162,14 @@ pub fn frontend_event(e: &AgentEvent, session_id: Option<&str>) -> FrontendEvent
             name,
             ok,
             summary,
+            detail,
             seq,
         } => FrontendEvent::ToolEnd {
             session_id: sid,
             name: name.clone(),
             ok: *ok,
             summary: summary.clone(),
+            detail: detail.clone(),
             seq: *seq,
         },
         AgentEvent::TurnEnd { text } => FrontendEvent::TurnEnd {

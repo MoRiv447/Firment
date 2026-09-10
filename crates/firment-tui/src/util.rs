@@ -46,6 +46,31 @@ pub(crate) fn truncate_chars(text: &str, max: usize) -> String {
     out
 }
 
+/// Whether a stored/delivered tool output carries a unified diff (the edit
+/// tools prepend a one-line "Edited …" header, so an `@@` header is the
+/// signal). Non-diff bodies are not worth a card body — the summary already
+/// says what happened.
+pub(crate) fn is_diff_body(detail: &str) -> bool {
+    detail.lines().any(|l| l.starts_with("@@ "))
+}
+
+/// A diff small enough to show without being asked (the breathing-LED case in
+/// the TUI mockup is three changed lines: one `-` line plus two `+`). Larger
+/// diffs collapse to the summary and wait for the expand key.
+///
+/// The `--- `/`+++ ` FILE HEADERS must not count: they are two extra lines on
+/// every diff, and counting them made a one-line edit look like four changes.
+pub(crate) fn diff_is_small(detail: &str) -> bool {
+    detail
+        .lines()
+        .filter(|l| {
+            (l.starts_with('-') && !l.starts_with("---"))
+                || (l.starts_with('+') && !l.starts_with("+++"))
+        })
+        .count()
+        <= 4
+}
+
 pub(crate) fn truncate_tail(text: &str, max: usize) -> String {
     if text.width() <= max {
         return text.to_string();

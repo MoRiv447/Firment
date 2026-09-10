@@ -99,9 +99,20 @@ impl Tool for WriteFile {
         }
         fs::write(&resolved, content)
             .map_err(|e| ToolError::new(format!("[Io] write failed: {e}")))?;
-        Ok(ToolOutput {
-            text: format!("Wrote {} bytes to {}", content.len(), resolved.display()),
-        })
+        // Echo the change for an OVERWRITE, like `edit_file` does: the model
+        // sees what it replaced and the UI has a diff to render. A brand-new
+        // file gets no diff on purpose — every line would be a `+`, which is
+        // pure noise in the 1 MiB-sized transcripts this tool is used for.
+        let text = match original_bytes.as_deref().map(String::from_utf8_lossy) {
+            Some(old) => format!(
+                "Wrote {} bytes to {}\n{}",
+                content.len(),
+                resolved.display(),
+                simple_diff(&resolved, &old, content, 4000)
+            ),
+            None => format!("Wrote {} bytes to {}", content.len(), resolved.display()),
+        };
+        Ok(ToolOutput { text })
     }
 }
 #[cfg(test)]
@@ -144,5 +155,48 @@ mod tests {
         assert!(preview.contains("+++"));
         assert!(preview.contains("-hello"), "got: {preview}");
         assert!(preview.contains("+hello base"), "got: {preview}");
+    }
+
+    #[tokio::test]
+    async fn run_echoes_a_diff_on_overwrite_but_not_on_create() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "hello\nworld\n").unwrap();
+
+        let overwritten = WriteFile
+            .run(
+                json!({"path": "a.txt", "content": "hello base\nworld\n"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(
+            overwritten.text.contains("Wrote"),
+            "got: {}",
+            overwritten.text
+        );
+        assert!(
+            overwritten.text.contains("-hello"),
+            "an overwrite must show what it replaced: {}",
+            overwritten.text
+        );
+        assert!(
+            overwritten.text.contains("+hello base"),
+            "got: {}",
+            overwritten.text
+        );
+
+        let created = WriteFile
+            .run(
+                json!({"path": "b.txt", "content": "brand new\n"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(created.text.contains("Wrote"), "got: {}", created.text);
+        assert!(
+            !created.text.contains("@@") && !created.text.contains("+brand new"),
+            "a brand-new file must not echo every line as an addition: {}",
+            created.text
+        );
     }
 }

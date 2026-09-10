@@ -191,7 +191,17 @@ export type FrontendEvent =
   | { type: 'text_delta'; session_id?: string | null; text: string }
   | { type: 'thinking'; session_id?: string | null; text: string }
   | { type: 'tool_start'; session_id?: string | null; name: string; args: unknown; seq: number }
-  | { type: 'tool_end'; session_id?: string | null; name: string; ok: boolean; summary: string; seq: number }
+  | {
+      type: 'tool_end';
+      session_id?: string | null;
+      name: string;
+      ok: boolean;
+      summary: string;
+      /** Full output for diff-carrying tools (edit_file/write_file); null for
+       * everything else and for the cancel/timeout paths. */
+      detail?: string | null;
+      seq: number;
+    }
   | { type: 'turn_end'; session_id?: string | null; text: string }
   // UI-internal: App dispatches this after the post-turn transcript fetch
   // lands, clearing the retained finished turn (anti blank-flash).
@@ -252,6 +262,8 @@ export interface ToolCardState {
   args: unknown;
   status: 'running' | 'ok' | 'failed';
   summary?: string;
+  /** Unified diff (header line included) for edit/write tools. */
+  detail?: string | null;
   /** Wall-clock start for the per-tool elapsed label. */
   startedAt?: number;
 }

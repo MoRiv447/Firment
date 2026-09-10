@@ -83,6 +83,7 @@ export function turnReducer(state: TurnState, e: FrontendEvent): TurnState {
               ...state.turn.tools[e.seq],
               status: e.ok ? 'ok' : 'failed',
               summary: e.summary,
+              detail: e.detail,
             },
           },
         },

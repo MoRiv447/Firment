@@ -33,7 +33,17 @@ pub enum AgentEvent {
     ToolEnd {
         name: String,
         ok: bool,
+        /// Single-line summary for compact UIs (first line of the output, at
+        /// most 120 chars). See `detail` when the UI can show more.
         summary: String,
+        /// Tool output a UI may render in full (`Some` only for tools whose
+        /// text carries a unified diff), capped at the emit site. `None` on
+        /// the paths that have no output at all (cancel / wave timeout), so
+        /// "no text" stays distinguishable from "empty text".
+        ///
+        /// Live-only: the transcript stores the same text through
+        /// `Agent::spill_text`, so nothing is lost by dropping this field.
+        detail: Option<String>,
         seq: u64,
     },
     TurnEnd {
@@ -1143,6 +1153,10 @@ impl Agent {
                             name: "verify".to_string(),
                             ok,
                             summary: summarize(&text),
+                            // `verify` emits its own gate text (and its whole
+                            // output, untruncated, already went into the
+                            // session at :1152); no diff to show.
+                            detail: None,
                             seq,
                         })
                         .await;
@@ -1589,6 +1603,19 @@ fn is_broad_tool(name: &str) -> bool {
     matches!(name, "shell" | "verify" | "grep" | "glob" | "list_dir")
 }
 
+/// Tools whose output text carries a unified diff, which is the only thing
+/// worth shipping past `summary`'s 120-char first line (that line is the
+/// "Edited <path> (N lines -> M lines)" header — the diff IS the body).
+/// Deliberately narrow: an unbounded `detail` on a chatty tool would put
+/// megabytes on the event channel (`AgentEvent::ToolEnd`/`detail` doc).
+fn is_diff_tool(name: &str) -> bool {
+    matches!(name, "edit_file" | "write_file")
+}
+
+/// Longest `detail` we will put on the event channel. Matches `spill_text`'s
+/// spill threshold so a UI shows the same amount the transcript keeps inline.
+const DETAIL_MAX_CHARS: usize = 8000;
+
 fn tool_path(call: &ToolCall) -> Option<PathBuf> {
     call.arguments
         .get("path")
@@ -1714,6 +1741,7 @@ async fn execute_tool_calls(
                         name: call.name.clone(),
                         ok: false,
                         summary: "cancelled".to_string(),
+                        detail: None,
                         seq: call_seqs[k],
                     })
                     .await;
@@ -1761,6 +1789,7 @@ async fn execute_tool_calls(
                         name: call.name.clone(),
                         ok: false,
                         summary: format!("timed out after {}s", agent.tool_wave_timeout.as_secs()),
+                        detail: None,
                         seq: call_seqs[k],
                     })
                     .await;
@@ -1868,12 +1897,18 @@ async fn execute_tool_calls(
                 }
             }
             let summary = summarize(&content);
+            // Cap at the source: this fires BEFORE `spill_text` below, so an
+            // uncapped `detail` would put a whole `shell` log on the event
+            // channel (256 slots, 32 drained per frame).
+            let detail =
+                is_diff_tool(&call.name).then(|| truncate_chars(&content, DETAIL_MAX_CHARS));
             agent
                 .sink
                 .event(AgentEvent::ToolEnd {
                     name: call.name.clone(),
                     ok,
                     summary: summary.clone(),
+                    detail,
                     seq: call_seqs[k],
                 })
                 .await;

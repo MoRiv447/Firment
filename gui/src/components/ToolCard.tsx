@@ -24,6 +24,58 @@ function dangerousName(name: string, args: unknown): boolean {
   return false;
 }
 
+/** How much of a diff body the card renders before it stops (`detail` itself
+ * is already capped at 8000 chars upstream). */
+const DIFF_MAX_CHARS = 4000;
+
+/**
+ * The change a tool made, line by line.
+ *
+ * The header line is dropped: it is the same "Edited <path> …" text the card
+ * summary already shows, so printing it here would duplicate it. Colors are
+ * the SUCCESS family on purpose — the acid brand green would read as "brand"
+ * rather than "added", and the whole point is to tell added from removed.
+ */
+function DiffBody({ detail }: { detail: string }) {
+  const body = detail.length > DIFF_MAX_CHARS ? `${detail.slice(0, DIFF_MAX_CHARS)}…` : detail;
+  return (
+    <div
+      style={{
+        border: '2px solid #000000',
+        background: '#0a0c10',
+        fontSize: 12,
+        fontFamily: "'JetBrains Mono', Consolas, monospace",
+        maxHeight: 260,
+        overflow: 'auto',
+      }}
+    >
+      {body
+        .split('\n')
+        .slice(1)
+        .map((line, i) => {
+          const added = line.startsWith('+');
+          const removed = line.startsWith('-');
+          const hunk = line.startsWith('@@');
+          return (
+            <div
+              key={i}
+              style={{
+                padding: '0 6px',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-all',
+                color: added ? '#15803D' : removed ? '#9F1239' : hunk ? '#9aa3b2' : '#6b7280',
+                background: added ? '#DCFCE7' : removed ? '#FFE4E6' : undefined,
+                fontWeight: added || removed ? 600 : 400,
+              }}
+            >
+              {line || ' '}
+            </div>
+          );
+        })}
+    </div>
+  );
+}
+
 export function ToolCard({
   tool,
   standalone,
@@ -48,10 +100,15 @@ export function ToolCard({
           {formatArgs(tool.args)}
         </pre>
       )}
-      {tool.status !== 'running' && tool.summary && (
-        <Text type="secondary" style={{ whiteSpace: 'pre-wrap' }}>
-          {tool.summary}
-        </Text>
+      {tool.detail ? (
+        <DiffBody detail={tool.detail} />
+      ) : (
+        tool.status !== 'running' &&
+        tool.summary && (
+          <Text type="secondary" style={{ whiteSpace: 'pre-wrap' }}>
+            {tool.summary}
+          </Text>
+        )
       )}
       {danger && <Alert type="warning" showIcon message="Dangerous command - verify before allowing" />}
     </Space>

@@ -32,7 +32,8 @@ pub struct LedgerChange {
     pub path: PathBuf,
     pub old_lines: usize,
     pub new_lines: usize,
-    /// Compact `-`/`+` hunk lines, capped in size.
+    /// Standard unified-diff hunk body: `@@ -a,b +c,d @@` headers plus context
+    /// lines, capped in size. No `--- `/`+++ ` file header (see `line_diff`).
     pub hunks: String,
     /// SHA-256 of the file before the change (content anchoring).
     pub old_sha256: String,
@@ -376,33 +377,181 @@ fn ledger_change_for(dir: &Path, entry: &EntryRecord) -> Result<LedgerChange, St
     })
 }
 
-/// Compact `-`/`+` line diff (common prefix/suffix trimmed), capped in size.
-/// Shared with the tool-layer permission previews.
+/// Standard unified diff of `old` against `new`, capped at `max_chars`.
+///
+/// Emits `@@ -a,b +c,d @@` hunk headers plus up to [`CONTEXT_LINES`] unchanged
+/// context lines around each change, so a reader can see WHERE in the file an
+/// edit landed instead of a bare run of `-`/`+` lines (the old shape reported
+/// an interior move as a whole-region rewrite: there was no line matching).
+///
+/// The `--- `/`+++ ` file header is deliberately NOT emitted here. This is the
+/// shared hunk BODY: the ledger stores it as `LedgerChange::hunks`, and the
+/// tool-layer permission previews prepend the two file-header lines
+/// themselves (`firment_tools::tools::util::simple_diff`).
+///
+/// Identical inputs yield an empty string.
 pub fn line_diff(old: &str, new: &str, max_chars: usize) -> String {
-    let old_lines: Vec<&str> = old.split('\n').collect();
-    let new_lines: Vec<&str> = new.split('\n').collect();
+    /// Unchanged lines kept on each side of a change.
+    const CONTEXT_LINES: usize = 3;
+
+    let old_lines = split_diff_lines(old);
+    let new_lines = split_diff_lines(new);
+    let ops = diff_ops(&old_lines, &new_lines);
+
+    // `pos[i]` is how many old/new lines the first `i` ops consumed, with a
+    // final entry for the end of the list. Hunk headers are then arithmetic
+    // rather than a second counting pass over the same ops.
+    let mut pos = Vec::with_capacity(ops.len() + 1);
+    let (mut o, mut n) = (0usize, 0usize);
+    for op in &ops {
+        pos.push((o, n));
+        match *op {
+            DiffOp::Keep(..) => {
+                o += 1;
+                n += 1;
+            }
+            DiffOp::Del(_) => o += 1,
+            DiffOp::Ins(_) => n += 1,
+        }
+    }
+    pos.push((o, n));
+
+    // Changed ops closer together than two context blocks share one hunk, so
+    // two nearby edits do not print overlapping context under two headers.
+    let mut hunks: Vec<(usize, usize)> = Vec::new();
+    for (i, op) in ops.iter().enumerate() {
+        if matches!(op, DiffOp::Keep(..)) {
+            continue;
+        }
+        let start = i.saturating_sub(CONTEXT_LINES);
+        let end = (i + CONTEXT_LINES + 1).min(ops.len());
+        match hunks.last_mut() {
+            Some(last) if start <= last.1 => last.1 = end,
+            _ => hunks.push((start, end)),
+        }
+    }
+
+    let mut out = String::new();
+    for (s, e) in hunks {
+        let (old_start, new_start) = pos[s];
+        let old_count = pos[e].0 - old_start;
+        let new_count = pos[e].1 - new_start;
+        let mut hunk = format!(
+            "@@ -{} +{} @@\n",
+            range_header(old_start, old_count),
+            range_header(new_start, new_count)
+        );
+        for op in &ops[s..e] {
+            match *op {
+                DiffOp::Keep(line, _) => hunk.push_str(&format!(" {}\n", old_lines[line])),
+                DiffOp::Del(line) => hunk.push_str(&format!("-{}\n", old_lines[line])),
+                DiffOp::Ins(line) => hunk.push_str(&format!("+{}\n", new_lines[line])),
+            }
+        }
+        // Whole hunks only. A diff cut mid-hunk leaves a `@@` header that does
+        // not describe the lines under it, which is worse than showing less:
+        // stop before the first hunk that would blow the budget.
+        if !out.is_empty() && out.chars().count() + hunk.chars().count() > max_chars {
+            out.push_str("… diff truncated\n");
+            break;
+        }
+        out.push_str(&hunk);
+    }
+    if out.chars().count() > max_chars {
+        return truncate_chars(&out, max_chars);
+    }
+    out
+}
+
+/// One line-level edit decision, in output order.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DiffOp {
+    /// Unchanged line: (0-based old index, 0-based new index).
+    Keep(usize, usize),
+    /// Removed line (0-based old index).
+    Del(usize),
+    /// Added line (0-based new index).
+    Ins(usize),
+}
+
+/// The `-a,b` / `+c,d` half of a hunk header, following unified-diff
+/// conventions: one line prints just its 1-based number, and an EMPTY range
+/// prints the 0-based position (`@@ -0,0 +1,3 @@` for an insert at the top).
+fn range_header(start: usize, count: usize) -> String {
+    match count {
+        0 => format!("{start},0"),
+        1 => format!("{}", start + 1),
+        _ => format!("{},{}", start + 1, count),
+    }
+}
+
+/// Line-level LCS diff. The common prefix and suffix are trimmed FIRST so the
+/// quadratic table only covers the region that actually changed, and a region
+/// too large for that table degrades to delete-then-insert instead of
+/// allocating gigabytes (`line_diff` runs over whole files on every commit).
+fn diff_ops(old: &[&str], new: &[&str]) -> Vec<DiffOp> {
+    /// Ceiling for the LCS table, in cells; 1M cells = 4 MB of `u32`.
+    const MAX_CELLS: usize = 1_000_000;
+
     let mut prefix = 0;
-    while prefix < old_lines.len()
-        && prefix < new_lines.len()
-        && old_lines[prefix] == new_lines[prefix]
-    {
+    while prefix < old.len() && prefix < new.len() && old[prefix] == new[prefix] {
         prefix += 1;
     }
     let mut suffix = 0;
-    while suffix < old_lines.len().saturating_sub(prefix)
-        && suffix < new_lines.len().saturating_sub(prefix)
-        && old_lines[old_lines.len() - 1 - suffix] == new_lines[new_lines.len() - 1 - suffix]
+    while suffix < old.len().saturating_sub(prefix)
+        && suffix < new.len().saturating_sub(prefix)
+        && old[old.len() - 1 - suffix] == new[new.len() - 1 - suffix]
     {
         suffix += 1;
     }
-    let mut out = String::new();
-    for line in &old_lines[prefix..old_lines.len() - suffix] {
-        out.push_str(&format!("-{line}\n"));
+
+    let a = &old[prefix..old.len() - suffix];
+    let b = &new[prefix..new.len() - suffix];
+    let mut ops: Vec<DiffOp> = (0..prefix).map(|k| DiffOp::Keep(k, k)).collect();
+    let (n, m) = (a.len(), b.len());
+    if n.saturating_mul(m) > MAX_CELLS {
+        ops.extend((0..n).map(|i| DiffOp::Del(prefix + i)));
+        ops.extend((0..m).map(|j| DiffOp::Ins(prefix + j)));
+    } else {
+        let stride = m + 1;
+        // lcs[i * stride + j] = length of the LCS of a[i..] and b[j..].
+        let mut lcs = vec![0u32; (n + 1) * stride];
+        for i in (0..n).rev() {
+            for j in (0..m).rev() {
+                lcs[i * stride + j] = if a[i] == b[j] {
+                    lcs[(i + 1) * stride + j + 1] + 1
+                } else {
+                    lcs[(i + 1) * stride + j].max(lcs[i * stride + j + 1])
+                };
+            }
+        }
+        let (mut i, mut j) = (0usize, 0usize);
+        while i < n && j < m {
+            if a[i] == b[j] {
+                ops.push(DiffOp::Keep(prefix + i, prefix + j));
+                i += 1;
+                j += 1;
+            } else if lcs[(i + 1) * stride + j] >= lcs[i * stride + j + 1] {
+                ops.push(DiffOp::Del(prefix + i));
+                i += 1;
+            } else {
+                ops.push(DiffOp::Ins(prefix + j));
+                j += 1;
+            }
+        }
+        ops.extend((i..n).map(|k| DiffOp::Del(prefix + k)));
+        ops.extend((j..m).map(|k| DiffOp::Ins(prefix + k)));
     }
-    for line in &new_lines[prefix..new_lines.len() - suffix] {
-        out.push_str(&format!("+{line}\n"));
-    }
-    truncate_chars(&out, max_chars)
+    ops.extend((0..suffix).map(|k| DiffOp::Keep(old.len() - suffix + k, new.len() - suffix + k)));
+    ops
+}
+
+/// Lines to diff, with `str::lines()` semantics: a trailing `\n` does NOT
+/// yield a phantom empty line. That keeps hunk ranges consistent with the
+/// `old_lines` / `new_lines` counts printed beside the diff in the ledger and
+/// in the system prompt (both use `lines()` too).
+fn split_diff_lines(text: &str) -> Vec<&str> {
+    text.lines().collect()
 }
 
 fn truncate_chars(text: &str, max_chars: usize) -> String {
@@ -560,6 +709,11 @@ mod tests {
         assert_eq!(changes[0].old_lines, 1);
         assert_eq!(changes[0].new_lines, 1);
         assert!(
+            changes[0].hunks.starts_with("@@ -1 +1 @@\n"),
+            "got: {}",
+            changes[0].hunks
+        );
+        assert!(
             changes[0].hunks.contains("-original"),
             "got: {}",
             changes[0].hunks
@@ -646,5 +800,71 @@ mod tests {
         assert!(summary.contains("b.txt"), "got: {summary}");
         assert!(summary.contains("+hello"), "got: {summary}");
         assert!(summary.contains("1 lines -> 2 lines"), "got: {summary}");
+    }
+
+    #[test]
+    fn line_diff_single_line_change_reports_a_hunk_header() {
+        let diff = line_diff("hello\nworld\n", "hi\nworld\n", 4000);
+        assert_eq!(diff, "@@ -1,2 +1,2 @@\n-hello\n+hi\n world\n");
+    }
+
+    #[test]
+    fn line_diff_groups_distant_changes_and_merges_nearby_ones() {
+        // Context is 3 lines, so two changes whose context blocks do not touch
+        // get their own hunks, each with its own `@@` header.
+        let old = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\n";
+        let new = "A\nb\nc\nd\ne\nf\ng\nh\ni\nj\nK\n";
+        let diff = line_diff(old, new, 4000);
+        assert_eq!(diff.matches("@@ -").count(), 2, "got: {diff}");
+        assert!(diff.contains("-a\n+A\n"), "got: {diff}");
+        assert!(diff.contains("-k\n+K\n"), "got: {diff}");
+
+        // Changes whose context DOES touch share one hunk: printing the shared
+        // context once is cheaper than printing it twice under two headers.
+        let old = "a\nb\nc\nd\ne\n";
+        let new = "A\nb\nc\nd\nE\n";
+        let diff = line_diff(old, new, 4000);
+        assert_eq!(diff.matches("@@ -").count(), 1, "got: {diff}");
+        assert!(
+            diff.contains(" b\n c\n d\n"),
+            "shared context printed once: {diff}"
+        );
+    }
+
+    #[test]
+    fn line_diff_range_header_follows_unified_conventions() {
+        // A whole-file insertion: the old side is empty, so it prints the
+        // 0-based position instead of a 1-based number.
+        assert_eq!(line_diff("", "x\ny\n", 4000), "@@ -0,0 +1,2 @@\n+x\n+y\n");
+        // A single-line insertion in the middle prints a bare `+2`, not `+2,1`.
+        assert_eq!(
+            line_diff("a\nc\n", "a\nb\nc\n", 4000),
+            "@@ -1,2 +1,3 @@\n a\n+b\n c\n"
+        );
+    }
+
+    #[test]
+    fn line_diff_identical_input_is_empty() {
+        assert_eq!(line_diff("a\nb\n", "a\nb\n", 4000), "");
+        assert_eq!(line_diff("", "", 4000), "");
+    }
+
+    #[test]
+    fn line_diff_truncates_on_a_hunk_boundary() {
+        // Two changes far enough apart to need two hunks; the first hunk is
+        // "…@@ -1,4 +1,4 @@\n-a\n+A\n b\n c\n d\n" = 45 chars.
+        let old = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\n";
+        let new = "A\nb\nc\nd\ne\nf\ng\nh\ni\nJ\n";
+        let diff = line_diff(old, new, 60);
+        // Exactly the first hunk is printed: the cut landed on a boundary
+        // rather than inside a hunk, so no header is left describing a body
+        // that was cut away.
+        assert_eq!(diff.matches("@@ -").count(), 1, "got: {diff}");
+        assert!(diff.contains("-a\n+A\n"), "got: {diff}");
+        assert!(
+            !diff.contains("-j\n+J\n"),
+            "second hunk must be cut: {diff}"
+        );
+        assert!(diff.contains("… diff truncated"), "got: {diff}");
     }
 }
