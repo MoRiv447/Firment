@@ -1,18 +1,21 @@
+/* The design tokens must be the FIRST rule: PostCSS expands the @tailwind
+ * directives below into a large block, and @import has to precede every rule
+ * (it ended up at line 1197 and the build rejected it). They live in their own
+ * file because gui/src/styles/tokens.ts mirrors them and
+ * docs/design/tokens.md is the source of truth -- one definition to keep in
+ * step, not two. */
+@import "../styles/tokens.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-:root {
-  --background: #030712;
-  --foreground: #e5e7eb;
-}
 
 html,
 body {
   height: 100%;
   margin: 0;
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--bg);
+  color: var(--ink);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
     "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
 }
@@ -26,11 +29,11 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #2a2f38;
-  border-radius: 4px;
+  background: var(--line-strong);
+  border-radius: var(--radius-control);
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #3a4150;
+  background: var(--muted);
 }
 
 /* iOS Safari 聚焦时输入框防自动放大（字体 < 16px 会被放大） */
