@@ -1,5 +1,7 @@
 import { webSearch, webFetch } from './web';
 import { readFileSync, listDir, globFiles, grepFiles } from './filesystem';
+import { ToolSpec } from '../types';
+import toolSpecsJson from './specs.json';
 
 export interface ToolResult {
   success: boolean;
@@ -7,12 +9,65 @@ export interface ToolResult {
   error?: string;
 }
 
+interface JsonSchema {
+  required?: string[];
+  properties?: Record<string, { type?: string }>;
+}
+
+const TOOL_SPECS = toolSpecsJson as ToolSpec[];
+
+/**
+ * Reject a call whose arguments cannot mean what the model intended, using the
+ * tool's own JSON schema. Empty strings count as missing: `grep` with
+ * `{"pattern":""}` is valid JSON, but `new RegExp('')` matches every line of
+ * every file in the sandbox, which reads as a successful call that returned
+ * garbage. Tools that genuinely take no arguments (`list_dir`) declare an
+ * empty `required` list and pass through untouched.
+ */
+export function validateArgs(toolName: string, args: Record<string, any>): string | null {
+  const spec = TOOL_SPECS.find(t => t.name === toolName);
+  if (!spec) return null; // unknown tool: handled by the dispatch default arm
+  const schema: JsonSchema = spec.input_schema || {};
+  if (args === null || typeof args !== 'object' || Array.isArray(args)) {
+    return `[InvalidInput] ${toolName}: arguments must be a JSON object`;
+  }
+  for (const key of schema.required || []) {
+    const declaredType = schema.properties?.[key]?.type;
+    if (!(key in args)) return `[InvalidInput] ${toolName}: missing required argument "${key}"`;
+    const value = args[key];
+    if (value === undefined || value === null) {
+      return `[InvalidInput] ${toolName}: required argument "${key}" is null`;
+    }
+    if (declaredType === 'string') {
+      if (typeof value !== 'string') {
+        return `[InvalidInput] ${toolName}: argument "${key}" must be a string, got ${typeof value}`;
+      }
+      if (value.trim() === '') {
+        return `[InvalidInput] ${toolName}: required argument "${key}" must not be empty`;
+      }
+    } else if (declaredType === 'integer' || declaredType === 'number') {
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        return `[InvalidInput] ${toolName}: argument "${key}" must be a number`;
+      }
+    } else if (declaredType === 'boolean') {
+      if (typeof value !== 'boolean') {
+        return `[InvalidInput] ${toolName}: argument "${key}" must be a boolean`;
+      }
+    }
+  }
+  return null;
+}
+
 export async function executeTool(
   toolName: string,
   args: Record<string, any>,
   cwd: string,
-  config: any
+  config: any,
+  signal?: AbortSignal
 ): Promise<ToolResult> {
+  const invalid = validateArgs(toolName, args);
+  if (invalid) return { success: false, output: '', error: invalid };
+
   try {
     switch (toolName) {
       case 'read_file': {
@@ -63,13 +118,14 @@ export async function executeTool(
         const results = await webSearch(
           args.query,
           args.max_results,
-          config?.tools?.webSearch || 'duckduckgo'
+          config?.tools?.webSearch || 'duckduckgo',
+          signal
         );
         return { success: true, output: formatSearchResults(args.query, results) };
       }
 
       case 'web_fetch': {
-        const content = await webFetch(args.url);
+        const content = await webFetch(args.url, signal);
         return { success: true, output: content };
       }
 

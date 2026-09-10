@@ -111,14 +111,46 @@ async function fetchWithSafeRedirect(
   }
 }
 
-export async function webSearch(query: string, maxResults = 5, provider = 'duckduckgo'): Promise<SearchResult[]> {
+interface Deadline {
+  controller: AbortController;
+  /** Release the timer and the caller-signal listener. Call in `finally`. */
+  stop: () => void;
+}
+
+/**
+ * Abort a request when either the internal deadline fires or the caller's
+ * signal aborts. Composed by hand rather than with `AbortSignal.any`, which
+ * only exists on newer Node runtimes.
+ */
+function startDeadline(timeoutMs: number, caller?: AbortSignal): Deadline {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error(`timed out after ${timeoutMs}ms`)), timeoutMs);
+  if (!caller) return { controller, stop: () => clearTimeout(timer) };
+  const onCallerAbort = () => controller.abort(caller.reason);
+  if (caller.aborted) onCallerAbort();
+  else caller.addEventListener('abort', onCallerAbort, { once: true });
+  return {
+    controller,
+    stop: () => {
+      clearTimeout(timer);
+      caller.removeEventListener('abort', onCallerAbort);
+    },
+  };
+}
+
+export async function webSearch(
+  query: string,
+  maxResults = 5,
+  provider = 'duckduckgo',
+  signal?: AbortSignal
+): Promise<SearchResult[]> {
   if (provider === 'bing') {
-    return bingSearch(query, maxResults);
+    return bingSearch(query, maxResults, signal);
   }
   if (provider !== 'duckduckgo') {
     throw new Error(`Web search provider "${provider}" is not supported in web mode (only duckduckgo / bing).`);
   }
-  return duckduckgoSearch(query, maxResults);
+  return duckduckgoSearch(query, maxResults, signal);
 }
 
 /**
@@ -127,12 +159,11 @@ export async function webSearch(query: string, maxResults = 5, provider = 'duckd
  * `b_algo`, take the first href inside the `<h2>` (loose match — attributes
  * vary), strip tags from the title, and read the first `<p>` as snippet.
  */
-async function bingSearch(query: string, maxResults: number): Promise<SearchResult[]> {
+async function bingSearch(query: string, maxResults: number, caller?: AbortSignal): Promise<SearchResult[]> {
   const url = await assertSafeUrl(
     `https://cn.bing.com/search?q=${encodeURIComponent(query)}&count=${maxResults}&mkt=zh-CN`,
   );
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15000);
+  const { controller, stop } = startDeadline(15000, caller);
   let html: string;
   try {
     const res = await fetchWithSafeRedirect(url, {
@@ -144,7 +175,7 @@ async function bingSearch(query: string, maxResults: number): Promise<SearchResu
   } catch (err: any) {
     throw new Error(`Web search failed: ${err?.message || 'timeout or network error'}`);
   } finally {
-    clearTimeout(timer);
+    stop();
   }
 
   const results: SearchResult[] = [];
@@ -173,11 +204,10 @@ async function bingSearch(query: string, maxResults: number): Promise<SearchResu
   return results;
 }
 
-async function duckduckgoSearch(query: string, maxResults: number): Promise<SearchResult[]> {
+async function duckduckgoSearch(query: string, maxResults: number, caller?: AbortSignal): Promise<SearchResult[]> {
   const encodedQuery = encodeURIComponent(query);
   const url = await assertSafeUrl(`https://html.duckduckgo.com/html/?q=${encodedQuery}`);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15000);
+  const { controller, stop } = startDeadline(15000, caller);
   let html: string;
   try {
     const res = await fetchWithSafeRedirect(url, {
@@ -189,7 +219,7 @@ async function duckduckgoSearch(query: string, maxResults: number): Promise<Sear
   } catch (err: any) {
     throw new Error(`Web search failed: ${err?.message || 'timeout or network error'}`);
   } finally {
-    clearTimeout(timer);
+    stop();
   }
 
   const results: SearchResult[] = [];
@@ -223,10 +253,9 @@ function extractRealUrl(href: string): string {
   return match ? decodeURIComponent(match[1]) : href;
 }
 
-export async function webFetch(rawUrl: string): Promise<string> {
+export async function webFetch(rawUrl: string, caller?: AbortSignal): Promise<string> {
   const url = await assertSafeUrl(rawUrl);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 20000);
+  const { controller, stop } = startDeadline(20000, caller);
   try {
     const response = await fetchWithSafeRedirect(url, {
       headers: { 'User-Agent': 'Firment/0.4' },
@@ -238,7 +267,7 @@ export async function webFetch(rawUrl: string): Promise<string> {
   } catch (err: any) {
     throw new Error(`Fetch failed: ${err?.message || 'timeout or network error'}`);
   } finally {
-    clearTimeout(timer);
+    stop();
   }
 }
 

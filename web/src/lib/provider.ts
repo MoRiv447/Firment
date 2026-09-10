@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
-import { ChatMessage, ToolSpec, AgentEvent, ToolCall } from './types';
-import { accumulateToolCalls } from './events';
+import { ChatMessage, ToolSpec, AgentEvent } from './types';
+import { accumulateToolCalls, type ParsedToolCall } from './events';
 
 export interface ProviderConfig {
   type: 'openai' | 'anthropic';
@@ -24,7 +24,7 @@ export interface ChatRequest {
 
 export interface StreamResult {
   text: string;
-  toolCalls: ToolCall[];
+  toolCalls: ParsedToolCall[];
 }
 
 export class FirmentProvider {

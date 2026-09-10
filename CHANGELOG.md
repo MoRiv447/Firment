@@ -1,5 +1,43 @@
 # Changelog
 
+## v0.8.2 (unreleased) — web client
+
+The web client re-implements the agent loop, and the guards the Rust core has
+were missing or degraded here. Each item was reproduced against the running app.
+
+- **Context compaction no longer folds away the request being answered.** The
+  fold point was counted in messages from the end, so a chat of almost any
+  length swallowed the prompt just typed: the model got a "here is what was
+  compacted" placeholder plus trailing tool output and answered a question
+  nobody asked, and the fold could re-fire on each iteration of the same turn.
+  It now stops at the last real user message and merges the summary into it, so
+  the live request survives, exactly one user message reaches the provider, and
+  a second pass is a no-op.
+- **A disconnected client stops the tools that have not started.** Cancellation
+  was checked once per batch, so closing the tab still ran every remaining call
+  (`web_fetch` holds a 20s deadline each, and those requests really leave the
+  machine). On a six-call batch the handler ran the full 50s; it now exits at
+  20s with the queued calls closed. Each closed call still gets a matching tool
+  result, so an abandoned turn cannot leave a dangling `tool_calls` entry that
+  breaks the session for every later request.
+- **A tool whose arguments cannot be read is no longer run without them.** A
+  truncated argument stream degraded to `{}` and executed anyway, so the
+  failure the model saw pointed at the wrong thing, and an empty `pattern` —
+  valid JSON, no degradation involved — matched every file in the workspace and
+  poured the result into the context. Arguments are now checked against each
+  tool's own schema before dispatch, refusals are labelled `[InvalidInput]` /
+  `[InvalidArguments]`, the reason reaches the UI instead of rendering as a
+  blank card, and the model is told to retry with complete arguments.
+- **Session storage failures are reported instead of swallowed.** A read that
+  threw returned an empty list and the next write saved that list back,
+  deleting every other chat without a word. An unusable store is now copied to
+  a `.corrupt` key first (a later bad load cannot overwrite that backup), the
+  failure surfaces in a dismissible banner, and a full quota is named as such
+  rather than looking like a successful save.
+
+Web unit tests go from 10 to 45; the compaction, cancellation, argument and
+storage paths each have a case that fails against the previous code.
+
 ## v0.8.1 (2026-09-07) — post-release audit hardening
 
 - **Stream and session reliability audit** (six P0 behaviours, each pinned by

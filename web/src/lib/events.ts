@@ -18,6 +18,14 @@ export interface ParsedToolCall {
   id: string;
   name: string;
   arguments: Record<string, any>;
+  /**
+   * Set when the streamed `arguments` could not be used as-is (invalid JSON
+   * or not an object). The call still appears in the stream — dropping it
+   * would leave the assistant's `tool_calls` without a matching `tool`
+   * result — but `arguments` is `{}` and the executor must refuse to run the
+   * tool. Optional on purpose: the clean path omits the key entirely.
+   */
+  argsError?: string;
 }
 
 /**
@@ -30,8 +38,9 @@ export interface ParsedToolCall {
  *   omit it) falls back to the last used slot when the chunk continues an
  *   existing call, and to the next free slot when it carries a new id/name.
  * - `arguments` are JSON-fragments concatenated across deltas; a parse
- *   failure degrades to `{}` and is LOGGED — silently executing a tool with
- *   no arguments only produces a confusing downstream error.
+ *   failure (or a non-object payload) degrades to `{}`, is LOGGED, and marks
+ *   the call with `argsError` — executing a tool with no arguments only
+ *   produces a silently wrong result.
  * - A `name` on a later chunk overwrites an empty first-chunk name (some
  *   servers fragment the function name across deltas).
  * - Entries without a name are dropped (an empty name means the delta only
@@ -59,17 +68,28 @@ export function accumulateToolCalls(chunks: ToolCallChunk[]): ParsedToolCall[] {
   const parsed: ParsedToolCall[] = [];
   for (const tc of acc.filter(Boolean)) {
     let args: Record<string, any> = {};
+    let argsError: string | undefined;
     try {
-      args = JSON.parse(tc.args || '{}');
+      const decoded = JSON.parse(tc.args || '{}');
+      if (decoded === null || typeof decoded !== 'object' || Array.isArray(decoded)) {
+        const kind = decoded === null ? 'null' : Array.isArray(decoded) ? 'array' : typeof decoded;
+        argsError = `arguments are not a JSON object (got ${kind})`;
+      } else {
+        args = decoded;
+      }
     } catch {
+      argsError = 'arguments are not valid JSON';
+    }
+    if (argsError) {
       console.error(
-        `tool call "${tc.name}" (${tc.id}): arguments are not valid JSON — executing with {}`,
+        `tool call "${tc.name}" (${tc.id}): ${argsError} — refusing to execute`,
         tc.args.slice(0, 200),
       );
-      args = {};
     }
     if (tc.name) {
-      parsed.push({ id: tc.id, name: tc.name, arguments: args });
+      parsed.push(
+        argsError ? { id: tc.id, name: tc.name, arguments: args, argsError } : { id: tc.id, name: tc.name, arguments: args }
+      );
     }
   }
   return parsed;
