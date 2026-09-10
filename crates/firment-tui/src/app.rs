@@ -1697,7 +1697,7 @@ impl App {
             .unwrap_or((command, ""));
         match name {
             "help" => self.items.push(Item::System(
-                "Commands: /new  /plan [on|off]  /agent  /models  /model <id>  /sessions (use ↑/↓ to select)  /session <id>  /delete <id>  /undo  /ledger  /pin <path>  /unpin <path>  /copy  /provider <name>  /add-provider <name> <openai|anthropic> <base_url> <model>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /budget <chars>  /output <tokens>  /context  /config  /clear  /help  /quit\nKeys: ↑/↓ browse history when input is empty, move the input cursor on multi-line input, scroll the transcript on single-line input · Shift+Enter manual newline · PgUp/PgDn/wheel scroll · Ctrl+P model picker · Ctrl+O expand/collapse the diff on the selected tool card (the newest one when nothing is selected) · Ctrl+T collapse/expand every diff at once · inside /sessions: c copies the selected id to clipboard, d deletes it (drag-select and right-click are disabled because the TUI captures mouse events; press Esc to dismiss the picker, then your terminal's native selection works in the scrollback) · Ctrl+C copies the selection (copies the last reply when there is none) · Ctrl+V paste · Ctrl+Shift+C copy last reply · ←/→ move the input cursor · y/n/a permission answers · Esc interrupts AI output (Esc twice while working; clears input when idle) · Ctrl+Q quit\nInput box: auto-wraps and grows to up to 5 lines; taller content scrolls, large pastes collapse into 【line x-y】, and the title shows hidden/collapsed line counts before sending"
+                "Commands: /new  /plan [on|off]  /agent  /models  /model <id>  /sessions (use ↑/↓ to select)  /session <id>  /delete <id>  /undo  /ledger  /pin <path>  /unpin <path>  /copy  /provider <name>  /add-provider <name> <openai|anthropic> <base_url> <model>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /budget <chars>  /output <tokens>  /verbosity [summary|normal|expanded]  /context  /config  /clear  /help  /quit\nKeys: ↑/↓ browse history when input is empty, move the input cursor on multi-line input, scroll the transcript on single-line input · Shift+Enter manual newline · PgUp/PgDn/wheel scroll · Ctrl+P model picker · Ctrl+O expand/collapse the diff on the selected tool card (the newest one when nothing is selected) · Ctrl+T collapse/expand every diff at once · inside /sessions: c copies the selected id to clipboard, d deletes it (drag-select and right-click are disabled because the TUI captures mouse events; press Esc to dismiss the picker, then your terminal's native selection works in the scrollback) · Ctrl+C copies the selection (copies the last reply when there is none) · Ctrl+V paste · Ctrl+Shift+C copy last reply · ←/→ move the input cursor · y/n/a permission answers · Esc interrupts AI output (Esc twice while working; clears input when idle) · Ctrl+Q quit\nInput box: auto-wraps and grows to up to 5 lines; taller content scrolls, large pastes collapse into 【line x-y】, and the title shows hidden/collapsed line counts before sending"
                     .to_string(),
             )),
             "new" => {
@@ -1940,6 +1940,50 @@ impl App {
                 self.pending_new_baseline = 0;
                 self.follow = true;
                 self.scroll = 0;
+            }
+            "verbosity" => {
+                if arg.is_empty() {
+                    // Bare `/verbosity` reports instead of guessing.
+                    self.items.push(Item::System(format!(
+                        "tool output: {}  ·  usage: /verbosity summary|normal|expanded",
+                        self.tool_verbosity.label()
+                    )));
+                } else if let Some(level) = ToolVerbosity::parse(arg) {
+                    self.tool_verbosity = level;
+                    // Re-decide every card already on screen: a level change
+                    // that only affected future cards would look broken, since
+                    // the transcript in front of the user does not move.
+                    let wanted: Vec<(usize, bool)> = self
+                        .items
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, item)| match item {
+                            Item::Tool { detail, .. } => {
+                                Some((i, self.should_auto_expand(detail.as_deref())))
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    let mut changed = 0usize;
+                    for (idx, want) in wanted {
+                        if let Some(Item::Tool { expanded, .. }) = self.items.get_mut(idx)
+                            && *expanded != want
+                        {
+                            *expanded = want;
+                            changed += 1;
+                        }
+                    }
+                    self.touch_rows();
+                    self.items.push(Item::System(format!(
+                        "tool output -> {}  ({changed} card(s) re-laid out)",
+                        level.label()
+                    )));
+                    self.send_cmd(AgentCmd::SetToolVerbosity(level));
+                } else {
+                    self.items.push(Item::System(format!(
+                        "unknown verbosity '{arg}': use summary, normal or expanded"
+                    )));
+                }
             }
             "quit" | "exit" => self.quit = true,
             other => self

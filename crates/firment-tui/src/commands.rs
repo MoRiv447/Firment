@@ -6,7 +6,7 @@
 
 use firment_core::{
     Agent, AgentEvent, Cancellable, Config, PermissionChecker, ProviderConfig, Session,
-    SessionMode, SessionStore, ThinkingLevel, ToolRegistry,
+    SessionMode, SessionStore, ThinkingLevel, ToolRegistry, ToolVerbosity,
 };
 use futures::FutureExt;
 use std::sync::Arc;
@@ -124,6 +124,23 @@ pub(crate) fn spawn_agent_task(
                             thinking: Some(level),
                             mode: None,
                         })
+                        .await;
+                }
+                AgentCmd::SetToolVerbosity(level) => {
+                    // A display preference: no agent lock, no session save. The
+                    // agent never sees it, so there is nothing to reload.
+                    task_config.ui.tool_verbosity = level;
+                    let saved = match task_config.save(&task_config_path) {
+                        Ok(()) => "saved".to_string(),
+                        Err(e) => format!("NOT saved ({e})"),
+                    };
+                    let _ = agent
+                        .lock()
+                        .await
+                        .emit(AgentEvent::Info(format!(
+                            "tool output -> {} ({saved})",
+                            level.label()
+                        )))
                         .await;
                 }
                 AgentCmd::SetContextBudget(chars) => {
@@ -563,6 +580,7 @@ pub(crate) enum AgentCmd {
     SetThinking(ThinkingLevel),
     SetContextBudget(usize),
     SetMaxOutputTokens(u32),
+    SetToolVerbosity(ToolVerbosity),
     ShowContext,
     DeleteSession(String),
     SetMode(SessionMode),

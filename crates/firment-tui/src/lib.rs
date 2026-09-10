@@ -1413,6 +1413,87 @@ mod tests {
         assert_eq!(app.mode, SessionMode::Agent);
     }
 
+    /// `/verbosity` is the only way to change this inside a TUI session: the
+    /// `-q`/`-v` flags exist on the one-shot path only.
+    #[test]
+    fn verbosity_command_reports_sets_rejects_and_re_lays_out_existing_cards() {
+        use firment_core::ToolVerbosity;
+
+        let mut app = test_app();
+        assert_eq!(app.tool_verbosity, ToolVerbosity::Normal);
+
+        // Bare command reports the current level and the usage.
+        app.run_command("verbosity");
+        let reported = match app.items.last() {
+            Some(Item::System(text)) => text.clone(),
+            _ => panic!("expected a system line"),
+        };
+        assert!(reported.contains("normal"), "got: {reported}");
+        assert!(
+            reported.contains("summary|normal|expanded"),
+            "got: {reported}"
+        );
+
+        // A card already on screen must follow the level, not just new ones.
+        let diff = [
+            "Edited a.c (1 lines -> 3 lines)",
+            "@@ -1 +1,3 @@",
+            "-old",
+            "+new",
+        ]
+        .join("\n")
+            + "\n";
+        app.items.push(Item::Tool {
+            name: "edit_file".to_string(),
+            seq: 1,
+            running: false,
+            ok: true,
+            summary: "Edited a.c".to_string(),
+            detail: Some(diff),
+            expanded: true,
+        });
+
+        app.run_command("verbosity summary");
+        assert_eq!(app.tool_verbosity, ToolVerbosity::Summary);
+        assert!(
+            matches!(app.items.last(), Some(Item::System(t)) if t.contains("1 card(s)"))
+                || app
+                    .items
+                    .iter()
+                    .any(|i| matches!(i, Item::System(t) if t.contains("1 card(s)"))),
+            "the level change should say how many cards moved"
+        );
+        assert!(
+            app.items.iter().any(|i| matches!(
+                i,
+                Item::Tool {
+                    expanded: false,
+                    ..
+                }
+            )),
+            "an open card must close when the level drops to summary"
+        );
+
+        app.run_command("verbosity expanded");
+        assert_eq!(app.tool_verbosity, ToolVerbosity::Expanded);
+        assert!(
+            app.items
+                .iter()
+                .any(|i| matches!(i, Item::Tool { expanded: true, .. })),
+            "expanded must re-open it"
+        );
+
+        // An unknown word is refused, and the level does not move.
+        app.run_command("verbosity loud");
+        assert_eq!(app.tool_verbosity, ToolVerbosity::Expanded);
+        assert!(
+            app.items
+                .iter()
+                .any(|i| matches!(i, Item::System(t) if t.contains("unknown verbosity"))),
+            "a typo must be reported, not silently ignored"
+        );
+    }
+
     #[test]
     fn scroll_counts_rows_away_from_bottom_and_clamps_at_top() {
         let mut app = test_app();
