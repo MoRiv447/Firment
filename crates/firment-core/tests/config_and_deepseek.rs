@@ -1,6 +1,6 @@
 use firment_core::{
     ChatMessage, ChatRequest, Config, OpenAIProvider, Provider, ProviderConfig, ProviderEvent,
-    StopReason, ThinkingLevel, ToolVerbosity, load_auth, save_auth,
+    StopReason, ThinkingLevel, ToolVerbosity, UiTheme, load_auth, save_auth,
 };
 use futures::StreamExt;
 use serde_json::{Value, json};
@@ -84,9 +84,81 @@ fn the_shipped_default_config_parses_and_documents_the_ui_block() {
     let text = firment_core::config::default_config_text();
     assert!(text.contains("[ui]"), "the [ui] block is missing");
     assert!(text.contains("# tool_verbosity = \"normal\""));
+    assert!(text.contains("# theme = \"auto\""));
 
     let config: Config = toml::from_str(text).expect("the shipped default must parse");
     assert_eq!(config.ui.tool_verbosity, ToolVerbosity::Normal);
+    assert_eq!(config.ui.theme, UiTheme::Auto);
+}
+
+#[test]
+fn ui_theme_defaults_to_auto_and_roundtrips() {
+    let text = r#"
+[providers.default]
+type = "openai"
+model = "x"
+"#;
+    let config: Config = toml::from_str(text).unwrap();
+    assert_eq!(config.ui.theme, UiTheme::Auto);
+    assert_eq!(config.ui.theme.label(), "auto");
+
+    let text = r#"
+[providers.default]
+type = "openai"
+model = "x"
+
+[ui]
+theme = "light"
+"#;
+    let config: Config = toml::from_str(text).unwrap();
+    assert_eq!(config.ui.theme, UiTheme::Light);
+    assert_eq!(config.ui.theme.label(), "light");
+}
+
+#[test]
+fn ui_theme_parses_names_and_aliases() {
+    assert_eq!(UiTheme::parse("light"), Some(UiTheme::Light));
+    assert_eq!(UiTheme::parse("DARK"), Some(UiTheme::Dark));
+    assert_eq!(UiTheme::parse(" auto "), Some(UiTheme::Auto));
+    // `system` is the word people reach for first; it means the same as auto.
+    assert_eq!(UiTheme::parse("system"), Some(UiTheme::Auto));
+    // Unknown words must NOT silently become the default.
+    assert_eq!(UiTheme::parse("bright"), None);
+    assert_eq!(UiTheme::parse(""), None);
+}
+
+/// The point of the whole setting: `auto` is the default, so on a dark machine
+/// `light` has to be pinnable explicitly or the light scheme is unreachable.
+#[test]
+fn light_survives_a_roundtrip_against_a_dark_system_default() {
+    for (label, expected) in [
+        ("light", UiTheme::Light),
+        ("dark", UiTheme::Dark),
+        ("auto", UiTheme::Auto),
+    ] {
+        let parsed = UiTheme::parse(label).expect(label);
+        assert_eq!(parsed, expected);
+        assert_eq!(parsed.label(), label, "labels must round-trip verbatim");
+        // Serialising an explicit choice must not collapse it into the default.
+        let text = format!("[ui]\ntheme = \"{}\"\n", parsed.label());
+        let config: Config = toml::from_str(&text).unwrap();
+        assert_eq!(config.ui.theme, expected, "explicit {label} was lost");
+    }
+}
+
+#[test]
+fn a_project_config_cannot_change_the_ui_theme() {
+    let dir = tempdir().unwrap();
+    std::fs::write(dir.path().join("firment.toml"), "[ui]\ntheme = \"light\"\n").unwrap();
+    let mut config = Config::default_config();
+    config.ui.theme = UiTheme::Dark;
+
+    let merged = config.merged_for(dir.path());
+    assert_eq!(
+        merged.ui.theme,
+        UiTheme::Dark,
+        "a cloned repo must not be able to change what its reader sees"
+    );
 }
 
 #[test]

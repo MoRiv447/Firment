@@ -119,16 +119,68 @@ impl ToolVerbosity {
     }
 }
 
+/// Which colour scheme the interfaces draw in.
+///
+/// The setting lives here rather than in each frontend because the GUI and the
+/// web client must agree on what "light" means: a scheme that only one of them
+/// honoured would let the two drift into different greys.
+///
+/// The TUI deliberately ignores this. Its colours come from the terminal's own
+/// palette (see `crates/firment-tui/src/theme.rs`), so light-versus-dark there
+/// is the user's terminal theme, not ours, and overriding it from a config file
+/// would fight the thing that already knows the answer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UiTheme {
+    /// Always light, whatever the OS reports.
+    Light,
+    /// Always dark, whatever the OS reports.
+    Dark,
+    /// Follow the OS. Default.
+    ///
+    /// A default rather than a guess: on a dark machine `auto` resolves to
+    /// dark, so a user who wants to *see* the light scheme has to be able to
+    /// say so explicitly — hence `light` in the same enum rather than a
+    /// follow-the-system boolean.
+    #[default]
+    Auto,
+}
+
+impl UiTheme {
+    /// Wire/CLI name, for config output and error text.
+    pub fn label(self) -> &'static str {
+        match self {
+            UiTheme::Light => "light",
+            UiTheme::Dark => "dark",
+            UiTheme::Auto => "auto",
+        }
+    }
+
+    /// Parse a user-supplied name. Case-insensitive; `None` for unknown words
+    /// so callers can report the bad value instead of silently defaulting.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "light" => Some(UiTheme::Light),
+            "dark" => Some(UiTheme::Dark),
+            "auto" | "system" => Some(UiTheme::Auto),
+            _ => None,
+        }
+    }
+}
+
 /// `[ui]` in config.toml.
 ///
 /// Deliberately NOT merged from a project config file (`merged_for` skips it):
-/// how verbose the UI is belongs to the person reading it, and a cloned repo
-/// should not be able to change what someone sees. Only the user's own
-/// config.toml and the CLI flags can set this.
+/// how verbose and how bright the UI is belongs to the person reading it, and a
+/// cloned repo should not be able to change what someone sees. Only the user's
+/// own config.toml and the CLI flags can set this.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UiConfig {
     #[serde(default)]
     pub tool_verbosity: ToolVerbosity,
+    /// Colour scheme: `light` / `dark` / `auto`. See [`UiTheme`].
+    #[serde(default)]
+    pub theme: UiTheme,
 }
 
 /// ELF binary-analysis gate policy. Written as a string (glob only) in
@@ -1067,6 +1119,14 @@ model = "deepseek-v4-flash"
 # CLI equivalents: -q (summary) / -v (expanded). A non-TTY session always
 # behaves as "summary" no matter what this says.
 # tool_verbosity = "normal"
+
+# Colour scheme for the GUI and the web client.
+#   light = always light      dark = always dark
+#   auto  = follow the OS (default)
+# "auto" is the default, so on a dark machine you must set "light" explicitly
+# to see the light scheme. The TUI ignores this: it draws in the terminal's own
+# palette, which already adapts to the user's background.
+# theme = "auto"
 
 [tools]
 # After code changes, the agent must pass verify before declaring completion; empty disables the tool
