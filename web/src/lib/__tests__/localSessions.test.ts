@@ -89,6 +89,22 @@ describe('loadSessions', () => {
     stub.setItem(KEY, JSON.stringify([{ title: 'no id, no messages' }]));
     expect(loadSessions().error).toMatch(/unexpected structure/);
   });
+
+  it('never replaces an earlier backup with the next corrupt blob', () => {
+    const stub = installStorage();
+    stub.setItem(KEY, '[{"id":"real","messages":[]}]trailing');
+    loadSessions();
+    const firstBackup = stub.getItem(CORRUPT_KEY);
+
+    // The app writes a fresh store immediately after a bad load, so any later
+    // corrupt read is a different blob — and the first backup is the only copy
+    // of the sessions that were really there.
+    stub.setItem(KEY, '[{"id":"placeholder","messages":[]}]trailing');
+    loadSessions();
+    expect(stub.getItem(CORRUPT_KEY)).toBe(firstBackup);
+    expect(stub.getItem(CORRUPT_KEY)).toContain('"real"');
+    expect(stub.getItem(`${CORRUPT_KEY}.1`)).toContain('placeholder');
+  });
 });
 
 describe('saveSessions', () => {
