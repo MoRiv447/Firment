@@ -14,7 +14,9 @@ use crate::util::{
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
-use firment_core::{AgentEvent, ChatMessage, QuestionRequest, SessionMode, ThinkingLevel};
+use firment_core::{
+    AgentEvent, ChatMessage, QuestionRequest, SessionMode, ThinkingLevel, ToolVerbosity,
+};
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 use std::collections::{HashSet, VecDeque};
@@ -106,6 +108,14 @@ pub(crate) struct App {
     /// dynamic rows (running tool spinners, the growing assistant tail) and
     /// are re-wrapped every frame.
     pub(crate) row_cache: Option<RowCache>,
+    /// First rendered row of each item, in the same order as `items` (with a
+    /// final entry for the end). Written by `render_rows`, read by the
+    /// selection → item mapping behind `Ctrl+O`. Empty before the first draw.
+    pub(crate) item_row_starts: Vec<usize>,
+    /// How much of a tool's diff this session shows by default. Set from
+    /// `[ui] tool_verbosity` after construction (`App::new` keeps its ten
+    /// positional arguments); `Ctrl+O` still overrides per card.
+    pub(crate) tool_verbosity: ToolVerbosity,
 }
 
 impl App {
@@ -171,6 +181,8 @@ impl App {
             thinking_since: None,
             row_version: 0,
             row_cache: None,
+            item_row_starts: Vec::new(),
+            tool_verbosity: ToolVerbosity::Normal,
         };
         if let Some(hint) = startup_hint {
             app.items.push(Item::System(hint));
@@ -192,11 +204,17 @@ impl App {
                     let ok = !content.starts_with("Permission denied")
                         && !content.starts_with("unknown tool")
                         && !content.starts_with("[Permission] Dangerous command");
+                    // A restored session stores the tool text verbatim, so
+                    // history gets the same diff view the live card had — it is
+                    // not limited to the one-line summary.
+                    let expanded = self.should_auto_expand(Some(content.as_str()));
                     self.items.push(Item::Tool {
                         name: name.clone(),
                         seq: u64::MAX,
                         running: false,
                         ok,
+                        detail: Some(content.clone()),
+                        expanded,
                         summary: content.clone(),
                     });
                 }
@@ -264,17 +282,23 @@ impl App {
                     running: true,
                     ok: false,
                     summary,
+                    detail: None,
+                    expanded: false,
                 });
             }
             AgentEvent::ToolEnd {
                 name,
                 ok,
                 summary,
+                detail,
                 seq,
             } => {
                 if let Some(pos) = self.active_tools.iter().position(|(n, _)| n == &name) {
                     self.active_tools.remove(pos);
                 }
+                // Decided before the loop: `should_auto_expand` borrows `self`,
+                // which the mutable item iteration below already holds.
+                let auto_expand = self.should_auto_expand(detail.as_deref());
                 for item in self.items.iter_mut().rev() {
                     if let Item::Tool {
                         name: n,
@@ -282,6 +306,8 @@ impl App {
                         running,
                         ok: current_ok,
                         summary: current_summary,
+                        detail: current_detail,
+                        expanded,
                     } = item
                         && n == &name
                         && *item_seq == seq
@@ -289,9 +315,15 @@ impl App {
                         *running = false;
                         *current_ok = ok;
                         *current_summary = summary;
+                        *expanded = auto_expand;
+                        *current_detail = detail;
                         break;
                     }
                 }
+                // The card just stopped being `is_row_dynamic` (its spinner is
+                // gone), so the wrapped rows are now served from cache: without
+                // this the detail body would never appear.
+                self.touch_rows();
             }
             AgentEvent::TurnEnd { .. } => {
                 self.busy = false;
@@ -700,6 +732,17 @@ impl App {
             KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.cursor = self.input.len();
                 self.input_sel = None;
+                false
+            }
+            // These MUST stay above the bare `Char(ch)` arm below: that one
+            // matches any modifier, so an unhandled Ctrl+O would happily type
+            // an "o" into the composer.
+            KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.toggle_tool_detail();
+                false
+            }
+            KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.toggle_all_tool_details();
                 false
             }
             KeyCode::Char(ch) => {
@@ -1515,6 +1558,83 @@ impl App {
         }
     }
 
+    /// Whether a card's diff body should open by itself when it lands.
+    /// `[ui] tool_verbosity` moves the line: `expanded` opens every diff,
+    /// `summary` opens none, `normal` opens only the small ones (one glance
+    /// beats a keystroke for a two-line edit, a screenful does not).
+    pub(crate) fn should_auto_expand(&self, detail: Option<&str>) -> bool {
+        let Some(body) = detail.filter(|b| crate::util::is_diff_body(b)) else {
+            return false;
+        };
+        match self.tool_verbosity {
+            ToolVerbosity::Summary => false,
+            ToolVerbosity::Normal => crate::util::diff_is_small(body),
+            ToolVerbosity::Expanded => true,
+        }
+    }
+
+    /// Index of the tool card the transcript selection sits on, when it sits
+    /// on one. `None` if nothing is selected, the selection is stale, or the
+    /// selected row belongs to a user/assistant/system item.
+    pub(crate) fn selected_tool_index(&self) -> Option<usize> {
+        let selection = self.selection.as_ref()?;
+        // `item_row_starts` is filled by the last draw; before it exists there
+        // is nothing on screen to point at.
+        if self.item_row_starts.len() < 2 {
+            return None;
+        }
+        let idx = self
+            .item_row_starts
+            .partition_point(|start| *start <= selection.anchor_row)
+            .saturating_sub(1);
+        match self.items.get(idx) {
+            Some(Item::Tool {
+                detail: Some(_), ..
+            }) => Some(idx),
+            _ => None,
+        }
+    }
+
+    /// Expand/collapse the tool card the transcript selection sits on, or the
+    /// newest card that has a diff body when nothing is selected (the common
+    /// case: you just watched the edit land at the bottom of the transcript).
+    pub(crate) fn toggle_tool_detail(&mut self) {
+        let target = self.selected_tool_index().or_else(|| {
+            self.items.iter().rposition(|i| {
+                matches!(
+                    i,
+                    Item::Tool {
+                        detail: Some(_),
+                        ..
+                    }
+                )
+            })
+        });
+        let Some(idx) = target else {
+            self.items
+                .push(Item::System("No tool output to expand yet".to_string()));
+            return;
+        };
+        if let Some(Item::Tool { expanded, .. }) = self.items.get_mut(idx) {
+            *expanded = !*expanded;
+            self.touch_rows();
+        }
+    }
+
+    /// Collapse or re-open every tool card's diff body at once.
+    pub(crate) fn toggle_all_tool_details(&mut self) {
+        let open = self
+            .items
+            .iter()
+            .any(|i| matches!(i, Item::Tool { expanded: true, .. }));
+        for item in &mut self.items {
+            if let Item::Tool { expanded, .. } = item {
+                *expanded = !open;
+            }
+        }
+        self.touch_rows();
+    }
+
     pub(crate) fn scroll_up(&mut self, amount: usize) {
         if self.max_offset == 0 {
             return;
@@ -1577,7 +1697,7 @@ impl App {
             .unwrap_or((command, ""));
         match name {
             "help" => self.items.push(Item::System(
-                "Commands: /new  /plan [on|off]  /agent  /models  /model <id>  /sessions (use ↑/↓ to select)  /session <id>  /delete <id>  /undo  /ledger  /pin <path>  /unpin <path>  /copy  /provider <name>  /add-provider <name> <openai|anthropic> <base_url> <model>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /budget <chars>  /output <tokens>  /context  /config  /clear  /help  /quit\nKeys: ↑/↓ browse history when input is empty, move the input cursor on multi-line input, scroll the transcript on single-line input · Shift+Enter manual newline · PgUp/PgDn/wheel scroll · Ctrl+P model picker · inside /sessions: c copies the selected id to clipboard, d deletes it (drag-select and right-click are disabled because the TUI captures mouse events; press Esc to dismiss the picker, then your terminal's native selection works in the scrollback) · Ctrl+C copies the selection (copies the last reply when there is none) · Ctrl+V paste · Ctrl+Shift+C copy last reply · ←/→ move the input cursor · y/n/a permission answers · Esc interrupts AI output (Esc twice while working; clears input when idle) · Ctrl+Q quit\nInput box: auto-wraps and grows to up to 5 lines; taller content scrolls, large pastes collapse into 【line x-y】, and the title shows hidden/collapsed line counts before sending"
+                "Commands: /new  /plan [on|off]  /agent  /models  /model <id>  /sessions (use ↑/↓ to select)  /session <id>  /delete <id>  /undo  /ledger  /pin <path>  /unpin <path>  /copy  /provider <name>  /add-provider <name> <openai|anthropic> <base_url> <model>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /budget <chars>  /output <tokens>  /context  /config  /clear  /help  /quit\nKeys: ↑/↓ browse history when input is empty, move the input cursor on multi-line input, scroll the transcript on single-line input · Shift+Enter manual newline · PgUp/PgDn/wheel scroll · Ctrl+P model picker · Ctrl+O expand/collapse the diff on the selected tool card (the newest one when nothing is selected) · Ctrl+T collapse/expand every diff at once · inside /sessions: c copies the selected id to clipboard, d deletes it (drag-select and right-click are disabled because the TUI captures mouse events; press Esc to dismiss the picker, then your terminal's native selection works in the scrollback) · Ctrl+C copies the selection (copies the last reply when there is none) · Ctrl+V paste · Ctrl+Shift+C copy last reply · ←/→ move the input cursor · y/n/a permission answers · Esc interrupts AI output (Esc twice while working; clears input when idle) · Ctrl+Q quit\nInput box: auto-wraps and grows to up to 5 lines; taller content scrolls, large pastes collapse into 【line x-y】, and the title shows hidden/collapsed line counts before sending"
                     .to_string(),
             )),
             "new" => {
@@ -1844,6 +1964,13 @@ pub(crate) enum Item {
         running: bool,
         ok: bool,
         summary: String,
+        /// Full tool output when it carries a unified diff (edit/write tools),
+        /// so the card can SHOW the change instead of 120 chars of header.
+        /// `None` for every other tool and for the cancel/timeout paths.
+        detail: Option<String>,
+        /// Whether this card's diff body is open. Per card, and always reset
+        /// to the small-diff default when the card is (re)built.
+        expanded: bool,
     },
     /// Permission confirmations render as inline cards in the transcript
     /// instead of popups covering the context.

@@ -5,7 +5,7 @@ use clap::Parser;
 use firment_core::config::{config_path, parse_size};
 use firment_core::{
     AgentEvent, Config, EventSink, PermissionChecker, PermissionError, Session, SessionMode,
-    SessionStore, ThinkingLevel, load_auth,
+    SessionStore, ThinkingLevel, ToolVerbosity, load_auth,
 };
 use std::collections::HashSet;
 use std::env;
@@ -13,6 +13,11 @@ use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+/// Diff lines a one-shot run prints at the default verbosity before it says
+/// "… N more". Enough to recognize the change; short enough that a build log
+/// with a dozen edits stays readable.
+const CLI_DIFF_PREVIEW_LINES: usize = 12;
 
 #[derive(Parser)]
 #[command(
@@ -67,6 +72,15 @@ struct Cli {
     /// Auto-approve all risky tool calls (write/edit/shell).
     #[arg(short = 'y', long)]
     yes: bool,
+
+    /// Print one line per tool call: never a diff body. Implied when stdout or
+    /// stderr is not a terminal, so pipes and CI logs stay short.
+    #[arg(short = 'q', long, conflicts_with = "verbose")]
+    quiet: bool,
+
+    /// Print the whole diff an edit made (overrides ui.tool_verbosity).
+    #[arg(short = 'v', long, conflicts_with = "quiet")]
+    verbose: bool,
 
     /// Allow destructive shell commands (rm/del/git clean, etc.) even with -y.
     /// Without this flag, the hard safety guard blocks them in one-shot mode.
@@ -549,7 +563,16 @@ async fn main() -> anyhow::Result<()> {
     };
 
     if let Some(prompt) = &cli.prompt {
-        run_once(&config, session, prompt, cli.yes, cli.allow_dangerous).await?;
+        let verbosity = resolve_verbosity(&cli, &config);
+        run_once(
+            &config,
+            session,
+            prompt,
+            cli.yes,
+            cli.allow_dangerous,
+            verbosity,
+        )
+        .await?;
     } else {
         firment_tui::run(config, config_path, session).await?;
     }
@@ -575,12 +598,32 @@ fn one_shot_auto_approve(config: &Config) -> Vec<String> {
     auto
 }
 
+/// Resolve how much tool output to print, in precedence order:
+/// explicit flag > config `[ui] tool_verbosity` > non-TTY downgrade.
+///
+/// The non-TTY rule wins over everything (including `-v`): a redirection the
+/// user forgot about must not turn a log into a screenful per edit.
+fn resolve_verbosity(cli: &Cli, config: &Config) -> ToolVerbosity {
+    let interactive = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+    if !interactive {
+        return ToolVerbosity::Summary;
+    }
+    if cli.quiet {
+        return ToolVerbosity::Summary;
+    }
+    if cli.verbose {
+        return ToolVerbosity::Expanded;
+    }
+    config.ui.tool_verbosity
+}
+
 async fn run_once(
     config: &Config,
     session: Session,
     prompt: &str,
     yes: bool,
     allow_dangerous: bool,
+    verbosity: ToolVerbosity,
 ) -> anyhow::Result<()> {
     let config = config.merged_for(&session.cwd);
     let store = SessionStore::default();
@@ -590,7 +633,7 @@ async fn run_once(
         &config,
         session,
         store,
-        Arc::new(CliSink),
+        Arc::new(CliSink { verbosity }),
         permission,
         None,
         allow_dangerous,
@@ -801,7 +844,19 @@ async fn guard_watch(cli: &Cli, cwd: PathBuf, once: bool) -> anyhow::Result<()> 
              请诊断该设备告警：先用 device_log 查看最近帧判断根因，最后给出结论与后续建议。\
              （本次为只读诊断：不要尝试写入或执行任何变更。）"
         );
-        match run_once(&global, session, &prompt, true, false).await {
+        // A watcher runs unattended, so its output stays on the one-line
+        // contract: `resolve_verbosity` would say the same thing (no TTY), and
+        // saying it here keeps the diagnosis log greppable.
+        match run_once(
+            &global,
+            session,
+            &prompt,
+            true,
+            false,
+            ToolVerbosity::Summary,
+        )
+        .await
+        {
             Ok(_) => {
                 handled += 1;
                 println!("[guard-watch] diagnosis turn complete ({handled} handled)");
@@ -816,7 +871,12 @@ async fn guard_watch(cli: &Cli, cwd: PathBuf, once: bool) -> anyhow::Result<()> 
     Ok(())
 }
 
-struct CliSink;
+/// One-shot CLI event sink. `verbosity` decides how much of a tool's output
+/// reaches stderr; a non-TTY session is forced to `Summary` by the caller, so
+/// a pipe or CI log never receives a diff body.
+struct CliSink {
+    verbosity: ToolVerbosity,
+}
 
 #[async_trait]
 impl EventSink for CliSink {
@@ -837,10 +897,44 @@ impl EventSink for CliSink {
                 eprintln!("▶ {name}");
             }
             AgentEvent::ToolEnd {
-                name, ok, summary, ..
+                name,
+                ok,
+                summary,
+                detail,
+                ..
             } => {
                 let mark = if ok { "✓" } else { "✗" };
                 eprintln!("  {mark} {name}: {summary}");
+                // `Summary` is the whole point of -q and of every non-TTY run:
+                // one line per tool, never a diff body (a CI log that grew by a
+                // screenful per edit would bury everything else).
+                if self.verbosity == ToolVerbosity::Summary {
+                    return;
+                }
+                if let Some(detail) = detail {
+                    // The first line of `detail` IS `summary`, already printed.
+                    let mut body = detail.lines().skip(1);
+                    // `Normal` shows enough of the change to recognize it;
+                    // `Expanded` prints the lot.
+                    let limit = if self.verbosity == ToolVerbosity::Expanded {
+                        usize::MAX
+                    } else {
+                        CLI_DIFF_PREVIEW_LINES
+                    };
+                    let mut shown = 0usize;
+                    let mut more = 0usize;
+                    for line in body.by_ref() {
+                        if shown >= limit {
+                            more += 1;
+                            continue;
+                        }
+                        eprintln!("  {line}");
+                        shown += 1;
+                    }
+                    if more > 0 {
+                        eprintln!("  … {more} more diff lines (-v to show all)");
+                    }
+                }
             }
             AgentEvent::TextDelta(_) => {
                 THINKING_SHOWN.store(false, std::sync::atomic::Ordering::Relaxed);

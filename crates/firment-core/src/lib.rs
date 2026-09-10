@@ -22,7 +22,7 @@ pub use ask::{Asker, QuestionRequest};
 pub use cancel::Cancellable;
 pub use config::{
     AuthMap, CompactionStrategy, Config, ConfigError, ElfConfig, LaConfig, ProviderConfig,
-    auth_path, config_dir, config_path, load_auth, save_auth,
+    ToolVerbosity, UiConfig, auth_path, config_dir, config_path, load_auth, save_auth,
 };
 pub use context::{default_system_prompt, delegation_section, system_prompt_for};
 pub use http::{http_builder, http_client};

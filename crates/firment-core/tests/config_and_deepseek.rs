@@ -1,6 +1,6 @@
 use firment_core::{
     ChatMessage, ChatRequest, Config, OpenAIProvider, Provider, ProviderConfig, ProviderEvent,
-    StopReason, ThinkingLevel, load_auth, save_auth,
+    StopReason, ThinkingLevel, ToolVerbosity, load_auth, save_auth,
 };
 use futures::StreamExt;
 use serde_json::{Value, json};
@@ -8,6 +8,86 @@ use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+#[test]
+fn ui_tool_verbosity_defaults_to_normal_and_roundtrips() {
+    let text = r#"
+[providers.default]
+type = "openai"
+model = "x"
+"#;
+    let config: Config = toml::from_str(text).unwrap();
+    assert_eq!(config.ui.tool_verbosity, ToolVerbosity::Normal);
+    assert_eq!(config.ui.tool_verbosity.label(), "normal");
+
+    let text = r#"
+[providers.default]
+type = "openai"
+model = "x"
+
+[ui]
+tool_verbosity = "expanded"
+"#;
+    let config: Config = toml::from_str(text).unwrap();
+    assert_eq!(config.ui.tool_verbosity, ToolVerbosity::Expanded);
+}
+
+#[test]
+fn tool_verbosity_parses_names_and_aliases() {
+    assert_eq!(
+        ToolVerbosity::parse("summary"),
+        Some(ToolVerbosity::Summary)
+    );
+    assert_eq!(ToolVerbosity::parse("QUIET"), Some(ToolVerbosity::Summary));
+    assert_eq!(
+        ToolVerbosity::parse(" normal "),
+        Some(ToolVerbosity::Normal)
+    );
+    assert_eq!(
+        ToolVerbosity::parse("expanded"),
+        Some(ToolVerbosity::Expanded)
+    );
+    assert_eq!(
+        ToolVerbosity::parse("verbose"),
+        Some(ToolVerbosity::Expanded)
+    );
+    // Unknown words must NOT silently become the default: the caller reports
+    // the bad value instead of pretending it understood.
+    assert_eq!(ToolVerbosity::parse("loud"), None);
+    assert_eq!(ToolVerbosity::parse(""), None);
+}
+
+#[test]
+fn a_project_config_cannot_change_the_ui_verbosity() {
+    let dir = tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("firment.toml"),
+        "[ui]\ntool_verbosity = \"expanded\"\n",
+    )
+    .unwrap();
+    let mut config = Config::default_config();
+    config.ui.tool_verbosity = ToolVerbosity::Summary;
+
+    let merged = config.merged_for(dir.path());
+    assert_eq!(
+        merged.ui.tool_verbosity,
+        ToolVerbosity::Summary,
+        "a cloned repo must not be able to change what its reader sees"
+    );
+}
+
+/// `default_config_text` is what a first run writes to the user's disk, and it
+/// had no test at all: a syntax slip there greets every new install with a
+/// parse error. Parsing it also pins the `[ui]` block's presence.
+#[test]
+fn the_shipped_default_config_parses_and_documents_the_ui_block() {
+    let text = firment_core::config::default_config_text();
+    assert!(text.contains("[ui]"), "the [ui] block is missing");
+    assert!(text.contains("# tool_verbosity = \"normal\""));
+
+    let config: Config = toml::from_str(text).expect("the shipped default must parse");
+    assert_eq!(config.ui.tool_verbosity, ToolVerbosity::Normal);
+}
 
 #[test]
 fn compaction_strategy_and_symbols_backend_roundtrip() {

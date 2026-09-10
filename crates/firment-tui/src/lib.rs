@@ -42,6 +42,8 @@ pub async fn run(
     // overrides (build_command, default_chip, …) must not leak out of the
     // project's scope.
     let base_config = config;
+    // Read before `base_config` is moved into the agent assembly below.
+    let tool_verbosity = base_config.ui.tool_verbosity;
     let config = base_config.clone().merged_for(&session.cwd);
     let store = SessionStore::default();
     let default_registry = firment_tools::default_registry();
@@ -150,6 +152,10 @@ pub async fn run(
     // agent lock while a turn runs).
     app.cancel_tx = Some(app_cancel_tx);
     app.cancel_signal = Some(app_cancel_signal);
+    // Display preference, set here rather than as an 11th `App::new` argument
+    // so the seven test constructors keep their current shape. Read from the
+    // USER config: `[ui]` is deliberately not project-overridable.
+    app.tool_verbosity = tool_verbosity;
     let result = run_loop(&mut terminal, &mut app, event_rx, perm_rx, ask_rx, ui_rx).await;
     restore_terminal(&mut terminal)?;
     agent_task.abort();
@@ -374,6 +380,71 @@ mod tests {
             None,
             Vec::new(),
         )
+    }
+
+    /// The `[ui] tool_verbosity` knob, exercised against the shapes that
+    /// actually reach a card: the mockup's three-line breathing-LED diff, a
+    /// diff big enough that opening it unasked would bury the transcript, and
+    /// bodies that are not diffs at all.
+    #[test]
+    fn tool_verbosity_decides_whether_a_diff_opens_by_itself() {
+        use firment_core::ToolVerbosity;
+
+        // Built line by line: a `\`-continued literal would fold this file's
+        // own indentation into the diff lines and silently change the count.
+        let small = [
+            "Edited src/main.c (2 lines -> 3 lines)",
+            "--- src/main.c",
+            "+++ src/main.c",
+            "@@ -118,7 +118,7 @@ MX_TIM2_Init",
+            "-  htim2.Init.Period = 999;",
+            "+  htim2.Init.Period = 499;",
+            "+  htim2.Init.Prescaler = 84;",
+        ]
+        .join("\n")
+            + "\n";
+        let big = {
+            let mut lines = vec![
+                "Edited src/main.c (1 lines -> 41 lines)".to_string(),
+                "@@ -1 +1,41 @@".to_string(),
+            ];
+            for i in 0..40 {
+                lines.push(format!("+line {i}"));
+            }
+            lines.join("\n") + "\n"
+        };
+        let no_diff = "Edited a.txt (1 lines -> 1 lines)\n";
+
+        let mut app = test_app();
+        app.tool_verbosity = ToolVerbosity::Normal;
+        // The `--- `/`+++ ` file headers must not count as changes: counting
+        // them made this three-line edit look like five and kept it shut.
+        assert!(
+            crate::util::diff_is_small(&small),
+            "file headers inflated the change count"
+        );
+        assert!(app.should_auto_expand(Some(&small)), "small diff opens");
+        assert!(!app.should_auto_expand(Some(&big)), "big diff stays shut");
+        assert!(
+            !app.should_auto_expand(None),
+            "no detail means nothing to open"
+        );
+        assert!(
+            !app.should_auto_expand(Some(no_diff)),
+            "a body with no diff header is not a diff"
+        );
+
+        app.tool_verbosity = ToolVerbosity::Summary;
+        assert!(!app.should_auto_expand(Some(&small)));
+        assert!(!app.should_auto_expand(Some(&big)));
+
+        app.tool_verbosity = ToolVerbosity::Expanded;
+        assert!(app.should_auto_expand(Some(&small)));
+        assert!(app.should_auto_expand(Some(&big)), "expanded opens all");
+        assert!(
+            !app.should_auto_expand(None),
+            "expanded still has nothing to show without a detail"
+        );
     }
 
     #[tokio::test]
@@ -1426,6 +1497,7 @@ mod tests {
             name: "flash".to_string(),
             ok: true,
             summary: String::new(),
+            detail: None,
             seq: 2,
         });
         assert_eq!(app.status_text(), "working · searching fn main…");
@@ -1434,6 +1506,7 @@ mod tests {
             name: "grep".to_string(),
             ok: true,
             summary: String::new(),
+            detail: None,
             seq: 1,
         });
         assert_eq!(app.status_text(), "working");

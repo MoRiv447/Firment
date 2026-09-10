@@ -51,6 +51,9 @@ pub struct Config {
     /// the turn reports the wave as cancelled.
     #[serde(default = "default_tool_cancel_grace")]
     pub tool_cancel_grace_secs: u64,
+    /// Display-only preferences. Never merged from a project config file.
+    #[serde(default)]
+    pub ui: UiConfig,
     /// Which command-bearing tool settings came from a project-local config
     /// file. Derived by `merged_for`, never persisted — `save` would otherwise
     /// write a repo-controlled fact into the user's own config.toml.
@@ -75,6 +78,57 @@ pub struct MqttConfig {
     /// "host:port" of the mosquitto broker, e.g. "192.168.1.6:1883".
     #[serde(default)]
     pub broker: String,
+}
+
+/// How much of a tool's output a UI shows.
+///
+/// The edit tools ship a unified diff on `AgentEvent::ToolEnd::detail`, and
+/// an unbroken diff can be a screenful per edit. This is the knob that decides
+/// how much of it lands by default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolVerbosity {
+    /// One line per tool, never a diff body. What a pipe or a CI log wants.
+    Summary,
+    /// Diffs are shown but stay collapsed unless they are small. Default.
+    #[default]
+    Normal,
+    /// Every diff body opens as soon as it lands.
+    Expanded,
+}
+
+impl ToolVerbosity {
+    /// Wire/CLI name, for `firm config` output and error text.
+    pub fn label(self) -> &'static str {
+        match self {
+            ToolVerbosity::Summary => "summary",
+            ToolVerbosity::Normal => "normal",
+            ToolVerbosity::Expanded => "expanded",
+        }
+    }
+
+    /// Parse a user-supplied name. Case-insensitive; `None` for unknown words
+    /// so callers can report the bad value instead of silently defaulting.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "summary" | "quiet" => Some(ToolVerbosity::Summary),
+            "normal" => Some(ToolVerbosity::Normal),
+            "expanded" | "verbose" => Some(ToolVerbosity::Expanded),
+            _ => None,
+        }
+    }
+}
+
+/// `[ui]` in config.toml.
+///
+/// Deliberately NOT merged from a project config file (`merged_for` skips it):
+/// how verbose the UI is belongs to the person reading it, and a cloned repo
+/// should not be able to change what someone sees. Only the user's own
+/// config.toml and the CLI flags can set this.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UiConfig {
+    #[serde(default)]
+    pub tool_verbosity: ToolVerbosity,
 }
 
 /// ELF binary-analysis gate policy. Written as a string (glob only) in
@@ -537,6 +591,7 @@ impl Config {
             stream_timeout_secs: default_stream_timeout(),
             tool_wave_timeout_secs: default_tool_wave_timeout(),
             tool_cancel_grace_secs: default_tool_cancel_grace(),
+            ui: UiConfig::default(),
             commands_from_project: CommandProvenance::default(),
         }
     }
@@ -1002,6 +1057,16 @@ model = "deepseek-v4-flash"
 # stream_timeout_secs = 120           # provider-stream SILENCE budget: any byte from the provider re-arms it, so a slow, huge reply is fine. Raise it if your provider stalls mid-response (clamped to >= 1s)
 # tool_wave_timeout_secs = 600        # hard deadline for one wave of tool calls (a run/build that never exits)
 # tool_cancel_grace_secs = 5          # time a killed tool gets to exit before the wave reports cancelled
+
+[ui]
+# How much tool output the interfaces show. An edit ships its full unified
+# diff on the tool event; that is a screenful per edit at "expanded".
+#   summary  = one line per tool, never a diff body  (what a pipe/CI log wants)
+#   normal   = diffs shown, collapsed unless small   (default)
+#   expanded = every diff body opens as soon as it lands
+# CLI equivalents: -q (summary) / -v (expanded). A non-TTY session always
+# behaves as "summary" no matter what this says.
+# tool_verbosity = "normal"
 
 [tools]
 # After code changes, the agent must pass verify before declaring completion; empty disables the tool
