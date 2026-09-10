@@ -244,6 +244,9 @@ export interface SettingsDto {
   monitor_baud: number;
   web_search: string | null;
   thinking: string;
+  /** Colour scheme: "auto" (follow the OS, the default) / "light" / "dark".
+   * `ui.theme` in config.toml; an unknown or missing value behaves as "auto". */
+  theme: string;
   providers: ProviderEntryDto[];
 }
 

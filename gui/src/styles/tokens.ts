@@ -10,20 +10,48 @@
  * Source of truth: docs/design/tokens.md. Keep the two in step; the values are
  * also duplicated into web/src/styles/tokens.css for the web client, because
  * the two surfaces must not drift into different greys.
+ *
+ * # Two palettes, one namespace
+ *
+ * `dark` and `light` below hold the same key set; `Palette` is derived from the
+ * dark one, so a key added to one and forgotten in the other is a type error
+ * rather than a silent fallback to the wrong grey.
+ *
+ * `color` reads the **active** palette through getters instead of being a flat
+ * object. There are ~160 inline `color.x` reads across the views, and every one
+ * of them is evaluated during render, so a getter hands each of them the
+ * current scheme without touching a single call site. The alternative -- a
+ * context plus a `useTokens()` hook -- would be the same thing with 160 edits,
+ * and it would still need a provider to keep `React.memo` from serving stale
+ * colours (see `gui/src/lib/theme.ts`).
+ *
+ * Ordering rule: whoever renders must call `setActivePalette()` **before** its
+ * children render, not in an effect, or the first paint is in the old scheme.
+ * `App.tsx` does it at the top of the render body.
  */
 
-/** Grounds and text. Deliberately neutral: an interface tinted green makes the
- * diff's own red/green harder to read, and Firment's screens are mostly diff. */
-export const color = {
+/** The two schemes. Resolved from `ui.theme` (auto/light/dark) by `theme.ts`. */
+export type ThemeMode = 'dark' | 'light';
+
+/**
+ * The dark palette. These are the values that shipped, unchanged: adding the
+ * light scheme moved no dark value.
+ *
+ * Where a token is readable as text, the ratio quoted is against `bg`; several
+ * were verified against both grounds (docs/design/tokens.md records the ground
+ * with every ratio -- #F7F7F5 and #FFFFFF are close enough that a ratio without
+ * its ground is ambiguous).
+ */
+const dark = {
   /** Page background. */
   bg: '#0F0F12',
   /** Cards, panels. */
   surface: '#18181B',
   /** Raised surfaces: popovers, the elevated card. */
   surfaceRaised: '#1F1F23',
-  /** Body text. */
+  /** Body text. 15.08:1 on `bg`. */
   ink: '#E4E4E7',
-  /** Secondary text. Never olive-green: it reads as disabled. */
+  /** Secondary text. Never olive-green: it reads as disabled. 7.47:1 on `bg`. */
   muted: '#A1A1AA',
   /** Hairline dividers and borders. */
   line: '#2A2A2F',
@@ -36,7 +64,7 @@ export const color = {
    * or icon colour; on a dark ground the text that sits ON it is `onAcid`.
    */
   brandAcid: '#B4F779',
-  /** Text/icon colour for content sitting on `brandAcid`. */
+  /** Text/icon colour for content sitting on `brandAcid`. 13.28:1 on it. */
   onAcid: '#15200D',
   /** Brand green dark enough to be readable AS text on a light ground. */
   brandInk: '#3B6D11',
@@ -47,6 +75,7 @@ export const color = {
    * one for both made "this is Firment" and "this passed" look identical.
    */
   successBg: '#14532D',
+  /** 6.49:1 on `successBg`. */
   successInk: '#86EFAC',
   successBorder: '#166534',
 
@@ -68,7 +97,159 @@ export const color = {
 
   /** The one true black: the neo-brutalist outline and hard shadow. */
   outline: '#000000',
+
+  /**
+   * Hover wash for rows and menu items. Unchanged from the value that shipped.
+   */
+  hover: 'rgba(255,255,255,0.08)',
+
+  /**
+   * The three states of a progress step (build / flash / monitor). Derived from
+   * the tokens above rather than invented, so a step never introduces a fourth
+   * green: done borrows the success pair, "current" is body ink plus the brand
+   * rule, pending is muted. Ratios on `bg`: 6.49 / 15.08 / 7.47.
+   */
+  stepDoneBg: '#14532D',
+  stepDoneInk: '#86EFAC',
+  stepCurrentInk: '#E4E4E7',
+  /** The 2px rule under the current step. Brand colour, so a shape not text. */
+  stepRule: '#B4F779',
+  stepPendingInk: '#A1A1AA',
+
+  /**
+   * Keyboard focus ring. Acid on a dark ground is 15.06:1, so the brand colour
+   * can be its own focus ring here; the light palette cannot do that (1.27:1).
+   */
+  focusRing: '#B4F779',
 } as const;
+
+/**
+ * The shape of a palette. Derived from `dark` so the two cannot drift: a key
+ * missing from `light` fails the compiler instead of rendering `undefined`.
+ */
+export type Palette = { [K in keyof typeof dark]: string };
+
+/**
+ * The light palette.
+ *
+ * Two things worth knowing before editing:
+ *
+ * 1. **A ratio is meaningless without its ground.** `ink` is 17.72:1 on
+ *    `surface` and 16.52:1 on `bg`; `muted` is 4.83 / 4.51. Both grounds are in
+ *    use, so the pairs that matter are recorded in docs/design/tokens.md.
+ * 2. **`brandAcid` is 1.27:1 here.** It is a fill and never text; anything
+ *    green-and-readable on light uses `brandInk` (6.21:1), and the focus ring
+ *    is `brandInk` for the same reason -- an acid ring is invisible to a
+ *    keyboard user. The dark palette can afford the acid ring; this one cannot.
+ */
+const light: Palette = {
+  bg: '#F7F7F5',
+  /** 1.07:1 against `bg` -- separation comes from the hairline, not the fill. */
+  surface: '#FFFFFF',
+  /** Distinguished by border and shadow, not by a lighter fill. */
+  surfaceRaised: '#FFFFFF',
+  /** 17.72:1 on `surface`, 16.52:1 on `bg`. */
+  ink: '#18181B',
+  /** 4.83:1 on `surface`, 4.51:1 on `bg` (the tighter of the two). */
+  muted: '#71717A',
+  /** Hairline. 1.18:1 on `bg`: a line, not the 3:1 non-text threshold. */
+  line: '#E4E4E7',
+  /** Secondary button outline. 1.48:1 on `surface`. */
+  lineStrong: '#D4D4D8',
+
+  brandAcid: '#B4F779',
+  /** 13.28:1 on `brandAcid`. */
+  onAcid: '#15200D',
+  /** 6.21:1 on `surface`, 5.79:1 on `bg`. Green text on light uses this. */
+  brandInk: '#3B6D11',
+
+  successBg: '#DCFCE7',
+  /** 5.02:1 on `surface`, 4.57:1 on `successBg`. */
+  successInk: '#15803D',
+  successBorder: '#BBF7D0',
+
+  /**
+   * Derived, not given: the table specified the inks but no grounds for them.
+   * Chosen to sit in the same family as the status colours, and both pairs were
+   * measured -- 5.17:1 and 4.51:1 respectively on their own fills.
+   */
+  infoBg: '#E0F2FE',
+  /** 5.93:1 on `surface`. The dark theme's #7DD3FC is ~2:1 here. */
+  infoInk: '#0369A1',
+  warnBg: '#FEF3C7',
+  /** 5.02:1 on `surface`; the dark theme's #EAB308 is 1.9:1 here. */
+  warnInk: '#B45309',
+
+  diffAddedBg: '#DCFCE7',
+  /** 4.57:1 on `diffAddedBg`. */
+  diffAddedInk: '#15803D',
+  diffRemovedBg: '#FEE2E2',
+  /** 6.56:1 on `diffRemovedBg`. */
+  diffRemovedInk: '#9F1239',
+  /** 4.51:1 on `bg`. */
+  diffMetaInk: '#71717A',
+
+  /**
+   * Kept black on purpose. The outline is the neo-brutalist signature -- 2px
+   * and 3px frames plus the hard offset shadow -- and it reads on both grounds.
+   * The light scheme gets its softness on controls from `line`/`lineStrong`
+   * instead (see `antdTheme`), not by lightening this.
+   */
+  outline: '#000000',
+
+  /**
+   * Pale acid wash. Every neutral tried here fails: `muted` is 4.51:1 on `bg`
+   * and that ground is already the floor, so a grey hover pulls it under AA
+   * (4.40:1 at #F4F4F5, 4.47:1 at #F6F6F7). This tint is the only candidate
+   * that holds -- 4.68:1 for `muted`, 17.16:1 for `ink` -- and it reads as a
+   * weaker sibling of the solid-acid selection rather than competing with it.
+   */
+  hover: '#F6FEEF',
+
+  /** 6.19:1 (done) / 16.52:1 (current) / 4.51:1 (pending) on `bg`. */
+  stepDoneBg: '#EAF3DE',
+  stepDoneInk: '#3F6212',
+  stepCurrentInk: '#18181B',
+  stepRule: '#B4F779',
+  stepPendingInk: '#6B7280',
+
+  /** 6.21:1. NOT the acid: that is 1.27:1 and a keyboard user cannot see it. */
+  focusRing: '#3B6D11',
+};
+
+const palettes: Record<ThemeMode, Palette> = { dark, light };
+
+let activeMode: ThemeMode = 'dark';
+
+/**
+ * Point every `color.x` getter at `mode`.
+ *
+ * Call this during render, before children render -- an effect is one frame too
+ * late and paints the previous scheme.
+ */
+export function setActivePalette(mode: ThemeMode): void {
+  activeMode = mode;
+}
+
+/** The palette for an explicit mode, for code that must not read the global. */
+export function paletteFor(mode: ThemeMode): Palette {
+  return palettes[mode];
+}
+
+/**
+ * The active palette, read through getters.
+ *
+ * A getter object rather than a flat `as const`: the reads happen inside render
+ * functions, so they pick up the scheme `setActivePalette` set for the pass that
+ * is currently running.
+ */
+export const color: Palette = Object.keys(dark).reduce((acc, key) => {
+  Object.defineProperty(acc, key, {
+    get: () => palettes[activeMode][key as keyof Palette],
+    enumerable: true,
+  });
+  return acc;
+}, {} as Record<string, unknown>) as Palette;
 
 /** Font stacks. Code and UI are separate on purpose -- the UI is not a
  * terminal, and setting prose in a monospace was making every label shout. */
@@ -93,29 +274,75 @@ export const radius = {
 } as const;
 
 /**
+ * The slant -- the one signature that cannot be substituted.
+ *
+ * Geometry lives here so no component invents its own numbers, and so the
+ * optical correction stays attached to the reason for it.
+ */
+export const slant = {
+  /** Horizontal run of the cut, in px. */
+  cut: 12,
+  /** The gap between adjacent slanted edges, in px. */
+  gap: 8,
+  /**
+   * Extra left padding over the right, in px.
+   *
+   * The cut removes a triangle from one side, which moves the remaining shape's
+   * centre of mass ~2.5px the other way; without this the label reads as
+   * off-centre even though it is geometrically centred.
+   */
+  opticalPadLeft: 5,
+  /** Every control on a row is this tall, so colour carries the hierarchy. */
+  controlHeight: 40,
+} as const;
+
+/** Motion. Enter 160 / standard 200 / exit 120. */
+export const motion = {
+  ease: 'cubic-bezier(.2,.8,.2,1)',
+  enter: 160,
+  standard: 200,
+  exit: 120,
+  stagger: 40,
+} as const;
+
+/**
  * The antd theme, in both light and dark form.
  *
  * Kept as a function rather than a constant because antd's own `token` needs
- * the raw values above, and because a future `ui.theme = light|dark` setting
- * should flip this rather than fork it.
+ * the raw values above, and because a `ui.theme = light|dark|auto` setting
+ * flips this rather than forking it.
+ *
+ * What actually differs between the modes:
+ *
+ * * **Grounds, text and borders** come from the mode's palette. The border
+ *   mapping is the visible one: dark frames controls in `outline` (the black
+ *   signature), light does not -- a thick black frame on a light ground reads
+ *   as heavy rather than deliberate, so light uses the hairline and the
+ *   secondary outline.
+ * * `colorSuccess` is `successInk` in **both** modes. The previous code fed the
+ *   light mode `brandInk`, which would have painted "this passed" in the brand
+ *   green -- the exact confusion the 85deg/145deg split exists to prevent.
+ * * `colorError` is `diffRemovedInk` in both modes, which is where the two
+ *   hardcoded values (a dark pink, a light maroon) already lived.
  */
-export function antdTheme(mode: 'dark' | 'light' = 'dark') {
-  const dark = mode === 'dark';
+export function antdTheme(mode: ThemeMode = 'dark') {
+  const p = paletteFor(mode);
+  const isDark = mode === 'dark';
   return {
     token: {
-      colorPrimary: color.brandAcid,
+      colorPrimary: p.brandAcid,
       // antd derives hover/active from the primary; on a dark ground the
       // derived shades of a bright acid green land where we want them.
-      colorBgLayout: color.bg,
-      colorBgContainer: color.surface,
-      colorBgElevated: color.surfaceRaised,
-      colorText: color.ink,
-      colorTextSecondary: color.muted,
-      colorBorder: color.outline,
-      colorBorderSecondary: color.outline,
-      colorSuccess: dark ? color.successInk : color.brandInk,
-      colorError: dark ? color.diffRemovedInk : '#9F1239',
-      colorWarning: color.warnInk,
+      colorBgLayout: p.bg,
+      colorBgContainer: p.surface,
+      colorBgElevated: p.surfaceRaised,
+      colorText: p.ink,
+      colorTextSecondary: p.muted,
+      colorBorder: isDark ? p.outline : p.lineStrong,
+      colorBorderSecondary: isDark ? p.outline : p.line,
+      colorSuccess: p.successInk,
+      colorError: p.diffRemovedInk,
+      colorWarning: p.warnInk,
       borderRadius: radius.control,
       fontFamily: font.sans,
       // Not a theme token upstream, but antd reads it for code-ish text when a
@@ -125,13 +352,15 @@ export function antdTheme(mode: 'dark' | 'light' = 'dark') {
     components: {
       Menu: {
         itemBg: 'transparent',
-        itemSelectedBg: color.brandAcid,
-        itemSelectedColor: color.onAcid,
-        itemHoverBg: 'rgba(255,255,255,0.08)',
+        itemSelectedBg: p.brandAcid,
+        itemSelectedColor: p.onAcid,
+        itemHoverBg: p.hover,
         itemBorderRadius: 0,
       },
       Card: { headerBg: 'transparent' },
-      Button: { fontWeight: 600 },
+      // The acid fill carries `onAcid` text, never white-on-green: white on
+      // #B4F779 is 1.3:1.
+      Button: { fontWeight: 600, primaryColor: p.onAcid },
       Tag: { borderRadiusSM: radius.chip, borderRadiusLG: radius.chip },
     },
   };

@@ -558,6 +558,12 @@ pub struct SettingsDto {
     pub monitor_baud: u32,
     pub web_search: Option<String>,
     pub thinking: String,
+    /// Colour scheme for the GUI and the web client: `auto` / `light` / `dark`
+    /// (see `firment_core::UiTheme`). Defaulted so `save_settings` from an older
+    /// client that does not round-trip it still deserializes; the empty string
+    /// then fails to parse and leaves the stored value alone.
+    #[serde(default)]
+    pub theme: String,
     /// All configured providers (name + resolved connection info) so the IDE
     /// can edit base_url / model without hand-editing config.toml.
     /// Defaulted so save_settings from older clients (which don't round-trip
@@ -611,6 +617,7 @@ pub async fn get_settings(shared: tauri::State<'_, Arc<Shared>>) -> Result<Setti
         monitor_baud: config.tools.monitor_baud,
         web_search: config.tools.web_search.clone(),
         thinking: config.thinking.label().to_string(),
+        theme: config.ui.theme.label().to_string(),
         providers,
     })
 }
@@ -642,6 +649,12 @@ pub async fn save_settings(
         config.tools.web_search = settings.web_search;
         if let Ok(level) = settings.thinking.parse::<firment_core::ThinkingLevel>() {
             config.thinking = level;
+        }
+        // An unparseable value (an older client's empty string, a hand-edited
+        // config) leaves the stored setting alone rather than silently
+        // resetting the scheme.
+        if let Some(theme) = firment_core::UiTheme::parse(&settings.theme) {
+            config.ui.theme = theme;
         }
         config
             .save(&shared.config_path)

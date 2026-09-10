@@ -17,6 +17,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import type { ProviderEntryDto, SettingsDto } from '../types';
 import { color, font, radius } from '../styles/tokens';
+import { setThemeSetting } from '../lib/theme';
 
 const { Text } = Typography;
 
@@ -40,6 +41,9 @@ export function SettingsView() {
     void api.getSettings().then((s) => {
       setSettings(s);
       form.setFieldsValue(s);
+      // Publish the stored scheme so the shell repaints without needing its own
+      // fetch of the same settings.
+      setThemeSetting(s.theme ?? 'auto');
     });
   };
 
@@ -67,6 +71,9 @@ export function SettingsView() {
       // providers is not part of the antd form; carry it over from state
       values.providers = settings?.providers ?? [];
       await api.saveSettings(values);
+      // Repaint immediately instead of waiting for the reload below: the user
+      // just chose a scheme and should see it on the spot.
+      setThemeSetting(values.theme ?? 'auto');
       setSaving(false);
       setSaveMsg('saved ✓');
       load();
@@ -302,6 +309,20 @@ export function SettingsView() {
               </Form.Item>
               <Form.Item name="max_iterations" label="Max iterations">
                 <InputNumber min={1} max={100} />
+              </Form.Item>
+              <Form.Item
+                name="theme"
+                label="Theme"
+                tooltip="auto follows the OS. Pinning light or dark overrides it, so on a dark machine pick light to see the light scheme."
+              >
+                <Select
+                  style={{ width: 120 }}
+                  options={[
+                    { label: 'auto', value: 'auto' },
+                    { label: 'light', value: 'light' },
+                    { label: 'dark', value: 'dark' },
+                  ]}
+                />
               </Form.Item>
             </Space>
             <Button size="small" style={{ marginBottom: 12 }} onClick={() => refreshModels(form.getFieldValue('default_provider'))}>

@@ -8,6 +8,7 @@ import type { Components } from 'react-markdown';
 import { ToolCard } from './ToolCard';
 import type { ChatMessage, ToolCall } from '../types';
 import { color, radius } from '../styles/tokens';
+import { useThemeMode } from '../lib/theme';
 
 const { Text } = Typography;
 
@@ -246,6 +247,12 @@ export const MessageList = memo(function MessageList({
 }: {
   messages: ChatMessage[];
 }): ReactNode {
+  // Subscription only, no value used: memo compares props, and `messages` does
+  // not change when the colour scheme does, so without a context read here this
+  // subtree would keep painting the previous scheme's colours. Reading the
+  // context is what makes the memo follow the theme.
+  useThemeMode();
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       {messages.map((m, i) => {

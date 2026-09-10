@@ -54,13 +54,40 @@ import { initialTurnState, turnsReducer } from './lib/turnReducer';
 import type { TurnMap } from './lib/turnReducer';
 import { FlashView } from './views/FlashView';
 import { WorkbenchView } from './views/WorkbenchView';
-import { antdTheme, color, font } from './styles/tokens';
+import { antdTheme, color, font, setActivePalette } from './styles/tokens';
+import {
+  ThemeModeContext,
+  resolveTheme,
+  setThemeSetting,
+  useSystemPrefersDark,
+  useThemeSetting,
+} from './lib/theme';
 
 const { Sider, Header, Content } = Layout;
 
 type ViewKey = 'chat' | 'settings' | 'serial' | 'flash' | 'collab';
 
 export default function App() {
+  // The colour scheme. `ui.theme` (auto/light/dark) lives in config.toml and is
+  // read once here; `auto` additionally follows the OS and re-resolves when the
+  // OS flips. Set synchronously during render rather than in an effect, so the
+  // first paint is already in the right scheme rather than flashing the other.
+  const themeSetting = useThemeSetting();
+  const systemIsDark = useSystemPrefersDark(themeSetting === 'auto');
+  const mode = resolveTheme(themeSetting, systemIsDark);
+  setActivePalette(mode);
+
+  // Read the persisted setting once at startup. Reusing `get_settings` rather
+  // than adding a command just for this: it is one local IPC call, and a
+  // second source of the same value is a second thing that can disagree.
+  // `SettingsView` publishes later changes, so this is the only read.
+  useEffect(() => {
+    void api
+      .getSettings()
+      .then((s) => setThemeSetting(s.theme ?? 'auto'))
+      .catch((err: unknown) => console.error(err));
+  }, []);
+
   const [sessions, setSessions] = useState<SessionSummaryDto[]>([]);
   const [session, setSession] = useState<SessionDto | null>(null);
   // Per-session turn lifecycle: parallel chats each stream their own turn,
@@ -563,326 +590,285 @@ export default function App() {
   };
 
   return (
-    <ConfigProvider theme={{ ...antdTheme(), algorithm: theme.darkAlgorithm }}>
-      <Layout
-        style={{
-          height: '100vh',
-          overflow: 'hidden',
-          background: color.bg,
-          // Set here as well as in the antd theme: the shell's own text should
-          // not depend on a component library token reaching it.
-          fontFamily: font.sans,
+    // The provider exists for the memoised subtrees: a `React.memo` component
+    // compares props only, so without a subscription here a theme flip would
+    // leave it painting the previous scheme's colours.
+    <ThemeModeContext.Provider value={mode}>
+      <ConfigProvider
+        theme={{
+          ...antdTheme(mode),
+          algorithm: mode === 'dark' ? theme.darkAlgorithm : theme.defaultAlgorithm,
         }}
       >
-        <Sider
-          width={248}
-          theme="dark"
+        <Layout
           style={{
-            borderRight: `3px solid ${color.outline}`,
-            background: color.surface,
+            height: '100vh',
+            overflow: 'hidden',
+            background: color.bg,
+            // Set here as well as in the antd theme: the shell's own text should
+            // not depend on a component library token reaching it.
+            fontFamily: font.sans,
           }}
         >
-          <div
+          <Sider
+            width={248}
+            theme={mode}
             style={{
-              padding: '18px 14px 14px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 12,
-              borderBottom: `3px solid ${color.outline}`,
-              marginBottom: 12,
+              borderRight: `3px solid ${color.outline}`,
+              background: color.surface,
             }}
           >
-            <img
-              src="/icons/logo-w-64.png"
-              alt="Firment"
+            <div
               style={{
-                width: 40,
-                height: 40,
-                borderRadius: 6,
-                boxShadow: `3px 3px 0 ${color.outline}`,
-                objectFit: 'contain',
-                background: color.surfaceRaised,
-                padding: 4,
+                padding: '18px 14px 14px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                borderBottom: `3px solid ${color.outline}`,
+                marginBottom: 12,
               }}
-            />
-            <div style={{ lineHeight: 1.1 }}>
-              <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: 0.5, color: color.ink, textTransform: 'uppercase' }}>
-                Firment
-              </div>
-              <div style={{ fontSize: 10, color: color.muted, letterSpacing: 1.5 }}>
-                FIRMWARE + AGENT
+            >
+              <img
+                src="/icons/logo-w-64.png"
+                alt="Firment"
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: 6,
+                  boxShadow: `3px 3px 0 ${color.outline}`,
+                  objectFit: 'contain',
+                  background: color.surfaceRaised,
+                  padding: 4,
+                }}
+              />
+              <div style={{ lineHeight: 1.1 }}>
+                <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: 0.5, color: color.ink, textTransform: 'uppercase' }}>
+                  Firment
+                </div>
+                <div style={{ fontSize: 10, color: color.muted, letterSpacing: 1.5 }}>
+                  FIRMWARE + AGENT
+                </div>
               </div>
             </div>
-          </div>
-          <SessionSidebar
-            sessions={sessions}
-            currentId={session?.id ?? null}
-            workCwd={workCwd}
-            onWorkCwd={setWorkCwd}
-            onSelect={handleSelectSession}
-            onNew={handleNewSession}
-            onDelete={handleDeleteSession}
-            runningIds={new Set(
-              Object.entries(turnsById)
-                .filter(([, t]) => t.running)
-                .map(([id]) => id),
-            )}
-            onOpenWorkbench={(projectCwd) => {
-              // Hand the project path to the (always-mounted) Workbench view
-              // via the event bridge: its localStorage restore only ran once
-              // at mount, so just switching tabs shows the WRONG project.
-              localStorage.setItem('workbench-last-cwd', projectCwd);
-              requestWorkbenchOpen(projectCwd);
-              setView('collab');
-            }}
-          />
-        </Sider>
-        <Layout style={{ background: color.bg }}>
-          <Header
-            style={{
-              height: 54,
-              padding: '0 16px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 12,
-              background: color.surface,
-              borderBottom: `3px solid ${color.outline}`,
-            }}
-          >
-            <Menu
-              mode="horizontal"
-              selectedKeys={[view]}
-              onClick={(e) => setView(e.key as ViewKey)}
-              style={{
-                flex: 1,
-                background: 'transparent',
-                borderBottom: 'none',
-                fontSize: 13,
-                fontWeight: 700,
+            <SessionSidebar
+              sessions={sessions}
+              currentId={session?.id ?? null}
+              workCwd={workCwd}
+              onWorkCwd={setWorkCwd}
+              onSelect={handleSelectSession}
+              onNew={handleNewSession}
+              onDelete={handleDeleteSession}
+              runningIds={new Set(
+                Object.entries(turnsById)
+                  .filter(([, t]) => t.running)
+                  .map(([id]) => id),
+              )}
+              onOpenWorkbench={(projectCwd) => {
+                // Hand the project path to the (always-mounted) Workbench view
+                // via the event bridge: its localStorage restore only ran once
+                // at mount, so just switching tabs shows the WRONG project.
+                localStorage.setItem('workbench-last-cwd', projectCwd);
+                requestWorkbenchOpen(projectCwd);
+                setView('collab');
               }}
-              items={[
-                { key: 'chat', icon: <MessageOutlined />, label: 'Chat' },
-                { key: 'serial', icon: <UsbOutlined />, label: 'Serial monitor' },
-                { key: 'flash', icon: <RocketOutlined />, label: 'Flash / Run' },
-                { key: 'settings', icon: <ApiOutlined />, label: 'Settings' },
-                { key: 'collab', icon: <ProjectOutlined />, label: 'Workbench' },
-              ]}
             />
-            {anyRunning && (
-              <Tag
-                color={color.brandAcid}
+          </Sider>
+          <Layout style={{ background: color.bg }}>
+            <Header
+              style={{
+                height: 54,
+                padding: '0 16px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                background: color.surface,
+                borderBottom: `3px solid ${color.outline}`,
+              }}
+            >
+              <Menu
+                mode="horizontal"
+                selectedKeys={[view]}
+                onClick={(e) => setView(e.key as ViewKey)}
                 style={{
-                  borderRadius: 0,
+                  flex: 1,
+                  background: 'transparent',
+                  borderBottom: 'none',
+                  fontSize: 13,
                   fontWeight: 700,
-                  marginInlineEnd: 0,
-                  boxShadow: `2px 2px 0 ${color.outline}`,
                 }}
-              >
-                ⚡ {Object.values(turnsById).filter((t) => t.running).length} running
-              </Tag>
-            )}
-            <Popover
-              trigger="click"
-              placement="bottomRight"
-              open={notifOpen}
-              onOpenChange={setNotifOpen}
-              content={
-                <div style={{ width: 380, maxHeight: 420, overflowY: 'auto', padding: 8 }}>
-                  <Space style={{ marginBottom: 6, width: '100%', justifyContent: 'space-between' }}>
-                    <Button
-                      size="small"
-                      type="dashed"
-                      disabled={notifUnread === 0}
-                      onClick={() => {
-                        const ts = Date.now();
-                        setNotifLastRead(ts);
-                        localStorage.setItem('notif-last-read', String(ts));
-                      }}
-                    >
-                      Mark all read
-                    </Button>
-                    <Button
-                      size="small"
-                      type="text"
-                      onClick={() => {
-                        setNotifications([]);
-                        localStorage.setItem('notifications', '[]');
-                      }}
-                    >
-                      Clear
-                    </Button>
-                  </Space>
-                  {notifications.length === 0 ? (
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      No notifications yet. Guard alerts, build/verify/flash failures and node offline events land here.
-                    </Text>
-                  ) : (
-                    notifications.map((n) => (
-                      <div
-                        key={n.id}
+                items={[
+                  { key: 'chat', icon: <MessageOutlined />, label: 'Chat' },
+                  { key: 'serial', icon: <UsbOutlined />, label: 'Serial monitor' },
+                  { key: 'flash', icon: <RocketOutlined />, label: 'Flash / Run' },
+                  { key: 'settings', icon: <ApiOutlined />, label: 'Settings' },
+                  { key: 'collab', icon: <ProjectOutlined />, label: 'Workbench' },
+                ]}
+              />
+              {anyRunning && (
+                <Tag
+                  color={color.brandAcid}
+                  style={{
+                    borderRadius: 0,
+                    fontWeight: 700,
+                    marginInlineEnd: 0,
+                    boxShadow: `2px 2px 0 ${color.outline}`,
+                  }}
+                >
+                  ⚡ {Object.values(turnsById).filter((t) => t.running).length} running
+                </Tag>
+              )}
+              <Popover
+                trigger="click"
+                placement="bottomRight"
+                open={notifOpen}
+                onOpenChange={setNotifOpen}
+                content={
+                  <div style={{ width: 380, maxHeight: 420, overflowY: 'auto', padding: 8 }}>
+                    <Space style={{ marginBottom: 6, width: '100%', justifyContent: 'space-between' }}>
+                      <Button
+                        size="small"
+                        type="dashed"
+                        disabled={notifUnread === 0}
                         onClick={() => {
-                          if (n.sid) {
-                            // The notification may outlive its session
-                            // (deleted while the panel was open).
-                            void api
-                              .loadSession(n.sid)
-                              .then((s) => {
-                                setSession(s);
-                                setView('chat');
-                              })
-                              .catch(console.error);
-                          }
-                        }}
-                        style={{
-                          padding: '5px 6px',
-                          borderBottom: `1px solid ${color.line}`,
-                          cursor: n.sid ? 'pointer' : 'default',
+                          const ts = Date.now();
+                          setNotifLastRead(ts);
+                          localStorage.setItem('notif-last-read', String(ts));
                         }}
                       >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <Tag
-                            color={
-                              n.kind === 'guard'
-                                ? 'red'
-                                : n.kind.includes('fail')
-                                  ? 'orange'
-                                  : n.kind === 'device-offline'
-                                    ? 'default'
-                                    : 'blue'
+                        Mark all read
+                      </Button>
+                      <Button
+                        size="small"
+                        type="text"
+                        onClick={() => {
+                          setNotifications([]);
+                          localStorage.setItem('notifications', '[]');
+                        }}
+                      >
+                        Clear
+                      </Button>
+                    </Space>
+                    {notifications.length === 0 ? (
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        No notifications yet. Guard alerts, build/verify/flash failures and node offline events land here.
+                      </Text>
+                    ) : (
+                      notifications.map((n) => (
+                        <div
+                          key={n.id}
+                          onClick={() => {
+                            if (n.sid) {
+                              // The notification may outlive its session
+                              // (deleted while the panel was open).
+                              void api
+                                .loadSession(n.sid)
+                                .then((s) => {
+                                  setSession(s);
+                                  setView('chat');
+                                })
+                                .catch(console.error);
                             }
-                            style={{ borderRadius: 0, fontSize: 10, fontWeight: 700 }}
-                          >
-                            {n.kind}
-                          </Tag>
-                          <Text style={{ fontSize: 12, flex: 1, fontWeight: 600 }}>{n.title}</Text>
-                          <Text type="secondary" style={{ fontSize: 10 }}>
-                            {new Date(n.ts).toLocaleString()}
-                          </Text>
+                          }}
+                          style={{
+                            padding: '5px 6px',
+                            borderBottom: `1px solid ${color.line}`,
+                            cursor: n.sid ? 'pointer' : 'default',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <Tag
+                              color={
+                                n.kind === 'guard'
+                                  ? 'red'
+                                  : n.kind.includes('fail')
+                                    ? 'orange'
+                                    : n.kind === 'device-offline'
+                                      ? 'default'
+                                      : 'blue'
+                              }
+                              style={{ borderRadius: 0, fontSize: 10, fontWeight: 700 }}
+                            >
+                              {n.kind}
+                            </Tag>
+                            <Text style={{ fontSize: 12, flex: 1, fontWeight: 600 }}>{n.title}</Text>
+                            <Text type="secondary" style={{ fontSize: 10 }}>
+                              {new Date(n.ts).toLocaleString()}
+                            </Text>
+                          </div>
+                          {n.body && (
+                            <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
+                              {n.body}
+                            </Text>
+                          )}
                         </div>
-                        {n.body && (
-                          <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
-                            {n.body}
-                          </Text>
-                        )}
-                      </div>
-                    ))
-                  )}
-                </div>
-              }
-            >
-              <Tooltip
-                open={notifOpen ? false : undefined}
-                title="Notification center (guard alerts / build & flash failures / node offline)"
-              >
-                <Badge count={notifUnread} size="small" offset={[-2, 2]}>
-                  <Button
-                    icon={<BellOutlined />}
-                    style={{
-                      borderRadius: 0,
-                      border: `2px solid ${color.outline}`,
-                      boxShadow: `2px 2px 0 ${color.outline}`,
-                    }}
-                  />
-                </Badge>
-              </Tooltip>
-            </Popover>
-            {session && (
-              <Dropdown
-                menu={{
-                  items: [
-                    { key: 'agent', label: 'agent (full tools)' },
-                    { key: 'plan', label: 'plan (read-only tools)' },
-                  ],
-                  onClick: ({ key }) => void handleSetSessionProp(api.setSessionMode(session.id, key)),
-                  selectedKeys: [session.mode],
-                }}
-                trigger={['click']}
-                disabled={running}
-              >
-                <Tag
-                  style={{
-                    borderRadius: 0,
-                    marginInlineEnd: 0,
-                    border: `2px solid ${color.outline}`,
-                    background: color.warnInk,
-                    color: color.outline,
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                  }}
-                >
-                  {session.mode} ▾
-                </Tag>
-              </Dropdown>
-            )}
-            {session && (
-              <Dropdown
-                menu={{
-                  items: [
-                    { key: 'off', label: 'thinking: off' },
-                    { key: 'low', label: 'thinking: low' },
-                    { key: 'medium', label: 'thinking: medium' },
-                    { key: 'high', label: 'thinking: high' },
-                    { key: 'xhigh', label: 'thinking: xhigh' },
-                    { key: 'max', label: 'thinking: max' },
-                  ],
-                  onClick: ({ key }) => void handleSetSessionProp(api.setSessionThinking(session.id, key)),
-                  selectedKeys: [session.thinking],
-                }}
-                trigger={['click']}
-                disabled={running}
-              >
-                <Tag
-                  color="purple"
-                  style={{
-                    borderRadius: 0,
-                    marginInlineEnd: 0,
-                    border: `2px solid ${color.outline}`,
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                  }}
-                >
-                  🧠 {session.thinking} ▾
-                </Tag>
-              </Dropdown>
-            )}
-            {session && (
-              <Dropdown
-                menu={{
-                  items: [
-                    { key: '65536', label: '64k chars' },
-                    { key: '131072', label: '128k chars' },
-                    { key: '262144', label: '256k chars (default)' },
-                    { key: '524288', label: '512k chars' },
-                    { key: '1048576', label: '1M chars' },
-                  ],
-                  onClick: ({ key }) =>
-                    void handleSetSessionProp(api.setSessionBudget(session.id, Number(key))),
-                  selectedKeys: [String(session.context_budget_chars || 262144)],
-                }}
-                trigger={['click']}
-                onOpenChange={setCtxMenuOpen}
-                disabled={running}
+                      ))
+                    )}
+                  </div>
+                }
               >
                 <Tooltip
-                  open={ctxMenuOpen ? false : undefined}
-                  title={
-                    usage
-                      ? `context ~${Math.round(usage.total_chars / 1024)}k of ${Math.round(usage.budget / 1024)}k chars (${usage.pct.toFixed(0)}%) — click chip to change budget`
-                      : 'context usage'
-                  }
+                  open={notifOpen ? false : undefined}
+                  title="Notification center (guard alerts / build & flash failures / node offline)"
+                >
+                  <Badge count={notifUnread} size="small" offset={[-2, 2]}>
+                    <Button
+                      icon={<BellOutlined />}
+                      style={{
+                        borderRadius: 0,
+                        border: `2px solid ${color.outline}`,
+                        boxShadow: `2px 2px 0 ${color.outline}`,
+                      }}
+                    />
+                  </Badge>
+                </Tooltip>
+              </Popover>
+              {session && (
+                <Dropdown
+                  menu={{
+                    items: [
+                      { key: 'agent', label: 'agent (full tools)' },
+                      { key: 'plan', label: 'plan (read-only tools)' },
+                    ],
+                    onClick: ({ key }) => void handleSetSessionProp(api.setSessionMode(session.id, key)),
+                    selectedKeys: [session.mode],
+                  }}
+                  trigger={['click']}
+                  disabled={running}
                 >
                   <Tag
-                    color={
-                      // Unknown usage must read as unknown, not healthy:
-                      // green "ctx …" used to render while the fetch failed.
-                      usage === null
-                        ? 'default'
-                        : usage.pct > 90
-                          ? 'red'
-                          : usage.pct > 70
-                            ? 'orange'
-                            : 'green'
-                    }
+                    style={{
+                      borderRadius: 0,
+                      marginInlineEnd: 0,
+                      border: `2px solid ${color.outline}`,
+                      background: color.warnInk,
+                      color: color.outline,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {session.mode} ▾
+                  </Tag>
+                </Dropdown>
+              )}
+              {session && (
+                <Dropdown
+                  menu={{
+                    items: [
+                      { key: 'off', label: 'thinking: off' },
+                      { key: 'low', label: 'thinking: low' },
+                      { key: 'medium', label: 'thinking: medium' },
+                      { key: 'high', label: 'thinking: high' },
+                      { key: 'xhigh', label: 'thinking: xhigh' },
+                      { key: 'max', label: 'thinking: max' },
+                    ],
+                    onClick: ({ key }) => void handleSetSessionProp(api.setSessionThinking(session.id, key)),
+                    selectedKeys: [session.thinking],
+                  }}
+                  trigger={['click']}
+                  disabled={running}
+                >
+                  <Tag
+                    color="purple"
                     style={{
                       borderRadius: 0,
                       marginInlineEnd: 0,
@@ -891,61 +877,112 @@ export default function App() {
                       cursor: 'pointer',
                     }}
                   >
-                    ctx {usage ? `${usage.pct.toFixed(0)}%` : '…'} ▾
+                    🧠 {session.thinking} ▾
                   </Tag>
-                </Tooltip>
-              </Dropdown>
-            )}
-          </Header>
-          <Content
-            style={{
-              overflow: 'hidden',
-              display: 'flex',
-              flexDirection: 'column',
-              minHeight: 0,
-              background: color.bg,
-            }}
-          >
-            {view === 'chat' && (
-              <ChatView
-                session={session}
-                running={running}
-                turn={turn}
-                infos={infos.filter(
-                  (i) => !i.sid || i.sid === session?.id,
-                )}
-                onSend={handleSend}
-                onCancel={handleCancel}
-              />
-            )}
-            {view === 'settings' && <SettingsView />}
-            {view === 'serial' && <SerialView lines={monitorLines} />}
-            {view === 'flash' && <FlashView />}
-            {/* Workbench stays MOUNTED on every tab (hidden, not unmounted):
-                its escalation detection + device subscription must keep
-                running while the user is in Chat/Serial/etc. */}
-            <div
+                </Dropdown>
+              )}
+              {session && (
+                <Dropdown
+                  menu={{
+                    items: [
+                      { key: '65536', label: '64k chars' },
+                      { key: '131072', label: '128k chars' },
+                      { key: '262144', label: '256k chars (default)' },
+                      { key: '524288', label: '512k chars' },
+                      { key: '1048576', label: '1M chars' },
+                    ],
+                    onClick: ({ key }) =>
+                      void handleSetSessionProp(api.setSessionBudget(session.id, Number(key))),
+                    selectedKeys: [String(session.context_budget_chars || 262144)],
+                  }}
+                  trigger={['click']}
+                  onOpenChange={setCtxMenuOpen}
+                  disabled={running}
+                >
+                  <Tooltip
+                    open={ctxMenuOpen ? false : undefined}
+                    title={
+                      usage
+                        ? `context ~${Math.round(usage.total_chars / 1024)}k of ${Math.round(usage.budget / 1024)}k chars (${usage.pct.toFixed(0)}%) — click chip to change budget`
+                        : 'context usage'
+                    }
+                  >
+                    <Tag
+                      color={
+                        // Unknown usage must read as unknown, not healthy:
+                        // green "ctx …" used to render while the fetch failed.
+                        usage === null
+                          ? 'default'
+                          : usage.pct > 90
+                            ? 'red'
+                            : usage.pct > 70
+                              ? 'orange'
+                              : 'green'
+                      }
+                      style={{
+                        borderRadius: 0,
+                        marginInlineEnd: 0,
+                        border: `2px solid ${color.outline}`,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      ctx {usage ? `${usage.pct.toFixed(0)}%` : '…'} ▾
+                    </Tag>
+                  </Tooltip>
+                </Dropdown>
+              )}
+            </Header>
+            <Content
               style={{
-                display: view === 'collab' ? 'flex' : 'none',
+                overflow: 'hidden',
+                display: 'flex',
                 flexDirection: 'column',
-                flex: 1,
                 minHeight: 0,
+                background: color.bg,
               }}
             >
-              <WorkbenchView />
-            </div>
-          </Content>
+              {view === 'chat' && (
+                <ChatView
+                  session={session}
+                  running={running}
+                  turn={turn}
+                  infos={infos.filter(
+                    (i) => !i.sid || i.sid === session?.id,
+                  )}
+                  onSend={handleSend}
+                  onCancel={handleCancel}
+                />
+              )}
+              {view === 'settings' && <SettingsView />}
+              {view === 'serial' && <SerialView lines={monitorLines} />}
+              {view === 'flash' && <FlashView />}
+              {/* Workbench stays MOUNTED on every tab (hidden, not unmounted):
+                  its escalation detection + device subscription must keep
+                  running while the user is in Chat/Serial/etc. */}
+              <div
+                style={{
+                  display: view === 'collab' ? 'flex' : 'none',
+                  flexDirection: 'column',
+                  flex: 1,
+                  minHeight: 0,
+                }}
+              >
+                <WorkbenchView />
+              </div>
+            </Content>
+          </Layout>
         </Layout>
-      </Layout>
-      {permQueue[0] && (
-        <PermissionDialog
-          req={permQueue[0]}
-          onClose={() => setPermQueue((q) => q.slice(1))}
-        />
-      )}
-      {askQueue[0] && (
-        <AskDialog req={askQueue[0]} onClose={() => setAskQueue((q) => q.slice(1))} />
-      )}
-    </ConfigProvider>
+        {permQueue[0] && (
+          <PermissionDialog
+            req={permQueue[0]}
+            onClose={() => setPermQueue((q) => q.slice(1))}
+          />
+        )}
+        {askQueue[0] && (
+          <AskDialog req={askQueue[0]} onClose={() => setAskQueue((q) => q.slice(1))} />
+        )}
+      </ConfigProvider>
+    </ThemeModeContext.Provider>
   );
 }
