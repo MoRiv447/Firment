@@ -3,6 +3,7 @@ import { Alert, Button, Input, Modal, Space, Tag, Typography } from 'antd';
 import { api } from '../lib/api';
 import { ToolCard } from './ToolCard';
 import type { AskRequest, PermissionRequest, ToolCardState } from '../types';
+import { color, radius } from '../styles/tokens';
 
 const { Text } = Typography;
 
@@ -11,8 +12,13 @@ function SessionChip({ sid }: { sid?: string }) {
   if (!sid) return null;
   return (
     <Tag
-      color="#2f6bff"
-      style={{ borderRadius: 0, border: '2px solid #000', fontWeight: 700 }}
+      color={color.brandAcid}
+      style={{
+        borderRadius: radius.chip,
+        border: `2px solid ${color.outline}`,
+        color: color.onAcid,
+        fontWeight: 700,
+      }}
     >
       chat {sid.slice(0, 8)}
     </Tag>

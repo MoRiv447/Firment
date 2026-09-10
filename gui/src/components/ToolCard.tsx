@@ -1,6 +1,7 @@
 import { Alert, Card, Space, Tag, Typography } from 'antd';
 import { DownOutlined, RightOutlined } from '@ant-design/icons';
 import type { ToolCardState } from '../types';
+import { color, font, radius } from '../styles/tokens';
 
 const { Text } = Typography;
 
@@ -41,10 +42,10 @@ function DiffBody({ detail }: { detail: string }) {
   return (
     <div
       style={{
-        border: '2px solid #000000',
-        background: '#0a0c10',
+        border: `2px solid ${color.outline}`,
+        background: color.bg,
         fontSize: 12,
-        fontFamily: "'JetBrains Mono', Consolas, monospace",
+        fontFamily: font.mono,
         maxHeight: 260,
         overflow: 'auto',
       }}
@@ -55,7 +56,6 @@ function DiffBody({ detail }: { detail: string }) {
         .map((line, i) => {
           const added = line.startsWith('+');
           const removed = line.startsWith('-');
-          const hunk = line.startsWith('@@');
           return (
             <div
               key={i}
@@ -63,8 +63,12 @@ function DiffBody({ detail }: { detail: string }) {
                 padding: '0 6px',
                 whiteSpace: 'pre-wrap',
                 wordBreak: 'break-all',
-                color: added ? '#15803D' : removed ? '#9F1239' : hunk ? '#9aa3b2' : '#6b7280',
-                background: added ? '#DCFCE7' : removed ? '#FFE4E6' : undefined,
+                color: added
+                  ? color.diffAddedInk
+                  : removed
+                    ? color.diffRemovedInk
+                    : color.diffMetaInk,
+                background: added ? color.diffAddedBg : removed ? color.diffRemovedBg : undefined,
                 fontWeight: added || removed ? 600 : 400,
               }}
             >
@@ -89,7 +93,7 @@ export function ToolCard({
   collapsible?: { open: boolean; onToggle: () => void };
 }) {
   const danger = dangerousName(tool.name, tool.args);
-  const color =
+  const tagColor =
     tool.status === 'ok' ? 'green' : tool.status === 'failed' ? 'red' : danger ? 'orange' : 'blue';
   const icon = tool.status === 'ok' ? '✓' : tool.status === 'failed' ? '✕' : danger ? '⚠' : '·';
 
@@ -119,16 +123,16 @@ export function ToolCard({
       size="small"
       style={{
         ...(standalone ? {} : { margin: '6px 0' }),
-        borderRadius: 0,
-        border: '2px solid #000000',
-        boxShadow: '3px 3px 0 #000000',
-        background: '#12151b',
+        borderRadius: radius.brand,
+        border: `2px solid ${color.outline}`,
+        boxShadow: `3px 3px 0 ${color.outline}`,
+        background: color.surface,
       }}
       styles={{
         body: { paddingTop: 8 },
         header: {
           minHeight: 38,
-          borderBottom: collapsible ? 'none' : '2px solid #000000',
+          borderBottom: collapsible ? 'none' : `2px solid ${color.outline}`,
           ...(collapsible ? { cursor: 'pointer' } : {}),
         },
       }}
@@ -137,14 +141,19 @@ export function ToolCard({
         <Space size={8}>
           {collapsible &&
             (collapsible.open ? (
-              <DownOutlined style={{ fontSize: 9, color: '#9aa3b2' }} />
+              <DownOutlined style={{ fontSize: 9, color: color.muted }} />
             ) : (
-              <RightOutlined style={{ fontSize: 9, color: '#9aa3b2' }} />
+              <RightOutlined style={{ fontSize: 9, color: color.muted }} />
             ))}
           {tool.status !== 'running' && <Text strong>{icon}</Text>}
           <Tag
-            color={color}
-            style={{ borderRadius: 0, border: '2px solid #000', color: '#e6e9ef', fontWeight: 700 }}
+            color={tagColor}
+            style={{
+              borderRadius: radius.chip,
+              border: `2px solid ${color.outline}`,
+              color: color.ink,
+              fontWeight: 700,
+            }}
           >
             {tool.status === 'running' ? `${icon} ${tool.name}` : tool.name}
           </Tag>

@@ -1,0 +1,76 @@
+/*
+ * The design tokens, web side.
+ *
+ * Mirrors gui/src/styles/tokens.ts and docs/design/tokens.md. Values are
+ * duplicated rather than generated because the two build systems share no
+ * tooling, and the two surfaces must not drift into different greys.
+ *
+ * Nothing consumes these yet: the web client's colours are still hardcoded
+ * Tailwind classes. Defining them now means the rewrite has a target to move
+ * to, and the two names kept for backwards compatibility (--background,
+ * --foreground) mean this file can land without a single visual change.
+ */
+
+:root {
+  /* Grounds and text. Neutral on purpose: an interface tinted green makes the
+   * diff's own red and green harder to read, and Firment's screens are mostly
+   * diff. */
+  --bg: #0f0f12;
+  --surface: #18181b;
+  --surface-raised: #1f1f23;
+  --ink: #e4e4e7;
+  --muted: #a1a1aa; /* neutral grey, never olive: olive reads as disabled */
+  --line: #2a2a2f;
+  --line-strong: #3f3f46;
+
+  /* Brand. ONLY the logo, the primary CTA, progress, the current step.
+   * --brand-acid is ~1.8:1 on a light ground, so it is a highlighter and never
+   * a text colour; anything green-and-readable on light uses --brand-ink. */
+  --brand-acid: #b4f779;
+  --on-acid: #15200d;
+  --brand-ink: #3b6d11;
+
+  /* Status green: a different hue from the brand green on purpose (145deg vs
+   * 85deg). Brand is identity, status is feedback. */
+  --success-bg: #14532d;
+  --success-ink: #86efac;
+  --success-border: #166534;
+
+  --info-bg: #1a1e26;
+  --info-ink: #7dd3fc;
+  --warn-ink: #eab308;
+  --warn-bg: #3f2e06;
+
+  /* Added/removed diff lines: their own family, because an added line and a
+   * passed check are not the same message. */
+  --diff-added-bg: #14311c;
+  --diff-added-ink: #86efac;
+  --diff-removed-bg: #3b1218;
+  --diff-removed-ink: #fda4af;
+  --diff-meta-ink: #a1a1aa;
+
+  /* The one true black: the outline and the hard offset shadow. */
+  --outline: #000000;
+
+  /* Type and shape. The font FAMILIES are deliberately not bound here: this
+   * file is not imported yet, and a `font-family` on :root would override the
+   * Inter/JetBrains setup in app/layout.tsx the moment it is. Bind them when
+   * the rewrite actually consumes this file. */
+  --font-sans-stack: 'Inter', 'Noto Sans SC', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono-stack: 'JetBrains Mono', 'Noto Sans SC', 'Cascadia Code', Consolas, monospace;
+  --radius-brand: 0px;
+  --radius-chip: 2px;
+  --radius-control: 4px;
+  --radius-panel: 8px;
+
+  /* Motion. Enter 160 / standard 200 / exit 120. */
+  --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --duration-enter: 160ms;
+  --duration-standard: 200ms;
+  --duration-exit: 120ms;
+
+  /* Kept so this file can land without changing anything: the existing names
+   * now resolve to the token values. */
+  --background: var(--bg);
+  --foreground: var(--ink);
+}

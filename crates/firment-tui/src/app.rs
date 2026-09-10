@@ -116,6 +116,10 @@ pub(crate) struct App {
     /// `[ui] tool_verbosity` after construction (`App::new` keeps its ten
     /// positional arguments); `Ctrl+O` still overrides per card.
     pub(crate) tool_verbosity: ToolVerbosity,
+    /// What the terminal can be trusted with. Detected once at construction and
+    /// read through `theme::*`; kept on the App so tests can pin a tier instead
+    /// of inheriting whatever `COLORTERM` the test runner happens to have.
+    pub(crate) tier: crate::theme::Tier,
 }
 
 impl App {
@@ -183,6 +187,7 @@ impl App {
             row_cache: None,
             item_row_starts: Vec::new(),
             tool_verbosity: ToolVerbosity::Normal,
+            tier: crate::theme::Tier::detect(),
         };
         if let Some(hint) = startup_hint {
             app.items.push(Item::System(hint));

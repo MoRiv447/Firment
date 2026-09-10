@@ -3,6 +3,7 @@ import { CaretRightOutlined, SendOutlined, StopOutlined } from '@ant-design/icon
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, onMonitorExited } from '../lib/api';
 import type { MonitorLine } from '../types';
+import { color, font, radius } from '../styles/tokens';
 
 const { Text } = Typography;
 
@@ -167,11 +168,11 @@ export function SerialView({ lines }: { lines: Record<string, MonitorLine[]> }) 
         style={{
           flex: 1,
           overflow: 'auto',
-          background: '#0d0d0d',
-          border: '1px solid #303030',
-          borderRadius: 8,
+          background: color.bg,
+          border: `1px solid ${color.line}`,
+          borderRadius: radius.panel,
           padding: 10,
-          fontFamily: 'Consolas, monospace',
+          fontFamily: font.mono,
           fontSize: 12.5,
           lineHeight: 1.5,
         }}
@@ -181,7 +182,11 @@ export function SerialView({ lines }: { lines: Record<string, MonitorLine[]> }) 
         )}
         {stream.map((b, i) => (
           <div key={i} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-            {b.stderr ? <span style={{ color: '#e8b339' }}>{b.text}</span> : <span>{b.text}</span>}
+            {b.stderr ? (
+              <span style={{ color: color.warnInk }}>{b.text}</span>
+            ) : (
+              <span>{b.text}</span>
+            )}
           </div>
         ))}
       </div>
@@ -192,7 +197,7 @@ export function SerialView({ lines }: { lines: Record<string, MonitorLine[]> }) 
             onChange={(e) => setSendText(e.target.value)}
             onPressEnter={send}
             placeholder="Type data to send… (Enter to send)"
-            style={{ fontFamily: 'Consolas, monospace' }}
+            style={{ fontFamily: font.mono }}
             disabled={!active.includes(port)}
           />
           <Button

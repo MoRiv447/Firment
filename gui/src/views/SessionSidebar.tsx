@@ -7,6 +7,7 @@ import {
 } from '@ant-design/icons';
 import type { SessionSummaryDto } from '../types';
 import pkg from '../../package.json';
+import { color, font, radius } from '../styles/tokens';
 
 const { Text } = Typography;
 
@@ -75,12 +76,12 @@ export function SessionSidebar({
       onClick={() => onSelect(s.id)}
       style={{
         cursor: 'pointer',
-        borderRadius: 0,
+        borderRadius: radius.brand,
         padding: '8px 10px',
         paddingLeft: 10 + depth * 16,
-        background: s.id === currentId ? '#2f6bff' : undefined,
-        border: s.id === currentId ? '3px solid #000' : '3px solid transparent',
-        boxShadow: s.id === currentId ? '3px 3px 0 #000' : undefined,
+        background: s.id === currentId ? color.brandAcid : undefined,
+        border: s.id === currentId ? `3px solid ${color.outline}` : '3px solid transparent',
+        boxShadow: s.id === currentId ? `3px 3px 0 ${color.outline}` : undefined,
         transition: 'background 0.15s ease',
       }}
       actions={[
@@ -95,7 +96,7 @@ export function SessionSidebar({
                     e.stopPropagation();
                     onOpenWorkbench(s.cwd);
                   }}
-                  style={{ color: s.id === currentId ? '#fff' : '#7dd3fc' }}
+                  style={{ color: s.id === currentId ? color.ink : color.infoInk }}
                 />
               </Tooltip>,
             ]
@@ -113,7 +114,7 @@ export function SessionSidebar({
             type="text"
             icon={<DeleteOutlined />}
             onClick={(e) => e.stopPropagation()}
-            style={{ color: s.id === currentId ? '#fff' : undefined }}
+            style={{ color: s.id === currentId ? color.ink : undefined }}
           />
         </Popconfirm>,
       ]}
@@ -127,10 +128,10 @@ export function SessionSidebar({
                 style={{
                   fontSize: 10,
                   marginRight: 0,
-                  borderRadius: 0,
-                  border: '2px solid #000',
-                  background: '#14532d',
-                  color: '#bbf7d0',
+                  borderRadius: radius.chip,
+                  border: `2px solid ${color.outline}`,
+                  background: color.successBg,
+                  color: color.successInk,
                   lineHeight: '16px',
                 }}
               >
@@ -142,10 +143,10 @@ export function SessionSidebar({
                 style={{
                   fontSize: 10,
                   marginRight: 0,
-                  borderRadius: 0,
-                  border: '2px solid #000',
-                  background: '#1a1e26',
-                  color: '#7dd3fc',
+                  borderRadius: radius.chip,
+                  border: `2px solid ${color.outline}`,
+                  background: color.surfaceRaised,
+                  color: color.infoInk,
                   lineHeight: '16px',
                 }}
               >
@@ -157,10 +158,10 @@ export function SessionSidebar({
                 style={{
                   fontSize: 10,
                   marginRight: 0,
-                  borderRadius: 0,
-                  border: '2px solid #14532d',
+                  borderRadius: radius.chip,
+                  border: `2px solid ${color.successBg}`,
                   background: 'transparent',
-                  color: '#4ade80',
+                  color: color.successInk,
                   lineHeight: '16px',
                 }}
               >
@@ -171,7 +172,7 @@ export function SessionSidebar({
               style={{
                 fontSize: 13,
                 fontWeight: s.id === currentId ? 700 : 500,
-                color: s.id === currentId ? '#fff' : '#e6e9ef',
+                color: s.id === currentId ? color.onAcid : color.ink,
               }}
               ellipsis={{ tooltip: s.preview }}
             >
@@ -186,12 +187,13 @@ export function SessionSidebar({
           <Space size={4} wrap>
             {runningIds?.has(s.id) && (
               <Tag
-                color="#2f6bff"
+                color={color.brandAcid}
                 style={{
                   fontSize: 10,
                   marginRight: 0,
-                  borderRadius: 0,
-                  border: '2px solid #000',
+                  borderRadius: radius.chip,
+                  border: `2px solid ${color.outline}`,
+                  color: color.onAcid,
                   fontWeight: 700,
                   lineHeight: '16px',
                 }}
@@ -203,15 +205,18 @@ export function SessionSidebar({
               style={{
                 fontSize: 11,
                 marginRight: 0,
-                borderRadius: 0,
-                border: '2px solid #000',
-                background: s.id === currentId ? '#0a0c10' : '#1a1e26',
-                color: s.id === currentId ? '#fff' : '#9aa3b2',
+                borderRadius: radius.chip,
+                border: `2px solid ${color.outline}`,
+                background: s.id === currentId ? color.bg : color.surfaceRaised,
+                color: s.id === currentId ? color.ink : color.muted,
               }}
             >
               {s.model}
             </Tag>
-            <Text type="secondary" style={{ fontSize: 11, color: s.id === currentId ? '#dbe3f0' : '#6b7280' }}>
+            <Text
+              type="secondary"
+              style={{ fontSize: 11, color: s.id === currentId ? color.ink : color.muted }}
+            >
               {new Date(s.updated_at * 1000).toLocaleString()}
             </Text>
           </Space>
@@ -229,7 +234,13 @@ export function SessionSidebar({
             icon={<ThunderboltOutlined />}
             onClick={() => onNew('agent')}
             type="primary"
-            style={{ flex: 1, borderRadius: 0, border: '3px solid #000', boxShadow: '3px 3px 0 #000', fontWeight: 700 }}
+            style={{
+              flex: 1,
+              borderRadius: radius.control,
+              border: `3px solid ${color.outline}`,
+              boxShadow: `3px 3px 0 ${color.outline}`,
+              fontWeight: 700,
+            }}
           >
             New
           </Button>
@@ -239,11 +250,11 @@ export function SessionSidebar({
             icon={<SafetyCertificateOutlined />}
             onClick={() => onNew('plan')}
             style={{
-              borderRadius: 0,
-              border: '3px solid #000',
-              background: '#facc15',
-              color: '#000',
-              boxShadow: '3px 3px 0 #000',
+              borderRadius: radius.control,
+              border: `3px solid ${color.outline}`,
+              background: color.brandAcid,
+              color: color.onAcid,
+              boxShadow: `3px 3px 0 ${color.outline}`,
               fontWeight: 700,
             }}
           />
@@ -255,11 +266,11 @@ export function SessionSidebar({
         value={workCwd}
         onChange={(e) => onWorkCwd(e.target.value)}
         style={{
-          background: '#0a0c10',
-          border: '2px solid #000',
-          borderRadius: 0,
-          color: '#e6e9ef',
-          fontFamily: 'Consolas, monospace',
+          background: color.bg,
+          border: `2px solid ${color.outline}`,
+          borderRadius: radius.control,
+          color: color.ink,
+          fontFamily: font.mono,
         }}
       />
       <List
@@ -275,12 +286,12 @@ export function SessionSidebar({
           justifyContent: 'space-between',
           marginTop: 'auto',
           paddingTop: 6,
-          borderTop: '2px solid #000000',
-          color: '#9aa3b2',
+          borderTop: `2px solid ${color.outline}`,
+          color: color.muted,
         }}
       >
         <Text style={{ fontSize: 10, letterSpacing: 1.2 }}>FIRMENT GUI</Text>
-        <Text style={{ fontSize: 10, fontFamily: 'Consolas, monospace' }}>v{pkg.version}</Text>
+        <Text style={{ fontSize: 10, fontFamily: font.mono }}>v{pkg.version}</Text>
       </div>
     </div>
   );

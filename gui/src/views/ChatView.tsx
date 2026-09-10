@@ -5,6 +5,7 @@ import { MessageList, Markdown } from '../components/MessageList';
 import { ToolCard } from '../components/ToolCard';
 import { shouldShowStallNotice, stallNotice } from '../lib/stallHint';
 import type { RunningTurn, SessionDto } from '../types';
+import { color, font, radius } from '../styles/tokens';
 
 const { Text } = Typography;
 const { TextArea } = Input;
@@ -120,7 +121,7 @@ export function ChatView({
           flex: 1,
           overflow: 'auto',
           padding: '24px 28px',
-          background: '#0a0c10',
+          background: color.bg,
           position: 'relative',
         }}
       >
@@ -137,7 +138,7 @@ export function ChatView({
                       ? 'thinking…'
                       : 'generating…'}
                 </Text>
-                <Text type="secondary" style={{ fontSize: 12, fontFamily: 'Consolas, monospace' }}>
+                <Text type="secondary" style={{ fontSize: 12, fontFamily: font.mono }}>
                   {lastRunning
                     ? // The RUNNING TOOL's own elapsed, not time since the
                       // last visible event (a chatty stream used to keep
@@ -180,7 +181,7 @@ export function ChatView({
                   marginTop: 10,
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-word',
-                  color: '#8b7bd8',
+                  color: color.infoInk,
                   fontStyle: 'italic',
                   fontSize: 13,
                   lineHeight: 1.6,
@@ -190,7 +191,7 @@ export function ChatView({
               </div>
             )}
             {turn && turn.thinking && turn.text && (
-              <details style={{ marginTop: 8, color: '#8b7bd8', fontSize: 12 }}>
+              <details style={{ marginTop: 8, color: color.infoInk, fontSize: 12 }}>
                 <summary style={{ cursor: 'pointer', fontStyle: 'italic', userSelect: 'none' }}>
                   💭 reasoning…
                 </summary>
@@ -213,7 +214,7 @@ export function ChatView({
                   marginTop: 10,
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-word',
-                  color: '#f2f4f8',
+                  color: color.ink,
                   lineHeight: 1.7,
                 }}
               >
@@ -239,9 +240,9 @@ export function ChatView({
               bottom: 16,
               left: '50%',
               transform: 'translateX(-50%)',
-              borderRadius: 0,
-              border: '2px solid #000',
-              boxShadow: '2px 2px 0 #000',
+              borderRadius: radius.control,
+              border: `2px solid ${color.outline}`,
+              boxShadow: `2px 2px 0 ${color.outline}`,
               fontWeight: 700,
               zIndex: 5,
             }}
@@ -259,7 +260,7 @@ export function ChatView({
               flex: 1,
               minHeight: 240,
               gap: 10,
-              color: '#9aa3b2',
+              color: color.muted,
             }}
           >
             <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: 0.5 }}>Firment</div>
@@ -267,31 +268,55 @@ export function ChatView({
           </div>
         )}
       </div>
-      <div style={{ padding: '14px 20px 16px', borderTop: '3px solid #000000', background: '#12151b' }}>
+      <div
+        style={{
+          padding: '14px 20px 16px',
+          borderTop: `3px solid ${color.outline}`,
+          background: color.surface,
+        }}
+      >
         {session && (
           <Space size={6} style={{ marginBottom: 8, flexWrap: 'wrap' }}>
             <Tag
-              color="#2f6bff"
-              style={{ borderRadius: 0, fontWeight: 700, border: '2px solid #000', boxShadow: '2px 2px 0 #000' }}
+              color={color.brandAcid}
+              style={{
+                borderRadius: radius.chip,
+                fontWeight: 700,
+                border: `2px solid ${color.outline}`,
+                boxShadow: `2px 2px 0 ${color.outline}`,
+                color: color.onAcid,
+              }}
             >
               {session.provider}
             </Tag>
-            <Tag style={{ borderRadius: 0, border: '2px solid #000', color: '#e6e9ef', fontWeight: 600 }}>
+            <Tag
+              style={{
+                borderRadius: radius.chip,
+                border: `2px solid ${color.outline}`,
+                color: color.ink,
+                fontWeight: 600,
+              }}
+            >
               {session.model}
             </Tag>
             <Tag
-              color={session.mode === 'plan' ? '#facc15' : '#22c55e'}
-              style={{ borderRadius: 0, border: '2px solid #000', color: '#000', fontWeight: 700 }}
+              color={session.mode === 'plan' ? color.warnInk : color.successInk}
+              style={{
+                borderRadius: radius.chip,
+                border: `2px solid ${color.outline}`,
+                color: color.outline,
+                fontWeight: 700,
+              }}
             >
               {session.mode}
             </Tag>
             <Tag
               style={{
-                borderRadius: 0,
-                border: '2px solid #000',
-                color: '#9aa3b2',
-                fontFamily: 'Consolas, monospace',
-                background: '#0a0c10',
+                borderRadius: radius.chip,
+                border: `2px solid ${color.outline}`,
+                color: color.muted,
+                fontFamily: font.mono,
+                background: color.bg,
               }}
             >
               {session.cwd}
@@ -313,12 +338,12 @@ export function ChatView({
             disabled={running || !session}
             style={{
               fontSize: 14,
-              background: '#0a0c10',
-              border: '3px solid #000000',
-              borderRadius: 0,
-              boxShadow: '4px 4px 0 #000000',
-              color: '#f2f4f8',
-              fontFamily: "'JetBrains Mono', Consolas, monospace",
+              background: color.bg,
+              border: `3px solid ${color.outline}`,
+              borderRadius: radius.control,
+              boxShadow: `4px 4px 0 ${color.outline}`,
+              color: color.ink,
+              fontFamily: font.mono,
             }}
           />
           {running ? (
@@ -326,7 +351,13 @@ export function ChatView({
               danger
               icon={<StopOutlined />}
               onClick={onCancel}
-              style={{ height: 'auto', borderRadius: 0, border: '3px solid #000', boxShadow: '4px 4px 0 #000', fontWeight: 700 }}
+              style={{
+                height: 'auto',
+                borderRadius: radius.control,
+                border: `3px solid ${color.outline}`,
+                boxShadow: `4px 4px 0 ${color.outline}`,
+                fontWeight: 700,
+              }}
             >
               Stop
             </Button>
@@ -338,9 +369,9 @@ export function ChatView({
               disabled={!session || !input.trim()}
               style={{
                 height: 'auto',
-                borderRadius: 0,
-                border: '3px solid #000',
-                boxShadow: '4px 4px 0 #000',
+                borderRadius: radius.control,
+                border: `3px solid ${color.outline}`,
+                boxShadow: `4px 4px 0 ${color.outline}`,
                 fontWeight: 700,
               }}
             >

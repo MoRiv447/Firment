@@ -258,28 +258,41 @@ impl App {
                 // summary already rendered above — skip it so the header does
                 // not appear twice.
                 if *expanded && let Some(body) = body {
+                    // Read once, outside the loop: the token accessors consult
+                    // the detected tier, and a diff body can be hundreds of
+                    // lines.
+                    let meta = crate::theme::meta(self.tier);
+                    let added_fg = crate::theme::success(self.tier);
+                    let removed_fg = crate::theme::danger(self.tier);
+                    let added_bg = crate::theme::diff_added_bg(self.tier);
+                    let removed_bg = crate::theme::diff_removed_bg(self.tier);
+                    let on_added = crate::theme::on_accent(self.tier);
                     for body_line in body.lines().skip(1) {
                         // A diff line carries its own leading marker; anything
                         // else is context. `@@` headers are dim on purpose:
                         // they locate the change without competing with it.
+                        //
+                        // The filled row background only exists at truecolor:
+                        // at 16 colours a hard-coded background is a coin flip
+                        // against an unknown palette, so those tiers keep the
+                        // `+`/`-` marker and the foreground colour alone.
                         let (marker_style, text) = if let Some(rest) = body_line.strip_prefix("@@")
                         {
-                            (Style::default().fg(Color::DarkGray), format!("  @@{rest}"))
+                            (Style::default().fg(meta), format!("  @@{rest}"))
                         } else if let Some(rest) = body_line.strip_prefix('+') {
-                            (
-                                Style::default().fg(Color::Black).bg(Color::Green),
-                                format!("  +{rest}"),
-                            )
+                            let style = match added_bg {
+                                Some(bg) => Style::default().fg(on_added).bg(bg),
+                                None => Style::default().fg(added_fg),
+                            };
+                            (style, format!("  +{rest}"))
                         } else if let Some(rest) = body_line.strip_prefix('-') {
-                            (
-                                Style::default().fg(Color::Black).bg(Color::Red),
-                                format!("  -{rest}"),
-                            )
+                            let style = match removed_bg {
+                                Some(bg) => Style::default().fg(on_added).bg(bg),
+                                None => Style::default().fg(removed_fg),
+                            };
+                            (style, format!("  -{rest}"))
                         } else {
-                            (
-                                Style::default().fg(Color::DarkGray),
-                                format!("  {body_line}"),
-                            )
+                            (Style::default().fg(meta), format!("  {body_line}"))
                         };
                         for seg in wrap_text(&text, width.saturating_sub(1)) {
                             rows.push(Line::from(Span::styled(seg, marker_style)));
@@ -363,7 +376,7 @@ impl App {
                 .unwrap_or(0);
             rows.push(Line::from(Span::styled(
                 format!(" {ch} thinking… {secs}s"),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(crate::theme::warn(self.tier)),
             )));
         }
         let height = transcript_area.height.saturating_sub(2) as usize;
@@ -384,10 +397,14 @@ impl App {
         } else {
             format!(" Firment · ↑ {} ", self.scroll)
         };
+        // The frame around the agent's output is the identity anchor here, the
+        // way the mark is in the GUI -- so it is the one place the brand colour
+        // appears. Below truecolor it keeps the cyan it always had.
+        let accent = crate::theme::accent(self.tier);
         let paragraph = Paragraph::new(rows).scroll((offset as u16, 0)).block(
             Block::bordered()
-                .title(Span::styled(title, Style::default().fg(Color::Cyan)))
-                .border_style(Style::default().fg(Color::DarkGray)),
+                .title(Span::styled(title, Style::default().fg(accent)))
+                .border_style(Style::default().fg(accent)),
         );
         frame.render_widget(paragraph, transcript_area);
 
@@ -426,10 +443,13 @@ impl App {
             format!(" {} · {state} ", spinner)
         };
         let pad = (status_area.width as usize).saturating_sub(left.width() + right.width());
+        // The status line is chrome, so it takes the muted token rather than a
+        // hard-coded grey; the left half stays the accent because that is where
+        // the mode and model live.
         let status_line = Line::from(vec![
-            Span::styled(left, Style::default().fg(Color::Cyan)),
+            Span::styled(left, Style::default().fg(accent)),
             Span::raw(" ".repeat(pad)),
-            Span::styled(right, Style::default().fg(Color::DarkGray)),
+            Span::styled(right, Style::default().fg(crate::theme::muted(self.tier))),
         ]);
         frame.render_widget(Paragraph::new(status_line), status_area);
 
@@ -447,15 +467,16 @@ impl App {
         } else {
             " input ".to_string()
         };
+        let muted = crate::theme::muted(self.tier);
         let block = Block::bordered()
             .border_type(ratatui::widgets::BorderType::Rounded)
-            .title(Span::styled(title, Style::default().fg(Color::Cyan)))
-            .border_style(Style::default().fg(Color::DarkGray));
+            .title(Span::styled(title, Style::default().fg(accent)))
+            .border_style(Style::default().fg(muted));
         let content = if self.input.is_empty() {
             self.input_scroll = 0;
             Paragraph::new(Line::from(Span::styled(
                 "Type a message (or /help for commands & keys)",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(muted),
             )))
             .block(block)
         } else {

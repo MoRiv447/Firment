@@ -33,6 +33,7 @@ import type {
   TimelineEntryDto,
   WorkbenchStateDto,
 } from '../types';
+import { color } from '../styles/tokens';
 
 const { Text, Title } = Typography;
 
@@ -689,7 +690,7 @@ export function WorkbenchView() {
             COLLAPSED — per-project context lives in the project's own
             Devices card below. */}
         <details style={{ marginBottom: 12 }}>
-          <summary style={{ cursor: 'pointer', fontSize: 12, color: '#9aa3b2' }}>
+          <summary style={{ cursor: 'pointer', fontSize: 12, color: color.muted }}>
             All device traffic (unfiltered) — click to expand
           </summary>
         <Card
@@ -735,7 +736,7 @@ export function WorkbenchView() {
                     alignItems: 'center',
                     gap: 8,
                     padding: '3px 0',
-                    borderBottom: '1px solid #f0f0f0',
+                    borderBottom: `1px solid ${color.line}`,
                   }}
                 >
                   <Tag color="blue" style={{ borderRadius: 0, fontWeight: 700 }}>
@@ -885,7 +886,7 @@ export function WorkbenchView() {
                         alignItems: 'center',
                         gap: 8,
                         padding: '4px 6px',
-                        borderBottom: '1px solid #f0f0f0',
+                        borderBottom: `1px solid ${color.line}`,
                       }}
                     >
                       <Tag
@@ -987,7 +988,7 @@ export function WorkbenchView() {
                         key={e.id}
                         style={{
                           padding: '5px 6px',
-                          borderBottom: '1px solid #f0f0f0',
+                          borderBottom: `1px solid ${color.line}`,
                         }}
                       >
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -1175,7 +1176,7 @@ export function WorkbenchView() {
                          alignItems: 'center',
                          gap: 8,
                          padding: '3px 6px',
-                         borderBottom: '1px solid #f0f0f0',
+                         borderBottom: `1px solid ${color.line}`,
                        }}
                      >
                        <Tag color={f.ok ? 'green' : 'red'} style={{ borderRadius: 0, fontSize: 10, fontWeight: 700 }}>
@@ -1253,7 +1254,7 @@ export function WorkbenchView() {
                                 alignItems: 'center',
                                 gap: 8,
                                 padding: '3px 6px',
-                                borderBottom: '1px solid #f0f0f0',
+                                borderBottom: `1px solid ${color.line}`,
                               }}
                             >
                               <Tag color="blue" style={{ borderRadius: 0, fontWeight: 700, minWidth: 64, textAlign: 'center' }}>
@@ -1327,7 +1328,7 @@ export function WorkbenchView() {
                       alignItems: 'flex-start',
                       gap: 8,
                       padding: '4px 6px',
-                      borderBottom: '1px solid #f0f0f0',
+                      borderBottom: `1px solid ${color.line}`,
                     }}
                   >
                     <Tag style={{ borderRadius: 0, fontSize: 10, minWidth: 76, textAlign: 'center' }}>
@@ -1565,7 +1566,10 @@ export function WorkbenchView() {
                         alignItems: 'center',
                         gap: 8,
                         padding: '4px 8px',
-                        border: s.id === currentSessionId ? '1px solid #1677ff' : '1px solid #f0f0f0',
+                        border:
+            s.id === currentSessionId
+              ? `1px solid ${color.brandAcid}`
+              : `1px solid ${color.line}`,
                         borderRadius: 6,
                       }}
                     >

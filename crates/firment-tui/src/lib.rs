@@ -24,6 +24,7 @@ mod app;
 mod commands;
 mod paste;
 mod pickers;
+mod theme;
 mod util;
 mod view;
 

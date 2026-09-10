@@ -16,6 +16,7 @@ import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import type { ProviderEntryDto, SettingsDto } from '../types';
+import { color, font, radius } from '../styles/tokens';
 
 const { Text } = Typography;
 
@@ -172,18 +173,27 @@ export function SettingsView() {
               <div
                 key={p.name}
                 style={{
-                  border: '2px solid #000',
+                  border: `2px solid ${color.outline}`,
+                  borderRadius: radius.panel,
                   padding: 10,
-                  background: '#12151b',
+                  background: color.surface,
                   display: 'flex',
                   flexDirection: 'column',
                   gap: 8,
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <Text strong style={{ color: '#f2f4f8' }}>{p.name}</Text>
+                  <Text strong style={{ color: color.ink }}>{p.name}</Text>
                   {p.is_default && (
-                    <Tag color="#facc15" style={{ borderRadius: 0, border: '2px solid #000', color: '#000', fontWeight: 700 }}>
+                    <Tag
+                      color={color.warnInk}
+                      style={{
+                        borderRadius: radius.chip,
+                        border: `2px solid ${color.outline}`,
+                        color: color.outline,
+                        fontWeight: 700,
+                      }}
+                    >
                       DEFAULT
                     </Tag>
                   )}
@@ -204,7 +214,7 @@ export function SettingsView() {
                     options={[{ label: 'openai', value: 'openai' }, { label: 'anthropic', value: 'anthropic' }]}
                   />
                   <Input
-                    style={{ flex: 1, minWidth: 200, fontFamily: 'Consolas, monospace' }}
+                    style={{ flex: 1, minWidth: 200, fontFamily: font.mono }}
                     placeholder="base url"
                     value={p.base_url ?? ''}
                     onChange={(e) => setProviderLocal(p, { base_url: e.target.value || null })}
@@ -220,7 +230,7 @@ export function SettingsView() {
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                   <Input.Password
-                    style={{ flex: 1, minWidth: 260, fontFamily: 'Consolas, monospace' }}
+                    style={{ flex: 1, minWidth: 260, fontFamily: font.mono }}
                     placeholder={`api key for ${p.name} (empty = use env)`}
                     value={p.api_key ?? ''}
                     onChange={(e) => setProviderKeyLocal(p, e.target.value)}
@@ -232,7 +242,7 @@ export function SettingsView() {
               </div>
             ))}
             <Divider style={{ margin: '4px 0' }} />
-            <Text strong style={{ color: '#e6e9ef' }}>Add provider</Text>
+            <Text strong style={{ color: color.ink }}>Add provider</Text>
             <Space wrap>
               <Input
                 style={{ width: 130 }}
@@ -247,7 +257,7 @@ export function SettingsView() {
                 options={[{ label: 'openai', value: 'openai' }, { label: 'anthropic', value: 'anthropic' }]}
               />
               <Input
-                style={{ width: 260, fontFamily: 'Consolas, monospace' }}
+                style={{ width: 260, fontFamily: font.mono }}
                 placeholder="base url (e.g. https://api.deepseek.com/v1)"
                 value={newBaseUrl}
                 onChange={(e) => setNewBaseUrl(e.target.value)}
