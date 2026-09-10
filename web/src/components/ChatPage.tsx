@@ -370,7 +370,7 @@ export default function ChatPage() {
             <img
               src="/logo-w-64.png"
               alt="Firment"
-              className="w-10 h-10 rounded-md object-contain bg-[#2f6bff] p-1 shadow-[3px_3px_0_#000]"
+              className="w-10 h-10 rounded-md object-contain surface-brand p-1 shadow-[3px_3px_0_#000]"
             />
             <div>
               <h1 className="font-extrabold text-white text-lg leading-tight tracking-wide">FIRMENT</h1>
@@ -392,7 +392,7 @@ export default function ChatPage() {
         <div className="p-4">
           <button
             onClick={createNewSession}
-            className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-[#2f6bff] hover:bg-[#2456d6] text-white font-bold border-[3px] border-black shadow-[4px_4px_0_#000] transition-all duration-100 active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+            className="w-full flex items-center justify-center gap-2 px-4 py-3 btn-brand font-bold border-[3px] border-black shadow-[4px_4px_0_#000] transition-all duration-100 active:shadow-none"
           >
             <Plus className="w-5 h-5" />
             New Session
@@ -412,7 +412,7 @@ export default function ChatPage() {
                   key={session.id}
                   className={`group flex items-center gap-2 px-3 py-2.5 cursor-pointer transition-all duration-100 ${
                     currentId === session.id
-                      ? 'bg-[#2f6bff] border-[3px] border-black shadow-[3px_3px_0_#000]'
+                      ? 'surface-brand border-[3px] border-black shadow-[3px_3px_0_#000]'
                       : 'hover:bg-gray-800 border-[3px] border-transparent'
                   }`}
                   onClick={() => selectSession(session.id)}
@@ -552,7 +552,7 @@ export default function ChatPage() {
                 className={`p-2.5 border-[3px] border-black ${
                   isLoading || !input.trim()
                     ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
-                    : 'bg-[#2f6bff] hover:bg-[#2456d6] text-white shadow-[3px_3px_0_#000] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all duration-100'
+                    : 'btn-brand shadow-[3px_3px_0_#000] active:shadow-none transition-all duration-100'
                 }`}
               >
                 {isLoading ? (
@@ -578,7 +578,7 @@ export default function ChatPage() {
           >
             <div className="flex items-center justify-between px-6 py-4 border-b-[3px] border-black">
               <h2 className="font-bold text-white flex items-center gap-2">
-                <Settings className="w-5 h-5 text-[#2f6bff]" />
+                <Settings className="w-5 h-5 text-brand-acid" />
                 Settings
               </h2>
               <button
@@ -600,7 +600,7 @@ export default function ChatPage() {
                   </h3>
                   <button
                     onClick={addProvider}
-                    className="flex items-center gap-1 px-3 py-1.5 text-xs text-[#5b8cff] hover:text-[#7aa5ff] hover:bg-blue-500/10 font-bold transition-colors"
+                    className="flex items-center gap-1 px-3 py-1.5 text-xs text-brand-acid hover:brightness-110 hover:bg-white/5 font-bold transition-colors"
                   >
                     <PlusCircle className="w-3.5 h-3.5" />
                     Add Provider
@@ -767,7 +767,7 @@ export default function ChatPage() {
               </button>
               <button
                 onClick={() => setShowSettings(false)}
-                className="px-4 py-2 bg-[#2f6bff] hover:bg-[#2456d6] text-white text-sm font-bold border-[2px] border-black shadow-[3px_3px_0_#000] transition-colors"
+                className="px-4 py-2 btn-brand text-sm font-bold border-[2px] border-black shadow-[3px_3px_0_#000] transition-colors"
               >
                 Save Settings
               </button>
@@ -788,10 +788,13 @@ function EmptyState({ onSend, workspace }: { onSend: (text: string) => void; wor
   ];
 
   const colorMap: Record<string, string> = {
-    blue: 'bg-[#2f6bff] border-[3px] border-black text-white hover:bg-[#2456d6] shadow-[4px_4px_0_#000] hover:shadow-[6px_6px_0_#000]',
-    purple: 'bg-[#a855f7] border-[3px] border-black text-white hover:bg-[#9333ea] shadow-[4px_4px_0_#000] hover:shadow-[6px_6px_0_#000]',
-    green: 'bg-[#22c55e] border-[3px] border-black text-black hover:bg-[#16a34a] shadow-[4px_4px_0_#000] hover:shadow-[6px_6px_0_#000]',
-    yellow: 'bg-[#facc15] border-[3px] border-black text-black hover:bg-[#eab308] shadow-[4px_4px_0_#000] hover:shadow-[6px_6px_0_#000]',
+    blue: 'btn-brand border-[3px] border-black shadow-[4px_4px_0_#000] hover:shadow-[6px_6px_0_#000]',
+    purple:
+      'bg-info-ink border-[3px] border-black text-black hover:brightness-90 shadow-[4px_4px_0_#000] hover:shadow-[6px_6px_0_#000]',
+    green:
+      'bg-success-ink border-[3px] border-black text-black hover:brightness-90 shadow-[4px_4px_0_#000] hover:shadow-[6px_6px_0_#000]',
+    yellow:
+      'bg-warn-ink border-[3px] border-black text-black hover:brightness-90 shadow-[4px_4px_0_#000] hover:shadow-[6px_6px_0_#000]',
   };
 
   return (
@@ -800,7 +803,7 @@ function EmptyState({ onSend, workspace }: { onSend: (text: string) => void; wor
       <img
         src="/logo-w-128.png"
         alt="Firment"
-        className="w-20 h-20 rounded-md object-contain bg-[#2f6bff] p-2 mb-6 border-[3px] border-black shadow-[6px_6px_0_#000]"
+        className="w-20 h-20 rounded-md object-contain surface-brand p-2 mb-6 border-[3px] border-black shadow-[6px_6px_0_#000]"
       />
       <h2 className="text-3xl font-extrabold text-white mb-3 tracking-tight">WELCOME TO FIRMENT</h2>
       <p className="text-gray-400 max-w-md mb-8 text-base leading-relaxed">
@@ -852,14 +855,14 @@ function MessageBubble({ message, streaming }: { message: ChatMessage; streaming
         <img
           src="/logo-w-32.png"
           alt="Firment"
-          className="w-8 h-8 shrink-0 object-contain bg-[#2f6bff] p-0.5 border-[2px] border-black"
+          className="w-8 h-8 shrink-0 object-contain surface-brand p-0.5 border-[2px] border-black"
         />
       )}
       <div
         style={{ width: 'fit-content', maxWidth: '85%' }}
         className={`px-3 py-2 border-[3px] border-black ${
           isUser
-            ? 'bg-[#2f6bff] text-white shadow-[4px_4px_0_#000]'
+            ? 'surface-brand shadow-[4px_4px_0_#000]'
             : 'bg-gray-800 text-gray-100 border-[2px]'
         }`}
       >
@@ -892,14 +895,14 @@ function LoadingBubble() {
       <img
         src="/logo-w-32.png"
         alt="Firment"
-        className="w-8 h-8 shrink-0 object-contain bg-[#2f6bff] p-0.5 border-[2px] border-black"
+        className="w-8 h-8 shrink-0 object-contain surface-brand p-0.5 border-[2px] border-black"
       />
       <div className="bg-gray-800 border-[2px] border-black px-4 py-3 max-w-[80%]">
         <div className="flex items-center gap-2">
           <div className="flex gap-1">
-            <span className="w-2 h-2 bg-[#2f6bff] animate-bounce" style={{ animationDelay: '0ms' }} />
-            <span className="w-2 h-2 bg-[#a855f7] animate-bounce" style={{ animationDelay: '150ms' }} />
-            <span className="w-2 h-2 bg-[#facc15] animate-bounce" style={{ animationDelay: '300ms' }} />
+            <span className="w-2 h-2 bg-brand-acid animate-bounce" style={{ animationDelay: '0ms' }} />
+            <span className="w-2 h-2 bg-info-ink animate-bounce" style={{ animationDelay: '150ms' }} />
+            <span className="w-2 h-2 bg-warn-ink animate-bounce" style={{ animationDelay: '300ms' }} />
           </div>
           <span className="text-xs text-gray-400 font-bold">THINKING...</span>
         </div>

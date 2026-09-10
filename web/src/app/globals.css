@@ -44,3 +44,34 @@ body {
     font-size: 16px !important;
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * Component classes that carry the brand
+ *
+ * These exist so the JSX can ask for "the brand button" without naming a hex,
+ * and so the hover/active derivation lives in one place. The amounts match the
+ * ones the design system documents (hover 5% darker, active 10%).
+ *
+ * `color-mix` and not a second set of tokens: the brand has exactly four jobs
+ * (logo, primary CTA, progress, current step) and giving each one its own
+ * hover token would be five more names to keep in step across three surfaces.
+ * ------------------------------------------------------------------------- */
+@layer components {
+  .surface-brand {
+    background-color: var(--brand-acid);
+    color: var(--on-acid);
+  }
+
+  .btn-brand {
+    background-color: var(--brand-acid);
+    color: var(--on-acid);
+  }
+  .btn-brand:hover {
+    background-color: color-mix(in srgb, var(--brand-acid) 95%, black);
+  }
+  .btn-brand:active {
+    background-color: color-mix(in srgb, var(--brand-acid) 90%, black);
+    transform: translate(1px, 1px);
+  }
+}
+
