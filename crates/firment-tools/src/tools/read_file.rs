@@ -13,7 +13,12 @@ impl Tool for ReadFile {
     }
 
     fn description(&self) -> &'static str {
-        "Read a text file. Output lines carry a line-number prefix (\"  123 | content\") so edit_file can target exact ranges; without offset/limit at most the first 1000 lines are returned and a [truncated] hint tells you how to read on."
+        "Read a text file. Output lines carry a line-number prefix (\"  123 | content\") so \
+         edit_file can target exact ranges; without offset/limit at most the first 1000 lines are \
+         returned and a [truncated] hint tells you how to read on. For a LARGE file (thousands of \
+         lines) read it once with hashlines=true: that returns the whole file with an 8-hex \
+         content-hash anchor per line, and those anchors stay valid across the rest of the file, \
+         so several edits need no second read and no line arithmetic."
     }
 
     fn input_schema(&self) -> Value {

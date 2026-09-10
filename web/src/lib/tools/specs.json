@@ -208,26 +208,84 @@
   },
   {
     "name": "edit_file",
-    "description": "Edit a file by exact old_text anchor (must match exactly once) or by 1-based line range.",
+    "description": "Edit a file by exact old_text anchor (must match exactly once), by 1-based line range, or as a batch of edits in one call.",
     "input_schema": {
       "oneOf": [
         {
           "required": [
+            "new_text",
             "old_text"
           ]
         },
         {
           "required": [
+            "new_text",
             "start_line"
           ]
         },
         {
           "required": [
+            "new_text",
             "hashline"
+          ]
+        },
+        {
+          "required": [
+            "edits"
           ]
         }
       ],
       "properties": {
+        "edits": {
+          "description": "Batch mode: several edits to one file in a single call, applied IN ORDER, each seeing the previous result. Prefer this over repeated calls when a change spans several hunks. All or nothing: the first failure aborts the whole call and the file is untouched.",
+          "items": {
+            "oneOf": [
+              {
+                "required": [
+                  "old_text"
+                ]
+              },
+              {
+                "required": [
+                  "start_line"
+                ]
+              },
+              {
+                "required": [
+                  "hashline"
+                ]
+              }
+            ],
+            "properties": {
+              "end_hashline": {
+                "type": "string"
+              },
+              "end_line": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "hashline": {
+                "type": "string"
+              },
+              "new_text": {
+                "type": "string"
+              },
+              "old_text": {
+                "type": "string"
+              },
+              "start_line": {
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "new_text"
+            ],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
         "end_hashline": {
           "description": "8-hex content hash of the last line of the range (optional, same mode as hashline)",
           "type": "string"
@@ -244,12 +302,16 @@
           "description": "8-hex content hash anchor of the first line to replace (from read_file hashlines=true); the file must still contain exactly one line with this hash",
           "type": "string"
         },
+        "ignore_trailing_whitespace": {
+          "description": "Match old_text ignoring differences in TRAILING whitespace only — leading indentation is never ignored. Defaults to true, except for Python/Makefile/CMake/YAML where trailing whitespace can be significant.",
+          "type": "boolean"
+        },
         "new_text": {
           "description": "Replacement text",
           "type": "string"
         },
         "old_text": {
-          "description": "Exact text to replace; must occur exactly once",
+          "description": "Exact text to replace; must occur exactly once. If it does not match, the error names the closest location — copy that text verbatim rather than retrying blind.",
           "type": "string"
         },
         "path": {
@@ -261,8 +323,7 @@
         }
       },
       "required": [
-        "path",
-        "new_text"
+        "path"
       ],
       "type": "object"
     }
@@ -769,7 +830,7 @@
   },
   {
     "name": "read_file",
-    "description": "Read a text file. Output lines carry a line-number prefix (\"  123 | content\") so edit_file can target exact ranges; without offset/limit at most the first 1000 lines are returned and a [truncated] hint tells you how to read on.",
+    "description": "Read a text file. Output lines carry a line-number prefix (\"  123 | content\") so edit_file can target exact ranges; without offset/limit at most the first 1000 lines are returned and a [truncated] hint tells you how to read on. For a LARGE file (thousands of lines) read it once with hashlines=true: that returns the whole file with an 8-hex content-hash anchor per line, and those anchors stay valid across the rest of the file, so several edits need no second read and no line arithmetic.",
     "input_schema": {
       "properties": {
         "hashlines": {
