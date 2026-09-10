@@ -157,6 +157,74 @@ impl Ledger {
             })
             .unwrap_or_default()
     }
+
+    /// Every change the session has committed, as one unified-diff document.
+    ///
+    /// `root` relativises the paths so the report is readable (and, for a small
+    /// change, directly `git apply`-able); pass the session cwd.
+    ///
+    /// # This is a report, not a guaranteed patch
+    ///
+    /// Each hunk body was capped at [`LEDGER_HUNK_MAX_CHARS`] when the turn
+    /// committed, so an edit larger than that was truncated BEFORE it reached
+    /// the ledger. The marker the capping leaves behind (`… diff truncated`) is
+    /// preserved verbatim, and [`Self::export_truncated`] lists the files it
+    /// affects -- a caller that wants to apply the result must check that list
+    /// first, because applying a truncated patch does not fail loudly, it
+    /// applies a PARTIAL change.
+    pub fn export_unified_diff(&self, root: &Path) -> String {
+        let mut out = String::new();
+        for (_, _, changes) in self.entries() {
+            for change in changes {
+                out.push_str(&change.as_unified_diff(root));
+            }
+        }
+        out
+    }
+
+    /// Paths whose exported diff is incomplete because the hunk body was capped.
+    ///
+    /// Empty for a session whose every change fits the budget, which is the
+    /// case that can be applied as a patch.
+    pub fn export_truncated(&self) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        for (_, _, changes) in self.entries() {
+            for change in changes {
+                if change.hunks.contains(TRUNCATION_MARKER) {
+                    out.push(change.path.clone());
+                }
+            }
+        }
+        out
+    }
+}
+
+/// Appended by `line_diff` when it has to stop before printing every hunk.
+pub const TRUNCATION_MARKER: &str = "… diff truncated";
+
+/// Hunk budget the ledger commits with. Kept here next to the exporter that has
+/// to reason about it. See `ledger_change_for`.
+pub const LEDGER_HUNK_MAX_CHARS: usize = 1600;
+
+impl LedgerChange {
+    /// One file's entry in a unified-diff document: the `--- `/`+++ ` header
+    /// plus the stored hunk body.
+    ///
+    /// The hunk body already carries `@@ -a,b +c,d @@` headers and context
+    /// lines (it is produced by `line_diff`), so only the file header is added
+    /// here. The body is NOT re-generated from the current file: the ledger
+    /// stores the change as it was committed, and re-diffing against today's
+    /// content would quietly report a different change than the one that
+    /// happened.
+    pub fn as_unified_diff(&self, root: &Path) -> String {
+        let shown = self
+            .path
+            .strip_prefix(root)
+            .unwrap_or(&self.path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        format!("--- {shown}\n+++ {shown}\n{}", self.hunks)
+    }
 }
 
 /// Per-turn edit journal: backs up every file before the first mutation and
@@ -371,7 +439,7 @@ fn ledger_change_for(dir: &Path, entry: &EntryRecord) -> Result<LedgerChange, St
         path: entry.path.clone(),
         old_lines: old.lines().count(),
         new_lines: new.lines().count(),
-        hunks: line_diff(&old, &new, 1600),
+        hunks: line_diff(&old, &new, LEDGER_HUNK_MAX_CHARS),
         old_sha256: crate::hash::sha256_hex(&old_bytes),
         new_sha256: crate::hash::sha256_hex(&new_bytes),
     })
@@ -598,6 +666,17 @@ fn now_nanos() -> u128 {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// `EditJournal::commit` does NOT write the ledger itself: it returns the
+    /// changes and `Agent` appends them to `store.ledger_path(session)` (see
+    /// `agent.rs`). So an export test has to do the same two steps -- commit,
+    /// then append -- or it reads a file nothing ever created.
+    fn committed_ledger(undo: &std::path::Path, journal: &mut EditJournal) -> Ledger {
+        let changes = journal.commit().unwrap();
+        let ledger = Ledger::new(undo.join("ledger.jsonl"));
+        ledger.append(&changes).unwrap();
+        ledger
+    }
 
     #[test]
     fn rollback_restores_modified_and_removes_created() {
@@ -866,5 +945,88 @@ mod tests {
             "second hunk must be cut: {diff}"
         );
         assert!(diff.contains("… diff truncated"), "got: {diff}");
+    }
+
+    #[test]
+    fn export_writes_a_unified_diff_per_changed_file() {
+        let dir = tempdir().unwrap();
+        let undo = dir.path().join("undo");
+        let mut journal = EditJournal::new(undo.clone());
+        let file = dir.path().join("src").join("main.c");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, "int main(void) {\n  return 0;\n}\n").unwrap();
+
+        journal.begin(&file).unwrap();
+        fs::write(&file, "int main(void) {\n  return 1;\n}\n").unwrap();
+        let ledger = committed_ledger(&undo, &mut journal);
+        // The export reads the changes back from the JSONL the commit appended
+        // to, the same way an embedder (or `/ledger --export`) would.
+        let text = ledger.export_unified_diff(dir.path());
+        assert!(text.contains("--- src/main.c\n"), "got: {text}");
+        assert!(text.contains("+++ src/main.c\n"), "got: {text}");
+        assert!(text.contains("@@ -1,3 +1,3 @@"), "got: {text}");
+        assert!(text.contains("-  return 0;"), "got: {text}");
+        assert!(text.contains("+  return 1;"), "got: {text}");
+        // Forward slashes on every platform: a report copied between machines
+        // (or into a patch) must not carry `src\\main.c`.
+        assert!(!text.contains('\\'), "got: {text}");
+    }
+
+    /// The invariant a caller must be able to check: a truncated export is
+    /// reported as truncated, because applying a partial patch does not fail
+    /// loudly -- it applies a PARTIAL change.
+    #[test]
+    fn export_reports_which_files_were_truncated() {
+        let dir = tempdir().unwrap();
+        let undo = dir.path().join("undo");
+        let mut journal = EditJournal::new(undo.clone());
+        let file = dir.path().join("big.txt");
+        // Two blocks of long lines, far enough apart to need two hunks and long
+        // enough together to blow the 1600-char ledger budget. Short lines would
+        // both fit and the test would silently stop covering truncation.
+        let filler = "x".repeat(80);
+        let old: String = (0..120).map(|i| format!("line {i} {filler}\n")).collect();
+        let mut new_lines: Vec<String> = (0..120).map(|i| format!("line {i} {filler}\n")).collect();
+        for line in new_lines.iter_mut().take(10) {
+            line.push_str("ADDED\n");
+        }
+        for line in new_lines.iter_mut().skip(100) {
+            line.push_str("ADDED\n");
+        }
+        let new: String = new_lines.concat();
+        fs::write(&file, &old).unwrap();
+
+        journal.begin(&file).unwrap();
+        fs::write(&file, &new).unwrap();
+        let ledger = committed_ledger(&undo, &mut journal);
+        let exported = ledger.export_unified_diff(dir.path());
+        assert!(
+            exported.contains(TRUNCATION_MARKER),
+            "a body past the budget must stay visibly truncated: {}",
+            &exported[..exported.len().min(200)]
+        );
+        assert_eq!(
+            ledger.export_truncated(),
+            vec![file.clone()],
+            "the affected file must be listed"
+        );
+    }
+
+    #[test]
+    fn export_of_a_small_change_lists_nothing_truncated() {
+        let dir = tempdir().unwrap();
+        let undo = dir.path().join("undo");
+        let mut journal = EditJournal::new(undo.clone());
+        let file = dir.path().join("a.txt");
+        fs::write(&file, "one\ntwo\n").unwrap();
+        journal.begin(&file).unwrap();
+        fs::write(&file, "one\nTWO\n").unwrap();
+        let ledger = committed_ledger(&undo, &mut journal);
+        assert!(ledger.export_truncated().is_empty());
+        assert!(
+            !ledger
+                .export_unified_diff(dir.path())
+                .contains(TRUNCATION_MARKER)
+        );
     }
 }
