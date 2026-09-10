@@ -46,17 +46,43 @@ machine — read the "why" so you don't re-create the problem.
   - WorkBuddy's sandbox (`modify_backup` rule) intercepts every
     create/modify/delete and breaks cargo's lock-file open; its `rm -f`
     shim also silently no-ops there (stderr goes to /dev/null), so "rm
-    the lock and retry" cannot work in-sandbox. VERIFIED FIX: run the
-    session in **bypass-permissions mode** (the sandbox follows the
-    session's `permissionMode`; bypass logs show `passthrough=true` and
-    355 tests passed with zero lock errors, while `default`/
-    `acceptEdits` sandbox commands and the lock error recurs). The
-    `sandbox.extraAllowWrite` list in `~/.workbuddy/settings.json` does
-    NOT reach the shell sandbox — never `extend_rules` appear in the
-    sandbox logs — so editing it does not help.
+    the lock and retry" cannot work in-sandbox.
+  - **`bypassPermissions` is NOT a reliable way to lift it.** This was
+    recorded here as a verified fix and it does not hold: across 195
+    `SandboxRuleSync` lines in `~/.workbuddy/logs/`,
+    `permissionMode=bypassPermissions` landed on
+    `ruleProfile=default-strict` **117 times** (116 file rules,
+    `skippedRuleTypes=<none>` — nothing skipped, so `modify_backup`
+    still fires) and on `sandbox-disabled` 78 times. Same switch, two
+    opposite outcomes, so "switch to bypass and it works" is a coin
+    flip.
+  - **What the profiles actually do** (measured):
+
+    | `permissionMode` | `ruleProfile` | sandbox | file rules |
+    |---|---|---|---|
+    | `fullAccess` | `fullAccess-relaxed` | on, relaxed | **6**, skips `read_only,no_access,network(denyAll+blacklist)` |
+    | `bypassPermissions` | `sandbox-disabled` *or* `default-strict` | off *or* **still strict** | — / **116**, skips nothing |
+    | `default` | `default-strict` | on, strict | 116 |
+
+  - **Use `fullAccess`, then verify from the log rather than trusting the
+    switch.** A working session logs
+    `permissionMode=fullAccess configuredSandboxEnabled=true
+    effectiveSandboxEnabled=true ruleProfile=fullAccess-relaxed`. If the
+    line says `default-strict`, the wall is still up — change it, do not
+    retry the build.
+  - `permissionMode` is per SESSION (`[Startup] SessionMiddleware.handle:
+    updatePermissionMode`), not a `settings.json` key. Editing
+    `~/.workbuddy/settings.json` cannot change it. The
+    `sandbox.extraAllowWrite` list there does NOT reach the shell sandbox
+    either — `extend_rules` never appears in the sandbox logs — so
+    editing it does not help.
   - Huorong (火绒) real-time shield also holds handles on freshly written
-    files. `D:\OldStudy66\Firment` (at least `target/` dirs and `.git/`)
-    belongs in its trust zone.
+    files, as a SECOND layer: it is installed at
+    `C:\Program Files\Huorong\Sysdiag\bin\HipsDaemon.exe` and runs
+    independently of the sandbox. `D:\OldStudy66\Firment` (at least
+    `target/` dirs and `.git/`) belongs in its trust zone. Note that
+    Defender's Controlled Folder Access is *not* involved
+    (`EnableControlledFolderAccess = 0`).
 - When you hit this: report it once as an environment problem and stop.
   Do NOT loop retries, do NOT delete lock files, do NOT `cargo clean`
   (it will hit the same wall and wastes the whole build cache).
