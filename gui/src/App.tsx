@@ -1,5 +1,4 @@
-import { useEffect, useReducer, useRef, useState } from 'react';
-import {
+import { useEffect, useReducer, useRef, useState } from 'react';import {
   Badge,
   Button,
   ConfigProvider,
@@ -55,6 +54,7 @@ import { initialTurnState, turnsReducer } from './lib/turnReducer';
 import type { TurnMap } from './lib/turnReducer';
 import { FlashView } from './views/FlashView';
 import { WorkbenchView } from './views/WorkbenchView';
+import { antdTheme, color, font } from './styles/tokens';
 
 const { Sider, Header, Content } = Layout;
 
@@ -563,42 +563,23 @@ export default function App() {
   };
 
   return (
-    <ConfigProvider
-      theme={{
-        algorithm: theme.darkAlgorithm,
-        token: {
-          colorPrimary: '#2f6bff',
-          borderRadius: 0,
-          colorBgLayout: '#0a0c10',
-          colorBgContainer: '#12151b',
-          colorBgElevated: '#1a1e26',
-          colorBorder: '#000000',
-          colorText: '#f2f4f8',
-          colorTextSecondary: '#9aa3b2',
-          colorBorderSecondary: '#000000',
-          fontFamily: "'JetBrains Mono', 'Consolas', 'Segoe UI', system-ui, sans-serif",
-        },
-        components: {
-          Menu: {
-            itemBg: 'transparent',
-            itemSelectedBg: '#2f6bff',
-            itemSelectedColor: '#ffffff',
-            itemHoverBg: '#ffffff14',
-            itemBorderRadius: 0,
-          },
-          Card: { headerBg: 'transparent' },
-          Button: { fontWeight: 700 },
-          Tag: { borderRadiusSM: 0, borderRadiusLG: 0 },
-        },
-      }}
-    >
-      <Layout style={{ height: '100vh', overflow: 'hidden', background: '#0a0c10' }}>
+    <ConfigProvider theme={{ ...antdTheme(), algorithm: theme.darkAlgorithm }}>
+      <Layout
+        style={{
+          height: '100vh',
+          overflow: 'hidden',
+          background: color.bg,
+          // Set here as well as in the antd theme: the shell's own text should
+          // not depend on a component library token reaching it.
+          fontFamily: font.sans,
+        }}
+      >
         <Sider
           width={248}
           theme="dark"
           style={{
-            borderRight: '3px solid #000000',
-            background: '#12151b',
+            borderRight: `3px solid ${color.outline}`,
+            background: color.surface,
           }}
         >
           <div
@@ -607,7 +588,7 @@ export default function App() {
               display: 'flex',
               alignItems: 'center',
               gap: 12,
-              borderBottom: '3px solid #000000',
+              borderBottom: `3px solid ${color.outline}`,
               marginBottom: 12,
             }}
           >
@@ -618,17 +599,17 @@ export default function App() {
                 width: 40,
                 height: 40,
                 borderRadius: 6,
-                boxShadow: '3px 3px 0 #000000',
+                boxShadow: `3px 3px 0 ${color.outline}`,
                 objectFit: 'contain',
-                background: '#2f6bff',
+                background: color.surfaceRaised,
                 padding: 4,
               }}
             />
             <div style={{ lineHeight: 1.1 }}>
-              <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: 0.5, color: '#ffffff', textTransform: 'uppercase' }}>
+              <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: 0.5, color: color.ink, textTransform: 'uppercase' }}>
                 Firment
               </div>
-              <div style={{ fontSize: 10, color: '#9aa3b2', letterSpacing: 1.5 }}>
+              <div style={{ fontSize: 10, color: color.muted, letterSpacing: 1.5 }}>
                 FIRMWARE + AGENT
               </div>
             </div>
@@ -656,7 +637,7 @@ export default function App() {
             }}
           />
         </Sider>
-        <Layout style={{ background: '#0a0c10' }}>
+        <Layout style={{ background: color.bg }}>
           <Header
             style={{
               height: 54,
@@ -664,8 +645,8 @@ export default function App() {
               display: 'flex',
               alignItems: 'center',
               gap: 12,
-              background: '#12151b',
-              borderBottom: '3px solid #000000',
+              background: color.surface,
+              borderBottom: `3px solid ${color.outline}`,
             }}
           >
             <Menu
@@ -689,12 +670,12 @@ export default function App() {
             />
             {anyRunning && (
               <Tag
-                color="#2f6bff"
+                color={color.brandAcid}
                 style={{
                   borderRadius: 0,
                   fontWeight: 700,
                   marginInlineEnd: 0,
-                  boxShadow: '2px 2px 0 #000000',
+                  boxShadow: `2px 2px 0 ${color.outline}`,
                 }}
               >
                 ⚡ {Object.values(turnsById).filter((t) => t.running).length} running
@@ -754,7 +735,7 @@ export default function App() {
                         }}
                         style={{
                           padding: '5px 6px',
-                          borderBottom: '1px solid #2a2f3a',
+                          borderBottom: `1px solid ${color.line}`,
                           cursor: n.sid ? 'pointer' : 'default',
                         }}
                       >
@@ -798,8 +779,8 @@ export default function App() {
                     icon={<BellOutlined />}
                     style={{
                       borderRadius: 0,
-                      border: '2px solid #000000',
-                      boxShadow: '2px 2px 0 #000000',
+                      border: `2px solid ${color.outline}`,
+                      boxShadow: `2px 2px 0 ${color.outline}`,
                     }}
                   />
                 </Badge>
@@ -822,9 +803,9 @@ export default function App() {
                   style={{
                     borderRadius: 0,
                     marginInlineEnd: 0,
-                    border: '2px solid #000000',
-                    background: '#facc15',
-                    color: '#000000',
+                    border: `2px solid ${color.outline}`,
+                    background: color.warnInk,
+                    color: color.outline,
                     fontWeight: 700,
                     cursor: 'pointer',
                   }}
@@ -855,7 +836,7 @@ export default function App() {
                   style={{
                     borderRadius: 0,
                     marginInlineEnd: 0,
-                    border: '2px solid #000000',
+                    border: `2px solid ${color.outline}`,
                     fontWeight: 700,
                     cursor: 'pointer',
                   }}
@@ -905,7 +886,7 @@ export default function App() {
                     style={{
                       borderRadius: 0,
                       marginInlineEnd: 0,
-                      border: '2px solid #000000',
+                      border: `2px solid ${color.outline}`,
                       fontWeight: 700,
                       cursor: 'pointer',
                     }}
@@ -922,7 +903,7 @@ export default function App() {
               display: 'flex',
               flexDirection: 'column',
               minHeight: 0,
-              background: '#0a0c10',
+              background: color.bg,
             }}
           >
             {view === 'chat' && (

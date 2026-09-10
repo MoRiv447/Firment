@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="Firment">
+  <title>Firment</title>
+  <!--
+    The mark, derived exactly from the site's CSS (.brand-symbol):
+
+      .brand-symbol{width:26px;height:30px;transform:skew(-13deg)}
+      .brand-symbol i{height:6px;left:0}
+      .brand-symbol i:first-child{top:3px;width:25px}
+      .brand-symbol i:nth-child(2){top:12px;width:19px}
+      .brand-symbol i:last-child{top:21px;width:8px}
+
+    transform-origin defaults to 50% 50%, so the skew pivots on the centre of
+    the 26x30 box -- hence translate/skew/translate rather than a bare skewX,
+    which would pivot on the SVG origin and slide the whole mark sideways.
+
+    The 26x30 glyph is scaled by 3/32 = 0.9375 and centred in a 32x32 tile, so
+    the widths are 23.4375 / 17.8125 / 7.5 and the bar height is 5.625.
+  -->
+  <g transform="translate(16 16) skewX(-13) translate(-16 -16)" fill="#B4F779">
+    <rect x="1.7203" y="2.4074" width="23.4375" height="5.625"/>
+    <rect x="1.7203" y="10.8444" width="17.8125" height="5.625"/>
+    <rect x="1.7203" y="19.2815" width="7.5"     height="5.625"/>
+  </g>
+</svg>

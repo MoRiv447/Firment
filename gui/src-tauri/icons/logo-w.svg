@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="Firment">
+  <title>Firment</title>
+  <!--
+    Same geometry as logo.svg (see that file for the derivation from the site's
+    .brand-symbol CSS), in the darker green the light-ground version needs:
+    #B4F779 is only ~1.8:1 on white, so it is unusable as a glyph colour there.
+    #4D7C0F keeps the same hue family at a contrast that survives on white.
+  -->
+  <g transform="translate(16 16) skewX(-13) translate(-16 -16)" fill="#4D7C0F">
+    <rect x="1.7203" y="2.4074" width="23.4375" height="5.625"/>
+    <rect x="1.7203" y="10.8444" width="17.8125" height="5.625"/>
+    <rect x="1.7203" y="19.2815" width="7.5"     height="5.625"/>
+  </g>
+</svg>

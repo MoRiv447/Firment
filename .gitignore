@@ -29,6 +29,10 @@
 Thumbs.db
 Desktop.ini
 
+# Python（图标/资产生成脚本）
+__pycache__/
+*.pyc
+
 # 日志 / 临时文件
 *.log
 *.tmp
