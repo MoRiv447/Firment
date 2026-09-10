@@ -47,29 +47,34 @@ machine — read the "why" so you don't re-create the problem.
     create/modify/delete and breaks cargo's lock-file open; its `rm -f`
     shim also silently no-ops there (stderr goes to /dev/null), so "rm
     the lock and retry" cannot work in-sandbox.
-  - **`bypassPermissions` is NOT a reliable way to lift it.** This was
-    recorded here as a verified fix and it does not hold: across 195
-    `SandboxRuleSync` lines in `~/.workbuddy/logs/`,
-    `permissionMode=bypassPermissions` landed on
-    `ruleProfile=default-strict` **117 times** (116 file rules,
-    `skippedRuleTypes=<none>` — nothing skipped, so `modify_backup`
-    still fires) and on `sandbox-disabled` 78 times. Same switch, two
-    opposite outcomes, so "switch to bypass and it works" is a coin
-    flip.
-  - **What the profiles actually do** (measured):
+  - **CAUSE NOT ESTABLISHED — do not trust a permission-mode switch.**
+    This entry once said "run the session in bypass-permissions mode"
+    and marked it verified; that is not what the logs show. What IS
+    measured (in `~/.workbuddy/logs/`, 195 `SandboxRuleSync` lines):
+    `bypassPermissions` resolved to `ruleProfile=default-strict` 117
+    times (116 file rules, `skippedRuleTypes=<none>`) and to
+    `sandbox-disabled` 78 times — one setting, two opposite outcomes.
+    And the `fullAccess` session that DID hit this error still reported
+    `denied_write = 0` with no `[E]` line anywhere in its sandbox log,
+    so "it is the strict profile" does not explain that failure either.
+    Some other layer is involved, and it has not been identified.
+    To make progress, capture the FULL cargo output (not its last line)
+    together with the sandbox log from the same minute, then compare —
+    a wrong diagnosis here has already cost one round trip.
+  - What the profiles resolve to, for whoever picks this up (measured,
+    but note above: this is not the whole story):
 
     | `permissionMode` | `ruleProfile` | sandbox | file rules |
     |---|---|---|---|
     | `fullAccess` | `fullAccess-relaxed` | on, relaxed | **6**, skips `read_only,no_access,network(denyAll+blacklist)` |
-    | `bypassPermissions` | `sandbox-disabled` *or* `default-strict` | off *or* **still strict** | — / **116**, skips nothing |
+    | `bypassPermissions` | `sandbox-disabled` *or* `default-strict` | off *or* strict | — / **116**, skips nothing |
     | `default` | `default-strict` | on, strict | 116 |
 
-  - **Use `fullAccess`, then verify from the log rather than trusting the
-    switch.** A working session logs
-    `permissionMode=fullAccess configuredSandboxEnabled=true
-    effectiveSandboxEnabled=true ruleProfile=fullAccess-relaxed`. If the
-    line says `default-strict`, the wall is still up — change it, do not
-    retry the build.
+  - `modify_backup.enabled=true` holds even under `fullAccess` — the
+    sandbox backs a file up before letting a write through. There is no
+    `denied_write` rule in that profile, so writes are not being
+    REFUSED; whether the backup step can itself fail (the checkout has a
+    ~27 GB `target/`) is untested.
   - `permissionMode` is per SESSION (`[Startup] SessionMiddleware.handle:
     updatePermissionMode`), not a `settings.json` key. Editing
     `~/.workbuddy/settings.json` cannot change it. The
@@ -80,9 +85,11 @@ machine — read the "why" so you don't re-create the problem.
     files, as a SECOND layer: it is installed at
     `C:\Program Files\Huorong\Sysdiag\bin\HipsDaemon.exe` and runs
     independently of the sandbox. `D:\OldStudy66\Firment` (at least
-    `target/` dirs and `.git/`) belongs in its trust zone. Note that
-    Defender's Controlled Folder Access is *not* involved
-    (`EnableControlledFolderAccess = 0`).
+    `target/` dirs and `.git/`) belongs in its trust zone. Defender's
+    Controlled Folder Access is *not* involved
+    (`EnableControlledFolderAccess = 0`), but note this is the one layer
+    whose internals cannot be read from the CLI — the Huorong trust zone
+    lives in its GUI — so it is the leading unverified candidate.
 - When you hit this: report it once as an environment problem and stop.
   Do NOT loop retries, do NOT delete lock files, do NOT `cargo clean`
   (it will hit the same wall and wastes the whole build cache).
