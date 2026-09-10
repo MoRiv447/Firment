@@ -30,6 +30,42 @@ function dangerousName(name: string, args: unknown): boolean {
 const DIFF_MAX_CHARS = 4000;
 
 /**
+ * `+N -M` for the header, counted exactly the way the TUI counts it
+ * (`crates/firment-tui/src/view.rs`): over the diff body only. The first line
+ * is the "Edited <path>" header, which `DiffBody` drops, so counting it would
+ * be counting a line nobody sees.
+ */
+function diffCounts(detail: string): { added: number; removed: number } {
+  let added = 0;
+  let removed = 0;
+  for (const line of detail.split('\n').slice(1)) {
+    if (line.startsWith('+')) added += 1;
+    else if (line.startsWith('-')) removed += 1;
+  }
+  return { added, removed };
+}
+
+/**
+ * The file a tool touched, read from its arguments.
+ *
+ * `args` is `unknown` (it arrives as JSON from the backend), so every step is
+ * checked rather than assumed. This exists because the card lost the path: the
+ * diff body drops the "Edited <path>" header on the assumption that the summary
+ * already shows it, and the summary is only rendered when there is *no* detail.
+ * The two conditions cannot both hold, so the path was on screen in neither
+ * place once a diff was attached.
+ */
+function editedPath(args: unknown): string | undefined {
+  if (!args || typeof args !== 'object') return undefined;
+  const record = args as Record<string, unknown>;
+  for (const key of ['path', 'file_path', 'file']) {
+    const value = record[key];
+    if (typeof value === 'string' && value) return value;
+  }
+  return undefined;
+}
+
+/**
  * The change a tool made, line by line.
  *
  * The header line is dropped: it is the same "Edited <path> …" text the card
@@ -96,6 +132,9 @@ export function ToolCard({
   const tagColor =
     tool.status === 'ok' ? 'green' : tool.status === 'failed' ? 'red' : danger ? 'orange' : 'blue';
   const icon = tool.status === 'ok' ? '✓' : tool.status === 'failed' ? '✕' : danger ? '⚠' : '·';
+  const path = editedPath(tool.args);
+  const counts = tool.detail ? diffCounts(tool.detail) : null;
+  const hasCounts = counts !== null && (counts.added > 0 || counts.removed > 0);
 
   const inner = (
     <Space direction="vertical" size={4} style={{ width: '100%' }}>
@@ -138,27 +177,50 @@ export function ToolCard({
       }}
       onClick={collapsible?.onToggle}
       title={
-        <Space size={8}>
-          {collapsible &&
-            (collapsible.open ? (
-              <DownOutlined style={{ fontSize: 9, color: color.muted }} />
-            ) : (
-              <RightOutlined style={{ fontSize: 9, color: color.muted }} />
-            ))}
-          {tool.status !== 'running' && <Text strong>{icon}</Text>}
-          <Tag
-            color={tagColor}
-            style={{
-              borderRadius: radius.chip,
-              border: `2px solid ${color.outline}`,
-              color: color.ink,
-              fontWeight: 700,
-            }}
-          >
-            {tool.status === 'running' ? `${icon} ${tool.name}` : tool.name}
-          </Tag>
-          <Text type="secondary" style={{ fontSize: 12 }}>#{tool.seq}</Text>
-        </Space>
+        // Flex rather than `Space`: the counts are right-aligned, and a `Space`
+        // would pack them next to the tool name instead of at the far edge.
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+          <Space size={8}>
+            {collapsible &&
+              (collapsible.open ? (
+                <DownOutlined style={{ fontSize: 9, color: color.muted }} />
+              ) : (
+                <RightOutlined style={{ fontSize: 9, color: color.muted }} />
+              ))}
+            {tool.status !== 'running' && <Text strong>{icon}</Text>}
+            <Tag
+              color={tagColor}
+              style={{
+                borderRadius: radius.chip,
+                border: `2px solid ${color.outline}`,
+                color: color.ink,
+                fontWeight: 700,
+              }}
+            >
+              {tool.status === 'running' ? `${icon} ${tool.name}` : tool.name}
+            </Tag>
+            {path && (
+              <Text style={{ fontFamily: font.mono, fontSize: 12 }}>{path}</Text>
+            )}
+            <Text type="secondary" style={{ fontSize: 12 }}>#{tool.seq}</Text>
+          </Space>
+          {hasCounts && (
+            <span
+              style={{
+                marginLeft: 'auto',
+                fontFamily: font.mono,
+                fontSize: 12,
+                fontWeight: 700,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {/* The diff family, not the brand green: an added line and a
+                  passed check are not the same message. */}
+              <span style={{ color: color.diffAddedInk }}>+{counts.added}</span>{' '}
+              <span style={{ color: color.diffRemovedInk }}>-{counts.removed}</span>
+            </span>
+          )}
+        </div>
       }
     >
       {inner}
