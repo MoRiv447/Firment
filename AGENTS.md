@@ -86,9 +86,12 @@ machine — read the "why" so you don't re-create the problem.
     (`EnableControlledFolderAccess = 0`), but note this is the one layer
     whose internals cannot be read from the CLI — the Huorong trust zone
     lives in its GUI — so it is the leading unverified candidate.
-- When you hit this: report it once as an environment problem and stop.
-  Do NOT loop retries, do NOT delete lock files, do NOT `cargo clean`
-  (it will hit the same wall and wastes the whole build cache).
+- When you hit this: **first retry with `CARGO_BUILD_JOBS=1`** (see "What was
+  measured on 2026-09-10" — it is measured to work, and the failure is a
+  concurrency one). If it still fails serially, then report it once as an
+  environment problem and stop: do NOT loop retries, do NOT delete lock files,
+  do NOT `cargo clean` (it will hit the same wall and wastes the whole build
+  cache).
 
 ### What was measured on 2026-09-10 (this narrows the cause)
 
@@ -127,6 +130,25 @@ environment* rather than into the sandbox mode — which is why
 - Do not read this as "the code is broken". `cargo fmt` works, `cargo clippy`
   and `cargo test` work **while the build is cached** (they need no writes), and
   they break the moment a source edit forces a rebuild.
+- **THE WORKAROUND THAT WORKS TODAY, verified end to end:
+  `CARGO_BUILD_JOBS=1`.** Set it and cargo builds and tests normally with no
+  environment change at all:
+
+    ```bash
+    CARGO_BUILD_JOBS=1 cargo test --workspace    # 609 passed / 0 failed, exit 0
+    ```
+
+  The trigger is **concurrent writes**, not writes as such: the interception
+  fires when several rustc processes write dep-info and temp files into
+  `target/` at once, and it does not fire at all when the artifacts are already
+  fresh (no writes). That is the whole explanation for "the first baseline run
+  was green" — it was green because it was cached, not because the environment
+  was healthy. Cost of the serial route: a full workspace rebuild plus the
+  suite is **16m58s** on this machine, once; afterwards the cache makes
+  re-runs cheap again.
+- So: before reaching for a settings change or giving up, try the serial build.
+  Use `jobs=1` for any real rebuild here, and treat a cached green run as no
+  evidence about the environment either way.
 - **The switch to turn it off is cross-language**, which is why clearing
   `NODE_OPTIONS` alone is only a partial fix:
   `CODEBUDDY_SAFE_DELETE_ENABLED != "0"` is read by the node shim
