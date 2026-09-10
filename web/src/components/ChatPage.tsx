@@ -43,6 +43,9 @@ export default function ChatPage() {
   const [config, setConfig] = useState<Config>(getStoredConfig());
   const [liveAssistant, setLiveAssistant] = useState<{ content: string; tool_calls: any[] } | null>(null);
   const [toolStatus, setToolStatus] = useState<string>('');
+  // 存储写入失败 / 服务端 info 提示统一走这条可关闭的横幅（FIR-004）。
+  const [notice, setNotice] = useState<string | null>(null);
+  const storageErrorRef = useRef<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -52,13 +55,30 @@ export default function ChatPage() {
   // upsertSession's re-insert branch.
   const deletedIdsRef = useRef<Set<string>>(new Set());
 
+  // A silently swallowed save error means the user believes a chat is
+  // persisted when it is not, so report it instead of returning void. The
+  // message lands in a ref because the callers run inside a setSessions
+  // updater, which must stay pure; the effect below turns it into state.
+  function persistSessions(list: LocalSession[]) {
+    const err = saveSessions(list);
+    if (err) storageErrorRef.current = err;
+  }
+
   useEffect(() => {
-    const loaded = loadSessions();
+    if (storageErrorRef.current) {
+      setNotice(storageErrorRef.current);
+      storageErrorRef.current = null;
+    }
+  }, [sessions]);
+
+  useEffect(() => {
+    const { sessions: loaded, error } = loadSessions();
+    if (error) setNotice(error);
     if (loaded.length === 0) {
       const s = createSession();
       const list = [s];
       setSessions(list);
-      saveSessions(list);
+      persistSessions(list);
       saveCurrentId(s.id);
       setCurrentId(s.id);
     } else {
@@ -88,7 +108,7 @@ export default function ChatPage() {
       const exists = prev.some((s) => s.id === updated.id);
       const next = exists ? prev.map((s) => (s.id === updated.id ? updated : s)) : [updated, ...prev];
       next.sort((a, b) => b.updatedAt - a.updatedAt);
-      saveSessions(next);
+      persistSessions(next);
       return next;
     });
   }, []);
@@ -97,7 +117,7 @@ export default function ChatPage() {
     const s = createSession();
     setSessions((prev) => {
       const next = [s, ...prev];
-      saveSessions(next);
+      persistSessions(next);
       return next;
     });
     saveCurrentId(s.id);
@@ -118,7 +138,7 @@ export default function ChatPage() {
   function deleteSession(id: string) {
     deletedIdsRef.current.add(id);
     const next = sessions.filter((s) => s.id !== id);
-    saveSessions(next);
+    persistSessions(next);
     setSessions(next);
     if (currentId === id) {
       const fallback = next[0]?.id || null;
@@ -264,6 +284,8 @@ export default function ChatPage() {
             upsertSession(upd);
             setLiveAssistant(null);
             setToolStatus('');
+          } else if (evt.type === 'info' && evt.message) {
+            setNotice(String(evt.message));
           } else if (evt.type === 'error') {
             throw new Error(evt.error || 'Unknown error');
           }
@@ -472,6 +494,25 @@ export default function ChatPage() {
             </span>
           </div>
         </header>
+
+        {notice && (
+          <div
+            role="alert"
+            className="flex items-start gap-2 px-3 md:px-6 py-2 bg-amber-500/10 border-b-[3px] border-black text-amber-200 text-xs md:text-sm"
+          >
+            <span className="shrink-0 mt-0.5" aria-hidden>
+              ⚠
+            </span>
+            <span className="flex-1 min-w-0 break-words">{notice}</span>
+            <button
+              onClick={() => setNotice(null)}
+              className="shrink-0 px-2 py-0.5 text-amber-200 hover:text-white border-[2px] border-black bg-gray-800"
+              aria-label="Dismiss notice"
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
         <div className="flex-1 overflow-y-auto px-3 md:px-6 py-4 md:py-6">
           {renderMessages.length === 0 ? (
