@@ -34,6 +34,7 @@ import type {
   WorkbenchStateDto,
 } from '../types';
 import { color } from '../styles/tokens';
+import { SlantButton } from '../components/SlantButton';
 
 const { Text, Title } = Typography;
 
@@ -1548,9 +1549,9 @@ export function WorkbenchView() {
                   <Space direction="vertical" size={8} style={{ width: '100%' }}>
                     <Empty description="No sessions under this path yet" image={Empty.PRESENTED_IMAGE_SIMPLE} />
                     {kindFilter === 'all' && (
-                      <Button type="primary" loading={busy} onClick={createMainline}>
+                      <SlantButton tier="primary" loading={busy} onClick={createMainline}>
                         New mainline chat here
-                      </Button>
+                      </SlantButton>
                     )}
                   </Space>
                 )}

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { LoadingOutlined } from '@ant-design/icons';
 import { color, font, radius, slant } from '../styles/tokens';
 
 /**
@@ -58,6 +59,8 @@ export function SlantButton({
   children,
   onClick,
   disabled,
+  loading,
+  icon,
   title,
   chevron,
 }: {
@@ -67,18 +70,26 @@ export function SlantButton({
   children: ReactNode;
   onClick?: () => void;
   disabled?: boolean;
+  /** Busy: the button stops responding and shows a spinner where the icon was. */
+  loading?: boolean;
+  /** Leading icon, sized by the caller -- this is not an icon-button. */
+  icon?: ReactNode;
   title?: string;
   /** Trailing chevron, for the tertiary "View diff ›" shape. */
   chevron?: boolean;
 }) {
   const shape = edge ?? defaultEdge(tier);
   const clipped = slantClip(shape) !== undefined;
+  const inert = disabled || loading;
 
   const label = (
     <span
       style={{
         position: 'relative',
-        color: disabled
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        color: inert
           ? color.stepPendingInk
           : tier === 'primary'
             ? color.onAcid
@@ -92,6 +103,7 @@ export function SlantButton({
         paddingLeft: clipped && shape === 'left' ? slant.opticalPadLeft : 0,
       }}
     >
+      {loading ? <LoadingOutlined /> : icon}
       {children}
       {chevron && ' ›'}
     </span>
@@ -101,8 +113,8 @@ export function SlantButton({
     <button
       type="button"
       title={title}
-      onClick={disabled ? undefined : onClick}
-      disabled={disabled}
+      onClick={inert ? undefined : onClick}
+      disabled={inert}
       style={{
         position: 'relative',
         display: 'inline-flex',
