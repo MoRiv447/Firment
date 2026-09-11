@@ -36,6 +36,7 @@ import { color, font, radius } from '../styles/tokens';
 import { SlantButton } from '../components/SlantButton';
 import { FlashHistory } from './workbench/FlashHistory';
 import { ChangeTimeline, ElfBudget, VerificationBadges } from './workbench/insights';
+import { Decisions } from './workbench/Decisions';
 
 const { Text, Title } = Typography;
 
@@ -209,8 +210,6 @@ export function WorkbenchView() {
   // ADR-lite decision log ([[decision]]); branches whose title matches a
   // decision inherit it automatically at creation.
   const [decisions, setDecisions] = useState<DecisionEntryDto[]>([]);
-  const [newTitle, setNewTitle] = useState('');
-  const [newBody, setNewBody] = useState('');
   // Project knowledge files (AGENTS.md / vendor index / private cheatsheets).
   const [kbFiles, setKbFiles] = useState<KbEntryDto[]>([]);
   const [kbKey, setKbKey] = useState<string | null>(null);
@@ -493,15 +492,15 @@ export function WorkbenchView() {
     localStorage.setItem('escalation-auto-run', on ? '1' : '0');
   };
 
-  const addDecision = async () => {
-    if (!cwd.trim() || !newTitle.trim()) return;
+  const addDecision = async (title: string, body: string): Promise<boolean> => {
+    if (!cwd.trim() || !title.trim()) return false;
     setBusy(true);
     try {
-      setDecisions(await api.workbenchDecisionAdd(cwd.trim(), newTitle, newBody));
-      setNewTitle('');
-      setNewBody('');
+      setDecisions(await api.workbenchDecisionAdd(cwd.trim(), title, body));
+      return true;
     } catch (err) {
       setError(String(err));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -1268,73 +1267,12 @@ export function WorkbenchView() {
                 )}
               </Card>
 
-              <Card
-                type="inner"
-                title="Decisions (ADR-lite)"
-                size="small"
-                extra={
-                  <Tooltip title="Branches whose title matches a decision automatically inherit it at creation">
-                    <Text type="secondary" style={{ fontSize: 11 }}>
-                      inherited by matching branches
-                    </Text>
-                  </Tooltip>
-                }
-              >
-                {decisions.length === 0 && (
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    No decisions recorded. Log chip/peripheral/protocol choices here — the agent's
-                    decision tool writes the same list.
-                  </Text>
-                )}
-                {decisions.map((d, i) => (
-                  <div
-                    key={`${d.date}-${i}`}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'flex-start',
-                      gap: 8,
-                      padding: '4px 6px',
-                      borderBottom: `1px solid ${color.line}`,
-                    }}
-                  >
-                    <Tag style={{ borderRadius: radius.chip, fontSize: 10, minWidth: 76, textAlign: 'center' }}>
-                      {d.date || '—'}
-                    </Tag>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <Text style={{ fontSize: 12, fontWeight: 600 }}>{d.title}</Text>
-                      {d.body && (
-                        <div>
-                          <Text type="secondary" style={{ fontSize: 11 }}>
-                            {d.body}
-                          </Text>
-                        </div>
-                      )}
-                    </div>
-                    <Button size="small" type="text" danger disabled={busy} onClick={() => removeDecision(i)}>
-                      ✕
-                    </Button>
-                  </div>
-                ))}
-                <Space.Compact style={{ width: '100%', marginTop: 8 }}>
-                  <Input
-                    size="small"
-                    placeholder="decision headline (I2C bus at 400k)"
-                    value={newTitle}
-                    onChange={(e) => setNewTitle(e.target.value)}
-                    style={{ maxWidth: 260 }}
-                  />
-                  <Input
-                    size="small"
-                    placeholder="rationale / constraints (optional)"
-                    value={newBody}
-                    onChange={(e) => setNewBody(e.target.value)}
-                    onPressEnter={addDecision}
-                  />
-                  <Button size="small" type="dashed" disabled={busy || !newTitle.trim()} onClick={addDecision}>
-                    record
-                  </Button>
-                </Space.Compact>
-              </Card>
+              <Decisions
+                decisions={decisions}
+                busy={busy}
+                onAdd={addDecision}
+                onRemove={removeDecision}
+              />
 
               <Card
                 type="inner"
