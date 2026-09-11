@@ -795,10 +795,13 @@ export function WorkbenchView() {
               value={cwd}
               onChange={(e) => setCwd(e.target.value)}
               onPressEnter={() => void load()}
+              // Same 40px control height as the CTA beside it, so the row is
+              // level rather than assembled.
+              size="large"
             />
-            <Button type="primary" loading={busy} onClick={() => void load()}>
+            <SlantButton tier="primary" loading={busy} onClick={() => void load()}>
               Open project
-            </Button>
+            </SlantButton>
           </Space>
 
           {projects.length > 0 && (

@@ -18,6 +18,7 @@ import { api } from '../lib/api';
 import type { ProviderEntryDto, SettingsDto } from '../types';
 import { color, font, radius } from '../styles/tokens';
 import { setThemeSetting } from '../lib/theme';
+import { SlantButton } from '../components/SlantButton';
 
 const { Text } = Typography;
 
@@ -251,33 +252,40 @@ export function SettingsView() {
             <Divider style={{ margin: '4px 0' }} />
             <Text strong style={{ color: color.ink }}>Add provider</Text>
             <Space wrap>
+              {/* Every control on the row is 40px: the design system's control
+                  height. A 40px CTA beside 32px inputs is the one thing that
+                  makes a row look assembled rather than designed. */}
               <Input
+                size="large"
                 style={{ width: 130 }}
                 placeholder="name (e.g. deepseek)"
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
               />
               <Select
+                size="large"
                 style={{ width: 120 }}
                 value={newType}
                 onChange={(v) => setNewType(v ?? 'openai')}
                 options={[{ label: 'openai', value: 'openai' }, { label: 'anthropic', value: 'anthropic' }]}
               />
               <Input
+                size="large"
                 style={{ width: 260, fontFamily: font.mono }}
                 placeholder="base url (e.g. https://api.deepseek.com/v1)"
                 value={newBaseUrl}
                 onChange={(e) => setNewBaseUrl(e.target.value)}
               />
               <Input
+                size="large"
                 style={{ width: 180 }}
                 placeholder="model (e.g. deepseek-v4-flash)"
                 value={newModel}
                 onChange={(e) => setNewModel(e.target.value)}
               />
-              <Button type="primary" icon={<PlusOutlined />} onClick={upsertProvider}>
+              <SlantButton tier="primary" icon={<PlusOutlined />} onClick={upsertProvider}>
                 Save provider
-              </Button>
+              </SlantButton>
             </Space>
             {newMsg && <Text type="secondary" style={{ fontSize: 12 }}>{newMsg}</Text>}
             {keyMsg && <Text type="success" style={{ fontSize: 12 }}>{keyMsg}</Text>}
@@ -378,9 +386,9 @@ export function SettingsView() {
                 ]}
               />
             </Form.Item>
-            <Button type="primary" onClick={save} loading={saving}>
+            <SlantButton tier="primary" onClick={save} loading={saving}>
               Save settings
-            </Button>
+            </SlantButton>
             {saveMsg && <Text type="success" style={{ fontSize: 12 }}>{saveMsg}</Text>}
             {saveErr && <Text type="danger" style={{ fontSize: 12 }}>{saveErr}</Text>}
           </Form>
