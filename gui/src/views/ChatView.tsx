@@ -154,7 +154,7 @@ export function ChatView({
                     : `idle ${fmtElapsed(idleSecs * 1000)}`}
                 </Text>
                 {idleSecs > 45 && (
-                  <Tag color="warning" style={{ borderRadius: 0, fontWeight: 700 }}>
+                  <Tag color="warning" style={{ borderRadius: radius.chip, fontWeight: 700 }}>
                     no events for {idleSecs}s
                   </Tag>
                 )}
@@ -165,7 +165,7 @@ export function ChatView({
                 key={i.id}
                 type="warning"
                 showIcon
-                style={{ margin: '8px 0', borderRadius: 0 }}
+                style={{ margin: '8px 0', borderRadius: radius.control }}
                 message={i.text}
               />
             ))}
@@ -173,7 +173,7 @@ export function ChatView({
               <Alert
                 type="warning"
                 showIcon
-                style={{ margin: '8px 0', borderRadius: 0 }}
+                style={{ margin: '8px 0', borderRadius: radius.control }}
                 message={notice.message}
                 description={notice.description}
               />

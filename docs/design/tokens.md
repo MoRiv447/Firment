@@ -238,6 +238,16 @@ Not one value everywhere: a small chip needs to stay crisp, a large panel needs
 softness. `0` everywhere reads as unfinished rather than deliberate; `12` on a
 control starts to swallow a slanted edge.
 
+Applied by element, not by habit: badges and chips take `chip`, alerts, inputs,
+buttons and selectable rows take `control`, cards and panels take `panel`, and
+`brand` (0) belongs to the logo and icon tiles, whose hard edge *is* the anchor.
+
+`gui/src/styles/__tests__/no-literal-tokens.test.ts` enforces the whole token
+layer, not just the radius: no literal corner radius, no literal hex colour and
+no hand-written font stack anywhere under `gui/src` outside `tokens.ts`. The
+claim that there is one place a design value is written down decays one inline
+literal at a time, so it is asserted rather than trusted.
+
 ## Motion
 
 - Enter `160ms`, standard `200ms`, exit `120ms`

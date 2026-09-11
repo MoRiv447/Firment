@@ -33,7 +33,7 @@ import type {
   TimelineEntryDto,
   WorkbenchStateDto,
 } from '../types';
-import { color, font } from '../styles/tokens';
+import { color, font, radius } from '../styles/tokens';
 import { SlantButton } from '../components/SlantButton';
 import { FlashHistory } from './workbench/FlashHistory';
 
@@ -715,7 +715,7 @@ export function WorkbenchView() {
               return (
                 <Tag
                   color={state === 'on' ? 'green' : state === 'off' ? 'default' : 'default'}
-                  style={{ borderRadius: 0, fontWeight: 700 }}
+                  style={{ borderRadius: radius.chip, fontWeight: 700 }}
                 >
                   {state === 'on' ? '● broker online' : state === 'off' ? '○ broker off' : '… broker ?'}
                 </Tag>
@@ -741,10 +741,10 @@ export function WorkbenchView() {
                     borderBottom: `1px solid ${color.line}`,
                   }}
                 >
-                  <Tag color="blue" style={{ borderRadius: 0, fontWeight: 700 }}>
+                  <Tag color="blue" style={{ borderRadius: radius.chip, fontWeight: 700 }}>
                     {d.node}
                   </Tag>
-                  <Tag style={{ borderRadius: 0, fontSize: 10 }}>{d.lastKind}</Tag>
+                  <Tag style={{ borderRadius: radius.chip, fontSize: 10 }}>{d.lastKind}</Tag>
                   <Text style={{ fontSize: 11, flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
                     {d.lastFrame}
                   </Text>
@@ -760,7 +760,7 @@ export function WorkbenchView() {
                   </Text>
                   {liveAlerts.slice(0, 5).map((a, i) => (
                     <div key={i} style={{ fontSize: 11, padding: '2px 0' }}>
-                      <Tag color="red" style={{ borderRadius: 0, fontSize: 10 }}>{a.node}</Tag>
+                      <Tag color="red" style={{ borderRadius: radius.chip, fontSize: 10 }}>{a.node}</Tag>
                       <Text type="secondary" style={{ fontSize: 11 }}>{a.frame}</Text>
                     </div>
                   ))}
@@ -778,7 +778,7 @@ export function WorkbenchView() {
                   <Alert
                     type="warning"
                     showIcon
-                    style={{ marginTop: 6, borderRadius: 0 }}
+                    style={{ marginTop: 6, borderRadius: radius.control }}
                     message={`mqtt link: ${err} (retrying every 3s)`}
                   />
                  ) : null;
@@ -893,7 +893,7 @@ export function WorkbenchView() {
                     >
                       <Tag
                         color={live ? 'green' : 'default'}
-                        style={{ borderRadius: 0, fontWeight: 700 }}
+                        style={{ borderRadius: radius.chip, fontWeight: 700 }}
                       >
                         {live ? '●' : '○'} {d.node}
                       </Tag>
@@ -981,7 +981,7 @@ export function WorkbenchView() {
                       <Alert
                         type="warning"
                         showIcon
-                        style={{ marginBottom: 6, borderRadius: 0 }}
+                        style={{ marginBottom: 6, borderRadius: radius.control }}
                         message="No mainline session registered — set one first to enable diagnosis."
                       />
                     )}
@@ -996,11 +996,11 @@ export function WorkbenchView() {
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                           <Tag
                             color={e.sev === 'error' ? 'red' : 'orange'}
-                            style={{ borderRadius: 0, fontSize: 10, fontWeight: 700 }}
+                            style={{ borderRadius: radius.chip, fontSize: 10, fontWeight: 700 }}
                           >
                             {e.sev}
                           </Tag>
-                          <Tag style={{ borderRadius: 0, fontSize: 10 }}>{e.node}</Tag>
+                          <Tag style={{ borderRadius: radius.chip, fontSize: 10 }}>{e.node}</Tag>
                           <Text style={{ fontSize: 12, flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
                             {e.summary || e.payload}
                           </Text>
@@ -1059,7 +1059,7 @@ export function WorkbenchView() {
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 6, alignItems: 'center' }}>
                       <Tooltip title="Used by the flash tool when no chip parameter is passed. Saved to global config.">
                         <Tag
-                          style={{ borderRadius: 0, fontSize: 11, cursor: chipEditing ? 'default' : 'pointer' }}
+                          style={{ borderRadius: radius.chip, fontSize: 11, cursor: chipEditing ? 'default' : 'pointer' }}
                           onClick={() => {
                             setChipDraft(String(hardware.default_chip));
                             setChipEditing(true);
@@ -1070,7 +1070,7 @@ export function WorkbenchView() {
                       </Tooltip>
                       <Tag
                         color={hardware.probe_rs_available ? 'green' : 'default'}
-                        style={{ borderRadius: 0, fontSize: 11 }}
+                        style={{ borderRadius: radius.chip, fontSize: 11 }}
                       >
                         probe-rs {hardware.probe_rs_available ? 'available' : 'not installed'}
                       </Tag>
@@ -1130,7 +1130,7 @@ export function WorkbenchView() {
                           <Tag
                             key={p}
                             color="blue"
-                            style={{ borderRadius: 0, fontFamily: font.mono, fontSize: 11 }}
+                            style={{ borderRadius: radius.chip, fontFamily: font.mono, fontSize: 11 }}
                           >
                             {p}
                           </Tag>
@@ -1220,7 +1220,7 @@ export function WorkbenchView() {
                                 borderBottom: `1px solid ${color.line}`,
                               }}
                             >
-                              <Tag color="blue" style={{ borderRadius: 0, fontWeight: 700, minWidth: 64, textAlign: 'center' }}>
+                              <Tag color="blue" style={{ borderRadius: radius.chip, fontWeight: 700, minWidth: 64, textAlign: 'center' }}>
                                 {p.pin}
                               </Tag>
                               <Text style={{ flex: 1, fontSize: 12 }}>{p.func}</Text>
@@ -1294,7 +1294,7 @@ export function WorkbenchView() {
                       borderBottom: `1px solid ${color.line}`,
                     }}
                   >
-                    <Tag style={{ borderRadius: 0, fontSize: 10, minWidth: 76, textAlign: 'center' }}>
+                    <Tag style={{ borderRadius: radius.chip, fontSize: 10, minWidth: 76, textAlign: 'center' }}>
                       {d.date || '—'}
                     </Tag>
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -1533,7 +1533,7 @@ export function WorkbenchView() {
             s.id === currentSessionId
               ? `1px solid ${color.brandAcid}`
               : `1px solid ${color.line}`,
-                        borderRadius: 6,
+                        borderRadius: radius.control,
                       }}
                     >
                       <Tag color={tagColor}>

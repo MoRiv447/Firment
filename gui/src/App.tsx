@@ -54,7 +54,7 @@ import { initialTurnState, turnsReducer } from './lib/turnReducer';
 import type { TurnMap } from './lib/turnReducer';
 import { FlashView } from './views/FlashView';
 import { WorkbenchView } from './views/WorkbenchView';
-import { antdTheme, color, font, setActivePalette } from './styles/tokens';
+import { antdTheme, color, font, radius, setActivePalette } from './styles/tokens';
 import {
   ThemeModeContext,
   resolveTheme,
@@ -634,7 +634,7 @@ export default function App() {
                 style={{
                   width: 40,
                   height: 40,
-                  borderRadius: 6,
+                  borderRadius: radius.brand,
                   boxShadow: `3px 3px 0 ${color.outline}`,
                   objectFit: 'contain',
                   background: color.surfaceRaised,
@@ -708,7 +708,7 @@ export default function App() {
                 <Tag
                   color={color.brandAcid}
                   style={{
-                    borderRadius: 0,
+                    borderRadius: radius.chip,
                     fontWeight: 700,
                     marginInlineEnd: 0,
                     boxShadow: `2px 2px 0 ${color.outline}`,
@@ -786,7 +786,7 @@ export default function App() {
                                       ? 'default'
                                       : 'blue'
                               }
-                              style={{ borderRadius: 0, fontSize: 10, fontWeight: 700 }}
+                              style={{ borderRadius: radius.chip, fontSize: 10, fontWeight: 700 }}
                             >
                               {n.kind}
                             </Tag>
@@ -814,7 +814,7 @@ export default function App() {
                     <Button
                       icon={<BellOutlined />}
                       style={{
-                        borderRadius: 0,
+                        borderRadius: radius.control,
                         border: `2px solid ${color.outline}`,
                         boxShadow: `2px 2px 0 ${color.outline}`,
                       }}
@@ -837,7 +837,7 @@ export default function App() {
                 >
                   <Tag
                     style={{
-                      borderRadius: 0,
+                      borderRadius: radius.chip,
                       marginInlineEnd: 0,
                       border: `2px solid ${color.outline}`,
                       background: color.warnInk,
@@ -870,7 +870,7 @@ export default function App() {
                   <Tag
                     color="purple"
                     style={{
-                      borderRadius: 0,
+                      borderRadius: radius.chip,
                       marginInlineEnd: 0,
                       border: `2px solid ${color.outline}`,
                       fontWeight: 700,
@@ -920,7 +920,7 @@ export default function App() {
                               : 'green'
                       }
                       style={{
-                        borderRadius: 0,
+                        borderRadius: radius.chip,
                         marginInlineEnd: 0,
                         border: `2px solid ${color.outline}`,
                         fontWeight: 700,
