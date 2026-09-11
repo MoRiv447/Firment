@@ -33,8 +33,9 @@ import type {
   TimelineEntryDto,
   WorkbenchStateDto,
 } from '../types';
-import { color } from '../styles/tokens';
+import { color, font } from '../styles/tokens';
 import { SlantButton } from '../components/SlantButton';
+import { FlashHistory } from './workbench/FlashHistory';
 
 const { Text, Title } = Typography;
 
@@ -935,7 +936,7 @@ export function WorkbenchView() {
                       placeholder="node name (s3-node-1)"
                       value={bindNode}
                       onChange={(e) => setBindNode(e.target.value)}
-                      style={{ maxWidth: 170, fontFamily: 'Consolas, monospace' }}
+                      style={{ maxWidth: 170, fontFamily: font.mono }}
                     />
                   )}
                   <Input
@@ -1093,7 +1094,7 @@ export function WorkbenchView() {
                               setBusy(false);
                             }
                           }}
-                          style={{ fontFamily: 'Consolas, monospace', fontSize: 11 }}
+                          style={{ fontFamily: font.mono, fontSize: 11 }}
                         />
                         <Button
                           size="small"
@@ -1129,7 +1130,7 @@ export function WorkbenchView() {
                           <Tag
                             key={p}
                             color="blue"
-                            style={{ borderRadius: 0, fontFamily: 'Consolas, monospace', fontSize: 11 }}
+                            style={{ borderRadius: 0, fontFamily: font.mono, fontSize: 11 }}
                           >
                             {p}
                           </Tag>
@@ -1143,7 +1144,7 @@ export function WorkbenchView() {
                         </Text>
                         <div>
                           {hardware.probes.map((p, i) => (
-                            <div key={i} style={{ fontSize: 11, fontFamily: 'Consolas, monospace' }}>
+                            <div key={i} style={{ fontSize: 11, fontFamily: font.mono }}>
                               {p}
                             </div>
                           ))}
@@ -1154,46 +1155,7 @@ export function WorkbenchView() {
                  )}
                </Card>
 
-               <Card
-                 type="inner"
-                 title="Flash history"
-                 size="small"
-                 extra={
-                   <Text type="secondary" style={{ fontSize: 11 }}>
-                     .firment/work/flash-history.jsonl
-                   </Text>
-                 }
-               >
-                 {flashHistory.length === 0 ? (
-                   <Text type="secondary" style={{ fontSize: 12 }}>
-                     暂无烧录记录。agent 的 flash 工具每次执行（成功或失败）都会记录在这里。
-                   </Text>
-                 ) : (
-                   flashHistory.map((f, i) => (
-                     <div
-                       key={`${f.ts}-${i}`}
-                       style={{
-                         display: 'flex',
-                         alignItems: 'center',
-                         gap: 8,
-                         padding: '3px 6px',
-                         borderBottom: `1px solid ${color.line}`,
-                       }}
-                     >
-                       <Tag color={f.ok ? 'green' : 'red'} style={{ borderRadius: 0, fontSize: 10, fontWeight: 700 }}>
-                         {f.ok ? '✓' : '✗'}
-                       </Tag>
-                       <Text style={{ fontSize: 11, fontFamily: 'Consolas, monospace' }}>{f.chip}</Text>
-                       <Text type="secondary" style={{ fontSize: 11, flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-                         {f.file}
-                       </Text>
-                       <Text type="secondary" style={{ fontSize: 10 }}>
-                         {new Date(f.ts * 1000).toLocaleString()}
-                       </Text>
-                     </div>
-                   ))
-                 )}
-               </Card>
+               <FlashHistory history={flashHistory} />
 
                <Card
                  type="inner"
@@ -1228,7 +1190,7 @@ export function WorkbenchView() {
                     value={newBoard}
                     onChange={(e) => setNewBoard(e.target.value)}
                     onPressEnter={addBoard}
-                    style={{ width: 150, fontFamily: 'Consolas, monospace', fontSize: 11 }}
+                    style={{ width: 150, fontFamily: font.mono, fontSize: 11 }}
                   />
                   <Button size="small" type="dashed" disabled={busy || !newBoard.trim()} onClick={addBoard}>
                     use board
@@ -1286,7 +1248,7 @@ export function WorkbenchView() {
                         value={newPin}
                         onChange={(e) => setNewPin(e.target.value)}
                         onPressEnter={addPin}
-                        style={{ maxWidth: 110, fontFamily: 'Consolas, monospace' }}
+                        style={{ maxWidth: 110, fontFamily: font.mono }}
                       />
                       <Input
                         size="small"
@@ -1383,7 +1345,7 @@ export function WorkbenchView() {
                       value={newCheatName}
                       onChange={(e) => setNewCheatName(e.target.value)}
                       onPressEnter={newCheatsheet}
-                      style={{ width: 150, fontFamily: 'Consolas, monospace', fontSize: 11 }}
+                      style={{ width: 150, fontFamily: font.mono, fontSize: 11 }}
                     />
                     <Button size="small" type="dashed" disabled={busy || !newCheatName.trim()} onClick={newCheatsheet}>
                       +
@@ -1401,7 +1363,7 @@ export function WorkbenchView() {
                   <>
                     <Select
                       size="small"
-                      style={{ width: '100%', marginBottom: 8, fontFamily: 'Consolas, monospace' }}
+                      style={{ width: '100%', marginBottom: 8, fontFamily: font.mono }}
                       value={kbKey ?? undefined}
                       onChange={selectKbFile}
                       options={kbFiles.map((f) => ({
@@ -1416,7 +1378,7 @@ export function WorkbenchView() {
                         setKbDirty(true);
                       }}
                       rows={10}
-                      styles={{ textarea: { fontFamily: 'Consolas, monospace', fontSize: 12 } }}
+                      styles={{ textarea: { fontFamily: font.mono, fontSize: 12 } }}
                       placeholder={
                         kbKey === 'AGENTS.md'
                           ? 'Project memory for every session: coding rules, hardware notes, gotchas…'
