@@ -145,6 +145,7 @@ A progress row that looks pressable becomes a control that does nothing.
 | State | Dark | Light | Light ratio on `bg` |
 |---|---|---|---|
 | done | `#14532D` fill, `#86EFAC` ink | `#EAF3DE` fill, `#3F6212` ink | 6.19:1 |
+| failed | `#3B1218` fill, `#FDA4AF` ink | `#FEE2E2` fill, `#9F1239` ink | 6.56:1 |
 | current | no fill, `#E4E4E7` ink, 2px `#B4F779` rule | no fill, `#18181B` ink, 2px `#B4F779` rule | 16.52:1 |
 | pending | transparent, `#A1A1AA` ink | transparent, `#6B7280` ink | 4.51:1 |
 | unknown | transparent, muted ink, `○` | same | — |
@@ -155,6 +156,16 @@ Two rules matter more than the values:
   so it keeps the pending ink rather than being greyed to disabled.
 - **Unknown is not failure.** It renders `○` with muted ink and never `✗`; red is
   reserved for a real error, and a step nobody has measured yet is not one.
+
+`failed` is the one state that may be red, and it borrows the removed-diff pair
+rather than introducing a fourth red: "this broke" and "this was taken out" are
+the same message at different sizes. Only `done` and `failed` are filled — they
+are the only two states whose outcome is already known.
+
+The row is **derived from the turn's tool calls** (`gui/src/lib/steps.ts`), not
+tracked as its own state, so it cannot disagree with the tool cards next to it. A
+turn that never built anything shows no row at all, and a later attempt
+supersedes an earlier one: a build that failed and then passed reads as `done`.
 
 ## Slant — the one signature that cannot be substituted
 

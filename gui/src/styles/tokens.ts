@@ -115,6 +115,14 @@ const dark = {
   /** The 2px rule under the current step. Brand colour, so a shape not text. */
   stepRule: '#B4F779',
   stepPendingInk: '#A1A1AA',
+  /**
+   * A step that actually failed. The one place a step may be red: tokens.md
+   * reserves red for a real error, and an unknown outcome is not one. Same
+   * family as a removed diff line, because "this broke" and "this was taken
+   * out" are the same message at different sizes.
+   */
+  stepFailedBg: '#3B1218',
+  stepFailedInk: '#FDA4AF',
 
   /**
    * Keyboard focus ring. Acid on a dark ground is 15.06:1, so the brand colour
@@ -212,6 +220,9 @@ const light: Palette = {
   stepCurrentInk: '#18181B',
   stepRule: '#B4F779',
   stepPendingInk: '#6B7280',
+  /** 6.56:1 on `stepFailedBg`, mirrored from the removed-diff pair above. */
+  stepFailedBg: '#FEE2E2',
+  stepFailedInk: '#9F1239',
 
   /** 6.21:1. NOT the acid: that is 1.27:1 and a keyboard user cannot see it. */
   focusRing: '#3B6D11',

@@ -63,6 +63,8 @@ describe('text is readable on every ground it is used on', () => {
     ['light diffAddedInk on diffAddedBg', '#15803D', '#DCFCE7', 4.57],
     ['light diffRemovedInk on diffRemovedBg', '#9F1239', '#FEE2E2', 6.56],
     ['light stepDoneInk on stepDoneBg', '#3F6212', '#EAF3DE', 6.19],
+    ['light stepFailedInk on stepFailedBg', '#9F1239', '#FEE2E2', 6.56],
+    ['dark stepFailedInk on stepFailedBg', '#FDA4AF', '#3B1218', 8.64],
     ['light stepPendingInk on bg', '#6B7280', '#F7F7F5', 4.51],
     ['dark ink on bg', '#E4E4E7', '#0F0F12', 15.08],
     ['dark muted on bg', '#A1A1AA', '#0F0F12', 7.47],

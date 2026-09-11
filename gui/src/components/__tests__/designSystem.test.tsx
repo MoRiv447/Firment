@@ -158,6 +158,35 @@ describe('SlantButton', () => {
     expect(onClick).not.toHaveBeenCalled();
     expect(button).toBeDisabled();
   });
+
+  it('does not fire while loading, and says so', () => {
+    const onClick = vi.fn();
+    render(
+      <SlantButton tier="primary" loading onClick={onClick}>
+        Build
+      </SlantButton>,
+    );
+    const button = screen.getByRole('button', { name: /Build/ });
+    fireEvent.click(button);
+    expect(onClick).not.toHaveBeenCalled();
+    expect(button).toBeDisabled();
+    // The spinner replaces the icon, so the label keeps its meaning and the
+    // button does not silently look idle while work is in flight.
+    expect(button.querySelector('.anticon-loading')).not.toBeNull();
+  });
+
+  it('takes a leading icon without changing its weight or height', () => {
+    setActivePalette('light');
+    render(
+      <SlantButton tier="primary" icon={<span data-testid="lead" />} onClick={() => {}}>
+        Send
+      </SlantButton>,
+    );
+    const button = screen.getByRole('button', { name: /Send/ });
+    expect(screen.getByTestId('lead')).toBeInTheDocument();
+    expect(button.style.height).toBe('40px');
+    expect(fillLayer(button).style.background).toBe(rgb(paletteFor('light').brandAcid));
+  });
 });
 
 describe('StepProgress', () => {
@@ -231,6 +260,27 @@ describe('StepProgress', () => {
   it('keeps the label when a step carries an explicit one', () => {
     render(<StepProgress steps={[{ key: 'build', label: 'Build', state: 'done' }]} />);
     expect(screen.getByText('Build')).toBeInTheDocument();
+  });
+
+  it('fills a failed step, because that is a real error', () => {
+    setActivePalette('light');
+    render(<StepProgress steps={[{ key: 'flash', state: 'failed' }]} />);
+    const light = paletteFor('light');
+    const failed = screen.getByRole('listitem', { name: /flash/ });
+    expect(failed.style.background).toBe(rgb(light.stepFailedBg));
+    expect(failed.style.color).toBe(rgb(light.stepFailedInk));
+    expect(failed.textContent).toContain('✕');
+    expect(failed.getAttribute('aria-label')).toContain('failed');
+  });
+
+  it('keeps a failed step distinct from the brand and success greens', () => {
+    setActivePalette('light');
+    const light = paletteFor('light');
+    // Three outcomes, three colours: a failure must not be able to read as
+    // "passed", and it must not borrow the brand green either.
+    expect(light.stepFailedInk).not.toBe(light.stepDoneInk);
+    expect(light.stepFailedInk).not.toBe(light.brandAcid);
+    expect(light.stepFailedBg).not.toBe(light.stepDoneBg);
   });
 });
 

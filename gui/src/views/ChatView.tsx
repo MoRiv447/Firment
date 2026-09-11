@@ -3,7 +3,9 @@ import { ArrowDownOutlined, SendOutlined, StopOutlined } from '@ant-design/icons
 import { useEffect, useRef, useState } from 'react';
 import { MessageList, Markdown } from '../components/MessageList';
 import { ToolCard } from '../components/ToolCard';
+import { StepProgress } from '../components/StepProgress';
 import { shouldShowStallNotice, stallNotice } from '../lib/stallHint';
+import { workflowSteps } from '../lib/steps';
 import type { RunningTurn, SessionDto } from '../types';
 import { color, font, radius } from '../styles/tokens';
 
@@ -109,6 +111,10 @@ export function ChatView({
   };
 
   const toolList = turn ? Object.values(turn.tools) : [];
+  // Where the embedded workflow got to, computed from those same tools rather
+  // than tracked separately -- see `lib/steps.ts`. Null for a chat that never
+  // builds anything, so the row does not appear as empty furniture.
+  const steps = workflowSteps(toolList);
   const runningTools = toolList.filter((t) => t.status === 'running');
   const lastRunning = runningTools[runningTools.length - 1];
 
@@ -171,6 +177,11 @@ export function ChatView({
                 message={notice.message}
                 description={notice.description}
               />
+            )}
+            {steps && (
+              <div style={{ margin: '8px 0' }}>
+                <StepProgress steps={steps} />
+              </div>
             )}
             {toolList.map((t) => (
               <ToolCard key={t.seq} tool={t} />

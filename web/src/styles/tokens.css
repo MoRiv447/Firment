@@ -77,6 +77,8 @@
   --step-current-ink: #e4e4e7;
   --step-rule: #b4f779;
   --step-pending-ink: #a1a1aa;
+  --step-failed-bg: #3b1218;
+  --step-failed-ink: #fda4af;
 
   /* Slant geometry: the cut run, and the extra left padding that puts the
    * label back on the optical centre (see docs/design/tokens.md). */
@@ -197,5 +199,7 @@
     --step-current-ink: #18181b;
     --step-rule: #b4f779;
     --step-pending-ink: #6b7280;
+    --step-failed-bg: #fee2e2;
+    --step-failed-ink: #9f1239;
   }
 }

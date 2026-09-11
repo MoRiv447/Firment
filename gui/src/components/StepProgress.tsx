@@ -13,19 +13,21 @@ import { color, font, radius } from '../styles/tokens';
  *
  * * **Red is reserved for real errors.** `unknown` is not a failure -- it is a
  *   neutral `o`, never a `x`. A step whose outcome nobody has measured yet must
- *   not read as a step that failed.
+ *   not read as a step that failed. The one state that may be red is `failed`,
+ *   and it is only ever reached from a tool that actually reported failure.
  * * **A pending step is legible, not greyed out.** Its label stays readable
  *   (4.51:1 on the light ground), so it reads as "not yet", not as "unavailable".
  *
  * Colour per state, both schemes:
  *
  *   done     filled chip -- success pair (6.49:1 dark / 6.19:1 light)
+ *   failed   filled chip -- the removed-diff pair (6.56:1 light)
  *   current  no fill, body ink, 2px brand rule underneath
  *   pending  no fill, muted ink
  *   unknown  no fill, muted ink, `o` glyph
  */
 
-export type StepState = 'done' | 'current' | 'pending' | 'unknown';
+export type StepState = 'done' | 'current' | 'pending' | 'unknown' | 'failed';
 
 export interface StepProgressItem {
   /** Stable key; also the accessible label when `label` is absent. */
@@ -43,6 +45,8 @@ function glyph(state: StepState): string {
       return '◐';
     case 'unknown':
       return '○';
+    case 'failed':
+      return '✕';
     default:
       return '·';
   }
@@ -52,10 +56,29 @@ function ink(state: StepState): string {
   switch (state) {
     case 'done':
       return color.stepDoneInk;
+    case 'failed':
+      return color.stepFailedInk;
     case 'current':
       return color.stepCurrentInk;
     default:
       return color.stepPendingInk;
+  }
+}
+
+/**
+ * Only a finished step and a failed one are filled.
+ *
+ * The fill is what makes those two scannable without reading the labels, and
+ * they are the only two states whose outcome is already known.
+ */
+function fill(state: StepState): string {
+  switch (state) {
+    case 'done':
+      return color.stepDoneBg;
+    case 'failed':
+      return color.stepFailedBg;
+    default:
+      return 'transparent';
   }
 }
 
@@ -65,6 +88,7 @@ const STATE_WORDS: Record<StepState, string> = {
   current: 'in progress',
   pending: 'not started',
   unknown: 'not yet measured',
+  failed: 'failed',
 };
 
 export function StepProgress({ steps }: { steps: StepProgressItem[] }) {
@@ -80,7 +104,7 @@ export function StepProgress({ steps }: { steps: StepProgressItem[] }) {
       }}
     >
       {steps.map((step) => {
-        const done = step.state === 'done';
+        const filled = step.state === 'done' || step.state === 'failed';
         return (
           <div
             key={step.key}
@@ -92,11 +116,11 @@ export function StepProgress({ steps }: { steps: StepProgressItem[] }) {
               alignItems: 'center',
               gap: 6,
               padding: '4px 10px',
-              // A done step is the only filled one: the fill is what makes
-              // "finished" scannable without reading the labels.
-              background: done ? color.stepDoneBg : 'transparent',
+              background: fill(step.state),
               color: ink(step.state),
-              borderRadius: done ? radius.chip : 0,
+              // A filled chip needs its chip radius; a bare one has no corners
+              // of its own to round.
+              borderRadius: filled ? radius.chip : 0,
               fontSize: 13,
               fontWeight: step.state === 'current' ? 600 : 500,
               // The current step's only chrome: a 2px brand rule underneath.
