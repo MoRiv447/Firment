@@ -4,7 +4,6 @@ import {
   Card,
   Empty,
   Input,
-  List,
   Modal,
   Select,
   Space,
@@ -36,6 +35,7 @@ import type {
 import { color, font, radius } from '../styles/tokens';
 import { SlantButton } from '../components/SlantButton';
 import { FlashHistory } from './workbench/FlashHistory';
+import { ChangeTimeline, ElfBudget, VerificationBadges } from './workbench/insights';
 
 const { Text, Title } = Typography;
 
@@ -1431,61 +1431,9 @@ export function WorkbenchView() {
                     description={elfError}
                   />
                 )}
-                {elf && (
-                  <Card type="inner" size="small" title="ELF budget" style={{ marginBottom: 12 }}>
-                    <Space wrap size={24}>
-                      <Statistic title="flash" value={(elf.flash_bytes / 1024).toFixed(1)} suffix="KiB" />
-                      <Statistic title="RAM (data+bss)" value={(elf.ram_bytes / 1024).toFixed(1)} suffix="KiB" />
-                      <Statistic title="functions" value={elf.functions} />
-                    </Space>
-                    {elf.gate && (
-                      <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 6 }}>
-                        gate thresholds: stack +{elf.gate.stack_threshold}B · flash +
-                        {elf.gate.flash_threshold_kib}KiB · ram +{elf.gate.ram_threshold_kib}KiB
-                        {elf.gate.strict ? ' · strict' : ''}
-                      </Text>
-                    )}
-                    <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
-                      {elf.file}
-                    </Text>
-                  </Card>
-                )}
-                {quality.length > 0 && (
-                  <Card type="inner" size="small" title="Verification badges (mainline)" style={{ marginBottom: 12 }}>
-                    <Space wrap size={8}>
-                      {quality.map((q) => (
-                        <Tag key={q.tool} color={q.ok ? 'green' : 'red'} style={{ fontSize: 12 }}>
-                          {q.tool}: {q.ok ? 'PASS' : 'FAIL'}
-                        </Tag>
-                      ))}
-                    </Space>
-                  </Card>
-                )}
-                {timeline.length > 0 && (
-                  <Card type="inner" size="small" title="Change timeline (mainline)">
-                    <List
-                      size="small"
-                      dataSource={timeline}
-                      renderItem={(entry) => (
-                        <List.Item style={{ padding: '4px 0' }}>
-                          <div style={{ width: '100%' }}>
-                            <Text type="secondary" style={{ fontSize: 11 }}>
-                              #{entry.seq} · {new Date(entry.created_at * 1000).toLocaleString()}
-                            </Text>
-                            {entry.files.map((f) => (
-                              <div key={f.path} style={{ fontSize: 12 }}>
-                                <Text code>{f.path}</Text>{' '}
-                                <Text type="secondary">
-                                  {f.old_lines} → {f.new_lines}
-                                </Text>
-                              </div>
-                            ))}
-                          </div>
-                        </List.Item>
-                      )}
-                    />
-                  </Card>
-                )}
+                {elf && <ElfBudget elf={elf} />}
+                {quality.length > 0 && <VerificationBadges quality={quality} />}
+                {timeline.length > 0 && <ChangeTimeline timeline={timeline} />}
               </Card>
 
               <Card

@@ -25,3 +25,30 @@ import { cleanup } from '@testing-library/react';
  * a dozen buttons, or the same button twice.
  */
 afterEach(cleanup);
+
+/**
+ * jsdom implements no `matchMedia`.
+ *
+ * antd's responsive components -- `List` among them, via `useBreakpoint` --
+ * call it during render, so without this a component test dies on
+ * `window.matchMedia is not a function` rather than on the thing under test.
+ * `matches: false` is the honest default for a headless run: there is no
+ * viewport to report on.
+ *
+ * The listener methods are no-ops rather than absent, because code that
+ * subscribes (theme.ts follows the OS preference) would otherwise throw on the
+ * cleanup path.
+ */
+if (typeof window !== 'undefined' && !window.matchMedia) {
+  window.matchMedia = (query: string): MediaQueryList =>
+    ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    }) as MediaQueryList;
+}
