@@ -1274,6 +1274,38 @@ mod tests {
     }
 
     #[test]
+    fn the_frame_title_carries_the_brand_and_only_what_is_known() {
+        let mut app = test_app();
+        // Nothing configured, nothing measured: the brand alone, not a row of
+        // placeholders for a probe and a port that do not exist at rest.
+        assert_eq!(app.frame_title(), " Firment ");
+
+        app.device.chip = Some("stm32f407vetx".to_string());
+        assert_eq!(app.frame_title(), " Firment · stm32f407vetx ");
+
+        app.la_reading = Some(crate::la::LaReading {
+            channel: "0".to_string(),
+            low_hz: Some(998.0),
+            high_hz: Some(1002.0),
+            ..Default::default()
+        });
+        assert_eq!(
+            app.frame_title(),
+            " Firment · stm32f407vetx · 998 .. 1002 Hz "
+        );
+    }
+
+    #[test]
+    fn the_frame_title_shows_where_you_are_scrolled_to() {
+        let mut app = test_app();
+        app.follow = false;
+        app.scroll = 42;
+        // The scroll position is the one thing that must never be dropped: it is
+        // how you know the view is no longer following the agent.
+        assert_eq!(app.frame_title(), " Firment · ↑ 42 ");
+    }
+
+    #[test]
     fn a_measurement_from_the_analyzer_reaches_the_la_block() {
         let mut app = test_app();
         app.on_agent(AgentEvent::ToolEnd {

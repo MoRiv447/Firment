@@ -562,6 +562,33 @@ impl App {
             .collect()
     }
 
+    /// The transcript frame's title: the brand, then what this session is
+    /// aimed at, then the scroll position.
+    ///
+    /// The device cluster lives here rather than in a header row of its own. A
+    /// header would have to carry a probe and a port to look like the mockup,
+    /// and neither exists until the flash tool runs, so it would be a strip that
+    /// is mostly empty and duplicates the DEVICE block. This line is already the
+    /// identity anchor and already has the width.
+    pub(crate) fn frame_title(&self) -> String {
+        let mut parts = vec!["Firment".to_string()];
+        if let Some(chip) = &self.device.chip {
+            parts.push(chip.clone());
+        }
+        // The measurement is the only physical evidence the UI can put here, and
+        // it is named as what it is: the analyzer's reading, not the device's
+        // current state.
+        if let Some(reading) = &self.la_reading
+            && let Some(frequency) = reading.frequency()
+        {
+            parts.push(frequency);
+        }
+        if !self.follow {
+            parts.push(format!("↑ {}", self.scroll));
+        }
+        format!(" {} ", parts.join(" · "))
+    }
+
     pub(crate) fn render(&mut self, frame: &mut Frame) {
         let frame_width = frame.area().width.saturating_sub(2) as usize;
         let (input_lines, line_starts, cursor_line, cursor_col) = if self.input.is_empty() {
@@ -631,11 +658,7 @@ impl App {
             max_offset.saturating_sub(self.scroll)
         };
         self.highlight_selection(&mut rows);
-        let title = if self.follow {
-            " Firment ".to_string()
-        } else {
-            format!(" Firment · ↑ {} ", self.scroll)
-        };
+        let title = self.frame_title();
         // The frame around the agent's output is the identity anchor here, the
         // way the mark is in the GUI -- so it is the one place the brand colour
         // appears. Below truecolor it keeps the cyan it always had.
