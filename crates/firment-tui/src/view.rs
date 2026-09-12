@@ -13,7 +13,31 @@ use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+/// Cut a label to `width` cells, keeping its start.
+///
+/// The start, not the end: a file name is at the start, and tail-truncating a
+/// list of paths would leave every row looking like every other row. Counted in
+/// cells rather than chars so a CJK label does not overflow its column.
+fn clip(text: &str, width: usize) -> String {
+    if text.width() <= width {
+        return text.to_string();
+    }
+    let budget = width.saturating_sub(1);
+    let mut out = String::new();
+    let mut used = 0;
+    for ch in text.chars() {
+        let w = ch.width().unwrap_or(0);
+        if used + w > budget {
+            break;
+        }
+        out.push(ch);
+        used += w;
+    }
+    out.push('…');
+    out
+}
 
 use crate::evidence::RungState;
 
@@ -25,6 +49,10 @@ const SPINNER: [char; 4] = ['◐', '◓', '◑', '◒'];
 const EVIDENCE_WIDTH: u16 = 30;
 /// Below this the transcript needs the cells more than the ladder does.
 const MIN_WIDTH_FOR_EVIDENCE: u16 = 80;
+/// Width of the left rail.
+const RAIL_WIDTH: u16 = 24;
+/// And below this, the rail is the first thing to go.
+const MIN_WIDTH_FOR_RAIL: u16 = 100;
 
 impl App {
     /// Constant-rate spinner phase, derived from wall clock: deriving it
@@ -352,7 +380,67 @@ impl App {
         rows
     }
 
-    /// The EVIDENCE column: how far up the verification ladder this session got.
+    /// The left rail: which conversation you are in, and what is in front of you.
+    fn rail_panel(&self) -> Paragraph<'static> {
+        let muted = crate::theme::muted(self.tier);
+        Paragraph::new(self.rail_lines()).block(
+            Block::bordered()
+                .title(Span::styled(" WORKSPACE ", Style::default().fg(muted)))
+                .border_style(Style::default().fg(muted)),
+        )
+    }
+
+    /// The rail's rows. Split out from the widget so the text can be asserted
+    /// without a terminal.
+    pub(crate) fn rail_lines(&self) -> Vec<Line<'static>> {
+        let muted = crate::theme::muted(self.tier);
+        let dim = Style::default().fg(muted);
+        let width = RAIL_WIDTH.saturating_sub(2) as usize;
+        let mut lines = Vec::new();
+
+        lines.push(Line::from(Span::styled("SESSIONS", dim)));
+        if self.rail_sessions.is_empty() {
+            lines.push(Line::from(Span::styled("  —", dim)));
+        }
+        for row in &self.rail_sessions {
+            // The arrow is the marker for the session being typed into, the way
+            // the GUI fills the selected row: the rail has no room for a fill.
+            let style = if row.current {
+                Style::default().fg(crate::theme::accent(self.tier))
+            } else {
+                dim
+            };
+            let marker = if row.current { '▸' } else { ' ' };
+            lines.push(Line::from(Span::styled(
+                format!("{marker} {}", clip(&row.label, width.saturating_sub(2))),
+                style,
+            )));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("FILES", dim)));
+        if self.rail_files.is_empty() {
+            lines.push(Line::from(Span::styled("  —", dim)));
+        }
+        for row in &self.rail_files {
+            let indent = " ".repeat(row.depth * 2);
+            let glyph = if row.is_dir { '▾' } else { ' ' };
+            let room = width.saturating_sub(indent.len() + 3);
+            // The dot is a change marker, not decoration: it is the only thing
+            // that says a file differs from git's copy.
+            let dot = if row.modified { " ●" } else { "" };
+            lines.push(Line::from(vec![
+                Span::styled(format!("{indent}{glyph} "), dim),
+                Span::styled(clip(&row.name, room), dim),
+                Span::styled(dot, Style::default().fg(crate::theme::warn(self.tier))),
+            ]));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("/help 命令", dim)));
+        lines
+    }
+
     ///
     /// It shows every rung, always, including the ones nothing has reached. A
     /// ladder that appears one rung at a time is a progress bar; the point of
@@ -414,16 +502,27 @@ impl App {
             Constraint::Length(input_height),
         ])
         .areas(frame.area());
-        // The EVIDENCE column exists only where the terminal can afford it. On a
-        // narrow window every cell it takes comes straight out of the
-        // transcript, and a squeezed transcript is worse than a missing ladder.
-        let (transcript_area, evidence_area) = if body_area.width >= MIN_WIDTH_FOR_EVIDENCE {
+        // The side columns exist only where the terminal can afford them. On a
+        // narrow window every cell they take comes straight out of the
+        // transcript, and a squeezed transcript is worse than a missing panel.
+        // Ordered by which earns its width first: the ladder says what has been
+        // proven, the rail says where you are, and being lost is survivable in a
+        // way that claiming unproven work is not.
+        let (rail_area, transcript_area, evidence_area) = if body_area.width >= MIN_WIDTH_FOR_RAIL {
+            let [rail, transcript, evidence] = Layout::horizontal([
+                Constraint::Length(RAIL_WIDTH),
+                Constraint::Min(24),
+                Constraint::Length(EVIDENCE_WIDTH),
+            ])
+            .areas(body_area);
+            (Some(rail), transcript, Some(evidence))
+        } else if body_area.width >= MIN_WIDTH_FOR_EVIDENCE {
             let [transcript, evidence] =
                 Layout::horizontal([Constraint::Min(24), Constraint::Length(EVIDENCE_WIDTH)])
                     .areas(body_area);
-            (transcript, Some(evidence))
+            (None, transcript, Some(evidence))
         } else {
-            (body_area, None)
+            (None, body_area, None)
         };
         self.input_width = frame_width;
         self.input_rect = input_area;
@@ -474,6 +573,10 @@ impl App {
         );
         frame.render_widget(paragraph, transcript_area);
 
+        if let Some(area) = rail_area {
+            frame.render_widget(self.rail_panel(), area);
+        }
+
         if let Some(area) = evidence_area {
             frame.render_widget(self.evidence_panel(), area);
         }
@@ -490,7 +593,9 @@ impl App {
             cwd_str = format!("…{}", truncate_tail(&cwd_str, 35));
         }
         let git_str = match &self.git {
-            Some(GitInfo { branch, changes }) if *changes > 0 => {
+            Some(GitInfo {
+                branch, changes, ..
+            }) if *changes > 0 => {
                 format!(" git: {branch} · {changes}")
             }
             Some(GitInfo { branch, .. }) => format!(" git: {branch}"),

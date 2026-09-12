@@ -9,7 +9,28 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 pub(crate) struct GitInfo {
     pub(crate) branch: String,
     pub(crate) changes: usize,
+    /// The changed paths, repo-relative and `/`-separated, for the file rail to
+    /// mark. Kept alongside the count rather than instead of it: the status bar
+    /// wants a number, the rail wants names.
+    pub(crate) changed: Vec<String>,
 }
+
+/// The paths `git status --porcelain` reports.
+///
+/// Two shapes to know about: a rename is `XY <old> -> <new>` -- the new name is
+/// the one that exists on disk, so that is the one worth marking -- and git
+/// quotes a path containing unusual characters, which is unquoted here without
+/// trying to decode the escapes. A path the rail could not match would simply
+/// go unmarked, which is the harmless direction for this to fail in.
+pub(crate) fn parse_porcelain(text: &str) -> Vec<String> {
+    text.lines()
+        .filter(|line| line.len() > 3)
+        .map(|line| line[3..].trim())
+        .map(|path| path.rsplit(" -> ").next().unwrap_or(path))
+        .map(|path| path.trim_matches('"').to_string())
+        .collect()
+}
+
 pub(crate) fn wrap_text(text: &str, width: usize) -> Vec<String> {
     let mut out = Vec::new();
     for raw_line in text.split('\n') {
@@ -212,6 +233,44 @@ pub(crate) async fn git_info(cwd: &Path) -> Option<GitInfo> {
         .output()
         .await
         .ok()?;
-    let changes = String::from_utf8_lossy(&status.stdout).lines().count();
-    Some(GitInfo { branch, changes })
+    let stdout = String::from_utf8_lossy(&status.stdout);
+    let changed = parse_porcelain(&stdout);
+    Some(GitInfo {
+        branch,
+        changes: changed.len(),
+        changed,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn porcelain_paths_survive_the_two_column_prefix() {
+        let text = " M src/main.c\n?? notes.txt\nA  include/pwm.h\n";
+        assert_eq!(
+            parse_porcelain(text),
+            vec!["src/main.c", "notes.txt", "include/pwm.h"]
+        );
+    }
+
+    #[test]
+    fn a_rename_is_marked_under_the_name_that_exists() {
+        // `R  old -> new`: only `new` is on disk, so only `new` can be shown.
+        assert_eq!(
+            parse_porcelain("R  src/old.c -> src/new.c"),
+            vec!["src/new.c"]
+        );
+    }
+
+    #[test]
+    fn a_quoted_path_is_unquoted() {
+        assert_eq!(parse_porcelain("?? \"a file.txt\""), vec!["a file.txt"]);
+    }
+
+    #[test]
+    fn an_empty_status_is_no_paths() {
+        assert!(parse_porcelain("").is_empty());
+    }
 }

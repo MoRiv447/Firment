@@ -8,6 +8,7 @@ use crate::commands::AgentCmd;
 use crate::evidence::Evidence;
 use crate::paste::{EnterAction, PasteBlock, PasteBurst, PasteOut};
 use crate::pickers::{ModelPicker, Selection, SessionPicker};
+use crate::rail::{FileRow, SessionRow};
 use crate::util::{
     GitInfo, cell_width, char_index_at_cell, copy_to_clipboard, find_subslice, next_thinking,
     tool_activity,
@@ -45,6 +46,11 @@ pub(crate) struct App {
     /// How far up the verification ladder this session has got. Fed by the same
     /// two tool events as `active_tools`, drawn by the EVIDENCE panel.
     pub(crate) evidence: Evidence,
+    /// Left rail: the sessions in this workspace, and the files under the cwd.
+    pub(crate) rail_sessions: Vec<SessionRow>,
+    pub(crate) rail_files: Vec<FileRow>,
+    /// The session being typed into, so the rail can mark its row.
+    pub(crate) session_id: String,
     /// While busy, the first Esc arms an interrupt confirmation window (5s);
     /// a second Esc inside it actually cancels the turn.
     pub(crate) interrupt_armed_at: Option<Instant>,
@@ -153,6 +159,9 @@ impl App {
             ai_thinking: false,
             active_tools: Vec::new(),
             evidence: Evidence::default(),
+            rail_sessions: Vec::new(),
+            rail_files: Vec::new(),
+            session_id: String::new(),
             permission: None,
             permission_queue: VecDeque::new(),
             question: None,
@@ -376,6 +385,7 @@ impl App {
                 }
             }
             AgentEvent::Sessions(sessions) => {
+                self.rail_sessions = SessionRow::list(&sessions, &self.session_id);
                 if let Some(picker) = &mut self.session_picker {
                     picker.sessions = sessions;
                     picker.clamp();
@@ -386,6 +396,13 @@ impl App {
             AgentEvent::SessionLoaded(session) => {
                 let was_new = self.pending_new_session;
                 self.pending_new_session = false;
+                // The rail marks the session being typed into. Done by id rather
+                // than by rebuilding the list: this event carries one session,
+                // and the list may not have arrived yet.
+                self.session_id = session.id.clone();
+                for row in &mut self.rail_sessions {
+                    row.current = row.id == self.session_id;
+                }
                 // Keep anything the user added after `/new` (e.g. a message
                 // typed and sent while the fresh session was loading).
                 let keep = if was_new {

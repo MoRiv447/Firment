@@ -26,6 +26,7 @@ mod evidence;
 mod motion;
 mod paste;
 mod pickers;
+mod rail;
 mod theme;
 mod util;
 mod view;
@@ -263,7 +264,7 @@ async fn run_loop(
     // drives, and awaiting it inline in this select would freeze key/event
     // handling for the whole UI (no Esc interrupt, no Ctrl+Q).
     let mut git_ticker = tokio::time::interval(Duration::from_secs(4));
-    let (git_tx, mut git_rx) = mpsc::channel::<Option<GitInfo>>(1);
+    let (git_tx, mut git_rx) = mpsc::channel::<(Option<GitInfo>, Vec<crate::rail::FileRow>)>(1);
     let mut git_in_flight = false;
     let mut dirty = true;
     // When the last repaint of any kind happened. Animation frames are paced
@@ -283,11 +284,20 @@ async fn run_loop(
                         // None case (not a repo / git missing) — or the status
                         // bar would never refresh again after one failure.
                         let info = git_info(&cwd).await;
-                        let _ = tx.send(info).await;
+                        // The file walk rides along on this task rather than on
+                        // the loop: the same reason git does. A rail that made
+                        // key handling wait on a network drive would be worse
+                        // than a stale rail.
+                        let changed: std::collections::HashSet<String> = info
+                            .as_ref()
+                            .map(|i| i.changed.iter().cloned().collect())
+                            .unwrap_or_default();
+                        let files = crate::rail::file_rows(&cwd, &changed);
+                        let _ = tx.send((info, files)).await;
                     });
                 }
             }
-            Some(maybe_info) = git_rx.recv() => {
+            Some((maybe_info, files)) = git_rx.recv() => {
                 git_in_flight = false;
                 // None = not a repo / git unavailable: clear the latch (so
                 // later ticks retry) without clobbering a previously known
@@ -295,6 +305,7 @@ async fn run_loop(
                 if let Some(info) = maybe_info {
                     app.git = Some(info);
                 }
+                app.rail_files = files;
                 dirty = true;
             }
             event = event_rx.recv() => {
@@ -1248,6 +1259,87 @@ mod tests {
     /// Rows of the EVIDENCE panel, as plain strings.
     fn evidence_rows(app: &App) -> Vec<String> {
         app.evidence_lines().iter().map(|l| l.to_string()).collect()
+    }
+
+    /// Rows of the left rail, as plain strings.
+    fn rail_rows(app: &App) -> Vec<String> {
+        app.rail_lines().iter().map(|l| l.to_string()).collect()
+    }
+
+    #[test]
+    fn the_rail_names_both_of_its_sections_even_when_empty() {
+        let app = test_app();
+        let rows = rail_rows(&app);
+        // Both headers, always: a section that vanishes is a section the reader
+        // has to remember rather than see.
+        assert!(rows.iter().any(|r| r == "SESSIONS"), "got {rows:?}");
+        assert!(rows.iter().any(|r| r == "FILES"), "got {rows:?}");
+    }
+
+    #[test]
+    fn the_rail_marks_the_session_being_typed_into() {
+        let mut app = test_app();
+        app.rail_sessions = vec![
+            crate::rail::SessionRow {
+                id: "a".to_string(),
+                label: "first chat".to_string(),
+                current: false,
+            },
+            crate::rail::SessionRow {
+                id: "b".to_string(),
+                label: "second chat".to_string(),
+                current: true,
+            },
+        ];
+        let rows = rail_rows(&app);
+        // The arrow is the marker; the rail has no room for the GUI's fill.
+        assert!(rows.iter().any(|r| r == "▸ second chat"), "got {rows:?}");
+        assert!(rows.iter().any(|r| r == "  first chat"), "got {rows:?}");
+    }
+
+    #[test]
+    fn the_rail_marks_a_changed_file_and_indents_a_child() {
+        let mut app = test_app();
+        app.rail_files = vec![
+            crate::rail::FileRow {
+                name: "src".to_string(),
+                depth: 0,
+                is_dir: true,
+                modified: false,
+            },
+            crate::rail::FileRow {
+                name: "main.c".to_string(),
+                depth: 1,
+                is_dir: false,
+                modified: true,
+            },
+        ];
+        let rows = rail_rows(&app);
+        let dir = rows.iter().find(|r| r.contains("src")).expect("dir row");
+        assert!(dir.starts_with("▾ src"), "got {dir:?}");
+        let file = rows
+            .iter()
+            .find(|r| r.contains("main.c"))
+            .expect("file row");
+        // Two spaces of depth, a space where a directory would carry its glyph,
+        // then the name and the change marker.
+        assert_eq!(file, "    main.c ●");
+    }
+
+    #[test]
+    fn a_long_file_name_is_clipped_rather_than_wrapping_the_column() {
+        let mut app = test_app();
+        app.rail_files = vec![crate::rail::FileRow {
+            name: "an-extremely-long-generated-header-name.h".to_string(),
+            depth: 0,
+            is_dir: false,
+            modified: false,
+        }];
+        let rows = rail_rows(&app);
+        let row = rows.iter().find(|r| r.contains('…')).expect("clipped row");
+        // The rail is 24 cells wide (view::RAIL_WIDTH), so a name that fits in
+        // fewer than that has been clipped rather than allowed to overflow.
+        assert!(row.chars().count() <= 24, "got {row:?}");
     }
 
     #[test]
