@@ -70,6 +70,16 @@ pub fn assemble_agent(
     // research runner has consumed its clones.
     let attacker_permission = agent_permission.clone();
 
+    // Per-session tool scratch (the todo list, HIL artifacts, debug snapshots).
+    // Computed before `Agent::new` takes the session by value.
+    //
+    // This was `store.dir.join("work")` -- one shared directory for every
+    // session -- which contradicted the `todo` tool's own contract ("keeps a
+    // session-scoped todo list"): two chats wrote the same todos.json and
+    // clobbered each other, and a GUI pane reading it would have shown one
+    // session the other's items.
+    let work_dir = store.work_dir(&session.id);
+
     let mut agent = Agent::new(
         provider,
         registry,
@@ -124,7 +134,7 @@ pub fn assemble_agent(
         merged.tools.web_search.clone(),
         merged.tools.resolved_web_search_api_key(),
     );
-    agent.set_session_dir(Some(store.dir.join("work")));
+    agent.set_session_dir(Some(work_dir));
 
     // The research runner gets the PARENT'S sink. It used to keep the default
     // `NullSink` ("their output is the task tool's result text"), which is true

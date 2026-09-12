@@ -279,6 +279,45 @@ pub async fn session_transcript(
     Ok(session_dto(&session))
 }
 
+/// One item of a session's todo list.
+///
+/// The shape mirrors `TodoItem` in `firment_tools::tools::todo`, which is
+/// private to that module. Read-only on purpose: the agent owns the writes, and
+/// a UI that could edit the list would be a second writer racing the tool's
+/// atomic save.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TodoDto {
+    pub text: String,
+    pub done: bool,
+}
+
+/// The session's todo list, as the `todo` tool left it.
+///
+/// The tool writes `<session_dir>/todos.json` with an atomic tmp+rename, and
+/// `session_dir` is `SessionStore::work_dir(id)` -- per session since the fix
+/// that stopped every chat sharing one `sessions/work`. So this reads the same
+/// file the tool writes and needs no changes in the tool at all.
+///
+/// A missing or unparseable file is an empty list, not an error: a session that
+/// never used the tool has no list, and a half-written file must not break the
+/// inspector.
+#[tauri::command]
+pub async fn session_todos(
+    shared: tauri::State<'_, Arc<Shared>>,
+    id: String,
+) -> Result<Vec<TodoDto>, String> {
+    let store = shared
+        .store
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    let path = store.work_dir(&id).join("todos.json");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(Vec::new());
+    };
+    Ok(serde_json::from_str::<Vec<TodoDto>>(&text).unwrap_or_default())
+}
+
 // ---------- per-session chat knobs (thinking / mode / context budget) ----
 // The GUI rebuilds the agent from the saved session on every start_turn,
 // so persisting these to the session file is all it takes for the change

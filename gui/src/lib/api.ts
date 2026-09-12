@@ -17,6 +17,7 @@ import type {
   QualityItemDto,
   SessionDto,
   SessionSummaryDto,
+  TodoDto,
   SettingsDto,
   TimelineEntryDto,
   WorkbenchStateDto,
@@ -92,6 +93,8 @@ export const api = {
   loadSession: (id: string) => invoke<SessionDto>('load_session', { id }),
   deleteSession: (id: string) => invoke('delete_session', { id }),
   sessionTranscript: (id: string) => invoke<SessionDto>('session_transcript', { id }),
+  // The agent's own todo list, read from the file the 	odo tool writes.
+  sessionTodos: (id: string) => invoke<TodoDto[]>('session_todos', { id }),
   // Session ids whose agent currently has a live turn (mount-time restore of
   // running indicators after a reload).
   runningSessions: () => invoke<string[]>('running_sessions'),

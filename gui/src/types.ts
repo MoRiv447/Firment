@@ -124,6 +124,14 @@ export interface AlertEntry {
   ts: number;
 }
 
+/** One item of a session's agent-owned todo list. Read-only here: the agent
+ *  owns the writes, and a UI that could edit it would be a second writer racing
+ *  the tool's atomic save. */
+export interface TodoDto {
+  text: string;
+  done: boolean;
+}
+
 export interface SessionSummaryDto {
   id: string;
   updated_at: number;

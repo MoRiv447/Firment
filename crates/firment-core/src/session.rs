@@ -183,6 +183,18 @@ impl SessionStore {
         self.dir.join(format!("{}.spill", sanitize_id(id)))
     }
 
+    /// Directory of per-session tool scratch: the todo list, HIL artifacts,
+    /// debug snapshots, the ELF-analysis cache.
+    ///
+    /// This is what `ToolContext::session_dir` points at. It used to be a single
+    /// shared `sessions/work`, which made the `todo` tool's own contract -- "keep
+    /// a session-scoped todo list" -- false: two parallel chats wrote the same
+    /// `todos.json` and clobbered each other, and a GUI pane reading it would
+    /// have shown another session's items.
+    pub fn work_dir(&self, id: &str) -> PathBuf {
+        self.dir.join(format!("{}.work", sanitize_id(id)))
+    }
+
     /// Path of the session's change ledger (JSONL, one committed turn per line).
     pub fn ledger_path(&self, id: &str) -> PathBuf {
         self.dir.join(format!("{}.ledger.jsonl", sanitize_id(id)))
@@ -695,6 +707,39 @@ fn relevant_decisions(
 mod tests {
     use super::*;
     use crate::ToolCall;
+
+    /// `work_dir` is what `ToolContext::session_dir` points at, so it decides
+    /// where the `todo` tool keeps `todos.json`.
+    ///
+    /// It used to be a single shared `sessions/work` for every session, which
+    /// made the tool's own contract -- "keeps a session-scoped todo list" --
+    /// false: two parallel chats wrote the same file. The assertion that matters
+    /// is the second one: distinct ids must not collide, and neither may be the
+    /// old shared path.
+    #[test]
+    fn work_dir_is_per_session_and_not_the_shared_scratch() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().join("sessions"));
+        let a = store.work_dir("session-a");
+        let b = store.work_dir("session-b");
+        assert_ne!(a, b, "two sessions must not share a todo list");
+        assert_ne!(a, store.dir.join("work"), "the shared scratch dir is gone");
+        assert!(
+            a.starts_with(&store.dir),
+            "scratch lives beside the transcript"
+        );
+    }
+
+    /// A session id is used in a path, so it must not be able to escape the
+    /// store directory.
+    #[test]
+    fn work_dir_sanitises_the_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().join("sessions"));
+        let escaped = store.work_dir("../../etc/passwd");
+        assert!(escaped.starts_with(&store.dir));
+        assert!(!escaped.to_string_lossy().contains(".."));
+    }
 
     /// An undecodable byte surfaces as an I/O error from `Lines::next`, not as
     /// bad JSON. It used to be skipped without counting, so the tool result it

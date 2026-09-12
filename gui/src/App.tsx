@@ -29,6 +29,7 @@ import type {
   SessionDto,
   SessionSummaryDto,
   SettingsDto,
+  TodoDto,
 } from './types';
 import { AskDialog, PermissionDialog } from './components/Dialogs';
 import { ChatView } from './views/ChatView';
@@ -42,6 +43,7 @@ import { Inspector } from './shell/Inspector';
 import { StatusBar, StatusDivider, StatusItem } from './shell/StatusBar';
 import { TitleBar } from './shell/TitleBar';
 import { AgentsPane } from './shell/panes/AgentsPane';
+import { TodosPane } from './shell/panes/TodosPane';
 import { HardwarePane } from './shell/panes/HardwarePane';
 import { PendingPane } from './shell/panes/PendingPane';
 import { antdTheme, color, font, setActivePalette } from './styles/tokens';
@@ -224,6 +226,11 @@ export default function App() {
   const [askQueue, setAskQueue] = useState<AskRequest[]>([]);
   const [monitorLines, setMonitorLines] = useState<Record<string, MonitorLine[]>>({});
   const [workCwd, setWorkCwd] = useState('C:\\');
+  // The agent's own todo list. Read from the file the 	odo tool writes, and
+  // refetched when that tool reports -- no polling, because the only thing that
+  // can change it is the agent running the tool.
+  const [todos, setTodos] = useState<TodoDto[]>([]);
+  const [todosLoading, setTodosLoading] = useState(false);
   // The event listeners are registered once ([] deps), so the closure would
   // otherwise capture the FIRST render's `session` (null) forever. Keep a ref
   // to the latest session so turn_end can refresh the transcript.
@@ -324,6 +331,16 @@ export default function App() {
           case 'tool_end':
             flushDeltas();
             dispatchTurn(e);
+            // The agent's todo list is a file the `todo` tool rewrites. Nothing
+            // else can change it, so the tool reporting is the only refresh
+            // trigger this needs -- and polling a file the agent owns would be
+            // the wrong shape for it anyway.
+            if (e.type === 'tool_end' && e.name === 'todo' && sid) {
+              void api
+                .sessionTodos(sid)
+                .then(setTodos)
+                .catch((err: unknown) => console.error(err));
+            }
             // Notification center: build/verify/flash failures are
             // project-level events worth surfacing even in another chat.
             if (e.type === 'tool_end' && !e.ok && ['build', 'verify', 'flash'].includes(e.name)) {
@@ -521,6 +538,31 @@ export default function App() {
     return () => window.removeEventListener('firment:run-escalation', handler);
   }, []);
 
+  // Load the todo list when the open session changes. The list is per session
+  // (since the work directory stopped being shared), so switching chats must
+  // switch lists -- showing the previous session's items under a new chat was
+  // the exact confusion the per-session directory fixed.
+  useEffect(() => {
+    const id = session?.id;
+    if (!id) {
+      setTodos([]);
+      return;
+    }
+    let cancelled = false;
+    setTodosLoading(true);
+    void api
+      .sessionTodos(id)
+      .then((t) => {
+        if (!cancelled) setTodos(t);
+      })
+      .catch((err: unknown) => console.error(err))
+      .finally(() => {
+        if (!cancelled) setTodosLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.id]);
   const handleNewSession = (mode: 'agent' | 'plan') => {
     // Creating a chat never disturbs turns running in other chats.
     void api
@@ -808,12 +850,8 @@ export default function App() {
                 {
                   key: 'todos',
                   label: '待办',
-                  content: (
-                    <PendingPane
-                      title="待办"
-                      body="agent 的 todo 工具已经在往会话目录写 todos.json（原子写、活过上下文压缩），GUI 一个字都没显示过。读它不需要改内核，只差一个只读命令。"
-                    />
-                  ),
+                  badge: todos.length || undefined,
+                  content: <TodosPane todos={todos} loading={todosLoading} />,
                 },
                 {
                   key: 'hardware',
