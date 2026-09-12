@@ -57,7 +57,7 @@ import { initialTurnState, turnsReducer } from './lib/turnReducer';
 import type { TurnMap } from './lib/turnReducer';
 import { FlashView } from './views/FlashView';
 import { WorkbenchView } from './views/WorkbenchView';
-import { antdTheme, color, font, radius, setActivePalette } from './styles/tokens';
+import { antdTheme, color, font, radius, setActivePalette, statusChip } from './styles/tokens';
 import {
   ThemeModeContext,
   resolveTheme,
@@ -68,7 +68,7 @@ import {
 
 const { Sider, Header, Content } = Layout;
 
-type ViewKey = 'chat' | 'settings' | 'serial' | 'flash' | 'collab';
+type ViewKey = 'chat' | 'settings' | 'serial' | 'flash' | 'workbench';
 
 export default function App() {
   // The colour scheme. `ui.theme` (auto/light/dark) lives in config.toml and is
@@ -699,7 +699,7 @@ export default function App() {
                 // at mount, so just switching tabs shows the WRONG project.
                 localStorage.setItem('workbench-last-cwd', projectCwd);
                 requestWorkbenchOpen(projectCwd);
-                setView('collab');
+                setView('workbench');
               }}
             />
           </Sider>
@@ -731,7 +731,7 @@ export default function App() {
                   { key: 'serial', icon: <UsbOutlined />, label: 'Serial monitor' },
                   { key: 'flash', icon: <RocketOutlined />, label: 'Flash / Run' },
                   { key: 'settings', icon: <ApiOutlined />, label: 'Settings' },
-                  { key: 'collab', icon: <ProjectOutlined />, label: 'Workbench' },
+                  { key: 'workbench', icon: <ProjectOutlined />, label: 'Workbench' },
                 ]}
               />
               {anyRunning && (
@@ -807,16 +807,20 @@ export default function App() {
                         >
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                             <Tag
-                              color={
-                                n.kind === 'guard'
-                                  ? 'red'
-                                  : n.kind.includes('fail')
-                                    ? 'orange'
-                                    : n.kind === 'device-offline'
-                                      ? 'default'
-                                      : 'blue'
-                              }
-                              style={{ borderRadius: radius.chip, fontSize: 10, fontWeight: 700 }}
+                              style={{
+                                ...statusChip(
+                                  n.kind === 'guard'
+                                    ? 'failed'
+                                    : n.kind.includes('fail')
+                                      ? 'attention'
+                                      : n.kind === 'device-offline'
+                                        ? 'neutral'
+                                        : 'running',
+                                ),
+                                borderRadius: radius.chip,
+                                fontSize: 10,
+                                fontWeight: 700,
+                              }}
                             >
                               {n.kind}
                             </Tag>
@@ -867,11 +871,9 @@ export default function App() {
                 >
                   <Tag
                     style={{
+                      ...statusChip(session.mode === 'plan' ? 'attention' : 'ok'),
                       borderRadius: radius.chip,
                       marginInlineEnd: 0,
-                      border: `1px solid ${color.outline}`,
-                      background: color.warnInk,
-                      color: color.outline,
                       fontWeight: 700,
                       cursor: 'pointer',
                     }}
@@ -898,11 +900,10 @@ export default function App() {
                   disabled={running}
                 >
                   <Tag
-                    color="purple"
                     style={{
+                      ...statusChip('running'),
                       borderRadius: radius.chip,
                       marginInlineEnd: 0,
-                      border: `1px solid ${color.outline}`,
                       fontWeight: 700,
                       cursor: 'pointer',
                     }}
@@ -938,21 +939,20 @@ export default function App() {
                     }
                   >
                     <Tag
-                      color={
+                      style={{
                         // Unknown usage must read as unknown, not healthy:
                         // green "ctx …" used to render while the fetch failed.
-                        usage === null
-                          ? 'default'
-                          : usage.pct > 90
-                            ? 'red'
-                            : usage.pct > 70
-                              ? 'orange'
-                              : 'green'
-                      }
-                      style={{
+                        ...statusChip(
+                          usage === null
+                            ? 'neutral'
+                            : usage.pct > 90
+                              ? 'failed'
+                              : usage.pct > 70
+                                ? 'attention'
+                                : 'ok',
+                        ),
                         borderRadius: radius.chip,
                         marginInlineEnd: 0,
-                        border: `1px solid ${color.outline}`,
                         fontWeight: 700,
                         cursor: 'pointer',
                       }}
@@ -1012,7 +1012,7 @@ export default function App() {
                   running while the user is in Chat/Serial/etc. */}
               <div
                 style={{
-                  display: view === 'collab' ? 'flex' : 'none',
+                  display: view === 'workbench' ? 'flex' : 'none',
                   flexDirection: 'column',
                   flex: 1,
                   minHeight: 0,

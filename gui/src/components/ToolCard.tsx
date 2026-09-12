@@ -1,7 +1,8 @@
 import { Alert, Card, Space, Tag, Typography } from 'antd';
 import { DownOutlined, RightOutlined } from '@ant-design/icons';
 import type { ToolCardState } from '../types';
-import { color, font, radius, slant } from '../styles/tokens';
+import { color, font, radius, slant, statusChip } from '../styles/tokens';
+import type { StatusKind } from '../styles/tokens';
 import { quickActionsFor } from '../lib/quickActions';
 import { SlantButton } from './SlantButton';
 
@@ -134,8 +135,17 @@ export function ToolCard({
   onAction?: (prompt: string) => void;
 }) {
   const danger = dangerousName(tool.name, tool.args);
-  const tagColor =
-    tool.status === 'ok' ? 'green' : tool.status === 'failed' ? 'red' : danger ? 'orange' : 'blue';
+  // An antd preset name ('green') is a colour written down outside the token
+  // layer -- it is neither a hex literal nor a radius, so no-literal-tokens
+  // cannot see it. statusChip() reads both halves from one measured pair.
+  const tagStatus: StatusKind =
+    tool.status === 'ok'
+      ? 'ok'
+      : tool.status === 'failed'
+        ? 'failed'
+        : danger
+          ? 'attention'
+          : 'running';
   const icon = tool.status === 'ok' ? '✓' : tool.status === 'failed' ? '✕' : danger ? '⚠' : '·';
   const path = editedPath(tool.args);
   const counts = tool.detail ? diffCounts(tool.detail) : null;
@@ -212,11 +222,9 @@ export function ToolCard({
               ))}
             {tool.status !== 'running' && <Text strong>{icon}</Text>}
             <Tag
-              color={tagColor}
               style={{
+                ...statusChip(tagStatus),
                 borderRadius: radius.chip,
-                border: `1px solid ${color.outline}`,
-                color: color.ink,
                 fontWeight: 700,
               }}
             >

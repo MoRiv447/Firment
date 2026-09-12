@@ -7,7 +7,7 @@ import remarkGfm from 'remark-gfm';
 import type { Components } from 'react-markdown';
 import { ToolCard } from './ToolCard';
 import type { ChatMessage, ToolCall } from '../types';
-import { color, radius } from '../styles/tokens';
+import { color, radius, statusChip } from '../styles/tokens';
 import { useThemeMode } from '../lib/theme';
 
 const { Text } = Typography;
@@ -150,11 +150,9 @@ function CollapsedToolCard({ call, seq }: { call: ToolCall; seq: number }) {
     >
       <RightOutlined style={{ fontSize: 9, color: color.muted }} />
       <Tag
-        color="green"
         style={{
+          ...statusChip('ok'),
           borderRadius: radius.chip,
-          border: `1px solid ${color.outline}`,
-          color: color.ink,
           fontWeight: 700,
         }}
       >
@@ -196,11 +194,9 @@ function ToolResultCard({ name, content }: { name?: string; content: string }) {
           <RightOutlined style={{ fontSize: 9, color: color.muted }} />
         )}
         <Tag
-          color={color.warnInk}
           style={{
+            ...statusChip('attention'),
             borderRadius: radius.chip,
-            border: `1px solid ${color.outline}`,
-            color: color.outline,
             fontWeight: 700,
             boxShadow: color.shadowSm,
           }}
@@ -307,11 +303,9 @@ export const MessageList = memo(function MessageList({
         return (
           <div key={key}>
             <Tag
-              color={color.infoInk}
               style={{
+                ...statusChip('running'),
                 borderRadius: radius.chip,
-                border: `1px solid ${color.outline}`,
-                color: color.outline,
                 fontWeight: 700,
               }}
             >

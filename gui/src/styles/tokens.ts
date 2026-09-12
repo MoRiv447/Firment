@@ -288,6 +288,51 @@ export const color: Palette = Object.keys(dark).reduce((acc, key) => {
   return acc;
 }, {} as Record<string, unknown>) as Palette;
 
+/** What a status chip is reporting. `neutral` is "no judgement" -- an unknown
+ *  usage, a device that is configured but not connected -- and must not read as
+ *  either healthy or broken. */
+export type StatusKind = 'ok' | 'failed' | 'running' | 'attention' | 'neutral';
+
+/**
+ * The fill and ink for a status chip, as a pair.
+ *
+ * Chips used to be built the other way round: an *ink* token as the fill
+ * (`color={color.warnInk}`) with `color.outline` -- then pure black -- as the
+ * text. That works while every ink is bright, which is true in the dark scheme
+ * and false in the light one: `successInk` is `#86EFAC` on dark and `#15803D`
+ * on light, so the same chip went from light-fill/dark-text to
+ * dark-fill/dark-text. It is one of the reasons light read as a different
+ * product.
+ *
+ * Reading both halves from the same pair fixes that by construction: each ink
+ * is documented against the bg it sits on (6.49:1 dark, 4.57:1 light for `ok`),
+ * so a chip cannot be assembled from two tokens that were measured against
+ * different grounds.
+ *
+ * Borderless on purpose. A status chip is a fill, and the neutral layer already
+ * spends its hairlines on structure -- outlining every badge as well is what
+ * made the old header read as five competing boxes.
+ */
+export function statusChip(kind: StatusKind): { background: string; color: string } {
+  switch (kind) {
+    case 'ok':
+      return { background: color.successBg, color: color.successInk };
+    case 'failed':
+      // The failed-step pair, documented as the removed-diff family: "this
+      // broke" and "this was taken out" are the same message at different
+      // sizes.
+      return { background: color.stepFailedBg, color: color.stepFailedInk };
+    case 'running':
+      return { background: color.infoBg, color: color.infoInk };
+    case 'attention':
+      return { background: color.warnBg, color: color.warnInk };
+    case 'neutral':
+      // A raised surface rather than a hue: "we do not know" is not a status,
+      // and colouring it would make it look like one.
+      return { background: color.surfaceRaised, color: color.muted };
+  }
+}
+
 /** Font stacks. Code and UI are separate on purpose -- the UI is not a
  * terminal, and setting prose in a monospace was making every label shout. */
 export const font = {

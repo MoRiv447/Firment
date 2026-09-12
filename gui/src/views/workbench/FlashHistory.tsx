@@ -1,6 +1,6 @@
 import { Card, Tag, Typography } from 'antd';
 import type { FlashHistoryDto } from '../../types';
-import { color, font, radius } from '../../styles/tokens';
+import { color, font, radius, statusChip } from '../../styles/tokens';
 
 const { Text } = Typography;
 
@@ -46,11 +46,15 @@ export function FlashHistory({ history }: { history: FlashHistoryDto[] }) {
             }}
           >
             <Tag
-              color={f.ok ? 'green' : 'red'}
-              // A badge, so `radius.chip` -- not 0. The hard edge belongs to
-              // the brand tiles and the control frames, not to a chip
-              // (docs/design/tokens.md, "Radius").
-              style={{ borderRadius: radius.chip, fontSize: 10, fontWeight: 700 }}
+              // A badge, so `radius.chip` -- not the tile tier. The fill comes
+              // from the status pair, which is what makes the tick readable in
+              // both schemes (docs/design/tokens.md, "Radius").
+              style={{
+                ...statusChip(f.ok ? 'ok' : 'failed'),
+                borderRadius: radius.chip,
+                fontSize: 10,
+                fontWeight: 700,
+              }}
             >
               {f.ok ? '✓' : '✗'}
             </Tag>

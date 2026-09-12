@@ -16,7 +16,7 @@ import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import type { ProviderEntryDto, SettingsDto } from '../types';
-import { color, font, radius } from '../styles/tokens';
+import { color, font, radius, statusChip } from '../styles/tokens';
 import { setThemeSetting } from '../lib/theme';
 import { SlantButton } from '../components/SlantButton';
 
@@ -194,11 +194,9 @@ export function SettingsView() {
                   <Text strong style={{ color: color.ink }}>{p.name}</Text>
                   {p.is_default && (
                     <Tag
-                      color={color.warnInk}
                       style={{
+                        ...statusChip('attention'),
                         borderRadius: radius.chip,
-                        border: `1px solid ${color.outline}`,
-                        color: color.outline,
                         fontWeight: 700,
                       }}
                     >

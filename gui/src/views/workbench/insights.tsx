@@ -1,4 +1,5 @@
 import { Card, List, Space, Statistic, Tag, Typography } from 'antd';
+import { radius, statusChip } from '../../styles/tokens';
 import type { ElfCardDto, QualityItemDto, TimelineEntryDto } from '../../types';
 
 const { Text } = Typography;
@@ -56,7 +57,7 @@ export function VerificationBadges({ quality }: { quality: QualityItemDto[] }) {
     >
       <Space wrap size={8}>
         {quality.map((q) => (
-          <Tag key={q.tool} color={q.ok ? 'green' : 'red'} style={{ fontSize: 12 }}>
+          <Tag key={q.tool} style={{ ...statusChip(q.ok ? 'ok' : 'failed'), borderRadius: radius.chip, fontSize: 12 }}>
             {q.tool}: {q.ok ? 'PASS' : 'FAIL'}
           </Tag>
         ))}

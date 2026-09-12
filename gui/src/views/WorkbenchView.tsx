@@ -32,7 +32,8 @@ import type {
   TimelineEntryDto,
   WorkbenchStateDto,
 } from '../types';
-import { color, font, radius } from '../styles/tokens';
+import { color, font, radius, statusChip } from '../styles/tokens';
+import type { StatusKind } from '../styles/tokens';
 import { SlantButton } from '../components/SlantButton';
 import { FlashHistory } from './workbench/FlashHistory';
 import { ChangeTimeline, ElfBudget, VerificationBadges } from './workbench/insights';
@@ -713,8 +714,8 @@ export function WorkbenchView() {
               }
               return (
                 <Tag
-                  color={state === 'on' ? 'green' : state === 'off' ? 'default' : 'default'}
-                  style={{ borderRadius: radius.chip, fontWeight: 700 }}
+                  style={{ ...statusChip(state === 'on' ? 'ok' : 'neutral'), borderRadius: radius.chip, fontWeight: 700 }}
+                  
                 >
                   {state === 'on' ? '● broker online' : state === 'off' ? '○ broker off' : '… broker ?'}
                 </Tag>
@@ -740,7 +741,7 @@ export function WorkbenchView() {
                     borderBottom: `1px solid ${color.line}`,
                   }}
                 >
-                  <Tag color="blue" style={{ borderRadius: radius.chip, fontWeight: 700 }}>
+                  <Tag style={{ ...statusChip('running'), borderRadius: radius.chip, fontWeight: 700 }}>
                     {d.node}
                   </Tag>
                   <Tag style={{ borderRadius: radius.chip, fontSize: 10 }}>{d.lastKind}</Tag>
@@ -759,7 +760,7 @@ export function WorkbenchView() {
                   </Text>
                   {liveAlerts.slice(0, 5).map((a, i) => (
                     <div key={i} style={{ fontSize: 11, padding: '2px 0' }}>
-                      <Tag color="red" style={{ borderRadius: radius.chip, fontSize: 10 }}>{a.node}</Tag>
+                      <Tag style={{ ...statusChip('failed'), borderRadius: radius.chip, fontSize: 10 }}>{a.node}</Tag>
                       <Text type="secondary" style={{ fontSize: 11 }}>{a.frame}</Text>
                     </div>
                   ))}
@@ -811,8 +812,8 @@ export function WorkbenchView() {
               {projects.map((p) => (
                 <Tag
                   key={p}
-                  style={{ cursor: 'pointer', fontSize: 12 }}
-                  color={p === cwd ? 'blue' : 'default'}
+                  style={{ ...statusChip(p === cwd ? 'running' : 'neutral'), borderRadius: radius.chip, cursor: 'pointer', fontSize: 12 }}
+                  
                   onClick={() => {
                     setCwd(p);
                     void load(p);
@@ -894,8 +895,8 @@ export function WorkbenchView() {
                       }}
                     >
                       <Tag
-                        color={live ? 'green' : 'default'}
-                        style={{ borderRadius: radius.chip, fontWeight: 700 }}
+                        style={{ ...statusChip(live ? 'ok' : 'neutral'), borderRadius: radius.chip, fontWeight: 700 }}
+                        
                       >
                         {live ? '●' : '○'} {d.node}
                       </Tag>
@@ -997,8 +998,8 @@ export function WorkbenchView() {
                       >
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                           <Tag
-                            color={e.sev === 'error' ? 'red' : 'orange'}
-                            style={{ borderRadius: radius.chip, fontSize: 10, fontWeight: 700 }}
+                            style={{ ...statusChip(e.sev === 'error' ? 'failed' : 'attention'), borderRadius: radius.chip, fontSize: 10, fontWeight: 700 }}
+                            
                           >
                             {e.sev}
                           </Tag>
@@ -1071,8 +1072,8 @@ export function WorkbenchView() {
                         </Tag>
                       </Tooltip>
                       <Tag
-                        color={hardware.probe_rs_available ? 'green' : 'default'}
-                        style={{ borderRadius: radius.chip, fontSize: 11 }}
+                        style={{ ...statusChip(hardware.probe_rs_available ? 'ok' : 'neutral'), borderRadius: radius.chip, fontSize: 11 }}
+                        
                       >
                         probe-rs {hardware.probe_rs_available ? 'available' : 'not installed'}
                       </Tag>
@@ -1131,8 +1132,8 @@ export function WorkbenchView() {
                         {hardware.serial_ports.map((p) => (
                           <Tag
                             key={p}
-                            color="blue"
-                            style={{ borderRadius: radius.chip, fontFamily: font.mono, fontSize: 11 }}
+                            style={{ ...statusChip('running'), borderRadius: radius.chip, fontFamily: font.mono, fontSize: 11 }}
+                            
                           >
                             {p}
                           </Tag>
@@ -1179,8 +1180,8 @@ export function WorkbenchView() {
                   {pinmap.map((b) => (
                     <Tag
                       key={b.board}
-                      color={b.board === pinBoard ? 'blue' : 'default'}
-                      style={{ cursor: 'pointer', fontSize: 12 }}
+                      style={{ ...statusChip(b.board === pinBoard ? 'running' : 'neutral'), borderRadius: radius.chip, cursor: 'pointer', fontSize: 12 }}
+                      
                       onClick={() => setPinBoard(b.board)}
                     >
                       {b.board} ({b.pins.length})
@@ -1222,7 +1223,7 @@ export function WorkbenchView() {
                                 borderBottom: `1px solid ${color.line}`,
                               }}
                             >
-                              <Tag color="blue" style={{ borderRadius: radius.chip, fontWeight: 700, minWidth: 64, textAlign: 'center' }}>
+                              <Tag style={{ ...statusChip('running'), borderRadius: radius.chip, fontWeight: 700, minWidth: 64, textAlign: 'center' }}>
                                 {p.pin}
                               </Tag>
                               <Text style={{ flex: 1, fontSize: 12 }}>{p.func}</Text>
@@ -1408,8 +1409,11 @@ export function WorkbenchView() {
                 )}
                 <Space direction="vertical" size={6} style={{ width: '100%' }}>
                   {tree.map((s) => {
-                    const tagColor =
-                      s.kind === 'mainline' ? 'gold' : s.kind === 'branch' ? 'blue' : 'green';
+                    // Mainline / branch / plain session. A mainline is an
+                    // emphasis, not a warning, so it gets `attention`'s pair
+                    // rather than a gold preset.
+                    const kindStatus: StatusKind =
+                      s.kind === 'mainline' ? 'attention' : s.kind === 'branch' ? 'running' : 'ok';
                     return (
                     <div
                       key={s.id}
@@ -1425,7 +1429,7 @@ export function WorkbenchView() {
                         borderRadius: radius.control,
                       }}
                     >
-                      <Tag color={tagColor}>
+                      <Tag style={{ ...statusChip(kindStatus), borderRadius: radius.chip }}>
                         {s.isMainline ? 'MAINLINE' : s.kind.toUpperCase()}
                       </Tag>
                       <Text style={{ flex: 1, fontSize: 13 }} ellipsis>

@@ -7,7 +7,7 @@ import { StepProgress } from '../components/StepProgress';
 import { shouldShowStallNotice, stallNotice } from '../lib/stallHint';
 import { workflowSteps } from '../lib/steps';
 import type { RunningTurn, SessionDto } from '../types';
-import { color, font, radius } from '../styles/tokens';
+import { color, font, radius, statusChip } from '../styles/tokens';
 
 const { Text } = Typography;
 const { TextArea } = Input;
@@ -154,7 +154,13 @@ export function ChatView({
                     : `idle ${fmtElapsed(idleSecs * 1000)}`}
                 </Text>
                 {idleSecs > 45 && (
-                  <Tag color="warning" style={{ borderRadius: radius.chip, fontWeight: 700 }}>
+                  <Tag
+                    style={{
+                      ...statusChip('attention'),
+                      borderRadius: radius.chip,
+                      fontWeight: 700,
+                    }}
+                  >
                     no events for {idleSecs}s
                   </Tag>
                 )}
@@ -311,11 +317,13 @@ export function ChatView({
               {session.model}
             </Tag>
             <Tag
-              color={session.mode === 'plan' ? color.warnInk : color.successInk}
               style={{
+                // The fill used to be `warnInk`/`successInk` with `outline` as
+                // the text: those inks are bright in the dark scheme and dark
+                // in the light one, so this chip was readable in exactly one of
+                // the two.
+                ...statusChip(session.mode === 'plan' ? 'attention' : 'ok'),
                 borderRadius: radius.chip,
-                border: `1px solid ${color.outline}`,
-                color: color.outline,
                 fontWeight: 700,
               }}
             >

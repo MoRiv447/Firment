@@ -66,6 +66,39 @@ describe('the token layer is the only place a design value is written down', () 
     expect(matches(/fontFamily:\s*['"]/)).toEqual([]);
   });
 
+  it('has no antd preset colour name outside the tokens', () => {
+    // The gap that let the header end up with five hues, one of them a purple
+    // that appears nowhere in docs/design/tokens.md. An antd preset name
+    // (`color="blue"`) is neither a hex literal nor a radius, so every check
+    // above sails straight past it while it quietly becomes the second place a
+    // colour is written down -- and it does not follow the scheme, which is how
+    // `color={ok ? 'green' : 'red'}` produced a pale chip in dark and an
+    // unreadable one in light.
+    //
+    // `statusChip(kind)` in styles/tokens.ts is the one way to colour a status
+    // chip now: it reads both the fill and the ink from a pair that was
+    // measured against the same ground.
+    expect(
+      matches(
+        /color="(?:red|green|blue|purple|orange|gold|magenta|cyan|geekblue|volcano|lime|yellow|pink|brown|warning|success|error|processing)"/,
+      ),
+    ).toEqual([]);
+  });
+
+  it('has no antd preset colour name chosen by a ternary', () => {
+    // The same mistake written as an expression: `color={ok ? 'green' : 'red'}`.
+    //
+    // `'default'` and `'error'` are deliberately absent from this list. Both
+    // are antd colour names AND ordinary strings elsewhere in the tree --
+    // `cursor: x ? 'pointer' : 'default'` is a CSS cursor, and `'error'` is a
+    // FrontendEvent variant -- so including them would fail on correct code.
+    expect(
+      matches(
+        /[?:]\s*'(?:red|green|blue|purple|orange|gold|magenta|cyan|geekblue|volcano|lime|yellow|pink|brown)'/,
+      ),
+    ).toEqual([]);
+  });
+
   it('is actually looking at the source tree', () => {
     // A glob that silently matched nothing would make all of the above pass.
     expect(FILES.length).toBeGreaterThan(15);
