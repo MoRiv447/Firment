@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { StepProgress } from '../StepProgress';
 import { ActionButton } from '../ActionButton';
-import { paletteFor, setActivePalette } from '../../styles/tokens';
+import { paletteFor, setActivePalette, slant } from '../../styles/tokens';
 
 /**
  * The two components the design language is made of.
@@ -34,7 +34,9 @@ describe('ActionButton', () => {
   // grey, a primary button rendered as an acid fill inside a grey ring -- a fill
   // that looks outlined by mistake. These tests pin the replacement.
   describe('weight comes from colour, not size', () => {
-    it('maps the three tiers onto antd button types', () => {
+    it('draws only the primary tier by hand', () => {
+      // The split is the point: antd owns every tier it can, and the primary is
+      // built here only because a clipped fill cannot be a `border`.
       render(
         <div>
           <ActionButton tier="primary">a</ActionButton>
@@ -43,10 +45,14 @@ describe('ActionButton', () => {
         </div>,
       );
       const cls = (name: string) => screen.getByRole('button', { name }).className;
-      expect(cls('a')).toContain('ant-btn-primary');
-      expect(cls('b')).not.toContain('ant-btn-primary');
-      expect(cls('b')).not.toContain('ant-btn-text');
+      const layers = (name: string) =>
+        screen.getByRole('button', { name }).querySelectorAll('span[aria-hidden]').length;
+      expect(cls('b')).toContain('ant-btn');
       expect(cls('c')).toContain('ant-btn-text');
+      // primary is a plain <button> with two aria-hidden layers: edge + fill.
+      expect(layers('a')).toBe(2);
+      expect(layers('b')).toBe(0);
+      expect(layers('c')).toBe(0);
     });
 
     it('gives every tier the same height', () => {
@@ -57,29 +63,28 @@ describe('ActionButton', () => {
           <ActionButton tier="tertiary">c</ActionButton>
         </div>,
       );
-      const cls = (name: string) => screen.getByRole('button', { name }).className;
-      // antd sizes all three from one control height, so a row reads as one row
-      // rather than as a big button next to two small ones.
-      expect(cls('a')).toContain('ant-btn');
-      expect(cls('b')).toContain('ant-btn');
-      expect(cls('c')).toContain('ant-btn');
-      for (const name of ['a', 'b', 'c']) {
-        expect(screen.getByRole('button', { name }).style.height).toBe('');
-      }
+      // Same height on a row: colour carries the hierarchy, not scale.
+      expect(screen.getByRole('button', { name: 'a' }).style.height).toBe('40px');
+      expect(screen.getByRole('button', { name: 'b' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'c' })).toBeInTheDocument();
     });
 
-    it('leaves the primary tier unfilled by any inline chrome', () => {
-      // The regression in one assertion: no inline border, no inline shadow and
-      // no hand-drawn layer behind the label. antd paints the fill from
-      // `colorPrimary` and labels it from `Button.primaryColor`; anything added
-      // here would be a second source for a colour the theme already owns.
-      render(<ActionButton tier="primary">Go</ActionButton>);
-      const button = screen.getByRole('button', { name: 'Go' });
-      expect(button.style.border).toBe('');
-      expect(button.style.borderWidth).toBe('');
-      expect(button.style.boxShadow).toBe('');
-      expect(button.style.background).toBe('');
-      expect(button.querySelectorAll('span[aria-hidden]')).toHaveLength(0);
+    it('edges the primary tier in the brand edge, never in the generic border', () => {
+      // This is the whole regression. The edge layer used to be filled with
+      // `color.outline`, which was pure black until it became an ordinary
+      // border grey -- at which point the primary button rendered as an acid
+      // fill inside a grey ring, which reads as a mistake rather than a mark.
+      for (const mode of ['dark', 'light'] as const) {
+        setActivePalette(mode);
+        const palette = paletteFor(mode);
+        const { container, unmount } = render(<ActionButton tier="primary">Go</ActionButton>);
+        const layers = container.querySelectorAll<HTMLElement>('span[aria-hidden]');
+        expect(layers[0].style.background).toBe(rgb(palette.brandEdge));
+        expect(layers[0].style.background).not.toBe(rgb(palette.outline));
+        expect(layers[1].style.background).toBe(rgb(palette.brandAcid));
+        unmount();
+      }
+      setActivePalette('light');
     });
 
     it('renders the tertiary tier as a label and a chevron, with no chrome', () => {
@@ -90,8 +95,48 @@ describe('ActionButton', () => {
       );
       const button = screen.getByRole('button', { name: /View diff/ });
       expect(button).toHaveClass('ant-btn-text');
-      expect(button.style.border).toBe('');
       expect(button.textContent).toContain('›');
+    });
+  });
+
+  describe('the slant is a cut, never a shear', () => {
+    it('clips the fill by the documented run', () => {
+      const { container } = render(<ActionButton tier="primary">Go</ActionButton>);
+      const layers = container.querySelectorAll<HTMLElement>('span[aria-hidden]');
+      expect(layers[1].style.clipPath).toContain('polygon(');
+      expect(layers[1].style.clipPath).toContain(`${slant.cut}px`);
+    });
+
+    it('never transforms the label', () => {
+      const { container } = render(<ActionButton tier="primary">Go</ActionButton>);
+      const label = container.querySelector<HTMLElement>('button > span:not([aria-hidden])');
+      // tokens.md: a `skewX` would shear the type with the shape, and Latin text
+      // leaning is a decal, not a design.
+      expect(label?.style.transform).toBe('');
+      expect(container.querySelector('button')?.style.transform).toBe('');
+    });
+
+    it('adds the optical correction on the cut side only', () => {
+      const { container } = render(<ActionButton tier="primary">Go</ActionButton>);
+      const label = container.querySelector<HTMLElement>('button > span:not([aria-hidden])');
+      // The removed triangle sat on the left, so the label gets the padding back
+      // or it reads as off-centre.
+      expect(label?.style.paddingLeft).toBe(`${slant.opticalPadLeft}px`);
+    });
+
+    it('drops the correction when nothing is cut', () => {
+      const { container } = render(
+        <ActionButton tier="primary" edge="none">
+          Go
+        </ActionButton>,
+      );
+      const label = container.querySelector<HTMLElement>('button > span:not([aria-hidden])');
+      expect(label?.style.paddingLeft).toBe('0px');
+    });
+
+    it('keeps a radius off the cut shape so the diagonal survives', () => {
+      const { container } = render(<ActionButton tier="primary">Go</ActionButton>);
+      expect(container.querySelector('button')?.style.borderRadius).toBe('0px');
     });
   });
 

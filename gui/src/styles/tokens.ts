@@ -68,6 +68,20 @@ const dark = {
   onAcid: '#15200D',
   /** Brand green dark enough to be readable AS text on a light ground. */
   brandInk: '#3B6D11',
+  /**
+   * The frame around the primary CTA -- the one place a filled control gets an
+   * edge of its own, because the slant needs one (a `border` cannot draw a
+   * diagonal on a clipped element, so the edge is a layer behind the fill).
+   *
+   * Same value in both schemes, like `brandAcid` itself: the fill does not
+   * change with the ground, so neither does its edge.
+   *
+   * It is its own token and NOT `outline`. Borrowing the generic border colour
+   * is exactly what broke this last time -- once `outline` became an ordinary
+   * border grey, the CTA's edge layer turned into a grey ring around a green
+   * fill, which reads as a mistake rather than as a mark.
+   */
+  brandEdge: '#15200D',
 
   /**
    * Status green: a different hue from the brand green on purpose (145 deg vs
@@ -186,6 +200,9 @@ const light: Palette = {
   brandAcid: '#B4F779',
   /** 13.28:1 on `brandAcid`. */
   onAcid: '#15200D',
+  /** Identical to the dark scheme's: the fill does not move, so neither does
+   *  its edge (see the note on the dark palette's `brandEdge`). */
+  brandEdge: '#15200D',
   /** 6.21:1 on `surface`, 5.79:1 on `bg`. Green text on light uses this. */
   brandInk: '#3B6D11',
 
@@ -361,12 +378,64 @@ export const radius = {
 } as const;
 
 /**
+ * The slant -- the brand's structural mark on the primary CTA.
+ *
+ * This was deleted once, on the reading that "remove the neo-brutalist look"
+ * covered the slant too. It does not: the slant is a *cut* corner, and the
+ * complaint was about big shadows and hard right angles -- the slant is the
+ * opposite of a right angle. It is a decided part of the brand, and it comes
+ * back here.
+ *
+ * Geometry lives in one place so no component invents its own numbers, and so
+ * the optical correction stays attached to the reason for it.
+ *
+ * Scope: the primary CTA, and nothing else. One cut per screen. The logo
+ * carries the same skew but it is drawn into the artwork, not reproduced here.
+ */
+export const slant = {
+  /** Horizontal run of the cut, in px. */
+  cut: 12,
+  /** The gap between adjacent slanted edges, in px. */
+  gap: 8,
+  /**
+   * Extra left padding over the right, in px.
+   *
+   * The cut removes a triangle from one side, which moves the remaining shape's
+   * centre of mass ~2.5px the other way; without this the label reads as
+   * off-centre even though it is geometrically centred.
+   */
+  opticalPadLeft: 5,
+  /** Every control on a row is this tall, so colour carries the hierarchy. */
+  controlHeight: 40,
+} as const;
+
+/** Which edges the cut is made on. `left` is the shipped default. */
+export type SlantEdge = 'left' | 'both' | 'none';
+
+/**
+ * The cut, in CSS.
+ *
+ * `left`: the bottom-left triangle is removed, so the left edge runs from the
+ * very top-left down and inward. The removed area sits on the left, which is
+ * what `slant.opticalPadLeft` compensates for.
+ */
+export function slantClip(edge: SlantEdge): string | undefined {
+  const cut = `${slant.cut}px`;
+  switch (edge) {
+    case 'left':
+      return `polygon(0 0, 100% 0, 100% 100%, ${cut} 100%)`;
+    case 'both':
+      return `polygon(${cut} 0, 100% 0, calc(100% - ${cut}) 100%, 0 100%)`;
+    default:
+      return undefined;
+  }
+}
+
+/**
  * The gap between controls sitting on one row.
  *
- * This used to be `slant.gap`, part of a `slant` object that also carried the
- * clip-path geometry for the brand CTA. The slant is gone -- a diagonal cut is a
- * brutalist gesture, and the neutral layer separates with a hairline instead --
- * but the gap was never about the slant, so it outlived it.
+ * Kept separate from `slant` because it is not about the cut: a row of ordinary
+ * buttons wants the same gap as a row containing a slanted one.
  */
 export const space = {
   /** Between adjacent controls on a row. */
