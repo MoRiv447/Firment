@@ -372,6 +372,17 @@ impl App {
                 self.interrupt_armed_at = None;
             }
             AgentEvent::Info(message) => self.items.push(Item::System(message)),
+            // A nested agent started/ended. The pair exists so a UI can attribute
+            // the events in between -- the nested agent shares the parent's sink,
+            // so its tool calls are otherwise indistinguishable from the main
+            // agent's.
+            //
+            // The TUI deliberately does not track them yet: it renders whatever
+            // tool cards the sink carries, so a subagent's steps already appear
+            // as cards, which is the behaviour it had before the pair existed.
+            // Attribution is the GUI's inspector pane for now; if the TUI grows a
+            // subagent row it should keep a stack here rather than re-deriving it.
+            AgentEvent::SubagentStart { .. } | AgentEvent::SubagentEnd { .. } => {}
             AgentEvent::Settings {
                 provider,
                 model,

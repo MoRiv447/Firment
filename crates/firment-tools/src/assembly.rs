@@ -126,16 +126,29 @@ pub fn assemble_agent(
     );
     agent.set_session_dir(Some(store.dir.join("work")));
 
-    let subagent_factory: Arc<SubagentRunner> = Arc::new(SubagentRunner::new(
-        Arc::new(merged.clone()),
-        plan_registry(),
-        agent.session().provider.clone(),
-        agent.session().model.clone(),
-        asker,
-        permission,
-    ));
+    // The research runner gets the PARENT'S sink. It used to keep the default
+    // `NullSink` ("their output is the task tool's result text"), which is true
+    // about the *result* and false about the work: a subagent that spent forty
+    // steps researching reached the UI as one motionless `task` card, and in the
+    // GUI -- where each sink stamps its own session id -- its events were
+    // misattributed to the parent whenever they did arrive.
+    //
+    // The `SubagentStart`/`SubagentEnd` pair it emits around the run is what
+    // makes sharing the sink safe: a UI keeps a stack and attributes everything
+    // in between to the nested agent, and one that does not care sees exactly
+    // what it saw before.
+    let subagent_factory: Arc<SubagentRunner> = Arc::new(SubagentRunner {
+        sink: attacker_sink.clone(),
+        ..SubagentRunner::new(
+            Arc::new(merged.clone()),
+            plan_registry(),
+            agent.session().provider.clone(),
+            agent.session().model.clone(),
+            asker,
+            permission,
+        )
+    });
     agent.set_subagent_factory(Some(subagent_factory));
-
     // Attacker-profile runner for the `redteam` campaign: hardware-capable
     // registry, the parent's sink (attack tool cards stream into the live
     // UI), and the parent's permission — approval popups still reach the

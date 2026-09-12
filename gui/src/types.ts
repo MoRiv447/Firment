@@ -207,6 +207,24 @@ export type FrontendEvent =
   // lands, clearing the retained finished turn (anti blank-flash).
   | { type: 'turn_synced'; session_id?: string | null }
   | { type: 'info'; session_id?: string | null; message: string }
+  /** A nested agent started, and everything on this session's stream until the
+   * matching `subagent_end` belongs to it.
+   *
+   * The nested agent shares the parent's sink, so without this pair its tool
+   * calls arrive stamped with the PARENT's session_id and read as the main
+   * agent's work. The reducer keeps a stack: push on start, pop on end, and
+   * route in-between events to the top entry instead of the turn. */
+  | {
+      type: 'subagent_start';
+      session_id?: string | null;
+      id: string;
+      /** A short form of the prompt -- the question it was asked. */
+      label: string;
+      depth: number;
+    }
+  /** Sent on the error path too, so a consumer's stack cannot be left
+   * unbalanced by a subagent that failed. */
+  | { type: 'subagent_end'; session_id?: string | null; id: string; depth: number }
   | { type: 'device_frame'; node: string; kind: string; frame: string }
   | { type: 'guard_status'; frame: string }
   | { type: 'settings'; provider: string | null; model: string | null; thinking: string | null; mode: string | null }

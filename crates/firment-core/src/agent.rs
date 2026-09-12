@@ -51,6 +51,32 @@ pub enum AgentEvent {
     },
     /// Non-fatal status/info message shown in the UI (e.g. config changes).
     Info(String),
+    /// A nested agent started, and everything it emits until the matching
+    /// [`AgentEvent::SubagentEnd`] belongs to it rather than to the session that
+    /// spawned it.
+    ///
+    /// The nested agent shares the parent's sink, so without this pair its tool
+    /// calls arrive indistinguishable from the parent's -- a `task` subagent's
+    /// `read_file` reads as if the main agent made it. A UI that does not care
+    /// about attribution can ignore both variants and nothing changes; a UI that
+    /// does keeps a stack, pushing here and popping on the end.
+    ///
+    /// `id` is the nested session's id, and `label` is a short form of the
+    /// prompt, because "which subagent" is meaningless without the question it
+    /// was asked.
+    SubagentStart {
+        id: String,
+        label: String,
+        /// Nesting level of the agent that just started; 1 is the first level of
+        /// delegation. Subagents can spawn subagents up to `max_subagent_depth`.
+        depth: usize,
+    },
+    /// See [`AgentEvent::SubagentStart`]. Emitted even when the nested run
+    /// fails, so a UI stack cannot be left unbalanced by an error path.
+    SubagentEnd {
+        id: String,
+        depth: usize,
+    },
     /// Settings changed; UI should update its status bar.
     Settings {
         provider: Option<String>,

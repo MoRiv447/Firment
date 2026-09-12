@@ -124,6 +124,9 @@ impl SubagentFactory for SubagentRunner {
         // reflect what actually ran (an override would otherwise be invisible
         // in the transcript).
         let session = Session::new(cwd, provider_name.to_string(), model.clone());
+        // Captured before `Agent::new` takes ownership: the nested session's id
+        // is what the SubagentStart/End pair names it with.
+        let subagent_id = session.id.clone();
         let store = SessionStore::new(
             std::env::temp_dir()
                 .join("firment-subagents")
@@ -169,12 +172,52 @@ impl SubagentFactory for SubagentRunner {
             }
         }
         let _propagator_guard = AbortOnDrop(propagator);
+
+        // Bracket the nested run on the PARENT's sink. The nested agent emits
+        // through that same sink, so its tool calls would otherwise be
+        // indistinguishable from the parent's -- and on the GUI, where each sink
+        // stamps its own session id, they arrived as the parent's outright.
+        // A UI that does not care can ignore both; one that does keeps a stack.
+        self.sink
+            .event(AgentEvent::SubagentStart {
+                id: subagent_id.clone(),
+                label: subagent_label(prompt),
+                depth,
+            })
+            .await;
         let result = nested.run_turn(prompt).await;
+        // Emitted on every path, including the error one: a UI stack that is
+        // pushed but never popped would attribute the rest of the session to a
+        // subagent that has already finished.
+        self.sink
+            .event(AgentEvent::SubagentEnd {
+                id: subagent_id,
+                depth,
+            })
+            .await;
+
         // The subagent session is transient bookkeeping: drop its whole
         // directory when done so long sessions do not accumulate temp junk.
         let _ = std::fs::remove_dir_all(&store.dir);
         result.map_err(|e| e.to_string())
     }
+}
+
+/// A short form of the prompt, for a UI that has one line to name the subagent
+/// with.
+///
+/// The prompt *is* the question the subagent was asked, so it is the only
+/// truthful label: an id names nothing a person recognises, and the tool name
+/// would be the same word for every delegation. First non-empty line, trimmed,
+/// capped at 60 chars on char boundaries so a CJK prompt is not cut mid-glyph.
+fn subagent_label(prompt: &str) -> String {
+    let first = prompt.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+    let trimmed = first.trim();
+    let mut out: String = trimmed.chars().take(60).collect();
+    if trimmed.chars().count() > 60 {
+        out.push('…');
+    }
+    out
 }
 
 /// Event sink that drops everything; used for nested agents whose output is

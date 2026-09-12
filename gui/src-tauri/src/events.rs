@@ -52,6 +52,26 @@ pub enum FrontendEvent {
         session_id: Option<String>,
         message: String,
     },
+    /// A nested agent started, and everything the parent's stream carries until
+    /// the matching `SubagentEnd` belongs to it.
+    ///
+    /// The nested agent emits through the parent's sink, so without this pair
+    /// its tool calls are stamped with the parent's `session_id` and read as the
+    /// main agent's work. The frontend keeps a stack of these and routes
+    /// in-between events to the top entry.
+    SubagentStart {
+        session_id: Option<String>,
+        id: String,
+        label: String,
+        depth: usize,
+    },
+    /// See [`FrontendEvent::SubagentStart`]. Sent on the error path too, so the
+    /// frontend's stack cannot be left unbalanced by a subagent that failed.
+    SubagentEnd {
+        session_id: Option<String>,
+        id: String,
+        depth: usize,
+    },
     /// One frame from the SBC data plane (device telemetry/state/alert/echo).
     DeviceFrame {
         node: String,
@@ -179,6 +199,17 @@ pub fn frontend_event(e: &AgentEvent, session_id: Option<&str>) -> FrontendEvent
         AgentEvent::Info(message) => FrontendEvent::Info {
             session_id: sid,
             message: message.clone(),
+        },
+        AgentEvent::SubagentStart { id, label, depth } => FrontendEvent::SubagentStart {
+            session_id: sid,
+            id: id.clone(),
+            label: label.clone(),
+            depth: *depth,
+        },
+        AgentEvent::SubagentEnd { id, depth } => FrontendEvent::SubagentEnd {
+            session_id: sid,
+            id: id.clone(),
+            depth: *depth,
         },
         AgentEvent::Settings {
             provider,

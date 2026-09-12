@@ -41,6 +41,7 @@ import { NotificationBell } from './shell/NotificationBell';
 import { Inspector } from './shell/Inspector';
 import { StatusBar, StatusDivider, StatusItem } from './shell/StatusBar';
 import { TitleBar } from './shell/TitleBar';
+import { AgentsPane } from './shell/panes/AgentsPane';
 import { HardwarePane } from './shell/panes/HardwarePane';
 import { PendingPane } from './shell/panes/PendingPane';
 import { antdTheme, color, font, setActivePalette } from './styles/tokens';
@@ -110,7 +111,7 @@ export default function App() {
   const [turnsById, dispatchTurn] = useReducer(turnsReducer, undefined, () => ({} as TurnMap));
   const currentTurnState =
     (session ? turnsById[session.id] : undefined) ?? initialTurnState();
-  const { running, turn } = currentTurnState;
+  const { running, turn, subagents } = currentTurnState;
   const anyRunning = Object.values(turnsById).some((t) => t.running);
   // The chat the user is looking at. When it changes, a finished turn kept by
   // that chat's slot is superseded by the transcript now on screen: turn_end
@@ -801,12 +802,8 @@ export default function App() {
                 {
                   key: 'agents',
                   label: '子代理',
-                  content: (
-                    <PendingPane
-                      title="子代理"
-                      body="子代理的步骤和主 agent 共用同一条事件流，但事件上没有深度字段，所以现在分不出是谁干的——它的 read_file 看起来像主 agent 调用的。需要给事件加 depth/agent_id，然后在这里按代理分组显示。"
-                    />
-                  ),
+                  badge: subagents.length || undefined,
+                  content: <AgentsPane subagents={subagents} />,
                 },
                 {
                   key: 'todos',

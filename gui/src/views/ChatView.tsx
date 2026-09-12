@@ -2,7 +2,7 @@ import { Alert, Button, Input, Space, Spin, Tag, Typography } from 'antd';
 import { ArrowDownOutlined, SendOutlined, StopOutlined } from '@ant-design/icons';
 import { useEffect, useRef, useState } from 'react';
 import { MessageList, Markdown } from '../components/MessageList';
-import { ToolCard } from '../components/ToolCard';
+import { LiveRun } from '../components/LiveRun';
 import { StepProgress } from '../components/StepProgress';
 import { shouldShowStallNotice, stallNotice } from '../lib/stallHint';
 import { workflowSteps } from '../lib/steps';
@@ -189,9 +189,7 @@ export function ChatView({
                 <StepProgress steps={steps} />
               </div>
             )}
-            {toolList.map((t) => (
-              <ToolCard key={t.seq} tool={t} onAction={onSend} />
-            ))}
+            <LiveRun tools={toolList} onAction={onSend} />
             {turn && turn.thinking && !turn.text && (
               <div
                 style={{
