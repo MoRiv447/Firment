@@ -205,7 +205,7 @@ export function ToolRun({ messages }: { messages: ChatMessage[] }) {
         }}
       >
         <span style={{ fontSize: 9 }}>{open ? '▾' : '▸'}</span>
-        <span>{steps} 步</span>
+        <span>{steps} steps</span>
         {tools && (
           <>
             <span aria-hidden style={{ opacity: 0.5 }}>

@@ -18,8 +18,8 @@ export function TodosPane({ todos, loading }: { todos: TodoDto[]; loading: boole
     return (
       <div style={{ fontSize: 11, lineHeight: 1.6, color: color.muted, fontFamily: font.sans }}>
         {loading
-          ? '读取中…'
-          : '这个会话还没有待办。agent 用 todo 工具拆解多步任务时会写在这里——列表存在会话目录里，能活过上下文压缩。'}
+          ? 'Loading…'
+          : 'No todos in this session yet. When the agent breaks a multi-step task down with the todo tool the list appears here — it lives in the session directory and survives context compaction.'}
       </div>
     );
   }

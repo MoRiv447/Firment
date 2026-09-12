@@ -94,7 +94,7 @@ export function LiveRun({
           // is worth a permanent line.
           <span style={{ color: color.ink, fontFamily: font.mono }}>{current.name}</span>
         ) : (
-          <span style={{ color: color.muted }}>{sorted.length} 步</span>
+          <span style={{ color: color.muted }}>{sorted.length} steps</span>
         )}
         {seconds !== null && (
           <span style={{ color: color.muted, fontFamily: font.mono }}>{seconds}s</span>
@@ -110,7 +110,7 @@ export function LiveRun({
               whiteSpace: 'nowrap',
             }}
           >
-            {sorted.length} 步 · {toolCounts(sorted)}
+            {sorted.length} steps · {toolCounts(sorted)}
           </span>
         )}
         <span aria-hidden style={{ flex: 1, height: 1, background: color.line, minWidth: 12 }} />

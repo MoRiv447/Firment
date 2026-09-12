@@ -39,7 +39,7 @@ import { FlashHistory } from './workbench/FlashHistory';
 import { ChangeTimeline, ElfBudget, VerificationBadges } from './workbench/insights';
 import { Decisions } from './workbench/Decisions';
 
-const { Text, Title } = Typography;
+const { Text } = Typography;
 
 /**
  * A label with its value underneath, both in body type.
@@ -64,8 +64,14 @@ function Field({ label, value, mono }: { label: string; value: ReactNode; mono?:
 
 /**
  * Project workbench (W1): mainline + branch session tree over
- * .firment/workbench.toml, quick repo status. Multi-user scopes and the
- * small-model guard land in W2/W3 (docs/gui-workbench.md).
+ * .firment/workbench.toml, quick repo status, pins, devices, hardware, flash
+ * history and the W1d insight cards.
+ *
+ * Still missing, named here rather than left as a row of "Coming next" tags that
+ * outlived what they described: the ChangeRequest flow (the branch model carries
+ * `status: open | merged | archived` and nothing sets it), session search and
+ * archive, and a GUI table for the guard rules that live only in
+ * `sbc-guard/rules.toml`. docs/gui-workbench.md lists exactly these.
  */
 export function WorkbenchView() {
   // The Devices & guard card SUBSCRIBES ITSELF to the raw event stream:
@@ -497,8 +503,8 @@ export function WorkbenchView() {
       `[guard escalation] node ${entry.node} sev=${entry.sev} rule=${entry.rule}`,
       `summary: ${entry.summary}`,
       `payload: ${entry.payload}`,
-      '请诊断该设备告警：先用 device_log 查看最近帧判断根因；',
-      '如需操作设备用 device_cmd 并说明理由；最后给出结论与后续建议。',
+      'Diagnose this device alert: start with device_log to find the root cause in recent frames.',
+      'Use device_cmd if the device must be touched, and say why. End with a conclusion and next steps.',
     ].join('\n');
     window.dispatchEvent(
       new CustomEvent('firment:run-escalation', {
@@ -573,10 +579,10 @@ export function WorkbenchView() {
         // The file changed on disk while the draft was open. Offer a reload
         // instead of letting the user fight a silent last-writer-wins.
         Modal.confirm({
-          title: '文件已被外部修改',
-          content: '知识文件在编辑期间被 agent 或其他程序改动。放弃当前草稿并重新加载磁盘内容？',
-          okText: '重新加载',
-          cancelText: '保留草稿',
+          title: 'The file changed on disk',
+          content: 'The knowledge file was modified by the agent or another program while you were editing it. Discard your draft and reload from disk?',
+          okText: 'Reload',
+          cancelText: 'Keep draft',
           onOk: () => {
             if (kbKey) selectKbFile(kbKey);
           },
@@ -1494,17 +1500,6 @@ export function WorkbenchView() {
                   })}
                 </Space>
               </Card>
-
-              <Title level={5} style={{ marginBottom: 0 }}>
-                Coming next (W1d/W2)
-              </Title>
-              <Space wrap size={6}>
-                {['ELF budget card', 'verification badges', 'change timeline', 'scopes & CRs', 'small-model guard'].map(
-                  (t) => (
-                    <Tag key={t}>{t}</Tag>
-                  ),
-                )}
-              </Space>
             </>
           )}
         </Space>

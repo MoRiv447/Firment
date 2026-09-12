@@ -83,16 +83,16 @@ function SubagentRow({ agent }: { agent: SubagentState }) {
           </span>
         )}
         <span style={{ fontSize: 10, color: color.muted, fontFamily: font.mono, whiteSpace: 'nowrap' }}>
-          {agent.steps.length} 步
+          {agent.steps.length} steps
         </span>
         <span style={{ fontSize: 10, color: chip.color, fontFamily: font.sans, whiteSpace: 'nowrap' }}>
-          {busy ? '进行中' : failed > 0 ? '有失败' : '已完成'}
+          {busy ? 'running' : failed > 0 ? 'failed' : 'done'}
         </span>
       </div>
       {open && (
         <div style={{ paddingBottom: 8 }}>
           {agent.steps.length === 0 ? (
-            <span style={{ fontSize: 11, color: color.muted }}>还没有工具调用</span>
+            <span style={{ fontSize: 11, color: color.muted }}>No tool calls yet</span>
           ) : (
             <>
               <div
@@ -122,8 +122,9 @@ export function AgentsPane({ subagents }: { subagents: SubagentState[] }) {
   if (subagents.length === 0) {
     return (
       <div style={{ fontSize: 11, lineHeight: 1.6, color: color.muted, fontFamily: font.sans }}>
-        本轮没有派生子代理。agent 调用 <code>task</code> 工具时会派一个只读的研究子代理，
-        它的步骤会显示在这里，而不是混进主对话。
+        No subagents this turn. When the agent calls the <code>task</code> tool it delegates to a
+        read-only research subagent, and that subagent's steps appear here rather than being
+        interleaved with the conversation.
       </div>
     );
   }

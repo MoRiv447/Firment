@@ -32,7 +32,7 @@ describe('FlashHistory', () => {
     expect(screen.getByText('.firment/work/flash-history.jsonl')).toBeInTheDocument();
     // The empty copy explains why the list is worth watching, rather than
     // just reporting nothing.
-    expect(screen.getByText(/暂无烧录记录/)).toBeInTheDocument();
+    expect(screen.getByText(/No flashes recorded yet/)).toBeInTheDocument();
   });
 
   it('shows the chip and the image for each burn', () => {

@@ -262,7 +262,7 @@ export function ChatView({
               zIndex: 5,
             }}
           >
-            跳到底部
+            Jump to bottom
           </Button>
         )}
         {!session && (

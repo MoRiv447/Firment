@@ -40,13 +40,13 @@ describe('AgentsPane', () => {
 
   it('says so when nothing was delegated, instead of showing an empty box', () => {
     render(<AgentsPane subagents={[]} />);
-    expect(screen.getByText(/本轮没有派生子代理/)).toBeInTheDocument();
+    expect(screen.getByText(/No subagents this turn/)).toBeInTheDocument();
   });
 
   it('reports a running subagent as running and a finished one as done', () => {
     render(<AgentsPane subagents={[agent({ id: 'a' }), agent({ id: 'b', done: true })]} />);
-    expect(screen.getByText('进行中')).toBeInTheDocument();
-    expect(screen.getByText('已完成')).toBeInTheDocument();
+    expect(screen.getByText('running')).toBeInTheDocument();
+    expect(screen.getByText('done')).toBeInTheDocument();
   });
 
   it('reports a finished subagent with a failed step as failed', () => {
@@ -57,7 +57,7 @@ describe('AgentsPane', () => {
         subagents={[agent({ done: true, steps: [step(1, 'grep', 'failed'), step(2, 'read_file')] })]}
       />,
     );
-    expect(screen.getByText('有失败')).toBeInTheDocument();
+    expect(screen.getByText('failed')).toBeInTheDocument();
   });
 
   it('keeps the steps behind a fold, and opens to them', () => {
@@ -68,9 +68,9 @@ describe('AgentsPane', () => {
     );
     // A subagent's twenty calls must not land in the transcript or the pane
     // unfolded; the count is the summary.
-    expect(screen.getByText('2 步')).toBeInTheDocument();
+    expect(screen.getByText('2 steps')).toBeInTheDocument();
     expect(container.textContent).not.toContain('read_file ×2');
-    fireEvent.click(screen.getByText('2 步'));
+    fireEvent.click(screen.getByText('2 steps'));
     expect(container.textContent).toContain('read_file ×2');
   });
 

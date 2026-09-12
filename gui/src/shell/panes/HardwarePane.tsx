@@ -32,8 +32,8 @@ export function HardwarePane({ monitorLines }: { monitorLines: Record<string, Mo
       <div style={{ display: 'flex', gap: 4, flex: '0 0 auto' }}>
         {(
           [
-            ['serial', '串口', <UsbOutlined key="u" />],
-            ['flash', '烧录', <RocketOutlined key="r" />],
+            ['serial', 'Serial', <UsbOutlined key="u" />],
+            ['flash', 'Flash', <RocketOutlined key="r" />],
           ] as const
         ).map(([key, label, icon]) => {
           const on = tab === key;

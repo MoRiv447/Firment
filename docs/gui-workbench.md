@@ -1,8 +1,24 @@
 # GUI 工作台设计 —— 面向长期项目的项目中枢（v1 草案）
 
-> 状态：**实施中（v0.6.0-rc）**。W1 ✅、W2 ✅（W2-4 团队协作暂缓）、
-> W3 部分完成（MQTT 链路 + 守卫升级闭环 ✅；烧录历史/硬件清单/通知中心 ⏳）。
-> W4 未开始。
+> 状态：**实施中**。W1 ✅、W2 ✅（W2-4 团队协作暂缓）。
+>
+> W3：MQTT 链路 + 守卫升级闭环 ✅、烧录历史 ✅、硬件清单 ✅、通知中心 ✅、
+> 小模型守卫 ✅（`sbc-guard/guardd.py` + `GuardConfig.standby_minutes`）、
+> 守卫统计 ✅（`guardd.py` 的 `frames/matches/llm_calls/llm_fail` 计数器，随
+> `firment/guard/status` retained 上报）、作用域 ✅（`ScopeEntry` +
+> `WorkbenchSection.scope` + `[scope.owner]`）。
+>
+> **仍未做**（下表里带 ✓/★ 的条目大多已完成；这一行是逐条对着代码核过的结果）：
+>
+> - **ChangeRequest 流程（§4）** —— 只有 `CollabBackend` trait + `NoopBackend` 接缝，
+>   出界变更的打包与审批不存在；连带 CR 审查检查单也没有
+> - **会话搜索 / 归档** —— 分支模型里已有 `status: open | merged | archived` 字段，
+>   但没有搜索、没有归档操作
+> - **守卫规则可视化** —— 规则本身是 SBC 侧 `sbc-guard/rules.toml`，GUI 里没有对应的关键词/阈值表
+> - W4：未开始
+>
+> 这份文档的"期数"栏是**排期**，不是完成度标记——别把 ✓/★ 读成"做了/没做"。
+>
 > 配套文档：`docs/sbc-agent.md`（SBC 小模型数据桥；守卫与遥测的事件总线在 §5 汇合）。
 
 ## 0. 定位与三原则

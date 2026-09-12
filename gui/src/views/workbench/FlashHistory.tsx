@@ -31,7 +31,7 @@ export function FlashHistory({ history }: { history: FlashHistoryDto[] }) {
     >
       {history.length === 0 ? (
         <Text type="secondary" style={{ fontSize: 12 }}>
-          暂无烧录记录。agent 的 flash 工具每次执行（成功或失败）都会记录在这里。
+          No flashes recorded yet. Every run of the agent's flash tool lands here, successful or not.
         </Text>
       ) : (
         history.map((f, i) => (

@@ -58,10 +58,10 @@ describe('TodosPane', () => {
 
   it('distinguishes an empty list from one still loading', () => {
     const { unmount } = render(<TodosPane todos={[]} loading />);
-    expect(screen.getByText('读取中…')).toBeInTheDocument();
+    expect(screen.getByText('Loading…')).toBeInTheDocument();
     unmount();
     render(<TodosPane todos={[]} loading={false} />);
-    expect(screen.getByText(/这个会话还没有待办/)).toBeInTheDocument();
+    expect(screen.getByText(/No todos in this session yet/)).toBeInTheDocument();
   });
 });
 

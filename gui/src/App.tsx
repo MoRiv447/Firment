@@ -338,7 +338,7 @@ export default function App() {
             if (e.type === 'tool_end' && e.name === 'todo' && sid) {
               void api
                 .sessionTodos(sid)
-                .then(setTodos)
+                .then((t) => setTodos(Array.isArray(t) ? t : []))
                 .catch((err: unknown) => console.error(err));
             }
             // Notification center: build/verify/flash failures are
@@ -347,7 +347,7 @@ export default function App() {
               pushNotification({
                 id: `fail-${sid}-${e.seq}`,
                 kind: `${e.name}-fail`,
-                title: `${e.name} 失败${sid ? ` · ${sid.slice(0, 8)}` : ''}`,
+                title: `${e.name} failed${sid ? ` · ${sid.slice(0, 8)}` : ''}`,
                 body: e.summary.slice(0, 200),
                 sid: sid ?? undefined,
               });
@@ -421,7 +421,7 @@ export default function App() {
               pushNotification({
                 id: `alert-${String(parsed.ts ?? Date.now())}-${node}-${String(parsed.rule ?? '')}`,
                 kind: 'guard',
-                title: `告警 ${node} · ${String(parsed.sev ?? '?')}`,
+                title: `alert ${node} · ${String(parsed.sev ?? '?')}`,
                 body: String(parsed.summary ?? e.frame).slice(0, 200),
               });
             }
@@ -553,7 +553,9 @@ export default function App() {
     void api
       .sessionTodos(id)
       .then((t) => {
-        if (!cancelled) setTodos(t);
+        // Guarded at the IPC boundary: the command returns a list, but a render
+        // that assumes it is the worst failure mode there is -- 	odos.length`n        // on a null takes the whole shell down to a blank window.
+        if (!cancelled) setTodos(Array.isArray(t) ? t : []);
       })
       .catch((err: unknown) => console.error(err))
       .finally(() => {
@@ -833,29 +835,29 @@ export default function App() {
               tabs={[
                 {
                   key: 'changes',
-                  label: '改动',
+                  label: 'Changes',
                   content: (
                     <PendingPane
-                      title="改动卡片"
-                      body="每个被改动的文件一张卡：路径、+N −M、hunk、以及改完之后能做什么。一轮改多个文件时先折叠成一张汇总。数据源是 EditJournal，需要一个只读命令把它读出来。"
+                      title="Change cards"
+                      body="One card per changed file: path, +N −M, the hunks, and what you can do next. A turn that touches several files folds to one summary first. The data is in the EditJournal; it needs a read-only command to surface it."
                     />
                   ),
                 },
                 {
                   key: 'agents',
-                  label: '子代理',
+                  label: 'Subagents',
                   badge: subagents.length || undefined,
                   content: <AgentsPane subagents={subagents} />,
                 },
                 {
                   key: 'todos',
-                  label: '待办',
+                  label: 'Todos',
                   badge: todos.length || undefined,
                   content: <TodosPane todos={todos} loading={todosLoading} />,
                 },
                 {
                   key: 'hardware',
-                  label: '硬件',
+                  label: 'Hardware',
                   content: <HardwarePane monitorLines={monitorLines} />,
                 },
               ]}
@@ -865,17 +867,17 @@ export default function App() {
           <StatusBar>
             <StatusItem
               kind={running ? 'running' : 'neutral'}
-              label="轮次"
+              label="Turn"
               value={
                 running && turn?.startedAt
                   ? `${Math.max(0, Math.round((nowTick - turn.startedAt) / 1000))}s`
-                  : '空闲'
+                  : 'idle'
               }
             />
             {anyRunning && (
               <StatusItem
                 kind="running"
-                value={`${Object.values(turnsById).filter((t) => t.running).length} 个会话在跑`}
+                value={`${Object.values(turnsById).filter((t) => t.running).length} running`}
               />
             )}
             {session && (
@@ -886,8 +888,8 @@ export default function App() {
                   disabled={running}
                   menu={{
                     items: [
-                      { key: 'agent', label: 'agent（全部工具）' },
-                      { key: 'plan', label: 'plan（只读工具）' },
+                      { key: 'agent', label: 'agent (all tools)' },
+                      { key: 'plan', label: 'plan (read-only tools)' },
                     ],
                     onClick: ({ key }) => void handleSetSessionProp(api.setSessionMode(session.id, key)),
                   }}
@@ -895,9 +897,9 @@ export default function App() {
                   <span>
                     <StatusItem
                       kind={session.mode === 'plan' ? 'attention' : 'ok'}
-                      label="模式"
+                      label="Mode"
                       value={session.mode}
-                      title="点击切换 agent / plan"
+                      title="Switch between agent and plan"
                     />
                   </span>
                 </Dropdown>
@@ -916,9 +918,9 @@ export default function App() {
                   <span>
                     <StatusItem
                       kind="neutral"
-                      label="思考"
+                      label="Thinking"
                       value={session.thinking}
-                      title="点击切换思考等级"
+                      title="Change the thinking level"
                     />
                   </span>
                 </Dropdown>
@@ -927,11 +929,11 @@ export default function App() {
                   disabled={running}
                   menu={{
                     items: [
-                      { key: '65536', label: '64k 字符' },
-                      { key: '131072', label: '128k 字符' },
-                      { key: '262144', label: '256k 字符（默认）' },
-                      { key: '524288', label: '512k 字符' },
-                      { key: '1048576', label: '1M 字符' },
+                      { key: '65536', label: '64k chars' },
+                      { key: '131072', label: '128k chars' },
+                      { key: '262144', label: '256k chars (default)' },
+                      { key: '524288', label: '512k chars' },
+                      { key: '1048576', label: '1M chars' },
                     ],
                     onClick: ({ key }) =>
                       void handleSetSessionProp(api.setSessionBudget(session.id, Number(key))),
@@ -948,12 +950,12 @@ export default function App() {
                               ? 'attention'
                               : 'ok'
                       }
-                      label="上下文"
+                      label="Context"
                       value={usage ? `${usage.pct.toFixed(0)}%` : '…'}
                       title={
                         usage
-                          ? `${usage.total_chars} / ${usage.budget} 字符`
-                          : '用量未知'
+                          ? `${usage.total_chars} / ${usage.budget} chars`
+                          : 'usage unknown'
                       }
                     />
                   </span>
@@ -962,7 +964,7 @@ export default function App() {
                 <StatusItem
                   kind="neutral"
                   value={`${session.provider} · ${session.model}`}
-                  title="这个会话使用的 provider 与模型"
+                  title="Provider and model for this session"
                 />
               </>
             )}
@@ -970,7 +972,7 @@ export default function App() {
         </Layout>
 
         <Drawer
-          title="设置"
+          title="Settings"
           placement="right"
           width={760}
           open={settingsOpen}
