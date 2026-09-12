@@ -5,6 +5,7 @@
 
 use crate::adapters::PermissionRequest;
 use crate::commands::AgentCmd;
+use crate::evidence::Evidence;
 use crate::paste::{EnterAction, PasteBlock, PasteBurst, PasteOut};
 use crate::pickers::{ModelPicker, Selection, SessionPicker};
 use crate::util::{
@@ -41,6 +42,9 @@ pub(crate) struct App {
     pub(crate) ai_thinking: bool,
     /// Tools currently running (raw name, activity label) for status hints.
     pub(crate) active_tools: Vec<(String, String)>,
+    /// How far up the verification ladder this session has got. Fed by the same
+    /// two tool events as `active_tools`, drawn by the EVIDENCE panel.
+    pub(crate) evidence: Evidence,
     /// While busy, the first Esc arms an interrupt confirmation window (5s);
     /// a second Esc inside it actually cancels the turn.
     pub(crate) interrupt_armed_at: Option<Instant>,
@@ -148,6 +152,7 @@ impl App {
             busy: false,
             ai_thinking: false,
             active_tools: Vec::new(),
+            evidence: Evidence::default(),
             permission: None,
             permission_queue: VecDeque::new(),
             question: None,
@@ -276,6 +281,10 @@ impl App {
             AgentEvent::ToolStart { name, args, seq } => {
                 self.ai_thinking = false;
                 self.thinking_since = None;
+                // The verification ladder is advanced from the same two events
+                // the tool cards come from, so the EVIDENCE panel and the
+                // transcript cannot disagree about what ran.
+                self.evidence.begin(&name);
                 self.active_tools
                     .push((name.clone(), tool_activity(&name, &args)));
                 // Friendly activity label ("building main.c…") instead of the
@@ -301,6 +310,7 @@ impl App {
                 if let Some(pos) = self.active_tools.iter().position(|(n, _)| n == &name) {
                     self.active_tools.remove(pos);
                 }
+                self.evidence.finish(&name, ok);
                 // Decided before the loop: `should_auto_expand` borrows `self`,
                 // which the mutable item iteration below already holds.
                 let auto_expand = self.should_auto_expand(detail.as_deref());

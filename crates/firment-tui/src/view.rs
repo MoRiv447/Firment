@@ -15,9 +15,16 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
+use crate::evidence::RungState;
+
 /// Spinner glyphs shared by the tool cards, the thinking row and the status
 /// bar. The phase comes from `App::spinner_frame` (wall clock, 120ms/step).
 const SPINNER: [char; 4] = ['◐', '◓', '◑', '◒'];
+
+/// Width of the EVIDENCE column, matching the workspace mockup.
+const EVIDENCE_WIDTH: u16 = 30;
+/// Below this the transcript needs the cells more than the ladder does.
+const MIN_WIDTH_FOR_EVIDENCE: u16 = 80;
 
 impl App {
     /// Constant-rate spinner phase, derived from wall clock: deriving it
@@ -345,6 +352,54 @@ impl App {
         rows
     }
 
+    /// The EVIDENCE column: how far up the verification ladder this session got.
+    ///
+    /// It shows every rung, always, including the ones nothing has reached. A
+    /// ladder that appears one rung at a time is a progress bar; the point of
+    /// this panel is that the unticked rungs are what a completion claim still
+    /// has to answer for.
+    fn evidence_panel(&self) -> Paragraph<'static> {
+        let muted = crate::theme::muted(self.tier);
+        // The title names the highest rung reached. The ticks below already show
+        // which rungs are ticked, but the high-water mark is the number a
+        // completion claim is measured against, and naming it is what stops
+        // "it builds" from reading as "it works".
+        let title = match self.evidence.highest() {
+            Some(rung) => format!(
+                " EVIDENCE · {} ",
+                crate::evidence::RUNGS[rung as usize - 1].1
+            ),
+            None => " EVIDENCE ".to_string(),
+        };
+        Paragraph::new(self.evidence_lines()).block(
+            Block::bordered()
+                .title(Span::styled(title, Style::default().fg(muted)))
+                .border_style(Style::default().fg(muted)),
+        )
+    }
+
+    /// The ladder's rows, split out from the widget so the text can be asserted
+    /// without a terminal: the glyph and the label are its entire content.
+    pub(crate) fn evidence_lines(&self) -> Vec<Line<'static>> {
+        let spinner = SPINNER[self.spinner_frame()];
+        self.evidence
+            .rows()
+            .map(|(_rung, label, state)| {
+                let (glyph, color) = match state {
+                    RungState::Proven => ('✓', crate::theme::success(self.tier)),
+                    RungState::Running => (spinner, crate::theme::warn(self.tier)),
+                    // Not "failed": an untouched rung is untried, and red is
+                    // reserved for a real error.
+                    RungState::Untouched => ('○', crate::theme::muted(self.tier)),
+                };
+                Line::from(vec![
+                    Span::styled(format!(" {glyph} "), Style::default().fg(color)),
+                    Span::styled(label.to_string(), Style::default().fg(color)),
+                ])
+            })
+            .collect()
+    }
+
     pub(crate) fn render(&mut self, frame: &mut Frame) {
         let frame_width = frame.area().width.saturating_sub(2) as usize;
         let (input_lines, line_starts, cursor_line, cursor_col) = if self.input.is_empty() {
@@ -353,12 +408,23 @@ impl App {
             self.input_layout(frame_width.max(1))
         };
         let input_height = (input_lines.len() + 2).clamp(3, MAX_INPUT_HEIGHT) as u16;
-        let [transcript_area, status_area, input_area] = Layout::vertical([
+        let [body_area, status_area, input_area] = Layout::vertical([
             Constraint::Min(3),
             Constraint::Length(1),
             Constraint::Length(input_height),
         ])
         .areas(frame.area());
+        // The EVIDENCE column exists only where the terminal can afford it. On a
+        // narrow window every cell it takes comes straight out of the
+        // transcript, and a squeezed transcript is worse than a missing ladder.
+        let (transcript_area, evidence_area) = if body_area.width >= MIN_WIDTH_FOR_EVIDENCE {
+            let [transcript, evidence] =
+                Layout::horizontal([Constraint::Min(24), Constraint::Length(EVIDENCE_WIDTH)])
+                    .areas(body_area);
+            (transcript, Some(evidence))
+        } else {
+            (body_area, None)
+        };
         self.input_width = frame_width;
         self.input_rect = input_area;
 
@@ -407,6 +473,10 @@ impl App {
                 .border_style(Style::default().fg(accent)),
         );
         frame.render_widget(paragraph, transcript_area);
+
+        if let Some(area) = evidence_area {
+            frame.render_widget(self.evidence_panel(), area);
+        }
 
         let spinner = if self.busy {
             const SPINNER: [char; 4] = ['◐', '◓', '◑', '◒'];

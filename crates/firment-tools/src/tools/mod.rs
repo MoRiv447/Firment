@@ -10,6 +10,15 @@ pub(crate) mod flash;
 mod glob;
 mod grep;
 mod hil;
+
+/// The verification ladder's kind → rung mapping, re-exported.
+///
+/// The TUI's EVIDENCE column shows which rung a session has reached, and it has
+/// to show the *same* ladder the hil tool advances — a second copy of this table
+/// would drift, and the drift would be invisible: the panel would claim a rung
+/// the tools never granted. Exported as a function rather than by making the
+/// whole `hil` module public, because the mapping is the entire shared surface.
+pub use hil::ladder_rung;
 mod html;
 mod la;
 mod list_dir;

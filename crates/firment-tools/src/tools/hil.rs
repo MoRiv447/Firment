@@ -519,7 +519,11 @@ fn replay_path_for(ctx: &ToolContext, id: &str) -> PathBuf {
 /// Verification ladder rung a hil step reaches when it succeeds. Level 1
 /// ("code") is the floor every suite starts from; `elf_analyze` and `delay`
 /// do not advance the ladder.
-fn ladder_rung(kind: &str) -> Option<(u8, &'static str)> {
+///
+/// Public because the TUI's EVIDENCE panel displays this ladder. Note the two
+/// vocabularies and do not conflate them: the *kind* is the tool/step name
+/// (`flash`), while the *label* is the rung's name (`deploy`).
+pub fn ladder_rung(kind: &str) -> Option<(u8, &'static str)> {
     match kind {
         "build" => Some((2, "build")),
         "flash" => Some((3, "deploy")),

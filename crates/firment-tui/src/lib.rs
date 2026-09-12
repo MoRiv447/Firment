@@ -22,6 +22,7 @@ use tokio::sync::mpsc;
 mod adapters;
 mod app;
 mod commands;
+mod evidence;
 mod motion;
 mod paste;
 mod pickers;
@@ -1242,6 +1243,83 @@ mod tests {
         app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(app.model_picker.is_none());
         assert_eq!(app.model, "gpt-xhigh");
+    }
+
+    /// Rows of the EVIDENCE panel, as plain strings.
+    fn evidence_rows(app: &App) -> Vec<String> {
+        app.evidence_lines().iter().map(|l| l.to_string()).collect()
+    }
+
+    #[test]
+    fn the_evidence_panel_shows_all_five_rungs_from_the_start() {
+        let app = test_app();
+        let rows = evidence_rows(&app);
+        // Five, not zero: the untried rungs are the point of the panel -- they
+        // are what a completion claim still has to answer for.
+        assert_eq!(rows.len(), 5, "got {rows:?}");
+        assert!(rows[0].contains("code"), "got {rows:?}");
+        assert!(rows[4].contains("physical"), "got {rows:?}");
+        // And an untried rung is a circle, not a cross: untried is not failed.
+        assert!(rows.iter().all(|r| r.contains('○')), "got {rows:?}");
+    }
+
+    #[test]
+    fn the_evidence_panel_follows_the_tools_that_ran() {
+        let mut app = test_app();
+
+        // Rung 1 is earned by writing code, before anything compiles.
+        app.on_agent(AgentEvent::ToolEnd {
+            name: "edit_file".to_string(),
+            ok: true,
+            summary: String::new(),
+            detail: None,
+            seq: 1,
+        });
+        app.on_agent(AgentEvent::ToolEnd {
+            name: "build".to_string(),
+            ok: true,
+            summary: String::new(),
+            detail: None,
+            seq: 2,
+        });
+        let rows = evidence_rows(&app);
+        assert!(rows[0].starts_with(" ✓ code"), "got {rows:?}");
+        assert!(rows[1].starts_with(" ✓ build"), "got {rows:?}");
+        // The device was never touched, so those rungs stay untried.
+        assert!(rows[2].contains('○'), "got {rows:?}");
+        assert!(rows[4].contains('○'), "got {rows:?}");
+    }
+
+    #[test]
+    fn a_failed_step_does_not_tick_its_rung() {
+        let mut app = test_app();
+        app.on_agent(AgentEvent::ToolEnd {
+            name: "build".to_string(),
+            ok: false,
+            summary: String::new(),
+            detail: None,
+            seq: 1,
+        });
+        // A build that failed proves nothing about the build rung.
+        assert!(evidence_rows(&app)[1].contains('○'));
+    }
+
+    #[test]
+    fn a_running_step_shows_the_spinner_not_a_tick() {
+        let mut app = test_app();
+        app.on_agent(AgentEvent::ToolStart {
+            name: "flash".to_string(),
+            args: serde_json::json!({}),
+            seq: 1,
+        });
+        let rows = evidence_rows(&app);
+        let row = &rows[2];
+        assert!(row.contains("deploy"), "got {row:?}");
+        assert!(
+            !row.contains('✓'),
+            "a step in flight has proven nothing: {row:?}"
+        );
+        assert!(!row.contains('○'), "and it is not untried either: {row:?}");
     }
 
     #[test]
