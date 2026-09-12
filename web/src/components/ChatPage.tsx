@@ -3,9 +3,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Send,
-  Plus,
-  MessageSquare,
-  Trash2,
   Settings,
   Zap,
   Shield,
@@ -22,6 +19,7 @@ import { ChatMessage } from '@/lib/types';
 import { EmptyState } from './chat/EmptyState';
 import { LoadingBubble } from './chat/LoadingBubble';
 import { MessageBubble } from './chat/MessageBubble';
+import { SessionSidebar } from './chat/SessionSidebar';
 import {
   LocalSession,
   loadSessions,
@@ -349,114 +347,16 @@ export default function ChatPage() {
   return (
     <div className="flex h-dvh bg-gray-950 text-gray-100 overflow-hidden">
       {/* 移动端遮罩 */}
-      {sidebarOpen && (
-        <div
-          className="fixed inset-0 bg-black/60 z-30 md:hidden"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
-
-      {/* Sidebar：桌面常驻；移动端抽屉（汉堡展开） */}
-      <aside
-        className={`w-64 md:w-72 bg-gray-900 border-r-[3px] border-black flex flex-col shrink-0
-          fixed inset-y-0 left-0 z-40 transform transition-transform duration-200 md:static md:translate-x-0
-          ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
-      >
-        <div className="p-4 border-b-[3px] border-black flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/logo-w-64.png"
-              alt="Firment"
-              className="w-10 h-10 rounded-md object-contain surface-brand p-1 shadow-[3px_3px_0_#000]"
-            />
-            <div>
-              <h1 className="font-extrabold text-white text-lg leading-tight tracking-wide">FIRMENT</h1>
-              <p className="text-[10px] text-gray-500 tracking-[1.5px]">FIRMWARE + AGENT</p>
-            </div>
-          </div>
-          {/* 移动端关闭按钮 */}
-          <button
-            onClick={() => setSidebarOpen(false)}
-            className="p-1 text-gray-400 hover:text-white md:hidden"
-            aria-label="Close menu"
-          >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-
-        <div className="p-4">
-          <button
-            onClick={createNewSession}
-            className="w-full flex items-center justify-center gap-2 px-4 py-3 btn-brand font-bold border-[3px] border-black shadow-[4px_4px_0_#000] transition-all duration-100 active:shadow-none"
-          >
-            <Plus className="w-5 h-5" />
-            New Session
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-3 pb-3">
-          {sessions.length === 0 ? (
-            <div className="text-center py-8 text-gray-500 text-sm">
-              <MessageSquare className="w-8 h-8 mx-auto mb-2 opacity-50" />
-              No sessions yet
-            </div>
-          ) : (
-            <div className="space-y-1">
-              {sessions.map((session) => (
-                <div
-                  key={session.id}
-                  className={`group flex items-center gap-2 px-3 py-2.5 cursor-pointer transition-all duration-100 ${
-                    currentId === session.id
-                      ? 'surface-brand border-[3px] border-black shadow-[3px_3px_0_#000]'
-                      : 'hover:bg-gray-800 border-[3px] border-transparent'
-                  }`}
-                  onClick={() => selectSession(session.id)}
-                >
-                  <MessageSquare
-                    className={`w-4 h-4 shrink-0 ${
-                      currentId === session.id ? 'text-white' : 'text-gray-400'
-                    }`}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <p
-                      className={`text-sm truncate ${
-                        currentId === session.id ? 'text-white font-bold' : 'text-gray-200'
-                      }`}
-                    >
-                      {session.title || 'Empty session'}
-                    </p>
-                    <p className={`text-xs ${currentId === session.id ? 'text-blue-100' : 'text-gray-500'}`}>
-                      {session.messages.length} messages
-                    </p>
-                  </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteSession(session.id);
-                    }}
-                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-500/30 transition-all"
-                  >
-                    <Trash2 className="w-3 h-3 text-red-400" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div className="p-4 border-t-[3px] border-black">
-          <button
-            onClick={() => setShowSettings(true)}
-            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-300 hover:text-white hover:bg-gray-800 border-[2px] border-black transition-colors"
-          >
-            <Settings className="w-4 h-4" />
-            Settings
-          </button>
-        </div>
-      </aside>
+      <SessionSidebar
+        open={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        sessions={sessions}
+        currentId={currentId}
+        onNew={createNewSession}
+        onSelect={selectSession}
+        onDelete={deleteSession}
+        onOpenSettings={() => setShowSettings(true)}
+      />
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col min-w-0">
