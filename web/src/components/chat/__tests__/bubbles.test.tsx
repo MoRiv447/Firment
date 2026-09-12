@@ -22,6 +22,15 @@ describe('EmptyState', () => {
     expect(screen.getByText('Read the main file in thermostat')).toBeInTheDocument();
   });
 
+  it('does not name a workspace it was not given', () => {
+    // ChatPage passes `config.tools?.workspace || '.'`, so an unconfigured
+    // workspace is a bare dot: the suggestion used to read "Read the main file
+    // in .", a sentence ending in a full stop that was never a word.
+    render(<EmptyState onSend={() => {}} workspace="." />);
+    expect(screen.getByText('Read the main file')).toBeInTheDocument();
+    expect(screen.queryByText('Read the main file in .')).toBeNull();
+  });
+
   it('sends exactly the text the button shows', () => {
     const onSend = vi.fn();
     render(<EmptyState onSend={onSend} workspace="thermostat" />);

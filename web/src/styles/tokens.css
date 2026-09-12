@@ -52,6 +52,20 @@
   /* The one true black: the outline and the hard offset shadow. */
   --outline: #000000;
 
+  /* Saturated fills for the loud suggestion tiles, which carry black text and
+   * a black frame. Deliberately scheme-INDEPENDENT, like --outline directly
+   * above: the same pastel on either ground, and black on top of any of them
+   * is 12.59:1 / 14.96:1 / 10.95:1.
+   *
+   * These are NOT --info-ink / --success-ink / --warn-ink. Those invert under
+   * [data-theme="light"], so a tile built from them would have put black text
+   * on #0369A1 the moment the light scheme was wired. A status ink answers
+   * "what happened" and must track the ground; a tile fill answers "press me"
+   * and must not. */
+  --tile-info: #7dd3fc;
+  --tile-success: #86efac;
+  --tile-warn: #eab308;
+
   /* Type and shape. The font FAMILIES are deliberately not bound here: this
    * file is not imported yet, and a `font-family` on :root would override the
    * Inter/JetBrains setup in app/layout.tsx the moment it is. Bind them when

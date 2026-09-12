@@ -17,8 +17,13 @@ export function EmptyState({
   onSend: (text: string) => void;
   workspace: string;
 }) {
+  // ChatPage passes `config.tools?.workspace || '.'`, so an unconfigured
+  // workspace arrives as a bare dot and the suggestion rendered as
+  // "Read the main file in ." -- a sentence ending in a full stop that was
+  // never a word. Drop the clause instead of naming a directory we do not have.
+  const where = workspace && workspace !== '.' ? ` in ${workspace}` : '';
   const suggestions = [
-    { icon: FileText, text: `Read the main file in ${workspace}`, color: 'blue' },
+    { icon: FileText, text: `Read the main file${where}`, color: 'blue' },
     { icon: Search, text: 'Search for GPIO configuration patterns', color: 'purple' },
     { icon: Globe, text: 'Look up STM32F407 EXTI documentation', color: 'green' },
     { icon: Code, text: 'List all source files in the project', color: 'yellow' },
@@ -27,11 +32,11 @@ export function EmptyState({
   const colorMap: Record<string, string> = {
     blue: 'btn-brand border-[3px] border-black shadow-[4px_4px_0_#000] hover:shadow-[6px_6px_0_#000]',
     purple:
-      'bg-info-ink border-[3px] border-black text-black hover:brightness-90 shadow-[4px_4px_0_#000] hover:shadow-[6px_6px_0_#000]',
+      'bg-tile-info border-[3px] border-black text-black hover:brightness-90 shadow-[4px_4px_0_#000] hover:shadow-[6px_6px_0_#000]',
     green:
-      'bg-success-ink border-[3px] border-black text-black hover:brightness-90 shadow-[4px_4px_0_#000] hover:shadow-[6px_6px_0_#000]',
+      'bg-tile-success border-[3px] border-black text-black hover:brightness-90 shadow-[4px_4px_0_#000] hover:shadow-[6px_6px_0_#000]',
     yellow:
-      'bg-warn-ink border-[3px] border-black text-black hover:brightness-90 shadow-[4px_4px_0_#000] hover:shadow-[6px_6px_0_#000]',
+      'bg-tile-warn border-[3px] border-black text-black hover:brightness-90 shadow-[4px_4px_0_#000] hover:shadow-[6px_6px_0_#000]',
   };
 
   return (

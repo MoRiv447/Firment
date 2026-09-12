@@ -89,6 +89,21 @@ describe('SessionSidebar', () => {
     expect(other?.className).not.toContain('surface-brand');
   });
 
+  it('leaves the selected row readable on its brand fill', () => {
+    // `.surface-brand` sets `color: var(--on-acid)`, which is the only
+    // readable ink on #B4F779 (13.28:1). The children used to override it with
+    // `text-white` -- 1.27:1, measured, and the exact mistake
+    // docs/design/tokens.md warns about. A future "make it pop" edit that
+    // re-adds a light utility class has to fail here.
+    setup({ sessions: [session({ id: 'a', title: 'first chat' })], currentId: 'a' });
+    const row = screen.getByText('first chat').closest('div[class*="cursor-pointer"]');
+    expect(row?.className).toContain('surface-brand');
+    for (const el of row?.querySelectorAll('*') ?? []) {
+      // `el.className` is an SVGAnimatedString on the icon, not a string.
+      expect(el.getAttribute('class') ?? '').not.toMatch(/text-(white|blue-100)/);
+    }
+  });
+
   it('opens and closes the drawer with a transform, not a mount', () => {
     const { view } = setup({ open: false });
     const aside = view.container.querySelector('aside');

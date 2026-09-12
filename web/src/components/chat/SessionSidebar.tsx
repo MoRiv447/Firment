@@ -106,22 +106,30 @@ export function SessionSidebar({
                   }`}
                   onClick={() => onSelect(session.id)}
                 >
+                  {/* The selected row is `.surface-brand`, which already sets
+                      `color: var(--on-acid)` (13.28:1 on the acid). Overriding
+                      it with `text-white` here was 1.27:1 -- the exact ratio
+                      docs/design/tokens.md names when it says the acid is a
+                      fill, never a text colour. Inherit instead. */}
                   <MessageSquare
                     className={`w-4 h-4 shrink-0 ${
-                      currentId === session.id ? 'text-white' : 'text-gray-400'
+                      currentId === session.id ? '' : 'text-gray-400'
                     }`}
                   />
                   <div className="flex-1 min-w-0">
                     <p
                       className={`text-sm truncate ${
-                        currentId === session.id ? 'text-white font-bold' : 'text-gray-200'
+                        currentId === session.id ? 'font-bold' : 'text-gray-200'
                       }`}
                     >
                       {session.title || 'Empty session'}
                     </p>
                     <p
+                      // Dimmed by opacity rather than a second colour: the
+                      // on-acid ink at 70% is 5.50:1, and a named grey would
+                      // have to be re-measured against the acid, not the page.
                       className={`text-xs ${
-                        currentId === session.id ? 'text-blue-100' : 'text-gray-500'
+                        currentId === session.id ? 'opacity-70' : 'text-gray-500'
                       }`}
                     >
                       {session.messages.length} messages

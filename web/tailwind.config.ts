@@ -51,6 +51,12 @@ const config: Config = {
         "diff-meta-ink": "var(--diff-meta-ink)",
 
         outline: "var(--outline)",
+
+        // Loud tile fills. Same value in both schemes, unlike the status inks
+        // above -- see the comment on --tile-info in styles/tokens.css.
+        "tile-info": "var(--tile-info)",
+        "tile-success": "var(--tile-success)",
+        "tile-warn": "var(--tile-warn)",
       },
       borderRadius: {
         brand: "var(--radius-brand)",
