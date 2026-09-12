@@ -66,6 +66,12 @@ struct Cli {
     #[arg(long)]
     plan: bool,
 
+    /// Disable TUI animation. Already implied over ssh, on a dumb terminal, and
+    /// when stdout is not a terminal; this is for a capable terminal where the
+    /// spinner is still not worth the repaints.
+    #[arg(long = "no-anim")]
+    no_anim: bool,
+
     /// Working directory for the session.
     #[arg(long)]
     cwd: Option<PathBuf>,
@@ -597,7 +603,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .await?;
     } else {
-        firment_tui::run(config, config_path, session).await?;
+        firment_tui::run(config, config_path, session, cli.no_anim).await?;
     }
     Ok(())
 }

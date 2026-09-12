@@ -16,12 +16,13 @@ use std::collections::HashSet;
 use std::io::{self, Stdout};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 mod adapters;
 mod app;
 mod commands;
+mod motion;
 mod paste;
 mod pickers;
 mod theme;
@@ -31,12 +32,16 @@ mod view;
 use adapters::{ChannelSink, PermissionRequest, TuiAsker, TuiPermission};
 use app::App;
 use commands::spawn_agent_task;
+use motion::Motion;
 use util::{GitInfo, git_info};
 
 pub async fn run(
     config: Config,
     config_path: std::path::PathBuf,
     session: Session,
+    // `--no-anim`: turn animation off even on a capable terminal. The policy
+    // itself is decided here, once, rather than re-read per frame.
+    no_anim: bool,
 ) -> anyhow::Result<()> {
     // Keep the user-level config untouched so `/model` & co. only ever write
     // the user's own settings to the global file — project `.firment.toml`
@@ -157,7 +162,16 @@ pub async fn run(
     // so the seven test constructors keep their current shape. Read from the
     // USER config: `[ui]` is deliberately not project-overridable.
     app.tool_verbosity = tool_verbosity;
-    let result = run_loop(&mut terminal, &mut app, event_rx, perm_rx, ask_rx, ui_rx).await;
+    let result = run_loop(
+        &mut terminal,
+        &mut app,
+        event_rx,
+        perm_rx,
+        ask_rx,
+        ui_rx,
+        Motion::from_env(no_anim),
+    )
+    .await;
     restore_terminal(&mut terminal)?;
     agent_task.abort();
     result
@@ -234,8 +248,11 @@ async fn run_loop(
     mut perm_rx: mpsc::Receiver<PermissionRequest>,
     mut ask_rx: mpsc::Receiver<QuestionRequest>,
     mut ui_rx: mpsc::Receiver<Event>,
+    motion: Motion,
 ) -> anyhow::Result<()> {
-    // A 25ms tick lands paste-burst buffers on time without slowing animations.
+    // A 25ms tick lands paste-burst buffers on time. It is NOT the frame rate:
+    // animation repaints are throttled separately, by `motion`, so a fast tick
+    // here costs nothing on a slow terminal.
     let mut ticker = tokio::time::interval(Duration::from_millis(25));
     // After an event flood the default Burst behavior would fire the missed
     // ticks back-to-back, making the spinner visibly jump. Skip instead.
@@ -248,6 +265,10 @@ async fn run_loop(
     let (git_tx, mut git_rx) = mpsc::channel::<Option<GitInfo>>(1);
     let mut git_in_flight = false;
     let mut dirty = true;
+    // When the last repaint of any kind happened. Animation frames are paced
+    // against this rather than against their own timestamp, so a burst of real
+    // output cannot be followed immediately by an animation frame.
+    let mut last_draw: Option<Instant> = None;
     loop {
         let mut spinner_tick = false;
         tokio::select! {
@@ -334,11 +355,19 @@ async fn run_loop(
         }
         // Spinners keep running behind a modal now that the backdrop is
         // dimmed — freezing them read as "the app hung" during a long
-        // approval wait.
-        let animate = app.busy || app.ai_thinking;
-        if dirty || (animate && spinner_tick) {
+        // approval wait. That is exactly why the frame rate has to be capped
+        // and, on a terminal that cannot afford it, switched off: the spinner
+        // is the only thing on screen that would otherwise repaint 40 times a
+        // second while nothing is happening.
+        let animate = motion.enabled() && (app.busy || app.ai_thinking);
+        let now = Instant::now();
+        // `dirty` bypasses the cap on purpose: a repaint caused by real output
+        // is never delayed, because a lagging transcript is worse than a
+        // jumpy spinner.
+        if dirty || (animate && spinner_tick && motion.repaint_due(last_draw, now)) {
             terminal.draw(|frame| app.render(frame))?;
             dirty = false;
+            last_draw = Some(now);
         }
         if app.quit {
             break;

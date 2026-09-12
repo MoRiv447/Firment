@@ -255,9 +255,13 @@ literal at a time, so it is asserted rather than trusted.
 - Stagger `40ms` on grouped elements
 - Everything respects `prefers-reduced-motion`
 - **TUI caps at 15fps**, not 60: Windows Console, SSH and tmux repaint badly at
-  high rates, and `firm` over SSH to a dev board is a normal way to work. The TUI
-  also disables motion entirely under `SSH_CONNECTION`, `TERM=dumb`, or a
-  non-TTY, and offers `--no-anim`.
+  high rates, and `firm` over SSH to a dev board is a normal way to work. The
+  25ms input tick is not the frame rate — animation repaints are throttled
+  separately, so a repaint caused by real output is never delayed.
+- The TUI disables motion entirely under `SSH_CONNECTION`/`SSH_TTY`,
+  `TERM=dumb`, or a non-TTY stdout, and takes `--no-anim` for a capable
+  terminal where the spinner still is not worth the repaints. See
+  `crates/firment-tui/src/motion.rs`.
 
 ## State semantics
 
