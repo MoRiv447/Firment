@@ -24,6 +24,7 @@ mod app;
 mod commands;
 mod device;
 mod evidence;
+mod la;
 mod motion;
 mod paste;
 mod pickers;
@@ -1270,6 +1271,59 @@ mod tests {
     /// Rows of the left rail, as plain strings.
     fn rail_rows(app: &App) -> Vec<String> {
         app.rail_lines().iter().map(|l| l.to_string()).collect()
+    }
+
+    #[test]
+    fn a_measurement_from_the_analyzer_reaches_the_la_block() {
+        let mut app = test_app();
+        app.on_agent(AgentEvent::ToolEnd {
+            name: "la".to_string(),
+            ok: true,
+            summary: String::new(),
+            detail: Some(
+                "[la] measure capture=pwm channel=0 (frequency)\n  samples: 8000\n  frequency: 998 \
+                 .. 1002 Hz (~1000.00)\n  rising edges: 10\n  confidence: high — exact repeat\n"
+                    .to_string(),
+            ),
+            seq: 1,
+        });
+        let rows = app.la_rows();
+        // The range, not a midpoint: it is what the tool is willing to claim.
+        assert!(
+            rows.iter()
+                .any(|(l, v)| *l == "freq" && v == "998 .. 1002 Hz"),
+            "got {rows:?}"
+        );
+        assert!(
+            rows.iter().any(|(l, v)| *l == "edges" && v == "10"),
+            "got {rows:?}"
+        );
+        assert!(
+            rows.iter().any(|(l, v)| *l == "conf" && v == "high"),
+            "got {rows:?}"
+        );
+        // A frequency measurement reports no duty, so there is no shape to draw.
+        assert!(!rows.iter().any(|(l, _)| *l == "wave"), "got {rows:?}");
+    }
+
+    #[test]
+    fn a_capture_does_not_become_a_measurement_in_the_panel() {
+        let mut app = test_app();
+        app.on_agent(AgentEvent::ToolEnd {
+            name: "la".to_string(),
+            ok: true,
+            summary: String::new(),
+            detail: Some(
+                "[la] capture capture=pwm channels=0,1 samples=8000\n  saved: x.sr\n".to_string(),
+            ),
+            seq: 1,
+        });
+        // Nothing was measured, so the block gains no measured rows.
+        assert!(
+            app.la_rows()
+                .iter()
+                .all(|(l, _)| *l == "driver" || *l == "rate" || *l == "channels")
+        );
     }
 
     #[test]

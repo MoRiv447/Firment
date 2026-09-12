@@ -474,13 +474,44 @@ impl App {
         self.device.rows()
     }
 
-    /// The LA block's rows, empty when no analyzer is configured.
+    /// The LA block's rows: what a capture would use, then what the last
+    /// measurement actually found.
+    ///
+    /// Both halves are shown rather than one replacing the other: the
+    /// configuration is what the next capture will do, the reading is what the
+    /// last one proved. Only the fields the tool reported appear -- a blank
+    /// value reads as a bug, and a guessed one reads as data.
     pub(crate) fn la_rows(&self) -> Vec<(&'static str, String)> {
-        self.device
+        let mut rows = self
+            .device
             .la
             .as_ref()
             .map(|la| la.rows())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        let Some(reading) = &self.la_reading else {
+            return rows;
+        };
+        if !reading.channel.is_empty() {
+            rows.push(("channel", reading.channel.clone()));
+        }
+        if let Some(frequency) = reading.frequency() {
+            rows.push(("freq", frequency));
+        }
+        if let Some(duty) = reading.duty_pct {
+            rows.push(("duty", format!("{duty:.1}%")));
+        }
+        if let Some(edges) = reading.rising_edges {
+            rows.push(("edges", edges.to_string()));
+        }
+        if let Some(confidence) = &reading.confidence {
+            rows.push(("conf", confidence.clone()));
+        }
+        if reading.duty_pct.is_some() {
+            // One period at the measured duty. A shape, explicitly not a
+            // capture: the samples are in a .sr that nothing here parses.
+            rows.push(("wave", crate::la::schematic(reading.duty_pct, 16)));
+        }
+        rows
     }
 
     /// The EVIDENCE column: how far up the verification ladder this session got.

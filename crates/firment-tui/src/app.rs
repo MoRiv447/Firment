@@ -7,6 +7,7 @@ use crate::adapters::PermissionRequest;
 use crate::commands::AgentCmd;
 use crate::device::Device;
 use crate::evidence::Evidence;
+use crate::la::{LaReading, parse_measure};
 use crate::paste::{EnterAction, PasteBlock, PasteBurst, PasteOut};
 use crate::pickers::{ModelPicker, Selection, SessionPicker};
 use crate::rail::{FileRow, SessionRow};
@@ -48,6 +49,8 @@ pub(crate) struct App {
     /// two tool events as `active_tools`, drawn by the EVIDENCE panel.
     pub(crate) evidence: Evidence,
     /// Left rail: the sessions in this workspace, and the files under the cwd.
+    /// The last logic-analyzer measurement, if one has been taken.
+    pub(crate) la_reading: Option<LaReading>,
     /// The configured target and analyzer, for the DEVICE block.
     pub(crate) device: Device,
     pub(crate) rail_sessions: Vec<SessionRow>,
@@ -162,6 +165,7 @@ impl App {
             ai_thinking: false,
             active_tools: Vec::new(),
             evidence: Evidence::default(),
+            la_reading: None,
             device: Device::default(),
             rail_sessions: Vec::new(),
             rail_files: Vec::new(),
@@ -324,6 +328,13 @@ impl App {
                     self.active_tools.remove(pos);
                 }
                 self.evidence.finish(&name, ok);
+                // The measurement text is the only place the numbers exist; see
+                // la.rs for why this is parsed rather than carried structurally.
+                if name == "la"
+                    && let Some(reading) = detail.as_deref().and_then(parse_measure)
+                {
+                    self.la_reading = Some(reading);
+                }
                 // Decided before the loop: `should_auto_expand` borrows `self`,
                 // which the mutable item iteration below already holds.
                 let auto_expand = self.should_auto_expand(detail.as_deref());
