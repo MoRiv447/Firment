@@ -7,7 +7,7 @@ import {
 } from '@ant-design/icons';
 import type { SessionSummaryDto } from '../types';
 import pkg from '../../package.json';
-import { color, font, radius } from '../styles/tokens';
+import { color, font, radius, space } from '../styles/tokens';
 
 const { Text } = Typography;
 
@@ -192,7 +192,6 @@ export function SessionSidebar({
                   fontSize: 10,
                   marginRight: 0,
                   borderRadius: radius.chip,
-                  border: `1px solid ${color.outline}`,
                   color: color.onAcid,
                   fontWeight: 700,
                   lineHeight: '16px',
@@ -228,38 +227,32 @@ export function SessionSidebar({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: 4, gap: 6 }}>
-      <Space.Compact style={{ width: '100%' }}>
+      {/*
+        Two separate buttons, not `Space.Compact`.
+
+        Compact welds adjacent buttons into one block with shared edges, and
+        both of these were acid-filled -- so the sidebar opened with two green
+        rectangles fused together, which reads as one malformed control rather
+        than as two actions. They are also not the same weight: "New" is the
+        primary action and the plan-mode variant is its sibling, so only one of
+        them is filled. Neither carries a border any more: an acid fill inside a
+        grey ring looks like a mistake, which is how it read.
+      */}
+      <div style={{ display: 'flex', gap: space.controlGap }}>
         <Tooltip title="New agent session (uses cwd below)">
           <Button
             icon={<ThunderboltOutlined />}
             onClick={() => onNew('agent')}
             type="primary"
-            style={{
-              flex: 1,
-              borderRadius: radius.control,
-              border: `1px solid ${color.outline}`,
-              boxShadow: color.shadowMd,
-              fontWeight: 700,
-            }}
+            style={{ flex: 1, fontWeight: 700 }}
           >
             New
           </Button>
         </Tooltip>
         <Tooltip title="New plan-mode session (read-only tools)">
-          <Button
-            icon={<SafetyCertificateOutlined />}
-            onClick={() => onNew('plan')}
-            style={{
-              borderRadius: radius.control,
-              border: `1px solid ${color.outline}`,
-              background: color.brandAcid,
-              color: color.onAcid,
-              boxShadow: color.shadowMd,
-              fontWeight: 700,
-            }}
-          />
+          <Button icon={<SafetyCertificateOutlined />} onClick={() => onNew('plan')} />
         </Tooltip>
-      </Space.Compact>
+      </div>
       <Input
         placeholder="working dir (default C:\)"
         size="small"

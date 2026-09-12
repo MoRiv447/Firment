@@ -177,50 +177,52 @@ tracked as its own state, so it cannot disagree with the tool cards next to it. 
 turn that never built anything shows no row at all, and a later attempt
 supersedes an earlier one: a build that failed and then passed reads as `done`.
 
-## Slant — the one signature that cannot be substituted
+## The slant is gone
 
-The cut is the brand's structural mark (the logo is three slanted bars,
-`skewX(-13deg)`). On a control it is drawn with **`clip-path`, never a
-`transform: skewX`**: a transform shears the type with the shape, and Latin text
-leaning is a decal rather than a design.
+This section used to be titled "Slant — the one signature that cannot be
+substituted", and it described a `clip-path` cut on the primary CTA: a 12px
+horizontal run, a 5px optical correction on the left, and two absolutely
+positioned clipped layers so the diagonal had an edge a `border` cannot draw on
+a clipped element.
 
-Geometry, all from `slant` in `tokens.ts`:
+It was removed with the rest of the neo-brutalist layer. The cut is a loud
+geometric gesture, and it only made sense as one element of a frame that no
+longer exists: once the black outlines and the hard offset shadows went, a
+single slanted button read as an accident rather than as a signature.
 
-| Value | Purpose |
-|---|---|
-| cut `12px` | horizontal run of the cut |
-| gap `8px` | between adjacent slanted edges |
-| `opticalPadLeft 5px` | extra left padding, see below |
-| `controlHeight 40px` | every control on a row |
+The logo still carries the skew (three slanted bars) — that is the brand's
+structural mark and it is **drawn into the artwork**, not into a control. Nothing
+in the interface reproduces it.
 
-**The optical centre.** Cutting the bottom-left triangle removes area from the
-left, which shifts the remaining shape's centre of mass about 2.5px the other way.
-The label is then geometrically centred and still reads as off-centre, so it gets
-5px more padding on the left than on the right.
+Removing it also removed a real defect. The primary tier's dark edge was a layer
+filled with `color.outline`, which was pure black while the visual layer was
+brutalist. When `outline` became an ordinary border grey, that layer turned the
+primary button into an acid fill inside a grey ring — a fill that looks outlined
+by mistake. `ActionButton` now delegates every tier to antd (`primary` /
+`default` / `text`), so there is no layer left to get this wrong, and
+`designSystem.test.tsx` asserts that a primary button carries no inline border,
+shadow or fill.
 
-**The cut is on the fill, not the button.** `clip-path` clips whatever it is
-applied to, so clipping the button would take the label, the focus ring and the
-border with it. The fill is its own layer behind the label. The dark edge is a
-second clipped layer with the fill inset 1px inside it — a `border` on a clipped
-element exists only on the four box edges, so the diagonal comes out with no edge
-at all.
-
-**Rounded corners never meet the cut.** `radius.panel` (8px) rounds over a 12px
-diagonal and eats it; a clipped control keeps `border-radius: 0`.
+What survived is `space.controlGap` (8px). The gap between controls on a row was
+never about the slant.
 
 ### Button weight — three tiers
 
-Weight is carried by **colour and fill, never by size**: all three tiers are
-`controlHeight` tall and sit level on a row.
+Weight is carried by **colour and fill, never by size**: all three tiers render
+at antd's control height and sit level on a row.
 
 | Tier | Treatment |
 |---|---|
-| primary | `brandAcid` fill, `onAcid` label, slanted. One per screen |
-| secondary | `surface` fill, `lineStrong` hairline, square corners, unslanted |
-| tertiary | no chrome: `muted` label and chevron, going to `ink` on hover |
+| primary | `brandAcid` fill, `onAcid` label. One per screen |
+| secondary | `surface` fill, `lineStrong` hairline |
+| tertiary | no chrome: a `muted` label and a chevron, going to `ink` on hover |
 
-Only the primary is cut. The slant is a brand anchor, and one on every button
-would dilute it into decoration.
+The fill and the label are not set per call site: `antdTheme` maps `colorPrimary`
+to `brandAcid` and `Button.primaryColor` to `onAcid`, so a primary button cannot
+be assembled from a fill and an ink measured against different grounds. That
+mistake is what put near-white text on the acid user bubble (about 1.3:1, in the
+dark scheme only), and it is now asserted in `userBubble.test.tsx` for both
+schemes.
 
 ## Type
 

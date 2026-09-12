@@ -6,6 +6,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Components } from 'react-markdown';
 import { ToolCard } from './ToolCard';
+import { describeArgs } from '../lib/toolArgs';
 import type { ChatMessage, ToolCall } from '../types';
 import { color, radius, statusChip } from '../styles/tokens';
 import { useThemeMode } from '../lib/theme';
@@ -116,13 +117,7 @@ function ToolCallBlock({ calls }: { calls: ToolCall[] }) {
 /// below it. Live cards during streaming stay expanded.
 function CollapsedToolCard({ call, seq }: { call: ToolCall; seq: number }) {
   const [open, setOpen] = useState(false);
-  let preview = '';
-  try {
-    preview = typeof call.arguments === 'string' ? call.arguments : JSON.stringify(call.arguments);
-  } catch {
-    preview = String(call.arguments ?? '');
-  }
-  if (preview.length > 90) preview = `${preview.slice(0, 90)}…`;
+  const preview = describeArgs(call.arguments);
   if (open) {
     // Expanded: the ToolCard itself carries the chevron in its title and
     // collapses on click — rendering our own header too would duplicate the
@@ -144,6 +139,11 @@ function CollapsedToolCard({ call, seq }: { call: ToolCall; seq: number }) {
         gap: 6,
         cursor: 'pointer',
         padding: '4px 10px',
+        // Full width like every sibling. Without this the row sized to its
+        // content, so a card whose preview happened to be longer came out wider
+        // than the one above it -- four tool rows, four different right edges.
+        // `ToolResultCard` below already wraps for the same reason.
+        width: '100%',
         border: `1px solid ${color.outline}`,
         background: color.surface,
       }}
@@ -265,12 +265,19 @@ export const MessageList = memo(function MessageList({
                 style={{
                   maxWidth: '80%',
                   background: color.brandAcid,
-                  border: `1px solid ${color.outline}`,
                   borderRadius: radius.tile,
-                  boxShadow: color.shadowLg,
                   padding: '10px 16px',
                   lineHeight: 1.65,
-                  color: color.ink,
+                  // `onAcid`, not `ink`. This is the acid fill, so the text on
+                  // it is the one token measured against acid (13.28:1). `ink`
+                  // is near-white in the dark scheme, so the user's own message
+                  // was rendering at about 1.3:1 -- measured, not guessed: 320
+                  // near-white pixels inside the bubble in dark, 0 in light.
+                  //
+                  // No border and no shadow: the fill already separates the
+                  // bubble from the transcript, and a grey ring around a green
+                  // block is what made every filled control look like a mistake.
+                  color: color.onAcid,
                   fontWeight: 500,
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-word',

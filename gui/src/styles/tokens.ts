@@ -361,26 +361,16 @@ export const radius = {
 } as const;
 
 /**
- * The slant -- the one signature that cannot be substituted.
+ * The gap between controls sitting on one row.
  *
- * Geometry lives here so no component invents its own numbers, and so the
- * optical correction stays attached to the reason for it.
+ * This used to be `slant.gap`, part of a `slant` object that also carried the
+ * clip-path geometry for the brand CTA. The slant is gone -- a diagonal cut is a
+ * brutalist gesture, and the neutral layer separates with a hairline instead --
+ * but the gap was never about the slant, so it outlived it.
  */
-export const slant = {
-  /** Horizontal run of the cut, in px. */
-  cut: 12,
-  /** The gap between adjacent slanted edges, in px. */
-  gap: 8,
-  /**
-   * Extra left padding over the right, in px.
-   *
-   * The cut removes a triangle from one side, which moves the remaining shape's
-   * centre of mass ~2.5px the other way; without this the label reads as
-   * off-centre even though it is geometrically centred.
-   */
-  opticalPadLeft: 5,
-  /** Every control on a row is this tall, so colour carries the hierarchy. */
-  controlHeight: 40,
+export const space = {
+  /** Between adjacent controls on a row. */
+  controlGap: 8,
 } as const;
 
 /** Motion. Enter 160 / standard 200 / exit 120. */

@@ -18,7 +18,7 @@ import { api } from '../lib/api';
 import type { ProviderEntryDto, SettingsDto } from '../types';
 import { color, font, radius, statusChip } from '../styles/tokens';
 import { setThemeSetting } from '../lib/theme';
-import { SlantButton } from '../components/SlantButton';
+import { ActionButton } from '../components/ActionButton';
 
 const { Text } = Typography;
 
@@ -281,9 +281,9 @@ export function SettingsView() {
                 value={newModel}
                 onChange={(e) => setNewModel(e.target.value)}
               />
-              <SlantButton tier="primary" icon={<PlusOutlined />} onClick={upsertProvider}>
+              <ActionButton tier="primary" icon={<PlusOutlined />} onClick={upsertProvider}>
                 Save provider
-              </SlantButton>
+              </ActionButton>
             </Space>
             {newMsg && <Text type="secondary" style={{ fontSize: 12 }}>{newMsg}</Text>}
             {keyMsg && <Text type="success" style={{ fontSize: 12 }}>{keyMsg}</Text>}
@@ -384,9 +384,9 @@ export function SettingsView() {
                 ]}
               />
             </Form.Item>
-            <SlantButton tier="primary" onClick={save} loading={saving}>
+            <ActionButton tier="primary" onClick={save} loading={saving}>
               Save settings
-            </SlantButton>
+            </ActionButton>
             {saveMsg && <Text type="success" style={{ fontSize: 12 }}>{saveMsg}</Text>}
             {saveErr && <Text type="danger" style={{ fontSize: 12 }}>{saveErr}</Text>}
           </Form>

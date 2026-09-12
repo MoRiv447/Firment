@@ -7,7 +7,6 @@ import {
   Modal,
   Select,
   Space,
-  Statistic,
   Switch,
   Tag,
   Tooltip,
@@ -34,12 +33,34 @@ import type {
 } from '../types';
 import { color, font, radius, statusChip } from '../styles/tokens';
 import type { StatusKind } from '../styles/tokens';
-import { SlantButton } from '../components/SlantButton';
+import type { ReactNode } from 'react';
+import { ActionButton } from '../components/ActionButton';
 import { FlashHistory } from './workbench/FlashHistory';
 import { ChangeTimeline, ElfBudget, VerificationBadges } from './workbench/insights';
 import { Decisions } from './workbench/Decisions';
 
 const { Text, Title } = Typography;
+
+/**
+ * A label with its value underneath, both in body type.
+ *
+ * The thing this replaces: `Statistic`, which sets its value at display size.
+ * That is right for a count and wrong for a branch name or a session id -- the
+ * card was rendering "not a git repository" and `307f6f73` as if they were
+ * headline numbers, a tiny grey label floating over a huge grey string with no
+ * relationship between the two. `mono` marks the values that are identifiers
+ * rather than prose.
+ */
+function Field({ label, value, mono }: { label: string; value: ReactNode; mono?: boolean }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <Text type="secondary" style={{ fontSize: 11, lineHeight: '14px' }}>
+        {label}
+      </Text>
+      <Text style={{ fontSize: 13, fontFamily: mono ? font.mono : undefined }}>{value}</Text>
+    </div>
+  );
+}
 
 /**
  * Project workbench (W1): mainline + branch session tree over
@@ -799,9 +820,9 @@ export function WorkbenchView() {
               // level rather than assembled.
               size="large"
             />
-            <SlantButton tier="primary" loading={busy} onClick={() => void load()}>
+            <ActionButton tier="primary" loading={busy} onClick={() => void load()}>
               Open project
-            </SlantButton>
+            </ActionButton>
           </Space>
 
           {projects.length > 0 && (
@@ -830,22 +851,34 @@ export function WorkbenchView() {
           {state && (
             <>
               <Card type="inner" title={`Project: ${state.config.project_name || '(unnamed)'}`} size="small">
-                <Space wrap size={20}>
+                {/*
+                  Labelled values in body type, not `Statistic`.
+
+                  `Statistic` renders its value at display size -- 24px -- which
+                  is right for a count and wrong for everything else that was in
+                  here: a branch name, a session id and the words "not a git
+                  repository" were all being set as if they were headline
+                  numbers. That is what made the card look broken rather than
+                  dense: one huge grey string with a tiny label over it, and no
+                  relationship between the two.
+                */}
+                <Space wrap size={24}>
                   {state.git ? (
                     <>
-                      <Statistic title="branch" value={state.git.branch || '(none)'} />
-                      <Statistic title="dirty files" value={state.git.dirty_files} />
+                      <Field label="branch" value={state.git.branch || '(none)'} mono />
+                      <Field label="dirty files" value={state.git.dirty_files} />
                     </>
                   ) : (
-                    <Text type="secondary">not a git repository</Text>
+                    <Field label="git" value="not a repository" />
                   )}
-                  <Statistic
-                    title="mainline"
+                  <Field
+                    label="mainline"
                     value={
                       state.config.mainline_session
                         ? state.config.mainline_session.slice(0, 8)
                         : '(unset)'
                     }
+                    mono
                   />
                 </Space>
                 {state.config.toml_raw && (
@@ -1401,9 +1434,9 @@ export function WorkbenchView() {
                   <Space direction="vertical" size={8} style={{ width: '100%' }}>
                     <Empty description="No sessions under this path yet" image={Empty.PRESENTED_IMAGE_SIMPLE} />
                     {kindFilter === 'all' && (
-                      <SlantButton tier="primary" loading={busy} onClick={createMainline}>
+                      <ActionButton tier="primary" loading={busy} onClick={createMainline}>
                         New mainline chat here
-                      </SlantButton>
+                      </ActionButton>
                     )}
                   </Space>
                 )}

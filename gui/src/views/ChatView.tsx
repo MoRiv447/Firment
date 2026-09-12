@@ -299,8 +299,6 @@ export function ChatView({
               style={{
                 borderRadius: radius.chip,
                 fontWeight: 700,
-                border: `1px solid ${color.outline}`,
-                boxShadow: color.shadowSm,
                 color: color.onAcid,
               }}
             >

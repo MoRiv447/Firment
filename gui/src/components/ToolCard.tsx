@@ -1,22 +1,13 @@
 import { Alert, Card, Space, Tag, Typography } from 'antd';
 import { DownOutlined, RightOutlined } from '@ant-design/icons';
 import type { ToolCardState } from '../types';
-import { color, font, radius, slant, statusChip } from '../styles/tokens';
+import { color, font, radius, space, statusChip } from '../styles/tokens';
 import type { StatusKind } from '../styles/tokens';
 import { quickActionsFor } from '../lib/quickActions';
-import { SlantButton } from './SlantButton';
+import { ActionButton } from './ActionButton';
+import { describeArgs } from '../lib/toolArgs';
 
 const { Text } = Typography;
-
-function formatArgs(args: unknown): string {
-  if (args === undefined || args === null) return '';
-  try {
-    const s = typeof args === 'string' ? args : JSON.stringify(args, null, 2);
-    return s.length > 800 ? `${s.slice(0, 800)}…` : s;
-  } catch {
-    return String(args);
-  }
-}
 
 function dangerousName(name: string, args: unknown): boolean {
   if (name === 'shell' || name === 'build' || name === 'verify') {
@@ -148,15 +139,28 @@ export function ToolCard({
           : 'running';
   const icon = tool.status === 'ok' ? '✓' : tool.status === 'failed' ? '✕' : danger ? '⚠' : '·';
   const path = editedPath(tool.args);
+  // Not shown when it would only repeat the path the header already carries.
+  const described = describeArgs(tool.args);
+  const argsLine = described && described !== path ? described : '';
   const counts = tool.detail ? diffCounts(tool.detail) : null;
   const hasCounts = counts !== null && (counts.added > 0 || counts.removed > 0);
 
   const inner = (
     <Space direction="vertical" size={4} style={{ width: '100%' }}>
-      {tool.args !== undefined && (
-        <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-          {formatArgs(tool.args)}
-        </pre>
+      {/*
+        A described line, not `<pre>{JSON.stringify(args, null, 2)}</pre>`.
+        Every card in the transcript opened with a pretty-printed API payload,
+        which is a debug view of the request rather than a record of what
+        happened -- `{"path":"src/foc/current.c"}` above a one-line file read.
+        `describeArgs` names the subject and keeps the rest to a glance.
+
+        The full arguments are not lost: expanding a card is what the raw shape
+        was for, and the ledger has them verbatim.
+      */}
+      {argsLine && (
+        <Text type="secondary" style={{ fontFamily: font.mono, fontSize: 12 }}>
+          {argsLine}
+        </Text>
       )}
       {tool.detail ? (
         <DiffBody detail={tool.detail} />
@@ -175,15 +179,15 @@ export function ToolCard({
         being written is an offer to build something else.
       */}
       {onAction && tool.status !== 'running' && quickActionsFor(tool.name).length > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: slant.gap, marginTop: 4 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: space.controlGap, marginTop: 4 }}>
           {quickActionsFor(tool.name).map((action) => (
-            <SlantButton
+            <ActionButton
               key={action.key}
               tier={action.tier}
               onClick={() => onAction(action.prompt)}
             >
               {action.label}
-            </SlantButton>
+            </ActionButton>
           ))}
         </div>
       )}
