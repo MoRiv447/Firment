@@ -17,6 +17,8 @@ const { Text } = Typography;
 import {
   ApiOutlined,
   BellOutlined,
+  BulbFilled,
+  BulbOutlined,
   MessageOutlined,
   RocketOutlined,
   ProjectOutlined,
@@ -44,6 +46,7 @@ import type {
   PermissionRequest,
   SessionDto,
   SessionSummaryDto,
+  SettingsDto,
 } from './types';
 import { AskDialog, PermissionDialog } from './components/Dialogs';
 import { ChatView } from './views/ChatView';
@@ -81,12 +84,39 @@ export default function App() {
   // than adding a command just for this: it is one local IPC call, and a
   // second source of the same value is a second thing that can disagree.
   // `SettingsView` publishes later changes, so this is the only read.
+  //
+  // The whole DTO is kept, not just `theme`, because the header's scheme toggle
+  // writes the setting back through the same `save_settings` the settings form
+  // uses -- and that call replaces the whole object, so a theme-only payload
+  // would blank every other field.
+  const [settings, setSettings] = useState<SettingsDto | null>(null);
   useEffect(() => {
     void api
       .getSettings()
-      .then((s) => setThemeSetting(s.theme ?? 'auto'))
+      .then((s) => {
+        setSettings(s);
+        setThemeSetting(s.theme ?? 'auto');
+      })
       .catch((err: unknown) => console.error(err));
   }, []);
+
+  // Pin the opposite of what is on screen right now. `auto` has no icon of its
+  // own, so toggling from `auto` deliberately leaves `auto` behind: the user
+  // asked for the other scheme, and staying on `auto` would follow the OS
+  // straight back. Settings keeps the three-state control for anyone who wants
+  // `auto` back.
+  const toggleTheme = () => {
+    const next = mode === 'dark' ? 'light' : 'dark';
+    setThemeSetting(next);
+    if (!settings) return;
+    const updated = { ...settings, theme: next };
+    setSettings(updated);
+    void api.saveSettings(updated).catch((err: unknown) => {
+      // The scheme is already applied on screen; a failed write means it will
+      // not survive a restart. Say so rather than pretending it saved.
+      console.error('theme not persisted:', err);
+    });
+  };
 
   const [sessions, setSessions] = useState<SessionSummaryDto[]>([]);
   const [session, setSession] = useState<SessionDto | null>(null);
@@ -614,7 +644,7 @@ export default function App() {
             width={248}
             theme={mode}
             style={{
-              borderRight: `3px solid ${color.outline}`,
+              borderRight: `1px solid ${color.line}`,
               background: color.surface,
             }}
           >
@@ -624,7 +654,7 @@ export default function App() {
                 display: 'flex',
                 alignItems: 'center',
                 gap: 12,
-                borderBottom: `3px solid ${color.outline}`,
+                borderBottom: `1px solid ${color.line}`,
                 marginBottom: 12,
               }}
             >
@@ -634,8 +664,8 @@ export default function App() {
                 style={{
                   width: 40,
                   height: 40,
-                  borderRadius: radius.brand,
-                  boxShadow: `3px 3px 0 ${color.outline}`,
+                  borderRadius: radius.tile,
+                  boxShadow: color.shadowMd,
                   objectFit: 'contain',
                   background: color.surfaceRaised,
                   padding: 4,
@@ -682,7 +712,7 @@ export default function App() {
                 alignItems: 'center',
                 gap: 12,
                 background: color.surface,
-                borderBottom: `3px solid ${color.outline}`,
+                borderBottom: `1px solid ${color.line}`,
               }}
             >
               <Menu
@@ -711,7 +741,7 @@ export default function App() {
                     borderRadius: radius.chip,
                     fontWeight: 700,
                     marginInlineEnd: 0,
-                    boxShadow: `2px 2px 0 ${color.outline}`,
+                    boxShadow: color.shadowSm,
                   }}
                 >
                   ⚡ {Object.values(turnsById).filter((t) => t.running).length} running
@@ -815,8 +845,8 @@ export default function App() {
                       icon={<BellOutlined />}
                       style={{
                         borderRadius: radius.control,
-                        border: `2px solid ${color.outline}`,
-                        boxShadow: `2px 2px 0 ${color.outline}`,
+                        border: `1px solid ${color.outline}`,
+                        boxShadow: color.shadowSm,
                       }}
                     />
                   </Badge>
@@ -839,7 +869,7 @@ export default function App() {
                     style={{
                       borderRadius: radius.chip,
                       marginInlineEnd: 0,
-                      border: `2px solid ${color.outline}`,
+                      border: `1px solid ${color.outline}`,
                       background: color.warnInk,
                       color: color.outline,
                       fontWeight: 700,
@@ -872,7 +902,7 @@ export default function App() {
                     style={{
                       borderRadius: radius.chip,
                       marginInlineEnd: 0,
-                      border: `2px solid ${color.outline}`,
+                      border: `1px solid ${color.outline}`,
                       fontWeight: 700,
                       cursor: 'pointer',
                     }}
@@ -922,7 +952,7 @@ export default function App() {
                       style={{
                         borderRadius: radius.chip,
                         marginInlineEnd: 0,
-                        border: `2px solid ${color.outline}`,
+                        border: `1px solid ${color.outline}`,
                         fontWeight: 700,
                         cursor: 'pointer',
                       }}
@@ -932,6 +962,26 @@ export default function App() {
                   </Tooltip>
                 </Dropdown>
               )}
+              {/*
+                The scheme toggle, in the header rather than in Settings. It was
+                reachable only as the 8th field of the settings form AND only
+                after pressing Save, which is why nobody found it. Icon-only
+                because the header already carries four coloured chips.
+              */}
+              <Tooltip
+                title={
+                  mode === 'dark'
+                    ? 'Switch to the light scheme'
+                    : 'Switch to the dark scheme'
+                }
+              >
+                <Button
+                  type="text"
+                  aria-label={mode === 'dark' ? 'Switch to light scheme' : 'Switch to dark scheme'}
+                  onClick={toggleTheme}
+                  icon={mode === 'dark' ? <BulbOutlined /> : <BulbFilled />}
+                />
+              </Tooltip>
             </Header>
             <Content
               style={{

@@ -252,8 +252,8 @@ export function ChatView({
               left: '50%',
               transform: 'translateX(-50%)',
               borderRadius: radius.control,
-              border: `2px solid ${color.outline}`,
-              boxShadow: `2px 2px 0 ${color.outline}`,
+              border: `1px solid ${color.outline}`,
+              boxShadow: color.shadowSm,
               fontWeight: 700,
               zIndex: 5,
             }}
@@ -282,7 +282,7 @@ export function ChatView({
       <div
         style={{
           padding: '14px 20px 16px',
-          borderTop: `3px solid ${color.outline}`,
+          borderTop: `1px solid ${color.line}`,
           background: color.surface,
         }}
       >
@@ -293,8 +293,8 @@ export function ChatView({
               style={{
                 borderRadius: radius.chip,
                 fontWeight: 700,
-                border: `2px solid ${color.outline}`,
-                boxShadow: `2px 2px 0 ${color.outline}`,
+                border: `1px solid ${color.outline}`,
+                boxShadow: color.shadowSm,
                 color: color.onAcid,
               }}
             >
@@ -303,7 +303,7 @@ export function ChatView({
             <Tag
               style={{
                 borderRadius: radius.chip,
-                border: `2px solid ${color.outline}`,
+                border: `1px solid ${color.outline}`,
                 color: color.ink,
                 fontWeight: 600,
               }}
@@ -314,7 +314,7 @@ export function ChatView({
               color={session.mode === 'plan' ? color.warnInk : color.successInk}
               style={{
                 borderRadius: radius.chip,
-                border: `2px solid ${color.outline}`,
+                border: `1px solid ${color.outline}`,
                 color: color.outline,
                 fontWeight: 700,
               }}
@@ -324,7 +324,7 @@ export function ChatView({
             <Tag
               style={{
                 borderRadius: radius.chip,
-                border: `2px solid ${color.outline}`,
+                border: `1px solid ${color.outline}`,
                 color: color.muted,
                 fontFamily: font.mono,
                 background: color.bg,
@@ -350,9 +350,9 @@ export function ChatView({
             style={{
               fontSize: 14,
               background: color.bg,
-              border: `3px solid ${color.outline}`,
+              border: `1px solid ${color.outline}`,
               borderRadius: radius.control,
-              boxShadow: `4px 4px 0 ${color.outline}`,
+              boxShadow: color.shadowLg,
               color: color.ink,
               fontFamily: font.mono,
             }}
@@ -365,8 +365,8 @@ export function ChatView({
               style={{
                 height: 'auto',
                 borderRadius: radius.control,
-                border: `3px solid ${color.outline}`,
-                boxShadow: `4px 4px 0 ${color.outline}`,
+                border: `1px solid ${color.outline}`,
+                boxShadow: color.shadowLg,
                 fontWeight: 700,
               }}
             >
@@ -381,8 +381,8 @@ export function ChatView({
               style={{
                 height: 'auto',
                 borderRadius: radius.control,
-                border: `3px solid ${color.outline}`,
-                boxShadow: `4px 4px 0 ${color.outline}`,
+                border: `1px solid ${color.outline}`,
+                boxShadow: color.shadowLg,
                 fontWeight: 700,
               }}
             >

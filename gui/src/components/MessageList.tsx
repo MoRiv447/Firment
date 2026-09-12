@@ -31,7 +31,7 @@ const mdComponents: Components = {
         // chat scroll container — scroll inside the block instead.
         overflowX: 'auto',
         background: color.bg,
-        border: `2px solid ${color.outline}`,
+        border: `1px solid ${color.outline}`,
         padding: 8,
       }}
     >
@@ -68,8 +68,8 @@ const mdComponents: Components = {
       style={{
         borderCollapse: 'collapse',
         margin: '8px 0',
-        border: `2px solid ${color.outline}`,
-        boxShadow: `3px 3px 0 ${color.outline}`,
+        border: `1px solid ${color.outline}`,
+        boxShadow: color.shadowMd,
       }}
     >
       {children}
@@ -78,7 +78,7 @@ const mdComponents: Components = {
   th: ({ children }) => (
     <th
       style={{
-        border: `2px solid ${color.outline}`,
+        border: `1px solid ${color.outline}`,
         background: color.surfaceRaised,
         padding: '5px 10px',
         textAlign: 'left',
@@ -89,7 +89,7 @@ const mdComponents: Components = {
     </th>
   ),
   td: ({ children }) => (
-    <td style={{ border: `2px solid ${color.outline}`, padding: '4px 10px' }}>{children}</td>
+    <td style={{ border: `1px solid ${color.outline}`, padding: '4px 10px' }}>{children}</td>
   ),
 };
 
@@ -144,7 +144,7 @@ function CollapsedToolCard({ call, seq }: { call: ToolCall; seq: number }) {
         gap: 6,
         cursor: 'pointer',
         padding: '4px 10px',
-        border: `2px solid ${color.outline}`,
+        border: `1px solid ${color.outline}`,
         background: color.surface,
       }}
     >
@@ -153,7 +153,7 @@ function CollapsedToolCard({ call, seq }: { call: ToolCall; seq: number }) {
         color="green"
         style={{
           borderRadius: radius.chip,
-          border: `2px solid ${color.outline}`,
+          border: `1px solid ${color.outline}`,
           color: color.ink,
           fontWeight: 700,
         }}
@@ -186,7 +186,7 @@ function ToolResultCard({ name, content }: { name?: string; content: string }) {
           gap: 6,
           cursor: 'pointer',
           padding: '4px 10px',
-          border: `2px solid ${color.outline}`,
+          border: `1px solid ${color.outline}`,
           background: color.surface,
         }}
       >
@@ -199,10 +199,10 @@ function ToolResultCard({ name, content }: { name?: string; content: string }) {
           color={color.warnInk}
           style={{
             borderRadius: radius.chip,
-            border: `2px solid ${color.outline}`,
+            border: `1px solid ${color.outline}`,
             color: color.outline,
             fontWeight: 700,
-            boxShadow: `2px 2px 0 ${color.outline}`,
+            boxShadow: color.shadowSm,
           }}
         >
           tool // {name}
@@ -224,7 +224,7 @@ function ToolResultCard({ name, content }: { name?: string; content: string }) {
           showIcon
           style={{
             borderRadius: radius.chip,
-            border: `2px solid ${color.outline}`,
+            border: `1px solid ${color.outline}`,
             borderTopWidth: 0,
           }}
           message={
@@ -269,9 +269,9 @@ export const MessageList = memo(function MessageList({
                 style={{
                   maxWidth: '80%',
                   background: color.brandAcid,
-                  border: `3px solid ${color.outline}`,
-                  borderRadius: radius.brand,
-                  boxShadow: `4px 4px 0 ${color.outline}`,
+                  border: `1px solid ${color.outline}`,
+                  borderRadius: radius.tile,
+                  boxShadow: color.shadowLg,
                   padding: '10px 16px',
                   lineHeight: 1.65,
                   color: color.ink,
@@ -310,7 +310,7 @@ export const MessageList = memo(function MessageList({
               color={color.infoInk}
               style={{
                 borderRadius: radius.chip,
-                border: `2px solid ${color.outline}`,
+                border: `1px solid ${color.outline}`,
                 color: color.outline,
                 fontWeight: 700,
               }}

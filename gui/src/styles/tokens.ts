@@ -95,8 +95,26 @@ const dark = {
   /** Diff hunk headers and context lines. */
   diffMetaInk: '#A1A1AA',
 
-  /** The one true black: the neo-brutalist outline and hard shadow. */
-  outline: '#000000',
+  /**
+   * The border around a card, a chip or a control.
+   *
+   * This used to be `#000000` in BOTH schemes -- a 2px black frame plus a hard
+   * offset shadow, the neo-brutalist signature. The visual layer is now
+   * neutral: depth comes from a hairline and a soft shadow, so this is a calm
+   * grey rather than ink. It keeps its own name because ~60 call sites read it
+   * and "the border on this thing" is what they all mean; it no longer carries
+   * any brand meaning.
+   */
+  outline: '#3F3F46',
+
+  /**
+   * Elevation. Low and soft, and the shadow is the SECOND separator: two
+   * adjacent surfaces are told apart by a hairline first, so these stay subtle
+   * enough that a page of cards does not become a pile of floating tiles.
+   */
+  shadowSm: '0 1px 2px rgba(0,0,0,0.32)',
+  shadowMd: '0 4px 12px rgba(0,0,0,0.36)',
+  shadowLg: '0 12px 32px rgba(0,0,0,0.44)',
 
   /**
    * Hover wash for rows and menu items. Unchanged from the value that shipped.
@@ -198,12 +216,20 @@ const light: Palette = {
   diffMetaInk: '#71717A',
 
   /**
-   * Kept black on purpose. The outline is the neo-brutalist signature -- 2px
-   * and 3px frames plus the hard offset shadow -- and it reads on both grounds.
-   * The light scheme gets its softness on controls from `line`/`lineStrong`
-   * instead (see `antdTheme`), not by lightening this.
+   * Matches the dark scheme's role, not its value: the neutral system separates
+   * with a hairline on both grounds, so this is `lineStrong`'s grey. It used to
+   * stay black in both schemes -- a thick black frame on a light ground reads as
+   * heavy rather than deliberate, which is exactly why this changed.
    */
-  outline: '#000000',
+  outline: '#D4D4D8',
+
+  /**
+   * Softer and wider than the dark scheme's: a black shadow on a white ground
+   * reads as dirt, so these are large-radius and very low alpha.
+   */
+  shadowSm: '0 1px 2px rgba(16,24,40,0.06)',
+  shadowMd: '0 4px 12px rgba(16,24,40,0.08)',
+  shadowLg: '0 12px 32px rgba(16,24,40,0.12)',
 
   /**
    * Pale acid wash. Every neutral tried here fails: `muted` is 4.51:1 on `bg`
@@ -271,17 +297,22 @@ export const font = {
   mono: "'JetBrains Mono', 'Noto Sans SC', 'Cascadia Code', Consolas, monospace",
 } as const;
 
-/** Corner radii. Not one value everywhere: a slanted CTA loses its slant past
- * 8px, while a large panel needs the softness. */
+/** Corner radii. A badge is not a card, so there are four tiers and no bare
+ *  numbers anywhere else in the tree (`no-literal-tokens.test.ts` enforces it).
+ *
+ *  These used to be 0 / 2 / 4 / 8, with 0 reserved for the logo and every icon
+ *  tile -- hard right angles as part of the neo-brutalist frame. The neutral
+ *  system rounds instead: a 0 on a card reads as an unfinished box once the
+ *  black outline around it is gone. */
 export const radius = {
-  /** Logo and icon tiles: hard edges, the brand anchor. */
-  brand: 0,
+  /** Logo and icon tiles, and the cards built on the same shape. */
+  tile: 8,
   /** Badges, chips, tooltips. */
-  chip: 2,
+  chip: 4,
   /** Inputs and buttons. */
-  control: 4,
+  control: 6,
   /** Cards and panels. */
-  panel: 8,
+  panel: 12,
 } as const;
 
 /**
@@ -325,11 +356,12 @@ export const motion = {
  *
  * What actually differs between the modes:
  *
- * * **Grounds, text and borders** come from the mode's palette. The border
- *   mapping is the visible one: dark frames controls in `outline` (the black
- *   signature), light does not -- a thick black frame on a light ground reads
- *   as heavy rather than deliberate, so light uses the hairline and the
- *   secondary outline.
+ * * **Grounds, text and borders** come from the mode's palette, and the border
+ *   mapping is the same in both: a hairline `line`, with `outline` for anything
+ *   that needs to read as a control edge. The old code framed every dark-mode
+ *   control in `#000000` and dropped to a hairline only in light -- which is
+ *   what made the two schemes look like different products.
+ * * **Elevation** comes from `shadowSm`, not from a hard offset block.
  * * `colorSuccess` is `successInk` in **both** modes. The previous code fed the
  *   light mode `brandInk`, which would have painted "this passed" in the brand
  *   green -- the exact confusion the 85deg/145deg split exists to prevent.
@@ -338,7 +370,6 @@ export const motion = {
  */
 export function antdTheme(mode: ThemeMode = 'dark') {
   const p = paletteFor(mode);
-  const isDark = mode === 'dark';
   return {
     token: {
       colorPrimary: p.brandAcid,
@@ -349,12 +380,18 @@ export function antdTheme(mode: ThemeMode = 'dark') {
       colorBgElevated: p.surfaceRaised,
       colorText: p.ink,
       colorTextSecondary: p.muted,
-      colorBorder: isDark ? p.outline : p.lineStrong,
-      colorBorderSecondary: isDark ? p.outline : p.line,
+      colorBorder: p.outline,
+      colorBorderSecondary: p.line,
       colorSuccess: p.successInk,
       colorError: p.diffRemovedInk,
       colorWarning: p.warnInk,
       borderRadius: radius.control,
+      borderRadiusLG: radius.panel,
+      borderRadiusSM: radius.chip,
+      // Popovers, dropdowns and modals float; a hairline is not enough once a
+      // surface overlaps live content, so these get the real elevation.
+      boxShadow: p.shadowMd,
+      boxShadowSecondary: p.shadowLg,
       fontFamily: font.sans,
       // Not a theme token upstream, but antd reads it for code-ish text when a
       // component asks for the mono family.
@@ -366,7 +403,9 @@ export function antdTheme(mode: ThemeMode = 'dark') {
         itemSelectedBg: p.brandAcid,
         itemSelectedColor: p.onAcid,
         itemHoverBg: p.hover,
-        itemBorderRadius: 0,
+        // Was 0 with the rest of the neo-brutalist frame; the selected tab is
+        // the one item where the tier has to be visible, so it is `chip`.
+        itemBorderRadius: radius.chip,
       },
       Card: { headerBg: 'transparent' },
       // The acid fill carries `onAcid` text, never white-on-green: white on

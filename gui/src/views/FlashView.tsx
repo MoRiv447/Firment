@@ -131,7 +131,7 @@ export function FlashView() {
           */}
           <div
             style={{
-              border: `2px solid ${color.outline}`,
+              border: `1px solid ${color.outline}`,
               borderRadius: radius.control,
               background: color.surfaceRaised,
               minHeight: 200,

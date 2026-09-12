@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { FlashHistory } from '../FlashHistory';
+import { radius } from '../../../styles/tokens';
 import type { FlashHistoryDto } from '../../../types';
 
 /**
@@ -71,10 +72,16 @@ describe('FlashHistory', () => {
 
   it('keeps the status chip a chip, not a hard-edged tile', () => {
     render(<FlashHistory history={[burn()]} />);
-    // The extraction fixed a drift: this badge was `borderRadius: 0`, which is
-    // the brand-tile radius. A badge is a chip (docs/design/tokens.md).
+    // The extraction fixed a drift: this badge was `borderRadius: 0`, which was
+    // the tile radius. A badge is a chip (docs/design/tokens.md).
+    //
+    // Asserted against the token, not against `2px`: the literal made this test
+    // fail the day the tiers were re-scaled, which is noise -- the invariant it
+    // guards is "a badge does not use the tile tier", and that survives a
+    // re-scale.
     const chip = screen.getByText('✓');
-    expect(chip).toHaveStyle({ borderRadius: '2px' });
+    expect(chip).toHaveStyle({ borderRadius: `${radius.chip}px` });
+    expect(radius.chip).not.toBe(radius.tile);
   });
 
   it('sets the code-ish columns in the mono stack', () => {

@@ -15,7 +15,7 @@ function SessionChip({ sid }: { sid?: string }) {
       color={color.brandAcid}
       style={{
         borderRadius: radius.chip,
-        border: `2px solid ${color.outline}`,
+        border: `1px solid ${color.outline}`,
         color: color.onAcid,
         fontWeight: 700,
       }}

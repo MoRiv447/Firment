@@ -118,7 +118,10 @@ header. They are counted the same way the TUI counts them
 |---|---|---|---|
 | `hover` | `rgba(255,255,255,0.08)` | `#F6FEEF` | row and menu hover wash |
 | `focusRing` | `#B4F779` | `#3B6D11` | keyboard focus |
-| `outline` | `#000000` | `#000000` | the neo-brutalist frame and hard shadow |
+| `outline` | `#3F3F46` | `#D4D4D8` | the border on a card, chip or control |
+| `shadowSm` | `0 1px 2px rgba(0,0,0,.32)` | `0 1px 2px rgba(16,24,40,.06)` | raised rows, the selected session |
+| `shadowMd` | `0 4px 12px rgba(0,0,0,.36)` | `0 4px 12px rgba(16,24,40,.08)` | cards that need to lift |
+| `shadowLg` | `0 12px 32px rgba(0,0,0,.44)` | `0 12px 32px rgba(16,24,40,.12)` | popovers, dropdowns, modals |
 
 The light hover is an **acid tint, not a grey**. `muted` is 4.51:1 on `bg` and
 that ground is already the AA floor, so any grey dark enough to read as a hover
@@ -131,10 +134,17 @@ The focus ring is **not** the acid in the light scheme: acid on a light ground i
 1.27:1 and a keyboard user cannot see it. The dark scheme can afford the acid ring
 (15.06:1); the light scheme uses `brandInk`.
 
-`outline` stays pure black in both schemes. It is the signature — 2px and 3px
-frames plus the hard offset shadow — and it reads on either ground. The light
-scheme gets its softness on controls from `line`/`lineStrong` instead
-(`antdTheme` maps `colorBorder` to those), not by lightening the outline.
+**`outline` is a grey in both schemes, and the shadow is the second separator.**
+It used to be `#000000` in both, carrying the neo-brutalist frame: 2px and 3px
+borders with a hard offset block (`3px 3px 0`) behind them. That layer is gone.
+Two surfaces are now told apart by a hairline first and a shadow second, so
+`shadowSm` sits under raised rows and `shadowMd`/`shadowLg` are reserved for
+things that genuinely overlap live content. The name `outline` survived the
+change because ~60 call sites read it and they all mean the same thing by it —
+"the border on this thing" — but it carries no brand meaning any more.
+
+The light shadows are wider and much lower-alpha than the dark ones on purpose:
+the same black that reads as depth on `#0F0F12` reads as dirt on `#F7F7F5`.
 
 ### Steps
 
@@ -229,24 +239,36 @@ YaHei and sits visibly wrong next to the Latin text.
 
 | Token | Value | Use |
 |---|---|---|
-| `brand` | `0` | Logo and icon tiles — the brand anchor stays hard-edged |
-| `chip` | `2` | Badges, chips, tooltips |
-| `control` | `4` | Inputs and buttons |
-| `panel` | `8` | Cards, panels, modals |
+| `tile` | `8` | Logo and icon tiles, and the cards built on the same shape |
+| `chip` | `4` | Badges, chips, tooltips |
+| `control` | `6` | Inputs and buttons |
+| `panel` | `12` | Cards, panels, modals |
 
 Not one value everywhere: a small chip needs to stay crisp, a large panel needs
 softness. `0` everywhere reads as unfinished rather than deliberate; `12` on a
-control starts to swallow a slanted edge.
+control starts to look like a pill.
+
+**These were `0 / 2 / 4 / 8` with `brand` at 0.** The name is gone along with the
+value it stood for: `brand` (0) meant "the brand anchor stays hard-edged", which
+was the neo-brutalist frame speaking. Once the black outline around a card went
+away, a 0 on that card read as an unfinished box rather than a deliberate one, so
+the tiles round like everything else and the tier is named for what it is.
 
 Applied by element, not by habit: badges and chips take `chip`, alerts, inputs,
 buttons and selectable rows take `control`, cards and panels take `panel`, and
-`brand` (0) belongs to the logo and icon tiles, whose hard edge *is* the anchor.
+`tile` belongs to the logo and icon tiles.
 
 `gui/src/styles/__tests__/no-literal-tokens.test.ts` enforces the whole token
 layer, not just the radius: no literal corner radius, no literal hex colour and
 no hand-written font stack anywhere under `gui/src` outside `tokens.ts`. The
 claim that there is one place a design value is written down decays one inline
 literal at a time, so it is asserted rather than trusted.
+
+Note what that test does **not** catch: an antd preset colour name (`color="blue"`,
+`'purple'` in a ternary) is neither a hex literal nor a radius, so it sails
+through. It is still a way to write a colour down outside this file, and it is
+how the header ended up with five hues — including a purple that appears nowhere
+in this document.
 
 ## Motion
 

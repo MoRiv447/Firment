@@ -181,7 +181,7 @@ export function SettingsView() {
               <div
                 key={p.name}
                 style={{
-                  border: `2px solid ${color.outline}`,
+                  border: `1px solid ${color.outline}`,
                   borderRadius: radius.panel,
                   padding: 10,
                   background: color.surface,
@@ -197,7 +197,7 @@ export function SettingsView() {
                       color={color.warnInk}
                       style={{
                         borderRadius: radius.chip,
-                        border: `2px solid ${color.outline}`,
+                        border: `1px solid ${color.outline}`,
                         color: color.outline,
                         fontWeight: 700,
                       }}

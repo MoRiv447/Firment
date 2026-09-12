@@ -80,7 +80,7 @@ function DiffBody({ detail }: { detail: string }) {
   return (
     <div
       style={{
-        border: `2px solid ${color.outline}`,
+        border: `1px solid ${color.outline}`,
         background: color.bg,
         fontSize: 12,
         fontFamily: font.mono,
@@ -185,16 +185,16 @@ export function ToolCard({
       size="small"
       style={{
         ...(standalone ? {} : { margin: '6px 0' }),
-        borderRadius: radius.brand,
-        border: `2px solid ${color.outline}`,
-        boxShadow: `3px 3px 0 ${color.outline}`,
+        borderRadius: radius.tile,
+        border: `1px solid ${color.outline}`,
+        boxShadow: color.shadowMd,
         background: color.surface,
       }}
       styles={{
         body: { paddingTop: 8 },
         header: {
           minHeight: 38,
-          borderBottom: collapsible ? 'none' : `2px solid ${color.outline}`,
+          borderBottom: collapsible ? 'none' : `1px solid ${color.line}`,
           ...(collapsible ? { cursor: 'pointer' } : {}),
         },
       }}
@@ -215,7 +215,7 @@ export function ToolCard({
               color={tagColor}
               style={{
                 borderRadius: radius.chip,
-                border: `2px solid ${color.outline}`,
+                border: `1px solid ${color.outline}`,
                 color: color.ink,
                 fontWeight: 700,
               }}

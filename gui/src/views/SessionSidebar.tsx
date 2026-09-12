@@ -76,12 +76,12 @@ export function SessionSidebar({
       onClick={() => onSelect(s.id)}
       style={{
         cursor: 'pointer',
-        borderRadius: radius.brand,
+        borderRadius: radius.tile,
         padding: '8px 10px',
         paddingLeft: 10 + depth * 16,
         background: s.id === currentId ? color.brandAcid : undefined,
-        border: s.id === currentId ? `3px solid ${color.outline}` : '3px solid transparent',
-        boxShadow: s.id === currentId ? `3px 3px 0 ${color.outline}` : undefined,
+        border: s.id === currentId ? `1px solid ${color.outline}` : '1px solid transparent',
+        boxShadow: s.id === currentId ? color.shadowMd : undefined,
         transition: 'background 0.15s ease',
       }}
       actions={[
@@ -129,7 +129,7 @@ export function SessionSidebar({
                   fontSize: 10,
                   marginRight: 0,
                   borderRadius: radius.chip,
-                  border: `2px solid ${color.outline}`,
+                  border: `1px solid ${color.outline}`,
                   background: color.successBg,
                   color: color.successInk,
                   lineHeight: '16px',
@@ -144,7 +144,7 @@ export function SessionSidebar({
                   fontSize: 10,
                   marginRight: 0,
                   borderRadius: radius.chip,
-                  border: `2px solid ${color.outline}`,
+                  border: `1px solid ${color.outline}`,
                   background: color.surfaceRaised,
                   color: color.infoInk,
                   lineHeight: '16px',
@@ -159,7 +159,7 @@ export function SessionSidebar({
                   fontSize: 10,
                   marginRight: 0,
                   borderRadius: radius.chip,
-                  border: `2px solid ${color.successBg}`,
+                  border: `1px solid ${color.successBorder}`,
                   background: 'transparent',
                   color: color.successInk,
                   lineHeight: '16px',
@@ -192,7 +192,7 @@ export function SessionSidebar({
                   fontSize: 10,
                   marginRight: 0,
                   borderRadius: radius.chip,
-                  border: `2px solid ${color.outline}`,
+                  border: `1px solid ${color.outline}`,
                   color: color.onAcid,
                   fontWeight: 700,
                   lineHeight: '16px',
@@ -206,7 +206,7 @@ export function SessionSidebar({
                 fontSize: 11,
                 marginRight: 0,
                 borderRadius: radius.chip,
-                border: `2px solid ${color.outline}`,
+                border: `1px solid ${color.outline}`,
                 background: s.id === currentId ? color.bg : color.surfaceRaised,
                 color: s.id === currentId ? color.ink : color.muted,
               }}
@@ -237,8 +237,8 @@ export function SessionSidebar({
             style={{
               flex: 1,
               borderRadius: radius.control,
-              border: `3px solid ${color.outline}`,
-              boxShadow: `3px 3px 0 ${color.outline}`,
+              border: `1px solid ${color.outline}`,
+              boxShadow: color.shadowMd,
               fontWeight: 700,
             }}
           >
@@ -251,10 +251,10 @@ export function SessionSidebar({
             onClick={() => onNew('plan')}
             style={{
               borderRadius: radius.control,
-              border: `3px solid ${color.outline}`,
+              border: `1px solid ${color.outline}`,
               background: color.brandAcid,
               color: color.onAcid,
-              boxShadow: `3px 3px 0 ${color.outline}`,
+              boxShadow: color.shadowMd,
               fontWeight: 700,
             }}
           />
@@ -267,7 +267,7 @@ export function SessionSidebar({
         onChange={(e) => onWorkCwd(e.target.value)}
         style={{
           background: color.bg,
-          border: `2px solid ${color.outline}`,
+          border: `1px solid ${color.outline}`,
           borderRadius: radius.control,
           color: color.ink,
           fontFamily: font.mono,
@@ -286,7 +286,7 @@ export function SessionSidebar({
           justifyContent: 'space-between',
           marginTop: 'auto',
           paddingTop: 6,
-          borderTop: `2px solid ${color.outline}`,
+          borderTop: `1px solid ${color.line}`,
           color: color.muted,
         }}
       >
