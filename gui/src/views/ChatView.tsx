@@ -184,7 +184,7 @@ export function ChatView({
               </div>
             )}
             {toolList.map((t) => (
-              <ToolCard key={t.seq} tool={t} />
+              <ToolCard key={t.seq} tool={t} onAction={onSend} />
             ))}
             {turn && turn.thinking && !turn.text && (
               <div

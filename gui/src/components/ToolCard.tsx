@@ -1,7 +1,9 @@
 import { Alert, Card, Space, Tag, Typography } from 'antd';
 import { DownOutlined, RightOutlined } from '@ant-design/icons';
 import type { ToolCardState } from '../types';
-import { color, font, radius } from '../styles/tokens';
+import { color, font, radius, slant } from '../styles/tokens';
+import { quickActionsFor } from '../lib/quickActions';
+import { SlantButton } from './SlantButton';
 
 const { Text } = Typography;
 
@@ -120,6 +122,7 @@ export function ToolCard({
   tool,
   standalone,
   collapsible,
+  onAction,
 }: {
   tool: ToolCardState;
   standalone?: boolean;
@@ -127,6 +130,8 @@ export function ToolCard({
    * by historical (collapsed-by-default) renderings so the tool name shows
    * exactly once in both states. */
   collapsible?: { open: boolean; onToggle: () => void };
+  /** Sends a canned request to the agent. See lib/quickActions.ts. */
+  onAction?: (prompt: string) => void;
 }) {
   const danger = dangerousName(tool.name, tool.args);
   const tagColor =
@@ -154,6 +159,24 @@ export function ToolCard({
         )
       )}
       {danger && <Alert type="warning" showIcon message="Dangerous command - verify before allowing" />}
+      {/*
+        What you do *after* an edit, in the design system's own three tiers. Only
+        once the edit has finished: an offer to build a change that is still
+        being written is an offer to build something else.
+      */}
+      {onAction && tool.status !== 'running' && quickActionsFor(tool.name).length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: slant.gap, marginTop: 4 }}>
+          {quickActionsFor(tool.name).map((action) => (
+            <SlantButton
+              key={action.key}
+              tier={action.tier}
+              onClick={() => onAction(action.prompt)}
+            >
+              {action.label}
+            </SlantButton>
+          ))}
+        </div>
+      )}
     </Space>
   );
 
