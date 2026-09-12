@@ -53,6 +53,34 @@ const MIN_WIDTH_FOR_EVIDENCE: u16 = 80;
 const RAIL_WIDTH: u16 = 24;
 /// And below this, the rail is the first thing to go.
 const MIN_WIDTH_FOR_RAIL: u16 = 100;
+/// The EVIDENCE block: five rungs plus its two border rows.
+const EVIDENCE_HEIGHT: u16 = 7;
+
+/// A bordered two-column block: label, then value.
+///
+/// The label column is a fixed width so the values line up, which is the only
+/// reason a block like this is readable at a glance rather than word by word.
+fn section(
+    title: &'static str,
+    rows: Vec<(&'static str, String)>,
+    tier: crate::theme::Tier,
+) -> Paragraph<'static> {
+    let dim = Style::default().fg(crate::theme::muted(tier));
+    let lines: Vec<Line<'static>> = rows
+        .into_iter()
+        .map(|(label, value)| {
+            Line::from(vec![
+                Span::styled(format!(" {label:<9}"), dim),
+                Span::styled(clip(&value, 18), Style::default()),
+            ])
+        })
+        .collect();
+    Paragraph::new(lines).block(
+        Block::bordered()
+            .title(Span::styled(format!(" {title} "), dim))
+            .border_style(dim),
+    )
+}
 
 impl App {
     /// Constant-rate spinner phase, derived from wall clock: deriving it
@@ -441,6 +469,21 @@ impl App {
         lines
     }
 
+    /// The DEVICE block's rows, empty when nothing is configured.
+    pub(crate) fn device_rows(&self) -> Vec<(&'static str, String)> {
+        self.device.rows()
+    }
+
+    /// The LA block's rows, empty when no analyzer is configured.
+    pub(crate) fn la_rows(&self) -> Vec<(&'static str, String)> {
+        self.device
+            .la
+            .as_ref()
+            .map(|la| la.rows())
+            .unwrap_or_default()
+    }
+
+    /// The EVIDENCE column: how far up the verification ladder this session got.
     ///
     /// It shows every rung, always, including the ones nothing has reached. A
     /// ladder that appears one rung at a time is a progress bar; the point of
@@ -578,7 +621,30 @@ impl App {
         }
 
         if let Some(area) = evidence_area {
-            frame.render_widget(self.evidence_panel(), area);
+            let device = self.device_rows();
+            let la = self.la_rows();
+            // One block per section, each only as tall as its content, with the
+            // remainder left empty. A section with nothing to say is not drawn at
+            // all: an empty DEVICE block would read as a lookup that failed
+            // rather than as a target nobody configured.
+            let mut constraints = vec![Constraint::Length(EVIDENCE_HEIGHT)];
+            if !device.is_empty() {
+                constraints.push(Constraint::Length(device.len() as u16 + 2));
+            }
+            if !la.is_empty() {
+                constraints.push(Constraint::Length(la.len() as u16 + 2));
+            }
+            constraints.push(Constraint::Min(0));
+            let chunks = Layout::vertical(constraints).split(area);
+            frame.render_widget(self.evidence_panel(), chunks[0]);
+            let mut next = 1;
+            if !device.is_empty() {
+                frame.render_widget(section("DEVICE", device, self.tier), chunks[next]);
+                next += 1;
+            }
+            if !la.is_empty() {
+                frame.render_widget(section("LA", la, self.tier), chunks[next]);
+            }
         }
 
         let spinner = if self.busy {

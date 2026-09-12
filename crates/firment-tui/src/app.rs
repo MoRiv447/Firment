@@ -5,6 +5,7 @@
 
 use crate::adapters::PermissionRequest;
 use crate::commands::AgentCmd;
+use crate::device::Device;
 use crate::evidence::Evidence;
 use crate::paste::{EnterAction, PasteBlock, PasteBurst, PasteOut};
 use crate::pickers::{ModelPicker, Selection, SessionPicker};
@@ -47,6 +48,8 @@ pub(crate) struct App {
     /// two tool events as `active_tools`, drawn by the EVIDENCE panel.
     pub(crate) evidence: Evidence,
     /// Left rail: the sessions in this workspace, and the files under the cwd.
+    /// The configured target and analyzer, for the DEVICE block.
+    pub(crate) device: Device,
     pub(crate) rail_sessions: Vec<SessionRow>,
     pub(crate) rail_files: Vec<FileRow>,
     /// The session being typed into, so the rail can mark its row.
@@ -159,6 +162,7 @@ impl App {
             ai_thinking: false,
             active_tools: Vec::new(),
             evidence: Evidence::default(),
+            device: Device::default(),
             rail_sessions: Vec::new(),
             rail_files: Vec::new(),
             session_id: String::new(),

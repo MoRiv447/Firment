@@ -22,6 +22,7 @@ use tokio::sync::mpsc;
 mod adapters;
 mod app;
 mod commands;
+mod device;
 mod evidence;
 mod motion;
 mod paste;
@@ -34,6 +35,7 @@ mod view;
 use adapters::{ChannelSink, PermissionRequest, TuiAsker, TuiPermission};
 use app::App;
 use commands::spawn_agent_task;
+use device::Device;
 use motion::Motion;
 use util::{GitInfo, git_info};
 
@@ -164,6 +166,10 @@ pub async fn run(
     // so the seven test constructors keep their current shape. Read from the
     // USER config: `[ui]` is deliberately not project-overridable.
     app.tool_verbosity = tool_verbosity;
+    // What this session is aimed at, for the DEVICE block. Built from the
+    // MERGED config -- the same one the tools see -- or the panel would describe
+    // a target the flash tool is not actually going to use.
+    app.device = Device::from_config(&config);
     let result = run_loop(
         &mut terminal,
         &mut app,
@@ -1264,6 +1270,22 @@ mod tests {
     /// Rows of the left rail, as plain strings.
     fn rail_rows(app: &App) -> Vec<String> {
         app.rail_lines().iter().map(|l| l.to_string()).collect()
+    }
+
+    #[test]
+    fn the_device_block_reports_what_is_configured_and_nothing_else() {
+        let mut app = test_app();
+        app.device = crate::device::Device {
+            chip: Some("stm32f407vetx".to_string()),
+            build: None,
+            la: None,
+        };
+        assert_eq!(
+            app.device_rows(),
+            vec![("chip", "stm32f407vetx".to_string())]
+        );
+        // No analyzer configured: the block is absent, not blank.
+        assert!(app.la_rows().is_empty());
     }
 
     #[test]
