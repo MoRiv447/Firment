@@ -1,7 +1,8 @@
-import { Alert, Button, Card, Input, InputNumber, Space, Typography } from 'antd';
+import { Button, Card, Input, InputNumber, Space, Typography } from 'antd';
 import { PlayCircleOutlined, RocketOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import { api, onHardwareExit } from '../lib/api';
+import { color, font, radius } from '../styles/tokens';
 import type { HardwareExit } from '../types';
 
 const { Text } = Typography;
@@ -118,21 +119,58 @@ export function FlashView() {
           </Space>
           <Text type="secondary" style={{ fontSize: 12 }}>
             These buttons invoke the same code path as <Text code>firm flash</Text> /{' '}
-            <Text code>firm run</Text>, streaming RTT logs back into the result box below.
+            <Text code>firm run</Text>. The backend collects the run's output and emits it
+            in one piece on exit, so it appears below when the run finishes rather than
+            line by line.
           </Text>
-          {result && (
-            <Alert
-              type={result.code === 0 ? 'success' : 'error'}
-              showIcon
-              message={`${result.kind} exited with code ${result.code}`}
-              description={
-                <Text style={{ fontSize: 12, whiteSpace: 'pre-wrap' }}>
+          {/*
+            A persistent panel, not a conditional Alert. The note above used to
+            point at "the result box below" while the component rendered nothing
+            at all until `result` was non-null -- so during a flash you watched a
+            blank page, which is the one moment you most want to see something.
+          */}
+          <div
+            style={{
+              border: `2px solid ${color.outline}`,
+              borderRadius: radius.control,
+              background: color.surfaceRaised,
+              minHeight: 200,
+              maxHeight: 420,
+              overflow: 'auto',
+              padding: 12,
+            }}
+          >
+            {result ? (
+              <>
+                <Text
+                  strong
+                  style={{
+                    fontSize: 12,
+                    color: result.code === 0 ? color.successInk : color.warnInk,
+                  }}
+                >
+                  {result.kind} exited with code {result.code}
+                </Text>
+                <pre
+                  style={{
+                    margin: '8px 0 0',
+                    fontFamily: font.mono,
+                    fontSize: 12,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-all',
+                    color: color.ink,
+                  }}
+                >
                   {result.stdout}
                   {result.stderr}
-                </Text>
-              }
-            />
-          )}
+                </pre>
+              </>
+            ) : (
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {busy ? `${busy} in progress…` : 'No run yet — the output of the last flash or run lands here.'}
+              </Text>
+            )}
+          </div>
         </Space>
       </Card>
     </div>
