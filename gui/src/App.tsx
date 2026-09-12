@@ -1,28 +1,10 @@
-import { useEffect, useReducer, useRef, useState } from 'react';import {
-  Badge,
-  Button,
-  ConfigProvider,
-  Dropdown,
-  Layout,
-  Menu,
-  Popover,
-  Space,
-  Tag,
-  theme,
-  Tooltip,
-  Typography,
-} from 'antd';
-
-const { Text } = Typography;
+import { useEffect, useReducer, useRef, useState } from 'react';
+import { Button, ConfigProvider, Drawer, Dropdown, Layout, theme, Tooltip } from 'antd';
 import {
-  ApiOutlined,
-  BellOutlined,
   BulbFilled,
   BulbOutlined,
-  MessageOutlined,
-  RocketOutlined,
   ProjectOutlined,
-  UsbOutlined,
+  SettingOutlined,
 } from '@ant-design/icons';
 import {
   api,
@@ -52,12 +34,16 @@ import { AskDialog, PermissionDialog } from './components/Dialogs';
 import { ChatView } from './views/ChatView';
 import { SessionSidebar } from './views/SessionSidebar';
 import { SettingsView } from './views/SettingsView';
-import { SerialView } from './views/SerialView';
 import { initialTurnState, turnsReducer } from './lib/turnReducer';
 import type { TurnMap } from './lib/turnReducer';
-import { FlashView } from './views/FlashView';
 import { WorkbenchView } from './views/WorkbenchView';
-import { antdTheme, color, font, radius, setActivePalette, statusChip } from './styles/tokens';
+import { NotificationBell } from './shell/NotificationBell';
+import { Inspector } from './shell/Inspector';
+import { StatusBar, StatusDivider, StatusItem } from './shell/StatusBar';
+import { TitleBar } from './shell/TitleBar';
+import { HardwarePane } from './shell/panes/HardwarePane';
+import { PendingPane } from './shell/panes/PendingPane';
+import { antdTheme, color, font, setActivePalette } from './styles/tokens';
 import {
   ThemeModeContext,
   resolveTheme,
@@ -66,9 +52,6 @@ import {
   useThemeSetting,
 } from './lib/theme';
 
-const { Sider, Header, Content } = Layout;
-
-type ViewKey = 'chat' | 'settings' | 'serial' | 'flash' | 'workbench';
 
 export default function App() {
   // The colour scheme. `ui.theme` (auto/light/dark) lives in config.toml and is
@@ -162,10 +145,28 @@ export default function App() {
   const [usage, setUsage] = useState<ContextUsageDto | null>(null);
   // While the budget menu is open the ctx tooltip stays hidden — otherwise
   // hovering pops the info box and clicking pops two boxes at once.
-  const [ctxMenuOpen, setCtxMenuOpen] = useState(false);
   // While the notification panel is open its hover tooltip stays hidden.
   const [notifOpen, setNotifOpen] = useState(false);
-  const [view, setView] = useState<ViewKey>('chat');
+  // The shell's three panels, replacing a `view` union that drove a five-item
+  // tab bar. A tab was the wrong axis: it split one session across five screens,
+  // so opening the serial port lost the conversation.
+  //
+  //   workbenchOpen   a screen you open deliberately, not a tab you pass through
+  //   settingsOpen    a drawer, because settings are not a workspace
+  //   inspectorOpen   the right column; collapsed by default on a laptop
+  const [workbenchOpen, setWorkbenchOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(true);
+
+  // One tick per second while a turn runs, so the status bar's elapsed reading
+  // moves. Nothing else in the shell re-renders on it: the value is derived
+  // below and passed down as a string.
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    if (!running) return;
+    const timer = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [running]);
   // Notification center: guard alerts + build/verify/flash failures + device
   // offline events, aggregated across sessions. Persisted (last 50) so a
   // restart doesn't drop history; unread = entries newer than lastRead.
@@ -384,7 +385,7 @@ export default function App() {
             setSession(e.session);
             // Any session load lands in the chat (workbench "open" button,
             // startup restore, escalation handler all route here).
-            setView('chat');
+            setWorkbenchOpen(false);
             break;
           case 'sessions':
             setSessions(e.sessions);
@@ -507,7 +508,7 @@ export default function App() {
         .loadSession(detail.sessionId)
         .then((s) => {
           setSession(s);
-          setView('chat');
+          setWorkbenchOpen(false);
           void api.startTurn(detail.sessionId, detail.prompt).catch((err) => {
             console.error(err);
             pushInfo(detail.sessionId, `escalation turn failed: ${err}`);
@@ -525,7 +526,7 @@ export default function App() {
       .newSession(workCwd || 'C:\\', mode)
       .then((s) => {
         setSession(s);
-        setView('chat');
+        setWorkbenchOpen(false);
         void api.listSessions().then(setSessions);
       })
       .catch(console.error);
@@ -538,7 +539,7 @@ export default function App() {
       .loadSession(id)
       .then((s) => {
         setSession(s);
-        setView('chat');
+        setWorkbenchOpen(false);
       })
       .catch(console.error);
   };
@@ -640,389 +641,309 @@ export default function App() {
             fontFamily: font.sans,
           }}
         >
-          <Sider
-            width={248}
-            theme={mode}
+          <TitleBar
+            project={session?.cwd || workCwd}
+            actions={
+              <>
+                <NotificationBell
+                  notifications={notifications}
+                  unread={notifUnread}
+                  open={notifOpen}
+                  onOpenChange={setNotifOpen}
+                  onMarkAllRead={() => {
+                    const ts = Date.now();
+                    setNotifLastRead(ts);
+                    localStorage.setItem('notif-last-read', String(ts));
+                  }}
+                  onClear={() => {
+                    setNotifications([]);
+                    localStorage.setItem('notifications', '[]');
+                  }}
+                  onOpenSession={(sid) => {
+                    // The notification may outlive its session (deleted while
+                    // the panel was open).
+                    void api.loadSession(sid).then(setSession).catch(console.error);
+                  }}
+                />
+                <Tooltip title="Project workbench">
+                  <Button
+                    type="text"
+                    aria-label="Project workbench"
+                    icon={<ProjectOutlined />}
+                    onClick={() => setWorkbenchOpen((o) => !o)}
+                    style={workbenchOpen ? { color: color.ink } : undefined}
+                  />
+                </Tooltip>
+                <Tooltip title="Settings">
+                  <Button
+                    type="text"
+                    aria-label="Settings"
+                    icon={<SettingOutlined />}
+                    onClick={() => setSettingsOpen(true)}
+                  />
+                </Tooltip>
+                <Tooltip
+                  title={mode === 'dark' ? 'Switch to the light scheme' : 'Switch to the dark scheme'}
+                >
+                  <Button
+                    type="text"
+                    aria-label={mode === 'dark' ? 'Switch to light scheme' : 'Switch to dark scheme'}
+                    onClick={toggleTheme}
+                    icon={mode === 'dark' ? <BulbOutlined /> : <BulbFilled />}
+                  />
+                </Tooltip>
+              </>
+            }
+          />
+
+          {/*
+            The shell owns its own text colour. antd's `Content` used to supply
+            it, and swapping that for a plain `<main>` silently dropped every
+            prose colour onto the browser default -- dark text on a dark ground
+            for the whole transcript. Same reason `fontFamily` is set on the
+            Layout: the shell must not depend on a library token reaching it.
+          */}
+          <div
             style={{
-              borderRight: `1px solid ${color.line}`,
-              background: color.surface,
+              flex: 1,
+              display: 'flex',
+              minHeight: 0,
+              minWidth: 0,
+              overflow: 'hidden',
+              color: color.ink,
             }}
           >
-            <div
+            <aside
               style={{
-                padding: '18px 14px 14px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 12,
-                borderBottom: `1px solid ${color.line}`,
-                marginBottom: 12,
-              }}
-            >
-              <img
-                src="/icons/logo-w-64.png"
-                alt="Firment"
-                style={{
-                  width: 40,
-                  height: 40,
-                  borderRadius: radius.tile,
-                  boxShadow: color.shadowMd,
-                  objectFit: 'contain',
-                  background: color.surfaceRaised,
-                  padding: 4,
-                }}
-              />
-              <div style={{ lineHeight: 1.1 }}>
-                <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: 0.5, color: color.ink, textTransform: 'uppercase' }}>
-                  Firment
-                </div>
-                <div style={{ fontSize: 10, color: color.muted, letterSpacing: 1.5 }}>
-                  FIRMWARE + AGENT
-                </div>
-              </div>
-            </div>
-            <SessionSidebar
-              sessions={sessions}
-              currentId={session?.id ?? null}
-              workCwd={workCwd}
-              onWorkCwd={setWorkCwd}
-              onSelect={handleSelectSession}
-              onNew={handleNewSession}
-              onDelete={handleDeleteSession}
-              runningIds={new Set(
-                Object.entries(turnsById)
-                  .filter(([, t]) => t.running)
-                  .map(([id]) => id),
-              )}
-              onOpenWorkbench={(projectCwd) => {
-                // Hand the project path to the (always-mounted) Workbench view
-                // via the event bridge: its localStorage restore only ran once
-                // at mount, so just switching tabs shows the WRONG project.
-                localStorage.setItem('workbench-last-cwd', projectCwd);
-                requestWorkbenchOpen(projectCwd);
-                setView('workbench');
-              }}
-            />
-          </Sider>
-          <Layout style={{ background: color.bg }}>
-            <Header
-              style={{
-                height: 54,
-                padding: '0 16px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 12,
+                width: 248,
+                flex: '0 0 auto',
                 background: color.surface,
-                borderBottom: `1px solid ${color.line}`,
-              }}
-            >
-              <Menu
-                mode="horizontal"
-                selectedKeys={[view]}
-                onClick={(e) => setView(e.key as ViewKey)}
-                style={{
-                  flex: 1,
-                  background: 'transparent',
-                  borderBottom: 'none',
-                  fontSize: 13,
-                  fontWeight: 700,
-                }}
-                items={[
-                  { key: 'chat', icon: <MessageOutlined />, label: 'Chat' },
-                  { key: 'serial', icon: <UsbOutlined />, label: 'Serial monitor' },
-                  { key: 'flash', icon: <RocketOutlined />, label: 'Flash / Run' },
-                  { key: 'settings', icon: <ApiOutlined />, label: 'Settings' },
-                  { key: 'workbench', icon: <ProjectOutlined />, label: 'Workbench' },
-                ]}
-              />
-              {anyRunning && (
-                <Tag
-                  color={color.brandAcid}
-                  style={{
-                    borderRadius: radius.chip,
-                    fontWeight: 700,
-                    marginInlineEnd: 0,
-                    boxShadow: color.shadowSm,
-                  }}
-                >
-                  ⚡ {Object.values(turnsById).filter((t) => t.running).length} running
-                </Tag>
-              )}
-              <Popover
-                trigger="click"
-                placement="bottomRight"
-                open={notifOpen}
-                onOpenChange={setNotifOpen}
-                content={
-                  <div style={{ width: 380, maxHeight: 420, overflowY: 'auto', padding: 8 }}>
-                    <Space style={{ marginBottom: 6, width: '100%', justifyContent: 'space-between' }}>
-                      <Button
-                        size="small"
-                        type="dashed"
-                        disabled={notifUnread === 0}
-                        onClick={() => {
-                          const ts = Date.now();
-                          setNotifLastRead(ts);
-                          localStorage.setItem('notif-last-read', String(ts));
-                        }}
-                      >
-                        Mark all read
-                      </Button>
-                      <Button
-                        size="small"
-                        type="text"
-                        onClick={() => {
-                          setNotifications([]);
-                          localStorage.setItem('notifications', '[]');
-                        }}
-                      >
-                        Clear
-                      </Button>
-                    </Space>
-                    {notifications.length === 0 ? (
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        No notifications yet. Guard alerts, build/verify/flash failures and node offline events land here.
-                      </Text>
-                    ) : (
-                      notifications.map((n) => (
-                        <div
-                          key={n.id}
-                          onClick={() => {
-                            if (n.sid) {
-                              // The notification may outlive its session
-                              // (deleted while the panel was open).
-                              void api
-                                .loadSession(n.sid)
-                                .then((s) => {
-                                  setSession(s);
-                                  setView('chat');
-                                })
-                                .catch(console.error);
-                            }
-                          }}
-                          style={{
-                            padding: '5px 6px',
-                            borderBottom: `1px solid ${color.line}`,
-                            cursor: n.sid ? 'pointer' : 'default',
-                          }}
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <Tag
-                              style={{
-                                ...statusChip(
-                                  n.kind === 'guard'
-                                    ? 'failed'
-                                    : n.kind.includes('fail')
-                                      ? 'attention'
-                                      : n.kind === 'device-offline'
-                                        ? 'neutral'
-                                        : 'running',
-                                ),
-                                borderRadius: radius.chip,
-                                fontSize: 10,
-                                fontWeight: 700,
-                              }}
-                            >
-                              {n.kind}
-                            </Tag>
-                            <Text style={{ fontSize: 12, flex: 1, fontWeight: 600 }}>{n.title}</Text>
-                            <Text type="secondary" style={{ fontSize: 10 }}>
-                              {new Date(n.ts).toLocaleString()}
-                            </Text>
-                          </div>
-                          {n.body && (
-                            <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
-                              {n.body}
-                            </Text>
-                          )}
-                        </div>
-                      ))
-                    )}
-                  </div>
-                }
-              >
-                <Tooltip
-                  open={notifOpen ? false : undefined}
-                  title="Notification center (guard alerts / build & flash failures / node offline)"
-                >
-                  <Badge count={notifUnread} size="small" offset={[-2, 2]}>
-                    <Button
-                      icon={<BellOutlined />}
-                      style={{
-                        borderRadius: radius.control,
-                        border: `1px solid ${color.outline}`,
-                        boxShadow: color.shadowSm,
-                      }}
-                    />
-                  </Badge>
-                </Tooltip>
-              </Popover>
-              {session && (
-                <Dropdown
-                  menu={{
-                    items: [
-                      { key: 'agent', label: 'agent (full tools)' },
-                      { key: 'plan', label: 'plan (read-only tools)' },
-                    ],
-                    onClick: ({ key }) => void handleSetSessionProp(api.setSessionMode(session.id, key)),
-                    selectedKeys: [session.mode],
-                  }}
-                  trigger={['click']}
-                  disabled={running}
-                >
-                  <Tag
-                    style={{
-                      ...statusChip(session.mode === 'plan' ? 'attention' : 'ok'),
-                      borderRadius: radius.chip,
-                      marginInlineEnd: 0,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {session.mode} ▾
-                  </Tag>
-                </Dropdown>
-              )}
-              {session && (
-                <Dropdown
-                  menu={{
-                    items: [
-                      { key: 'off', label: 'thinking: off' },
-                      { key: 'low', label: 'thinking: low' },
-                      { key: 'medium', label: 'thinking: medium' },
-                      { key: 'high', label: 'thinking: high' },
-                      { key: 'xhigh', label: 'thinking: xhigh' },
-                      { key: 'max', label: 'thinking: max' },
-                    ],
-                    onClick: ({ key }) => void handleSetSessionProp(api.setSessionThinking(session.id, key)),
-                    selectedKeys: [session.thinking],
-                  }}
-                  trigger={['click']}
-                  disabled={running}
-                >
-                  <Tag
-                    style={{
-                      ...statusChip('running'),
-                      borderRadius: radius.chip,
-                      marginInlineEnd: 0,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    🧠 {session.thinking} ▾
-                  </Tag>
-                </Dropdown>
-              )}
-              {session && (
-                <Dropdown
-                  menu={{
-                    items: [
-                      { key: '65536', label: '64k chars' },
-                      { key: '131072', label: '128k chars' },
-                      { key: '262144', label: '256k chars (default)' },
-                      { key: '524288', label: '512k chars' },
-                      { key: '1048576', label: '1M chars' },
-                    ],
-                    onClick: ({ key }) =>
-                      void handleSetSessionProp(api.setSessionBudget(session.id, Number(key))),
-                    selectedKeys: [String(session.context_budget_chars || 262144)],
-                  }}
-                  trigger={['click']}
-                  onOpenChange={setCtxMenuOpen}
-                  disabled={running}
-                >
-                  <Tooltip
-                    open={ctxMenuOpen ? false : undefined}
-                    title={
-                      usage
-                        ? `context ~${Math.round(usage.total_chars / 1024)}k of ${Math.round(usage.budget / 1024)}k chars (${usage.pct.toFixed(0)}%) — click chip to change budget`
-                        : 'context usage'
-                    }
-                  >
-                    <Tag
-                      style={{
-                        // Unknown usage must read as unknown, not healthy:
-                        // green "ctx …" used to render while the fetch failed.
-                        ...statusChip(
-                          usage === null
-                            ? 'neutral'
-                            : usage.pct > 90
-                              ? 'failed'
-                              : usage.pct > 70
-                                ? 'attention'
-                                : 'ok',
-                        ),
-                        borderRadius: radius.chip,
-                        marginInlineEnd: 0,
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      ctx {usage ? `${usage.pct.toFixed(0)}%` : '…'} ▾
-                    </Tag>
-                  </Tooltip>
-                </Dropdown>
-              )}
-              {/*
-                The scheme toggle, in the header rather than in Settings. It was
-                reachable only as the 8th field of the settings form AND only
-                after pressing Save, which is why nobody found it. Icon-only
-                because the header already carries four coloured chips.
-              */}
-              <Tooltip
-                title={
-                  mode === 'dark'
-                    ? 'Switch to the light scheme'
-                    : 'Switch to the dark scheme'
-                }
-              >
-                <Button
-                  type="text"
-                  aria-label={mode === 'dark' ? 'Switch to light scheme' : 'Switch to dark scheme'}
-                  onClick={toggleTheme}
-                  icon={mode === 'dark' ? <BulbOutlined /> : <BulbFilled />}
-                />
-              </Tooltip>
-            </Header>
-            <Content
-              style={{
-                overflow: 'hidden',
+                borderRight: `1px solid ${color.line}`,
                 display: 'flex',
                 flexDirection: 'column',
+                // `minHeight: 0` + `overflow: hidden` are what keep the rail's
+                // own footer inside the rail: without them its `marginTop: auto`
+                // pushes past the viewport and the version string lands under
+                // the status bar.
                 minHeight: 0,
-                background: color.bg,
+                overflow: 'hidden',
               }}
             >
-              {view === 'chat' && (
+              <SessionSidebar
+                sessions={sessions}
+                currentId={session?.id ?? null}
+                workCwd={workCwd}
+                onWorkCwd={setWorkCwd}
+                onSelect={handleSelectSession}
+                onNew={handleNewSession}
+                onDelete={handleDeleteSession}
+                runningIds={
+                  new Set(
+                    Object.entries(turnsById)
+                      .filter(([, t]) => t.running)
+                      .map(([id]) => id),
+                  )
+                }
+                onOpenWorkbench={(projectCwd) => {
+                  setWorkbenchOpen(true);
+                  requestWorkbenchOpen(projectCwd);
+                }}
+              />
+            </aside>
+
+            <div style={{ flex: 1, display: 'flex', minWidth: 0, minHeight: 0 }}>
+              {/* Both stay mounted and are hidden with `display`. The workbench
+                  SUBSCRIBES to the device stream and detects escalations, so
+                  unmounting it on every tab switch would blind the guard. */}
+              <main
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  display: workbenchOpen ? 'none' : 'flex',
+                  flexDirection: 'column',
+                }}
+              >
                 <ChatView
                   session={session}
                   running={running}
                   turn={turn}
-                  infos={infos.filter(
-                    (i) => !i.sid || i.sid === session?.id,
-                  )}
+                  infos={infos.filter((i) => !i.sid || i.sid === session?.id)}
                   onSend={handleSend}
                   onCancel={handleCancel}
                 />
-              )}
-              {view === 'settings' && <SettingsView />}
-              {view === 'serial' && <SerialView lines={monitorLines} />}
-              {view === 'flash' && <FlashView />}
-              {/* Workbench stays MOUNTED on every tab (hidden, not unmounted):
-                  its escalation detection + device subscription must keep
-                  running while the user is in Chat/Serial/etc. */}
-              <div
+              </main>
+              <main
                 style={{
-                  display: view === 'workbench' ? 'flex' : 'none',
-                  flexDirection: 'column',
                   flex: 1,
-                  minHeight: 0,
+                  minWidth: 0,
+                  display: workbenchOpen ? 'flex' : 'none',
+                  flexDirection: 'column',
                 }}
               >
                 <WorkbenchView />
-              </div>
-            </Content>
-          </Layout>
+              </main>
+            </div>
+
+            <Inspector
+              open={inspectorOpen}
+              onToggle={() => setInspectorOpen((o) => !o)}
+              tabs={[
+                {
+                  key: 'changes',
+                  label: '改动',
+                  content: (
+                    <PendingPane
+                      title="改动卡片"
+                      body="每个被改动的文件一张卡：路径、+N −M、hunk、以及改完之后能做什么。一轮改多个文件时先折叠成一张汇总。数据源是 EditJournal，需要一个只读命令把它读出来。"
+                    />
+                  ),
+                },
+                {
+                  key: 'agents',
+                  label: '子代理',
+                  content: (
+                    <PendingPane
+                      title="子代理"
+                      body="子代理的步骤和主 agent 共用同一条事件流，但事件上没有深度字段，所以现在分不出是谁干的——它的 read_file 看起来像主 agent 调用的。需要给事件加 depth/agent_id，然后在这里按代理分组显示。"
+                    />
+                  ),
+                },
+                {
+                  key: 'todos',
+                  label: '待办',
+                  content: (
+                    <PendingPane
+                      title="待办"
+                      body="agent 的 todo 工具已经在往会话目录写 todos.json（原子写、活过上下文压缩），GUI 一个字都没显示过。读它不需要改内核，只差一个只读命令。"
+                    />
+                  ),
+                },
+                {
+                  key: 'hardware',
+                  label: '硬件',
+                  content: <HardwarePane monitorLines={monitorLines} />,
+                },
+              ]}
+            />
+          </div>
+
+          <StatusBar>
+            <StatusItem
+              kind={running ? 'running' : 'neutral'}
+              label="轮次"
+              value={
+                running && turn?.startedAt
+                  ? `${Math.max(0, Math.round((nowTick - turn.startedAt) / 1000))}s`
+                  : '空闲'
+              }
+            />
+            {anyRunning && (
+              <StatusItem
+                kind="running"
+                value={`${Object.values(turnsById).filter((t) => t.running).length} 个会话在跑`}
+              />
+            )}
+            {session && (
+              <>
+                <StatusDivider />
+                <Dropdown
+                  trigger={['click']}
+                  disabled={running}
+                  menu={{
+                    items: [
+                      { key: 'agent', label: 'agent（全部工具）' },
+                      { key: 'plan', label: 'plan（只读工具）' },
+                    ],
+                    onClick: ({ key }) => void handleSetSessionProp(api.setSessionMode(session.id, key)),
+                  }}
+                >
+                  <span>
+                    <StatusItem
+                      kind={session.mode === 'plan' ? 'attention' : 'ok'}
+                      label="模式"
+                      value={session.mode}
+                      title="点击切换 agent / plan"
+                    />
+                  </span>
+                </Dropdown>
+                <Dropdown
+                  trigger={['click']}
+                  disabled={running}
+                  menu={{
+                    items: ['off', 'low', 'medium', 'high', 'xhigh', 'max'].map((t) => ({
+                      key: t,
+                      label: `thinking: ${t}`,
+                    })),
+                    onClick: ({ key }) =>
+                      void handleSetSessionProp(api.setSessionThinking(session.id, key)),
+                  }}
+                >
+                  <span>
+                    <StatusItem
+                      kind="neutral"
+                      label="思考"
+                      value={session.thinking}
+                      title="点击切换思考等级"
+                    />
+                  </span>
+                </Dropdown>
+                <Dropdown
+                  trigger={['click']}
+                  disabled={running}
+                  menu={{
+                    items: [
+                      { key: '65536', label: '64k 字符' },
+                      { key: '131072', label: '128k 字符' },
+                      { key: '262144', label: '256k 字符（默认）' },
+                      { key: '524288', label: '512k 字符' },
+                      { key: '1048576', label: '1M 字符' },
+                    ],
+                    onClick: ({ key }) =>
+                      void handleSetSessionProp(api.setSessionBudget(session.id, Number(key))),
+                  }}
+                >
+                  <span>
+                    <StatusItem
+                      kind={
+                        usage === null
+                          ? 'neutral'
+                          : usage.pct > 90
+                            ? 'failed'
+                            : usage.pct > 70
+                              ? 'attention'
+                              : 'ok'
+                      }
+                      label="上下文"
+                      value={usage ? `${usage.pct.toFixed(0)}%` : '…'}
+                      title={
+                        usage
+                          ? `${usage.total_chars} / ${usage.budget} 字符`
+                          : '用量未知'
+                      }
+                    />
+                  </span>
+                </Dropdown>
+                <StatusDivider />
+                <StatusItem
+                  kind="neutral"
+                  value={`${session.provider} · ${session.model}`}
+                  title="这个会话使用的 provider 与模型"
+                />
+              </>
+            )}
+          </StatusBar>
         </Layout>
+
+        <Drawer
+          title="设置"
+          placement="right"
+          width={760}
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          destroyOnHidden
+        >
+          <SettingsView />
+        </Drawer>
         {permQueue[0] && (
           <PermissionDialog
             req={permQueue[0]}
