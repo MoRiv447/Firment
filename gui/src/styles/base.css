@@ -56,3 +56,21 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--scroll-thumb-hover);
 }
+
+/*
+ * The focus ring, once instead of once per component.
+ *
+ * Scoped to `[data-ui]` -- the attribute every primitive puts on its root -- not
+ * applied to the document. Until antd leaves in stage 7 the rest of the tree is
+ * still drawing its own focus ring with box-shadow, and an unscoped rule here
+ * would stack a second one on top of it.
+ *
+ * `:focus-visible`, never `:focus`: a control that paints itself focused because
+ * the pointer happened to land on it is the single most common reason an
+ * interface looks noisy.
+ */
+[data-ui]:focus-visible,
+[data-ui] :focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}

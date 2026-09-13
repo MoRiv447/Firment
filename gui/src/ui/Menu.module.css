@@ -1,0 +1,42 @@
+/*
+ * The menu: rows come from `floating.module.css`, this file only supplies the
+ * parts a menu has that a listbox does not.
+ */
+.item {
+  /* Rows are as wide as the panel and no wider: the label owns the row and the
+     hint sits at the far end of it. `.item` cannot say this itself -- a tooltip's
+     body must shrink to its text rather than fill an anchor's width. */
+  width: 100%;
+  border-radius: 0;
+  gap: var(--sp-3);
+  font-size: var(--fs-body);
+}
+
+/* The rows are a flush stack: the corner radius belongs to the panel, and a row
+   that rounded too would nick the edge off its own highlight. */
+.item[data-danger='true'] {
+  color: var(--step-failed-ink);
+}
+
+.text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A shortcut, in the voice of the meta layer: it is information about the row,
+   not the row's name. */
+.hint {
+  flex: none;
+  color: var(--muted);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-meta);
+}
+
+.sep {
+  height: 1px;
+  margin: var(--sp-1) 0;
+  background: var(--line);
+}

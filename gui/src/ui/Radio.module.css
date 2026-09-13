@@ -1,0 +1,88 @@
+.group {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.group[data-layout='row'] {
+  grid-auto-flow: column;
+  justify-content: start;
+  gap: var(--sp-5);
+}
+
+.row {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  cursor: pointer;
+  user-select: none;
+}
+
+.input {
+  --rd-size: 16px;
+
+  appearance: none;
+  flex: none;
+  display: grid;
+  place-content: center;
+  width: var(--rd-size);
+  height: var(--rd-size);
+  margin: 0;
+  border: 1px solid var(--outline);
+  border-radius: var(--r-round);
+  background: var(--surface);
+  cursor: inherit;
+  transition:
+    background-color var(--t-out) var(--ease),
+    border-color var(--t-out) var(--ease);
+}
+
+.input:checked {
+  background: var(--selection);
+  border-color: var(--selection);
+}
+
+.input:checked::before {
+  content: '';
+  width: calc(var(--rd-size) * 0.4);
+  height: calc(var(--rd-size) * 0.4);
+  border-radius: var(--r-round);
+  background: var(--on-selection);
+}
+
+.input:disabled {
+  border-color: var(--line);
+  background: transparent;
+  cursor: not-allowed;
+}
+
+.input:checked:disabled {
+  background: var(--line);
+  border-color: var(--line);
+}
+
+.stack {
+  display: grid;
+  gap: var(--sp-05);
+  min-width: 0;
+}
+
+.text {
+  color: var(--ink);
+  font-family: var(--ff-sans);
+  font-size: var(--fs-body);
+  line-height: var(--lh-tight);
+}
+
+/* The explanation is secondary text but it belongs to the control, so it sits at
+   the same gap as the box rather than drifting toward the next choice. */
+.hint {
+  color: var(--muted);
+  font-size: var(--fs-minor);
+  font-weight: var(--fw-book);
+  line-height: var(--lh-tight);
+}
+
+.row[data-disabled='true'] .text,
+.row[data-disabled='true'] .hint {
+  color: var(--muted);
+}

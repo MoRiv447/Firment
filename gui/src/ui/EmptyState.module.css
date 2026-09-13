@@ -1,0 +1,45 @@
+/*
+ * The empty moment, centred in whatever pane it fills.
+ *
+ * `place-items: center` on a grid is what keeps the block from drifting: the
+ * old tree wrapped each one in a hand-counted `padding-top` -- 40px here, 64px
+ * there -- so three empty states in three panes sat at three heights.
+ */
+.root {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: var(--sp-1);
+  min-height: 0;
+  height: 100%;
+  padding: var(--sp-6);
+  text-align: center;
+}
+
+.glyph {
+  display: inline-flex;
+  margin-bottom: var(--sp-2);
+  color: var(--muted);
+}
+
+.title {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--fs-ui);
+  font-weight: var(--fw-label);
+  line-height: var(--lh-tight);
+}
+
+.hint {
+  margin: 0;
+  max-width: 46ch;
+  color: var(--muted);
+  font-size: var(--fs-minor);
+  line-height: var(--lh-body);
+}
+
+/* Room to breathe below the prose, so a button does not read as part of the
+   sentence above it. */
+.action {
+  margin-top: var(--sp-3);
+}

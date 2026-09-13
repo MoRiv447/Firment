@@ -1,0 +1,37 @@
+/*
+ * The contents of a `PopConfirm` panel. The chrome -- ground, edge, shadow, the
+ * `--z-float` layer -- belongs to `floating.module.css` and is not repeated here.
+ */
+.content {
+  display: grid;
+  gap: var(--sp-1);
+  min-width: 220px;
+  max-width: 320px;
+}
+
+.title {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--fs-body);
+  font-weight: var(--fw-label);
+  line-height: var(--lh-tight);
+}
+
+.message {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-minor);
+  line-height: var(--lh-body);
+}
+
+/*
+ * Right-aligned, cancel first: the same order as the dialog, so the answer a user
+ * reaches for is in the place they already learned it. A panel that flips the two
+ * for a narrower layout is how someone deletes the wrong session.
+ */
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}

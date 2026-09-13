@@ -1,0 +1,99 @@
+/*
+ * The toast stack.
+ *
+ * The container is pointer-transparent and the panels are not, so an empty stack
+ * cannot be a barrier over the corner of the window it sits in, and a toast can
+ * still be dismissed by clicking it.
+ */
+.stack {
+  position: fixed;
+  z-index: var(--z-toast);
+  inset-block-end: calc(var(--h-bar) + var(--sp-3));
+  inset-inline-end: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--sp-2);
+  width: min(380px, calc(100vw - var(--sp-4) * 2));
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  box-sizing: border-box;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface-raised);
+  border: 1px solid var(--outline);
+  border-inline-start: 2px solid var(--tone);
+  border-radius: var(--r-control);
+  box-shadow: var(--shadow-md);
+  color: var(--ink);
+  font-family: var(--ff-sans);
+  font-size: var(--fs-body);
+  line-height: var(--lh-tight);
+  pointer-events: auto;
+  animation: enter var(--t-in) var(--ease);
+}
+
+/* The tone sets one custom property and everything that colour touches -- the
+   rule, the glyph -- reads it, which is why a toast cannot end up with an icon from
+   one status and an edge from another. */
+.toast[data-tone='info'] {
+  --tone: var(--info-ink);
+}
+
+.toast[data-tone='ok'] {
+  --tone: var(--success-ink);
+}
+
+.toast[data-tone='failed'] {
+  --tone: var(--step-failed-ink);
+}
+
+.toast[data-tone='attention'] {
+  --tone: var(--warn-ink);
+}
+
+.glyph {
+  flex: none;
+  margin-block-start: var(--sp-05);
+  color: var(--tone);
+}
+
+.text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dismiss {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: var(--h-min);
+  height: var(--h-min);
+  margin: calc(var(--sp-05) * -1) calc(var(--sp-2) * -1) calc(var(--sp-05) * -1) 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  cursor: pointer;
+}
+
+.dismiss:hover {
+  background: var(--hover);
+}
+
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translateY(var(--sp-2));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

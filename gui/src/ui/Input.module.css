@@ -1,0 +1,40 @@
+/*
+ * The two things a text control needs beyond the shared frame
+ * (`control.module.css` owns the border, the radius, the height and the state
+ * colours): a child that contributes no box of its own, and the ends of the row.
+ *
+ * `.field` must not grow a border or a background -- it is the text inside a box
+ * that already has both, and the UA stylesheet would happily add a second frame.
+ */
+.field {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  outline: none;
+}
+
+.field::placeholder {
+  color: var(--muted);
+}
+
+/* A textarea is where a log or a pasted diff goes, so it gets the mono line
+   height and it grows rather than scrolling inside three lines. */
+.textarea {
+  padding: var(--sp-1) 0;
+  line-height: var(--lh-body);
+  resize: vertical;
+}
+
+.glyph {
+  color: var(--muted);
+}
+
+.suffix {
+  color: var(--muted);
+  font-size: var(--fs-minor);
+}

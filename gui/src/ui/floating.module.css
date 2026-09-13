@@ -1,0 +1,120 @@
+/*
+ * The chrome every portalled panel shares: `Popover`, `Menu`, `Select`'s listbox,
+ * `Tooltip`, `PopConfirm`.
+ *
+ * One sheet rather than five copies of the same block, imported by name. The
+ * reason is not tidiness -- these five have to agree on the geometry exactly, and
+ * a panel that is 1px wider or uses a different shadow than the one next to it is
+ * the difference between "a system" and "five libraries that happen to be in the
+ * same app". Everything component-specific (a tooltip's tighter padding, a
+ * listbox's row heights) is layered on top in the component's own module.
+ *
+ * The `--pop-*` custom properties are written by `usePopover`; the fallbacks here
+ * exist so a panel that has not been measured yet cannot land in a corner of the
+ * screen and stay there.
+ */
+
+.panel {
+  position: fixed;
+  z-index: var(--z-float);
+  top: var(--pop-top, 0px);
+  left: var(--pop-left, 0px);
+  max-width: calc(100vw - var(--sp-2) * 2);
+  /* The height `place()` had room for. Without it the panel is as tall as its
+     content, which is how a long session list ends up running off the bottom of
+     the window instead of scrolling. */
+  max-height: var(--pop-max-h, none);
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--surface-raised);
+  border: 1px solid var(--outline);
+  border-radius: var(--r-panel);
+  box-shadow: var(--shadow-lg);
+  color: var(--ink);
+  font-family: var(--ff-sans);
+  font-size: var(--fs-body);
+  line-height: var(--lh-tight);
+  /* Before `usePopover` has measured it there is no honest position, and an
+     unpositioned panel that is merely invisible-but-laid-out would still eat
+     pointer events on whatever it overlaps. */
+  visibility: hidden;
+  animation: enter var(--t-in) var(--ease);
+}
+
+.panel[data-ready='true'] {
+  visibility: visible;
+}
+
+/* A listbox narrower than its trigger looks like a different control that
+   happened to appear near it. `min-` rather than `width`: a list of long model
+   names is allowed to be wider than the box that opened it. */
+.matchWidth {
+  min-width: var(--pop-anchor-w, 0px);
+}
+
+/* A list of rows supplies its own padding, edge to edge; a panel holding prose or
+   a confirm form needs the room, and getting one of the two wrong is what makes a
+   hand-rolled dropdown look hand-rolled. */
+.panel[data-padded='true'] {
+  padding: var(--sp-3);
+}
+
+/* A flush list still needs a gutter top and bottom, or the first row's highlight
+   runs into the panel's own rounded corner. The rows supply their horizontal
+   padding, which is why this is the block axis only. */
+.panel:not([data-padded='true']) {
+  padding-block: var(--sp-1);
+}
+
+/* `Menu` puts focus on the panel itself, and its row highlight plus
+   `aria-activedescendant` is what says where the cursor is; the global
+   `:focus-visible` ring would draw a second indicator around the whole list rather
+   than say anything new. Rows keep their own ring; only the container's is
+   dropped. */
+.panel:focus-visible {
+  outline: none;
+}
+
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translateY(calc(var(--sp-1) * -1));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* A row inside a floating list: a menu item, an option. */
+.item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--h-row);
+  padding: 0 var(--sp-3);
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.item[data-disabled='true'] {
+  color: var(--muted);
+  cursor: default;
+}
+
+/* The keyboard cursor. A wash, not the brand: only one thing on a screen may be
+   green, and it is the one the user has actually committed to. */
+.item[data-active='true'] {
+  background: var(--hover);
+}
+
+.item[data-selected='true'] {
+  color: var(--ink);
+  font-weight: var(--fw-label);
+}

@@ -1,0 +1,59 @@
+/*
+ * The select. The box is `control.module.css`, the panel and the rows are
+ * `floating.module.css` -- this file is only what a dropdown has that no other
+ * control does.
+ */
+.value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.value[data-mono='true'] {
+  font-family: var(--ff-mono);
+  font-size: var(--fs-meta);
+}
+
+/* A placeholder is not a value. Setting it in `--muted` is what stops an unset
+   field reading as a field that happens to contain the word "bing". */
+.empty {
+  color: var(--muted);
+}
+
+.arrow {
+  flex: none;
+  transition: transform var(--t-out) var(--ease);
+}
+
+/* The chevron turns when the panel opens. A descendant's transform cannot move
+   the anchor's box, so this does not break the placement invariant in
+   `usePopover` -- but nothing outside a glyph may be transformed for the same
+   reason, and this is the only place in the file that does it. */
+.trigger[data-open='true'] .arrow {
+  transform: rotate(180deg);
+}
+
+/* A hint is a second line, not a second column: `bing (default — no key,
+   CN-reachable)` is a sentence about the choice, and sentences wrap badly in an
+   11px right-aligned gutter. */
+.option {
+  width: 100%;
+  flex-wrap: wrap;
+  border-radius: 0;
+}
+
+.text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hint {
+  flex: 1 0 100%;
+  color: var(--muted);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-tight);
+  white-space: normal;
+}

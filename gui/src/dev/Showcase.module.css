@@ -1,0 +1,184 @@
+/*
+ * Layout for the dev-only gallery. Nothing here is a new design decision: the page
+ * is a grid of hairline boxes, and every primitive inside is drawn by its own
+ * stylesheet. If this file starts growing rules that look like component styling,
+ * they belong in the primitive.
+ */
+.page {
+  min-height: 100%;
+  overflow: auto;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--ff-sans);
+  font-size: var(--fs-body);
+}
+
+.head {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.headWord {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.headName {
+  display: block;
+  font-size: var(--fs-ui);
+  font-weight: var(--fw-label);
+}
+
+.kicker {
+  color: var(--muted);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-meta);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: var(--sp-4);
+  padding: var(--sp-4);
+  align-items: start;
+}
+
+.section {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-panel);
+}
+
+.sectionHead {
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--line);
+}
+
+.sectionTitle {
+  margin: 0;
+  font-size: var(--fs-body);
+  font-weight: var(--fw-label);
+}
+
+.sectionHint {
+  margin: var(--sp-05) 0 0;
+  color: var(--muted);
+  font-size: var(--fs-minor);
+  line-height: var(--lh-body);
+}
+
+.sectionBody {
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* The six steps, written out so a wrong one is visible next to its neighbours. */
+.types {
+  display: grid;
+  gap: var(--sp-2);
+  justify-items: start;
+}
+
+.t28 {
+  font-size: var(--fs-display);
+  font-weight: var(--fw-hero);
+  letter-spacing: -0.02em;
+}
+.t14 {
+  font-size: var(--fs-ui);
+}
+.t13 {
+  font-size: var(--fs-body);
+}
+.t12 {
+  font-size: var(--fs-minor);
+}
+.t11 {
+  font-size: var(--fs-meta);
+}
+.t10 {
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+}
+
+.inline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+/* Two fields that have to share a row without pushing each other out. */
+.half {
+  display: grid;
+  flex: 1 1 220px;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.slider {
+  display: block;
+  flex: 1 1 200px;
+  min-width: 160px;
+}
+
+.stats {
+  display: inline-flex;
+  gap: var(--sp-4);
+}
+
+.popText {
+  margin: 0;
+  max-width: 30ch;
+  font-size: var(--fs-minor);
+  line-height: var(--lh-body);
+}
+
+/* A plain button, because the tooltip must sit on the control it describes rather
+   than on a wrapper this layer does not own. */
+.tipHost {
+  padding: 0 var(--sp-2);
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-minor);
+  cursor: help;
+}
+
+.skeletonBox {
+  display: block;
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.emptyBox {
+  height: 200px;
+  border: 1px dashed var(--outline);
+  border-radius: var(--r-control);
+}
+
+.foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4) var(--sp-8);
+  color: var(--muted);
+  font-size: var(--fs-minor);
+}

@@ -1,0 +1,27 @@
+.root {
+  display: grid;
+  gap: var(--sp-05);
+  font-family: var(--ff-sans);
+}
+
+.value {
+  color: var(--ink);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-ui);
+  font-weight: var(--fw-strong);
+  /* Tabular figures, so two stats side by side put their digits in columns. */
+  font-variant-numeric: tabular-nums;
+  line-height: var(--lh-tight);
+}
+
+.label {
+  color: var(--muted);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-tight);
+}
+
+.hint {
+  color: var(--muted);
+  font-size: var(--fs-minor);
+  line-height: var(--lh-body);
+}

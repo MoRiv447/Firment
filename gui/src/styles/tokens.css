@@ -185,7 +185,12 @@
    * Heights. `--h-row` is both the control height and the one-line list row,
    * which is what makes a sidebar row, a menu item and an inspector tab read
    * as one system rather than three.
+   *
+   * `--h-min` is the small button: a control that has to live INSIDE a 40px row
+   * without filling it. It exists as a token because the alternative is a bare
+   * `28` at a call site, which is how the old tree grew seven different heights.
    */
+  --h-min: 28px;
   --h-bar: 44px;
   --h-row: 40px;
   --h-input: 36px;
@@ -211,12 +216,19 @@
   --t-spin: 900ms;
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 
-  /* One z story for the whole app. */
+  /*
+   * One z story for the whole app.
+   *
+   * `--z-float` is ABOVE `--z-dialog` on purpose, and it is the reason there is
+   * no separate menu layer: a `Select` or a `PopConfirm` opened from the settings
+   * drawer is still a floating panel, and a menu layer under the dialog value
+   * would paint it behind the very window the user is filling in.
+   */
   --z-sticky: 10;
   --z-pane: 20;
   --z-overlay: 40;
-  --z-menu: 50;
   --z-dialog: 60;
+  --z-float: 65;
   --z-toast: 70;
 }
 

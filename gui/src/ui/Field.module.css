@@ -1,0 +1,65 @@
+/*
+ * The field: label, control, one line of prose.
+ *
+ * Grid rather than flex, because the hint and the error occupy the same slot and
+ * a row that appears and disappears must not move the control above it -- the
+ * `min-height` on `.note` is what keeps a form from jumping when it becomes
+ * invalid.
+ */
+.field {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--sp-1);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.field[data-inline='true'] {
+  grid-template-columns: var(--field-label-w, 160px) minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--sp-4);
+}
+
+/* In the inline form the hint and the error have to land under the control, not
+   under the label, or the column the user is reading gets a second column of
+   explanation running through it. */
+.field[data-inline='true'] .note {
+  grid-column: 2;
+}
+
+.label {
+  display: block;
+  padding: 0;
+  font-size: var(--fs-minor);
+  font-weight: var(--fw-label);
+  line-height: var(--lh-tight);
+  color: var(--ink);
+}
+
+.required {
+  padding-left: var(--sp-1);
+  color: var(--step-failed-ink);
+}
+
+.control {
+  min-width: 0;
+}
+
+/* Reserved whether or not there is anything to say, so a field that turns
+   invalid does not shove the field below it down the page. */
+.note {
+  margin: 0;
+  min-height: calc(var(--fs-minor) * var(--lh-tight));
+  font-size: var(--fs-minor);
+  line-height: var(--lh-tight);
+}
+
+.hint {
+  color: var(--muted);
+}
+
+.error {
+  color: var(--step-failed-ink);
+}

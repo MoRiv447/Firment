@@ -1,0 +1,15 @@
+/*
+ * The one paragraph a confirm asks its question with.
+ *
+ * Muted, body size, and relaxed leading: the title already carries the weight, and
+ * a bold sentence under a bold heading is two things shouting in the same voice.
+ * The margin is reset because base.css deliberately owns no element selectors --
+ * a `<p>` here otherwise inherits the browser's 1em block margin and the dialog
+ * gains a gap nobody chose.
+ */
+.message {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+}

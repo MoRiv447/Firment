@@ -1,0 +1,70 @@
+/*
+ * The tab strip. Rows are `--h-row` tall so the strip lines up with the sidebar and
+ * the status bar without anyone measuring it.
+ */
+.strip {
+  display: flex;
+  align-items: stretch;
+  gap: var(--sp-1);
+  min-height: var(--h-row);
+  padding-inline: var(--sp-2);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--ff-sans);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  box-sizing: border-box;
+  min-height: var(--h-row);
+  /* The bottom edge sits on the strip's own hairline, so the negative margin lets
+     the active rule cover it instead of stacking a second line under it. */
+  margin-bottom: -1px;
+  padding: 0 var(--sp-3);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-body);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color var(--t-out) var(--ease),
+    border-color var(--t-out) var(--ease);
+}
+
+.tab:hover:not([data-active]):not([disabled]) {
+  color: var(--ink);
+  background: var(--hover);
+}
+
+/* Green as a shape, which is the one thing `--step-rule` exists for. A filled tab
+   would compete with the selected row in the sidebar next to it. */
+.tab[data-active='true'] {
+  color: var(--ink);
+  border-bottom-color: var(--step-rule);
+  font-weight: var(--fw-label);
+}
+
+.tab[disabled] {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.meta {
+  flex: none;
+  color: var(--muted);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+}

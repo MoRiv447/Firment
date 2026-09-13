@@ -1,0 +1,86 @@
+/*
+ * The slider.
+ *
+ * Track sizes are two local custom properties and the thumb's vertical offset is
+ * derived from them, because `appearance: none` throws away the browser's own
+ * alignment and the usual bug in a hand-styled range is a thumb that rides
+ * high.
+ *
+ * Only the `-webkit-` pseudo-elements: this ships inside WebView2, and carrying
+ * Firefox rules nobody here can see would be two more places for the geometry to
+ * disagree.
+ */
+.row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  min-height: var(--h-input);
+}
+
+.input {
+  --sl-track: 4px;
+  --sl-thumb: 14px;
+
+  appearance: none;
+  -webkit-appearance: none;
+  flex: 1;
+  min-width: 0;
+  height: var(--sl-thumb);
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.input::-webkit-slider-runnable-track {
+  height: var(--sl-track);
+  border-radius: var(--r-round);
+  /* One gradient with a hard stop, rather than a second element: the filled part
+     and the empty part are the same piece of geometry. */
+  background: linear-gradient(
+    to right,
+    var(--selection) var(--slider-fill, 0%),
+    var(--line) var(--slider-fill, 0%)
+  );
+}
+
+.input::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: var(--sl-thumb);
+  height: var(--sl-thumb);
+  margin-top: calc((var(--sl-track) - var(--sl-thumb)) / 2);
+  border: 1px solid var(--outline);
+  border-radius: var(--r-round);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--t-out) var(--ease);
+}
+
+.input:hover:not(:disabled)::-webkit-slider-thumb {
+  border-color: var(--ink);
+}
+
+.row[data-disabled='true'] .input {
+  cursor: not-allowed;
+}
+
+.row[data-disabled='true'] .input::-webkit-slider-runnable-track {
+  background: var(--line);
+}
+
+.row[data-disabled='true'] .input::-webkit-slider-thumb {
+  border-color: var(--line);
+  background: var(--surface-raised);
+}
+
+/* Tabular figures: a readout whose digits change width as the value moves makes
+   the whole row twitch while it is being dragged. */
+.readout {
+  min-width: var(--sl-readout, 5ch);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-minor);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  text-align: right;
+}

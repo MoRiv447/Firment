@@ -1,0 +1,48 @@
+/*
+ * A placeholder that is waiting for content, not a decorative block.
+ *
+ * The bars are one token tall and the last one is short by default: a stack of
+ * identical rectangles reads as a table of numbers, and the shape the user is
+ * about to receive is prose -- a line that stops where the sentence does.
+ */
+.root {
+  display: grid;
+  gap: var(--sp-2);
+  width: 100%;
+}
+
+.bar {
+  display: block;
+  height: var(--sp-3);
+  border-radius: var(--r-chip);
+  /* Two neutral grounds, no green: a skeleton is not progress, it is an absence. */
+  background: linear-gradient(
+    90deg,
+    var(--line) 0%,
+    var(--hover) 45%,
+    var(--line) 90%
+  );
+  background-size: 220% 100%;
+  animation: shimmer calc(var(--t-spin) * 2) var(--ease) infinite;
+}
+
+.bar[data-last='true'] {
+  width: 62%;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 220% 0;
+  }
+  to {
+    background-position: -120% 0;
+  }
+}
+
+/* The movement carries no information, so it is the first thing to go when the
+   user has asked for less motion. The bars themselves still say "not yet". */
+@media (prefers-reduced-motion: reduce) {
+  .bar {
+    animation: none;
+  }
+}

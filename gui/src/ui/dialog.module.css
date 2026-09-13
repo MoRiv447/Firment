@@ -1,0 +1,152 @@
+/*
+ * The chrome a modal panel and a drawer panel share: a ground, a heading, a body
+ * that scrolls on its own, and a row of actions.
+ *
+ * `Modal` and `Drawer` import this file and add only where the sheet is placed.
+ * The two used to be different products inside the same window -- antd's `Modal`
+ * and the hand-rolled settings drawer disagreed about heading size, body padding
+ * and what "cancel" looked like -- so a user who opened both in one session got two
+ * dialects of the same conversation.
+ *
+ * NO TRANSFORM HERE, on purpose. `usePopover` documents the invariant that an
+ * ancestor with a `transform` becomes the containing block for every fixed
+ * descendant, which would put a `Select` opened inside a drawer in the wrong place
+ * for as long as that ancestor kept it. So the drawer slides on `inset-inline-end`
+ * and the modal arrives on opacity: neither can move a panel that has not been
+ * measured yet.
+ */
+.sheet {
+  position: fixed;
+  z-index: var(--z-dialog);
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  max-height: calc(100vh - var(--sp-8) * 2);
+  background: var(--surface);
+  border: 1px solid var(--outline);
+  border-radius: var(--r-panel);
+  box-shadow: var(--shadow-lg);
+  color: var(--ink);
+  font-family: var(--ff-sans);
+  font-size: var(--fs-body);
+  line-height: var(--lh-tight);
+}
+
+.modal {
+  /* `inset` on all four sides plus auto margins centres a box with a definite
+     width and height. The usual `translate(-50%, -50%)` is what the header comment
+     rules out: a transform here would become the containing block for any panel a
+     `Select` inside this modal opens. */
+  inset: var(--sp-8);
+  width: min(calc(100vw - var(--sp-8) * 2), var(--sheet-w));
+  height: fit-content;
+  margin: auto;
+  animation: appear var(--t-in) var(--ease);
+}
+
+.modal[data-size='sm'] {
+  --sheet-w: 420px;
+}
+
+.modal[data-size='md'] {
+  --sheet-w: 560px;
+}
+
+.modal[data-size='lg'] {
+  --sheet-w: 760px;
+}
+
+.drawer {
+  top: 0;
+  bottom: 0;
+  inset-inline-end: 0;
+  width: min(100vw, var(--drawer-w));
+  border-block: 0;
+  border-inline-end: 0;
+  border-radius: 0;
+  animation: slide-in var(--t-in) var(--ease);
+}
+
+.drawer[data-size='md'] {
+  --drawer-w: 520px;
+}
+
+.drawer[data-size='lg'] {
+  --drawer-w: 720px;
+}
+
+@keyframes appear {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    inset-inline-end: calc(var(--drawer-w) * -1);
+  }
+  to {
+    opacity: 1;
+    inset-inline-end: 0;
+  }
+}
+
+.header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--line);
+}
+
+.title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--fs-ui);
+  font-weight: var(--fw-label);
+  line-height: var(--lh-tight);
+}
+
+.close {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: var(--h-min);
+  height: var(--h-min);
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.close:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  padding: var(--sp-4);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.footer {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--line);
+}

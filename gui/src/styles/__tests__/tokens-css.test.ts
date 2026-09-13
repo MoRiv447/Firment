@@ -182,6 +182,10 @@ describe('tokens.css number scales', () => {
     // what makes a sidebar row, a menu item and an inspector tab look like one
     // system rather than three that happen to sit near each other.
     expect(shared.get('--h-row')).toBe('40px');
+    // The small control is a step, not a literal: `data-size="sm"` needs a
+    // height and `--h-input` is already the medium one.
+    expect(shared.get('--h-min')).toBe('28px');
+    expect(shared.get('--h-input')).toBe('36px');
   });
 
   it('declares the motion the old motion group never got used for', () => {
@@ -192,9 +196,16 @@ describe('tokens.css number scales', () => {
   });
 
   it('keeps exactly one z-index ladder', () => {
-    const layers = ['--z-sticky', '--z-pane', '--z-overlay', '--z-menu', '--z-dialog', '--z-toast'];
+    // No `--z-menu`: a menu is a floating panel, and a panel layer below the
+    // dialog value would paint a Select opened from the settings drawer behind
+    // the drawer itself. Ordered, and strictly so -- a tie between two layers is
+    // the moment "which one is on top" stops being answerable from the source.
+    const layers = ['--z-sticky', '--z-pane', '--z-overlay', '--z-dialog', '--z-float', '--z-toast'];
     const values = layers.map((name) => Number(shared.get(name)));
     expect(values.every((v) => Number.isFinite(v))).toBe(true);
     expect([...values].sort((a, b) => a - b)).toEqual(values);
+    expect(values.indexOf(Number(shared.get('--z-float')))).toBeGreaterThan(
+      values.indexOf(Number(shared.get('--z-dialog'))),
+    );
   });
 });

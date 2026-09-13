@@ -1,0 +1,69 @@
+/*
+ * The status chip.
+ *
+ * Height comes from the type step plus the vertical padding, not from a `height`
+ * declaration: a chip that says "18px" stops matching the text inside it the
+ * moment the scheme or the step changes.
+ */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  box-sizing: border-box;
+  max-width: 100%;
+  padding: var(--sp-05) var(--sp-2);
+  border-radius: var(--r-chip);
+  background: var(--surface-raised);
+  color: var(--muted);
+  font-family: var(--ff-sans);
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-label);
+  line-height: var(--lh-tight);
+  white-space: nowrap;
+}
+
+.text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chip[data-mono='true'] {
+  font-family: var(--ff-mono);
+}
+
+.chip[data-size='sm'] {
+  padding: 0 var(--sp-1);
+  font-size: var(--fs-micro);
+}
+
+/* Each pair below is documented in docs/design/tokens.md against the ground it
+   sits on -- 6.49:1 dark, 4.57:1 light for `ok` -- which is the only reason a
+   chip can be assembled from two tokens without checking a calculator. */
+.chip[data-status='ok'] {
+  background: var(--success-bg);
+  color: var(--success-ink);
+}
+
+.chip[data-status='failed'] {
+  background: var(--step-failed-bg);
+  color: var(--step-failed-ink);
+}
+
+.chip[data-status='running'] {
+  background: var(--info-bg);
+  color: var(--info-ink);
+}
+
+.chip[data-status='attention'] {
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+}
+
+/* "We do not know" is not a status, so it gets no hue -- but it does get the one
+   hairline of any chip, because a borderless raised fill on a raised surface is
+   invisible and the row then reads as a gap. */
+.chip[data-status='neutral'] {
+  background: var(--surface-raised);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}

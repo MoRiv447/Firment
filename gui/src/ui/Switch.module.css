@@ -1,0 +1,84 @@
+/*
+ * The switch.
+ *
+ * Geometry lives in three local custom properties at the top of the rule, so the
+ * pill, the knob and the travel distance cannot drift apart -- the usual failure
+ * of a hand-rolled switch is a knob that stops 2px short of where the track ends.
+ */
+.root {
+  --sw-w: 32px;
+  --sw-h: 18px;
+  --sw-knob: calc(var(--sw-h) - var(--sp-1));
+
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--h-min);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-family: var(--ff-sans);
+  font-size: var(--fs-body);
+  cursor: pointer;
+  user-select: none;
+}
+
+.pill {
+  display: block;
+  position: relative;
+  flex: none;
+  width: var(--sw-w);
+  height: var(--sw-h);
+  border: 1px solid var(--outline);
+  border-radius: var(--r-round);
+  background: transparent;
+  transition:
+    background-color var(--t-out) var(--ease),
+    border-color var(--t-out) var(--ease);
+}
+
+.knob {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: var(--sw-knob);
+  height: var(--sw-knob);
+  border-radius: var(--r-round);
+  background: var(--muted);
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--t-out) var(--ease);
+}
+
+.text {
+  color: var(--ink);
+}
+
+.root[data-on] .pill {
+  /* `--selection`, not `--brand-acid`: on the light scheme the acid is 1.27:1 and
+     the switch would look off, which is the same reason the selected row stopped
+     borrowing it. */
+  background: var(--selection);
+  border-color: var(--selection);
+}
+
+.root[data-on] .knob {
+  background: var(--surface);
+  transform: translateX(calc(var(--sw-w) - var(--sw-knob) - var(--sp-1)));
+}
+
+.root[data-on] .text {
+  color: var(--ink);
+  font-weight: var(--fw-label);
+}
+
+.root:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.root:disabled .pill {
+  border-color: var(--line);
+}

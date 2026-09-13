@@ -1,0 +1,26 @@
+.root {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--sp-1) var(--sp-3);
+  align-items: baseline;
+  font-size: var(--fs-body);
+  line-height: var(--lh-tight);
+}
+
+.key {
+  color: var(--muted);
+  font-size: var(--fs-minor);
+}
+
+.value {
+  min-width: 0;
+  color: var(--ink);
+  /* The whole point of the component: a value that cannot fit is the one that
+     decides whether a card keeps its shape or pushes the pane open. */
+  overflow-wrap: anywhere;
+}
+
+.value[data-mono='true'] {
+  font-family: var(--ff-mono);
+  font-size: var(--fs-meta);
+}

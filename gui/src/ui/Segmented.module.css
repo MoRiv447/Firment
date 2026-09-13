@@ -1,0 +1,73 @@
+/*
+ * The segmented control: one track, one row of segments, one of them filled.
+ *
+ * The fill is `--selection`/`--on-selection` -- the same pair `Switch` uses for
+ * "on" -- because both controls answer the same question and must therefore look
+ * like the same answer. Using `--brand-acid` directly would make the light scheme
+ * show a selected segment as a 1.27:1 wash of acid under white text.
+ */
+.group {
+  display: inline-flex;
+  box-sizing: border-box;
+  width: 100%;
+  padding: var(--sp-05);
+  background: var(--surface);
+  border: 1px solid var(--outline);
+  border-radius: var(--r-control);
+  font-family: var(--ff-sans);
+}
+
+.segment {
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  box-sizing: border-box;
+  min-height: var(--h-input);
+  padding: 0 var(--sp-2);
+  border: 0;
+  border-radius: calc(var(--r-control) - var(--sp-05));
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-body);
+  line-height: var(--lh-tight);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background-color var(--t-out) var(--ease),
+    color var(--t-out) var(--ease);
+}
+
+.group[data-size='sm'] .segment {
+  min-height: var(--h-min);
+  font-size: var(--fs-minor);
+}
+
+.group[data-size='lg'] .segment {
+  min-height: var(--h-row);
+  font-size: var(--fs-ui);
+}
+
+.segment:hover:not([data-active]):not([disabled]) {
+  color: var(--ink);
+  background: var(--hover);
+}
+
+.segment[data-active] {
+  background: var(--selection);
+  color: var(--on-selection);
+  font-weight: var(--fw-label);
+}
+
+.segment[disabled] {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

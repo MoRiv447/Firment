@@ -1,0 +1,84 @@
+/*
+ * The checkbox.
+ *
+ * `appearance: none` on the native input, then the box IS the input: no overlay
+ * span, so the focus ring, the checked state and the disabled cursor all attach
+ * to the element that actually holds the state instead of to a picture of it.
+ */
+.row {
+  --cb-size: 16px;
+
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--h-min);
+  cursor: pointer;
+  user-select: none;
+}
+
+.input {
+  appearance: none;
+  flex: none;
+  display: grid;
+  place-content: center;
+  width: var(--cb-size);
+  height: var(--cb-size);
+  margin: 0;
+  border: 1px solid var(--outline);
+  border-radius: var(--r-chip);
+  background: var(--surface);
+  cursor: inherit;
+  transition:
+    background-color var(--t-out) var(--ease),
+    border-color var(--t-out) var(--ease);
+}
+
+.input:checked,
+.input:indeterminate {
+  background: var(--selection);
+  border-color: var(--selection);
+}
+
+/* Two strokes of a check, drawn as a rotated corner rather than a glyph: a tick
+   from a font would need a codepoint, a size and a colour of its own. */
+.input:checked::before {
+  content: '';
+  width: calc(var(--cb-size) * 0.5);
+  height: calc(var(--cb-size) * 0.28);
+  border: 2px solid var(--on-selection);
+  border-top: 0;
+  border-right: 0;
+  transform: rotate(-45deg) translate(0, -1px);
+}
+
+/* "Some of these" must not look like "none of these", so the third state is a
+   rule across an empty box. */
+.input:indeterminate::before {
+  content: '';
+  width: calc(var(--cb-size) * 0.5);
+  height: 0;
+  border-top: 2px solid var(--on-selection);
+}
+
+.input:disabled {
+  border-color: var(--line);
+  background: transparent;
+  cursor: not-allowed;
+}
+
+.input:disabled:checked,
+.input:disabled:indeterminate {
+  background: var(--line);
+  border-color: var(--line);
+}
+
+.text {
+  color: var(--ink);
+  font-family: var(--ff-sans);
+  font-size: var(--fs-body);
+  line-height: var(--lh-tight);
+}
+
+.input:disabled ~ .text {
+  color: var(--muted);
+}

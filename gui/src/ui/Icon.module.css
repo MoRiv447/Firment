@@ -1,0 +1,66 @@
+/*
+ * The icon box.
+ *
+ * `1em` is the whole idea: an icon next to a word takes the word's size, so no
+ * call site has to carry a number and no row needs a 9px font-size to make its
+ * chevron small.
+ */
+.icon {
+  width: 1em;
+  height: 1em;
+  flex: none;
+  /* antd's icons came in at 2 against a 16px box; these are usually 11-14px,
+     where the same weight reads as bold. */
+  stroke-width: 1.75;
+}
+
+.icon[data-size='md'] {
+  font-size: 1.25em;
+}
+
+.icon[data-size='lg'] {
+  font-size: 1.5em;
+}
+
+/* Status tones are the chip inks, so "this failed" is one colour wherever it is
+   drawn -- an icon and a badge beside it must not disagree. */
+.icon[data-tone='muted'] {
+  color: var(--muted);
+}
+.icon[data-tone='ink'] {
+  color: var(--ink);
+}
+.icon[data-tone='on-selection'] {
+  color: var(--on-selection);
+}
+.icon[data-tone='ok'] {
+  color: var(--success-ink);
+}
+.icon[data-tone='failed'] {
+  color: var(--step-failed-ink);
+}
+.icon[data-tone='running'] {
+  color: var(--info-ink);
+}
+.icon[data-tone='attention'] {
+  color: var(--warn-ink);
+}
+
+.icon[data-spin] {
+  animation: spin var(--t-spin) linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* A stopped spinner reads as "nothing is happening", which is worse than the
+     thing it was meant to communicate. Same duration, stepped around the circle:
+     the continuous sweep the preference is about goes away and the signal stays. */
+  .icon[data-spin] {
+    animation-timing-function: steps(6);
+  }
+}

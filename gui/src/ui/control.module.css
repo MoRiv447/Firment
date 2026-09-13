@@ -1,0 +1,79 @@
+/*
+ * The control frame, shared by every box that takes input: `TextInput`,
+ * `TextArea`, `SearchInput`, `Select`'s trigger.
+ *
+ * One sheet rather than four copies on purpose. In the old tree each antd control
+ * brought its own border weight, radius and inner padding, and a settings panel
+ * with three kinds of control looked like three products -- so the frame is now a
+ * single definition that a `Select` cannot accidentally drift away from.
+ *
+ * State arrives as `data-*` on the framed element, which is why the rules below
+ * read `data-invalid` and `data-disabled` instead of a class someone appends.
+ */
+.frame {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  box-sizing: border-box;
+  width: 100%;
+  min-height: var(--h-input);
+  padding: 0 var(--sp-3);
+  background: var(--surface);
+  border: 1px solid var(--outline);
+  border-radius: var(--r-control);
+  color: var(--ink);
+  font-family: var(--ff-sans);
+  font-size: var(--fs-body);
+  line-height: var(--lh-tight);
+  transition:
+    border-color var(--t-out) var(--ease),
+    background-color var(--t-out) var(--ease);
+}
+
+.frame[data-size='sm'] {
+  min-height: var(--h-min);
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-minor);
+}
+
+.frame[data-size='lg'] {
+  min-height: var(--h-row);
+}
+
+.frame[data-multiline='true'] {
+  align-items: flex-start;
+  padding: var(--sp-2) var(--sp-3);
+}
+
+.frame[data-mono='true'] {
+  font-family: var(--ff-mono);
+}
+
+.trigger {
+  /* A `Select` trigger is a button wearing the frame: it needs the text alignment
+     and the cursor of a control, not the UA centring of a `<button>`. */
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+}
+
+.frame:hover:not([data-disabled='true']) {
+  border-color: var(--muted);
+}
+
+/* The ring itself belongs to the focused control (`base.css`); the frame only
+   picks up the colour, so the two do not stack into a double border. */
+.frame:focus-within {
+  border-color: var(--focus-ring);
+}
+
+.frame[data-disabled='true'] {
+  background: transparent;
+  border-color: var(--line);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.frame[data-invalid='true'] {
+  border-color: var(--step-failed-ink);
+}

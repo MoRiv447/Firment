@@ -1,0 +1,19 @@
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay);
+  /* A wash of the page ground, not black at 45%: on the light scheme a black
+     mask turns a white dialog into the darkest thing on screen and the panel
+     stops reading as raised. */
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  animation: fade var(--t-out) var(--ease);
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

@@ -1,0 +1,22 @@
+/*
+ * The wordmark, at the two sizes it appears.
+ *
+ * `lg` is the only place in the app that uses `--fs-display`, which is what keeps
+ * the step from becoming "a big number anyone can ask for".
+ */
+.wordmark {
+  font-family: var(--ff-sans);
+  font-size: var(--fs-ui);
+  font-weight: var(--fw-label);
+  letter-spacing: -0.01em;
+  line-height: var(--lh-tight);
+  color: var(--ink);
+  user-select: none;
+}
+
+.wordmark[data-size='lg'] {
+  font-size: var(--fs-display);
+  font-weight: var(--fw-hero);
+  letter-spacing: -0.02em;
+  color: var(--brand-ink);
+}

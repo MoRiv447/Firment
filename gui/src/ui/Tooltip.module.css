@@ -1,0 +1,23 @@
+/*
+ * The tooltip's panel. Position, border, shadow and the enter animation come from
+ * `floating.module.css`; this file says only what must be different about a
+ * tooltip.
+ */
+.tip {
+  /* The panel appears under the cursor, so a tooltip that could receive pointer
+     events would take the hover away from the control it is describing -- and a
+     control that loses pointerenter while its own tooltip is up flickers. */
+  pointer-events: none;
+  padding: var(--sp-1) var(--sp-2);
+  /* In `ch`, because it is a measure of the text rather than a layout dimension:
+     a tooltip should wrap at roughly the line length it was written for, whatever
+     font the scheme ends up with. */
+  max-width: 32ch;
+  background: var(--surface-raised);
+  border-color: var(--line);
+  box-shadow: var(--shadow-md);
+  color: var(--muted);
+  font-size: var(--fs-minor);
+  line-height: var(--lh-tight);
+  white-space: normal;
+}
