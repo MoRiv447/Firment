@@ -120,6 +120,19 @@
   background: var(--hover);
 }
 
+/*
+ * A toggle that is on.
+ *
+ * `aria-pressed` is both the state and the selector, which is the point: a
+ * control cannot look switched on without also saying so. The button this
+ * replaces set `style={{ color }}` from React state, so the workbench looked open
+ * to the eye and closed to a screen reader.
+ */
+.root:not(:disabled)[aria-pressed='true'] {
+  color: var(--ink);
+  background: var(--hover);
+}
+
 .root[data-tier='danger']:not(:disabled):hover {
   background: color-mix(in srgb, var(--step-failed-ink) 12%, var(--step-failed-bg));
 }

@@ -43,6 +43,7 @@ export { Skeleton } from './Skeleton';
 export { Slider } from './Slider';
 export { Spinner } from './Spinner';
 export { Stat } from './Stat';
+export { StatusDot } from './StatusDot';
 export { Switch } from './Switch';
 export { Tabs } from './Tabs';
 export type { TabItem } from './Tabs';

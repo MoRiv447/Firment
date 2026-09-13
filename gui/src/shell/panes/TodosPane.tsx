@@ -1,5 +1,9 @@
-import { font, color } from '../../styles/tokens';
+import type { CSSProperties } from 'react';
+import { ListChecks } from 'lucide-react';
+
+import { EmptyState } from '../../ui';
 import type { TodoDto } from '../../types';
+import styles from './TodosPane.module.css';
 
 /**
  * The session's todo list, as the agent's `todo` tool left it.
@@ -16,11 +20,15 @@ import type { TodoDto } from '../../types';
 export function TodosPane({ todos, loading }: { todos: TodoDto[]; loading: boolean }) {
   if (todos.length === 0) {
     return (
-      <div style={{ fontSize: 11, lineHeight: 1.6, color: color.muted, fontFamily: font.sans }}>
-        {loading
-          ? 'Loading…'
-          : 'No todos in this session yet. When the agent breaks a multi-step task down with the todo tool the list appears here — it lives in the session directory and survives context compaction.'}
-      </div>
+      <EmptyState
+        icon={ListChecks}
+        title={loading ? 'Loading…' : 'No todos in this session yet'}
+        hint={
+          loading
+            ? undefined
+            : 'When the agent breaks a multi-step task down with the todo tool the list appears here — it lives in the session directory and survives context compaction.'
+        }
+      />
     );
   }
 
@@ -32,73 +40,48 @@ export function TodosPane({ todos, loading }: { todos: TodoDto[]; loading: boole
   const currentAt = todos.findIndex((t) => !t.done);
 
   return (
-    <div style={{ fontFamily: font.sans }}>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'baseline',
-          gap: 8,
-          marginBottom: 8,
-          fontSize: 11,
-          color: color.muted,
-        }}
-      >
-        <span style={{ fontFamily: font.mono, color: color.ink }}>
+    <div data-ui="todos-pane" className={styles.root}>
+      <div className={styles.head}>
+        <span className={styles.tally}>
           {done}/{todos.length}
         </span>
-        <span style={{ flex: 1, height: 2, background: color.line, position: 'relative' }}>
-          <span
-            style={{
-              position: 'absolute',
-              inset: 0,
-              width: `${pct}%`,
-              background: color.stepRule,
-            }}
-          />
-        </span>
+        {/*
+         * A progressbar with numbers, not just a line of pixels. `aria-valuenow`
+         * is the count rather than the rounded percentage so the announcement and
+         * the number next to it are the same fact.
+         */}
+        <span
+          className={styles.bar}
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={todos.length}
+          aria-valuenow={done}
+          aria-valuetext={`${done} of ${todos.length} done`}
+          style={{ '--progress': `${pct}%` } as CSSProperties}
+        />
       </div>
-      <ol style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-        {todos.map((t, i) => {
-          const current = i === currentAt;
-          return (
-            <li
-              key={`${i}-${t.text}`}
-              style={{
-                display: 'flex',
-                gap: 8,
-                padding: '5px 0',
-                borderBottom: `1px solid ${color.line}`,
-                fontSize: 12,
-                lineHeight: 1.5,
-                color: t.done ? color.muted : color.ink,
-                // Done items are struck through rather than removed: the list is
-                // the record of the plan, and a plan that erases itself cannot be
-                // checked against what actually happened.
-                textDecoration: t.done ? 'line-through' : undefined,
-                fontWeight: current ? 600 : 400,
-              }}
-            >
-              <span
-                aria-hidden
-                style={{
-                  width: 12,
-                  flex: '0 0 auto',
-                  fontFamily: font.mono,
-                  color: t.done ? color.successInk : current ? color.stepRule : color.muted,
-                }}
-              >
-                {t.done ? '✓' : current ? '▸' : '○'}
-              </span>
-              <span style={{ minWidth: 0, wordBreak: 'break-word' }}>{t.text}</span>
-            </li>
-          );
-        })}
+      <ol className={styles.list}>
+        {todos.map((t, i) => (
+          <li
+            key={`${i}-${t.text}`}
+            className={styles.item}
+            data-done={t.done ? 'true' : undefined}
+            data-current={i === currentAt ? 'true' : undefined}
+          >
+            {/* Three glyphs, not three colours: the mark has to survive a
+                colour-blind reader and a printed screenshot alike. */}
+            <span aria-hidden className={styles.mark}>
+              {t.done ? '✓' : i === currentAt ? '▸' : '○'}
+            </span>
+            <span className={styles.text}>{t.text}</span>
+          </li>
+        ))}
       </ol>
     </div>
   );
 }
 
-/** The one-line form for the status bar: `✓ 3/7`. */
+/** The one-line form for the status bar: `3/7`. */
 export function todoSummary(todos: TodoDto[]): string | null {
   if (todos.length === 0) return null;
   return `${todos.filter((t) => t.done).length}/${todos.length}`;

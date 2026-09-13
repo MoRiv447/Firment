@@ -1,0 +1,96 @@
+/*
+ * One row per subagent, and its steps behind a fold.
+ *
+ * The list is an `<ol>`-free `<ul>` because the order says nothing — a delegated
+ * task has no rank — so the markers are off and the hairlines between rows carry
+ * the structure instead.
+ */
+.list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--ff-sans);
+}
+
+.item + .item {
+  border-top: 1px solid var(--line);
+}
+
+/*
+ * The row is the button, so the hover is the whole width and not a pill around
+ * the text: the fold belongs to the row, and an affordance that stops where the
+ * words stop reads as a label that happens to be clickable.
+ */
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2) 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--fs-minor);
+  text-align: left;
+  cursor: pointer;
+}
+
+.row:hover {
+  background: var(--hover);
+}
+
+.label {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Counts, depth, and the run's tally all share the monospace so a column of rows
+   lines up instead of each number landing where its own digit count puts it. */
+.meta {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.state {
+  flex: 0 0 auto;
+  min-width: 4.5em;
+  color: var(--muted);
+  font-size: var(--fs-meta);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.body {
+  padding: 0 0 var(--sp-3);
+}
+
+.tally {
+  margin: 0 0 var(--sp-2);
+  color: var(--muted);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-meta);
+  overflow-wrap: anywhere;
+}
+
+.none {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-meta);
+}
+
+.steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}

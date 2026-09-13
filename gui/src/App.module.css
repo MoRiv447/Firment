@@ -1,0 +1,82 @@
+/*
+ * The window's own grid.
+ *
+ * Three rows, and the two that carry text state their own height through a token
+ * (`--h-bar`, `--h-min`) while this file says `auto` for both. That is on purpose:
+ * a row measured here would be a second copy of a number that lives in the strip
+ * it sizes, and the two would drift the first time one of them moved.
+ *
+ * The middle row is `minmax(0, 1fr)` rather than `1fr`. `1fr` means "at least as
+ * tall as my content", so a transcript long enough to scroll grew the row past the
+ * viewport and the status bar fell off the bottom of the window.
+ */
+.app {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--ff-sans);
+}
+
+.body {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/*
+ * The session rail.
+ *
+ * `min-height: 0` + `overflow: hidden` are what keep the rail's own footer inside
+ * the rail: without them its `margin-top: auto` pushes past the row and the
+ * version string lands under the status bar.
+ */
+.rail {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: 248px;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+}
+
+.panes {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+/*
+ * The two big panes, and the one rule that makes them cheap to switch: both stay
+ * mounted and are hidden with `display`. The workbench subscribes to the device
+ * stream and detects escalations, so unmounting it on every switch would blind
+ * the guard.
+ */
+.pane {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.pane[data-hidden='true'] {
+  display: none;
+}
+
+/*
+ * Only the transcript has a floor. It is the thing you are reading, and at the
+ * window's minimum width a shrinking transcript wraps code blocks mid-token; the
+ * workbench scrolls on its own and is the pane you open on purpose, so a squeezed
+ * one of those is still usable.
+ */
+.pane[data-pane='chat'] {
+  min-width: 420px;
+}

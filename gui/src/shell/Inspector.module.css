@@ -1,0 +1,105 @@
+/*
+ * The right-hand column.
+ *
+ * Its width is a custom property rather than a `width` the component picks: the
+ * grid container owns the sizing and the drag handle writes a number nobody has to
+ * guess. The fallback is the same 320px the column shipped at, so the sheet still
+ * describes a width when nothing has set the property.
+ */
+.column {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: var(--inspector-w, 320px);
+  flex: 0 0 auto;
+  min-height: 0;
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  flex: 0 0 auto;
+}
+
+/*
+ * The strip scrolls inside this box rather than pushing the collapse button out of
+ * the column: four tab labels do not fit in 240px, and the control that gets you
+ * out of a pane must never be the thing that overflows.
+ */
+.strip {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/*
+ * One hairline under the head, not two.
+ *
+ * `Tabs` already draws a border under its own strip, so this control matches its
+ * height exactly -- `--h-row` of content plus the shared hairline -- and paints a
+ * border of the same colour at the same offset. The lines coincide instead of
+ * stacking into a heavier one.
+ */
+.toggle {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: calc(var(--h-row) + 1px);
+  padding-inline: var(--sp-2);
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  /* An `Icon` measures itself in `em`, and a `<button>` inherits nothing. */
+  font-family: var(--ff-sans);
+  font-size: var(--fs-ui);
+  cursor: pointer;
+}
+
+.toggle:hover {
+  color: var(--ink);
+  background: var(--hover);
+}
+
+/*
+ * The pane's box.
+ *
+ * `[data-fill]` is the one thing the caller decides about it: a pane that scrolls
+ * on its own (the serial monitor, the flash log) takes the whole box and turns the
+ * scroller off, so the column does not end up with two scrollbars an inch apart.
+ */
+.body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: var(--sp-3);
+  overflow-y: auto;
+  font-family: var(--ff-sans);
+  color: var(--ink);
+}
+
+.body[data-fill='true'] {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+/*
+ * Collapsed, the column is a strip of icons rather than a bare chevron: the strip
+ * is how you get back, and it says what is behind it.
+ */
+.rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-1);
+  box-sizing: border-box;
+  width: 38px;
+  flex: 0 0 auto;
+  padding-top: var(--sp-2);
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+}

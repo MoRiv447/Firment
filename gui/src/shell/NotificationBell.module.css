@@ -1,0 +1,136 @@
+/*
+ * The notification bell and its panel.
+ *
+ * The `.bell` wrapper exists for one reason: the unread count has to sit on the
+ * button's corner, and a positioned child needs a positioned ancestor. It is the
+ * flex item inside `.actions`, so the row's gap still measures to the control and
+ * not to the wrapper.
+ */
+.bell {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+/*
+ * The count is decorative. The accessible name of the button already carries
+ * "3 unread", so a screen reader that read the superscript too would announce the
+ * same number twice -- and a bare dot would be the worse alternative, because
+ * "how many" is the one question a bell invites.
+ */
+.count {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  box-sizing: border-box;
+  min-width: 15px;
+  padding: 0 3px;
+  border: 1px solid var(--surface);
+  border-radius: var(--r-round);
+  background: var(--selection);
+  color: var(--on-selection);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-label);
+  line-height: 14px;
+  text-align: center;
+}
+
+/*
+ * Never narrower than it is tall, and never wider than the window.
+ *
+ * The panel holds prose, so it takes the roomier `padded` variant from
+ * `floating.module.css`; this file only decides how much of the screen it may
+ * take. `70vh` is the cap that keeps the header actions on screen when the list
+ * is long -- a panel whose top row has scrolled away cannot be cleared.
+ */
+.panel {
+  width: min(380px, calc(100vw - var(--sp-4) * 2));
+  max-height: min(420px, 70vh);
+  overflow-y: auto;
+  font-family: var(--ff-sans);
+}
+
+.head {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-1);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.list {
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The hairline goes between items, not under the last one -- `+` needs no
+   `:last-child`, and a row that is the only one in the list still gets none. */
+.item + .item {
+  border-top: 1px solid var(--line);
+}
+
+/*
+ * A row is a button when it can take you somewhere and a plain block when it
+ * cannot. Both share this class, which is why it carries no `cursor` and no
+ * hover: a fake-affordance on a row that does nothing is worse than none.
+ */
+.row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--sp-2);
+  align-items: start;
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--sp-2) var(--sp-1);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.row[data-jumpable='true'] {
+  cursor: pointer;
+}
+
+.row[data-jumpable='true']:hover {
+  background: var(--hover);
+}
+
+/* A row that jumps is a control, so its title takes the control weight; one that
+   cannot is prose, and prose does not get bold. */
+.row[data-jumpable='true'] .title {
+  font-weight: var(--fw-strong);
+}
+
+.text {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.title {
+  color: var(--ink);
+  font-size: var(--fs-minor);
+}
+
+.meta {
+  color: var(--muted);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-meta);
+}
+
+.body {
+  color: var(--muted);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-body);
+  overflow-wrap: anywhere;
+}
+
+/* The mark hangs on the first line of text, so the offset is in `em` -- a fixed
+   pixel would stop matching the row the moment its type step moved. */
+.mark {
+  padding-top: 0.5em;
+}

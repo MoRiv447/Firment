@@ -1,0 +1,64 @@
+/*
+ * The top strip.
+ *
+ * One row, fixed height, and the only place in the shell that gets `--h-bar`.
+ * Everything in it is either identity (the mark), context (the path) or an action
+ * (the right cluster), which is why nothing here has a background of its own --
+ * the bar is `--surface` against the transcript's `--bg`, and the hairline under
+ * it is the separator.
+ */
+.bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  box-sizing: border-box;
+  height: var(--h-bar);
+  flex: 0 0 auto;
+  padding: 0 var(--sp-3);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--ff-sans);
+}
+
+.mark {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border-radius: var(--r-chip);
+  object-fit: contain;
+}
+
+/* The vertical hairline between the mark and the context. A rule, not a border,
+   because it belongs to neither side. */
+.divider {
+  width: 1px;
+  height: 18px;
+  flex: none;
+  background: var(--line);
+}
+
+/*
+ * The project path.
+ *
+ * `direction: rtl` is the truncation: the ellipsis moves to the left end, so the
+ * leaf of the path -- the part you recognise -- stays visible without a JS slice
+ * that would have to guess how wide the bar is. The path's segments are all LTR
+ * runs separated by neutral `/` or `\`, and rule N1 of the bidi algorithm keeps
+ * them in order between two same-direction runs, so nothing is reordered.
+ */
+.project {
+  max-width: 420px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-minor);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.spacer {
+  flex: 1 1 auto;
+}

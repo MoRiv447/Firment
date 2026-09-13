@@ -1,0 +1,48 @@
+/*
+ * The resize handle on the inspector's left edge, and its column.
+ *
+ * A handle is 5px of hit area around a 1px rule: the hairline is what you see and
+ * the extra two pixels on each side are what a pointer can actually find. Anything
+ * narrower is a handle you have to hunt for.
+ */
+.handle {
+  position: relative;
+  z-index: var(--z-pane);
+  box-sizing: border-box;
+  flex: 0 0 5px;
+  width: 5px;
+  margin: 0 -2px;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+  /* A drag on a touch screen must not scroll the transcript behind it. */
+  touch-action: none;
+}
+
+.handle::after {
+  content: '';
+  position: absolute;
+  inset: 0 2px;
+  background: var(--line);
+}
+
+.handle:hover::after,
+.handle[data-resizing='true']::after {
+  background: var(--focus-ring);
+}
+
+/*
+ * Laid down while a drag is running.
+ *
+ * Pointer capture already keeps the events coming to the handle, so this is not
+ * about losing the drag -- it is about the text underneath. Without it a resize
+ * highlights half the transcript, and a selection that large is expensive enough
+ * to make the drag stutter.
+ */
+.mask {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay);
+  cursor: col-resize;
+  user-select: none;
+}

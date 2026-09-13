@@ -1,0 +1,13 @@
+/*
+ * The right-hand cluster of the title bar.
+ *
+ * A row of icon buttons and nothing else: the gap is the one number that decides
+ * whether four controls read as a group or as four accidents, so it is written
+ * here and nowhere else.
+ */
+.cluster {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: none;
+}

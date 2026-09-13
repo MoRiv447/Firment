@@ -1,0 +1,103 @@
+/*
+ * The agent's own checklist.
+ *
+ * Read-only, so nothing here is a control: no hover, no cursor, no focus ring.
+ * The three states -- done, current, pending -- are carried by `data-*` on the row
+ * and painted here, which is what lets the strike, the ink and the weight move
+ * together when a token changes instead of being three props in a JS object.
+ */
+.root {
+  font-family: var(--ff-sans);
+  color: var(--ink);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+
+.tally {
+  color: var(--ink);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * The track is the element; the fill is its pseudo-element, sized by `--progress`,
+ * which is the one number the component writes. A JS-set `width` would take the
+ * subtree out of the cascade -- the reason every other measured thing in this app
+ * goes through a custom property.
+ */
+.bar {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 2px;
+  background: var(--line);
+}
+
+.bar::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--progress, 0%);
+  background: var(--step-rule);
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  display: flex;
+  gap: var(--sp-2);
+  padding: var(--sp-1) 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+  font-size: var(--fs-minor);
+  line-height: var(--lh-body);
+}
+
+.item:last-child {
+  border-bottom: 0;
+}
+
+/*
+ * Done items are struck through rather than removed: the list is the record of
+ * the plan, and a plan that erases itself cannot be checked against what actually
+ * happened.
+ */
+.item[data-done='true'] {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.item[data-current='true'] .text {
+  font-weight: var(--fw-strong);
+}
+
+.mark {
+  flex: 0 0 auto;
+  width: 1em;
+  color: var(--step-pending-ink);
+  font-family: var(--ff-mono);
+}
+
+.item[data-current='true'] .mark {
+  color: var(--step-current-ink);
+}
+
+/* Last, so a finished row's mark is the done ink even if the ordering above moves. */
+.item[data-done='true'] .mark {
+  color: var(--step-done-ink);
+}
+
+.text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

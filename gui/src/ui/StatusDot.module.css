@@ -1,0 +1,67 @@
+/*
+ * The bare state mark.
+ *
+ * Six pixels, a circle, and no fill behind it: everything that needs a fill is a
+ * `Chip`, and a dot with a background would be a chip with the text removed.
+ */
+.dot {
+  display: inline-block;
+  box-sizing: border-box;
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-round);
+  background: var(--muted);
+}
+
+/* "No judgement" is not a status, so it is the same grey at half weight rather
+   than a sixth hue -- and it never pulses. */
+.dot[data-status='neutral'] {
+  background: var(--muted);
+  opacity: 0.5;
+}
+
+.dot[data-status='ok'] {
+  background: var(--success-ink);
+}
+
+.dot[data-status='failed'] {
+  background: var(--step-failed-ink);
+}
+
+.dot[data-status='running'] {
+  background: var(--info-ink);
+}
+
+.dot[data-status='attention'] {
+  background: var(--warn-ink);
+}
+
+/*
+ * Opacity, not scale.
+ *
+ * A transform is the cheap-looking version of this animation, and it is the one
+ * thing that cannot appear here: an ancestor with a `transform` stops being a
+ * containing block for `position: fixed`, which is how every popover in the app
+ * is placed. A dot that pulses inside a row that also anchors a panel would move
+ * that panel's anchor with it.
+ */
+.dot[data-pulse] {
+  animation: breathe 1.6s var(--ease) infinite;
+}
+
+@keyframes breathe {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The preference is about the sweep, not about the signal: a dot that stops
+     moving reads as "nothing is happening", which is the opposite of what
+     `running` means. Four steps around the same loop keeps the beat and drops
+     the glide. */
+  .dot[data-pulse] {
+    animation-timing-function: steps(4);
+  }
+}

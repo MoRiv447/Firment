@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Tooltip } from 'antd';
-import { UsbOutlined, RocketOutlined } from '@ant-design/icons';
-import { font, radius, color } from '../../styles/tokens';
-import { SerialView } from '../../views/SerialView';
+import { Rocket, Usb } from 'lucide-react';
+
+import { Segmented, StatusDot } from '../../ui';
 import { FlashView } from '../../views/FlashView';
+import { SerialView } from '../../views/SerialView';
 import type { MonitorLine } from '../../types';
+import styles from './HardwarePane.module.css';
 
 /**
  * Serial and Flash, together, inside the inspector.
@@ -28,56 +29,34 @@ export function HardwarePane({ monitorLines }: { monitorLines: Record<string, Mo
   }, [monitorLines]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, height: '100%', gap: 8 }}>
-      <div style={{ display: 'flex', gap: 4, flex: '0 0 auto' }}>
-        {(
-          [
-            ['serial', 'Serial', <UsbOutlined key="u" />],
-            ['flash', 'Flash', <RocketOutlined key="r" />],
-          ] as const
-        ).map(([key, label, icon]) => {
-          const on = tab === key;
-          return (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setTab(key)}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '4px 10px',
-                border: `1px solid ${on ? color.outline : 'transparent'}`,
-                borderRadius: radius.control,
-                background: on ? color.surfaceRaised : 'transparent',
-                color: on ? color.ink : color.muted,
-                cursor: 'pointer',
-                fontFamily: font.sans,
-                fontSize: 12,
-                fontWeight: on ? 600 : 400,
-              }}
-            >
-              {icon}
-              {label}
-            </button>
-          );
-        })}
-        <span style={{ flex: 1 }} />
+    <div data-ui="hardware-pane" className={styles.root}>
+      <div className={styles.head}>
+        <Segmented
+          size="sm"
+          ariaLabel="Hardware view"
+          value={tab}
+          onChange={setTab}
+          options={[
+            { value: 'serial', label: 'Serial', icon: Usb },
+            { value: 'flash', label: 'Flash', icon: Rocket },
+          ]}
+        />
+        <span className={styles.spacer} />
+        {/*
+         * A word, not a dot with a tooltip. The old mark was 6px of green whose only
+         * explanation appeared on hover, which put the fact in the one place a
+         * keyboard, a touch screen and a screenshot could not reach. It latches
+         * because a board that has spoken once has been connected, and that is the
+         * actual claim.
+         */}
         {sawOutput && (
-          <Tooltip title="The board has produced output in this session">
-            <span
-              style={{
-                alignSelf: 'center',
-                width: 6,
-                height: 6,
-                borderRadius: radius.chip,
-                background: color.successInk,
-              }}
-            />
-          </Tooltip>
+          <span className={styles.live}>
+            <StatusDot status="ok" />
+            live
+          </span>
         )}
       </div>
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+      <div className={styles.body}>
         {tab === 'serial' ? <SerialView lines={monitorLines} /> : <FlashView />}
       </div>
     </div>

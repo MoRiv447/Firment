@@ -1,11 +1,6 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
-import { Button, ConfigProvider, Drawer, Dropdown, Layout, theme, Tooltip } from 'antd';
-import {
-  BulbFilled,
-  BulbOutlined,
-  ProjectOutlined,
-  SettingOutlined,
-} from '@ant-design/icons';
+import { ConfigProvider, Drawer, theme } from 'antd';
+import { Bot, Diff, ListChecks, Usb } from 'lucide-react';
 import {
   api,
   notifySessionsChanged,
@@ -38,15 +33,16 @@ import { SettingsView } from './views/SettingsView';
 import { initialTurnState, turnsReducer } from './lib/turnReducer';
 import type { TurnMap } from './lib/turnReducer';
 import { WorkbenchView } from './views/WorkbenchView';
-import { NotificationBell } from './shell/NotificationBell';
 import { Inspector } from './shell/Inspector';
-import { StatusBar, StatusDivider, StatusItem } from './shell/StatusBar';
+import { StatusBar, StatusDivider, StatusItem, StatusMenu, StatusTail } from './shell/StatusBar';
 import { TitleBar } from './shell/TitleBar';
+import { TitleBarActions } from './shell/TitleBarActions';
 import { AgentsPane } from './shell/panes/AgentsPane';
-import { TodosPane } from './shell/panes/TodosPane';
+import { TodosPane, todoSummary } from './shell/panes/TodosPane';
 import { HardwarePane } from './shell/panes/HardwarePane';
 import { PendingPane } from './shell/panes/PendingPane';
-import { antdTheme, color, font, setActivePalette } from './styles/tokens';
+import { antdTheme, setActivePalette } from './styles/tokens';
+import styles from './App.module.css';
 import {
   ThemeModeContext,
   publishScheme,
@@ -152,13 +148,9 @@ export default function App() {
     const id = ++infoSeqRef.current;
     setInfos((prev) => [...prev.slice(-8), { id, sid, text, ts: Date.now() }]);
   };
-  // Rough context usage for the OPEN session (header chip); refreshed when
+  // Rough context usage for the OPEN session (status bar reading); refreshed when
   // the session changes and after every transcript refresh.
   const [usage, setUsage] = useState<ContextUsageDto | null>(null);
-  // While the budget menu is open the ctx tooltip stays hidden — otherwise
-  // hovering pops the info box and clicking pops two boxes at once.
-  // While the notification panel is open its hover tooltip stays hidden.
-  const [notifOpen, setNotifOpen] = useState(false);
   // The shell's three panels, replacing a `view` union that drove a five-item
   // tab bar. A tab was the wrong axis: it split one session across five screens,
   // so opening the serial port lost the conversation.
@@ -169,6 +161,15 @@ export default function App() {
   const [workbenchOpen, setWorkbenchOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
+  // The column's width is the one shell measurement worth keeping: a drag that
+  // resets on every restart is a drag that was never really set. The Inspector
+  // clamps it, so whatever is in here is only ever a starting point.
+  const [inspectorWidth, setInspectorWidth] = useState<number>(
+    () => Number(localStorage.getItem('inspector-width')) || 320,
+  );
+  useEffect(() => {
+    localStorage.setItem('inspector-width', String(inspectorWidth));
+  }, [inspectorWidth]);
 
   // One tick per second while a turn runs, so the status bar's elapsed reading
   // moves. Nothing else in the shell re-renders on it: the value is derived
@@ -679,6 +680,8 @@ export default function App() {
       .catch((err) => console.error(err));
   };
 
+  const todosDone = todoSummary(todos);
+
   return (
     // The provider exists for the memoised subtrees: a `React.memo` component
     // compares props only, so without a subscription here a theme flip would
@@ -690,104 +693,45 @@ export default function App() {
           algorithm: mode === 'dark' ? theme.darkAlgorithm : theme.defaultAlgorithm,
         }}
       >
-        <Layout
-          style={{
-            height: '100vh',
-            overflow: 'hidden',
-            background: color.bg,
-            // Set here as well as in the antd theme: the shell's own text should
-            // not depend on a component library token reaching it.
-            fontFamily: font.sans,
-          }}
-        >
+        {/*
+          Three rows: the title bar, the working surface, the status bar. Every
+          measurement that used to be an inline style here is in `App.module.css`,
+          and the scheme's colours come from `[data-scheme]` rather than from a JS
+          palette -- a `style` written in React opts its whole subtree out of the
+          cascade, which is how the transcript ended up unable to follow the theme.
+        */}
+        <div className={styles.app}>
           <TitleBar
             project={session?.cwd || workCwd}
             actions={
-              <>
-                <NotificationBell
-                  notifications={notifications}
-                  unread={notifUnread}
-                  open={notifOpen}
-                  onOpenChange={setNotifOpen}
-                  onMarkAllRead={() => {
-                    const ts = Date.now();
-                    setNotifLastRead(ts);
-                    localStorage.setItem('notif-last-read', String(ts));
-                  }}
-                  onClear={() => {
-                    setNotifications([]);
-                    localStorage.setItem('notifications', '[]');
-                  }}
-                  onOpenSession={(sid) => {
-                    // The notification may outlive its session (deleted while
-                    // the panel was open).
-                    void api.loadSession(sid).then(setSession).catch(console.error);
-                  }}
-                />
-                <Tooltip title="Project workbench">
-                  <Button
-                    type="text"
-                    aria-label="Project workbench"
-                    icon={<ProjectOutlined />}
-                    onClick={() => setWorkbenchOpen((o) => !o)}
-                    style={workbenchOpen ? { color: color.ink } : undefined}
-                  />
-                </Tooltip>
-                <Tooltip title="Settings">
-                  <Button
-                    type="text"
-                    aria-label="Settings"
-                    icon={<SettingOutlined />}
-                    onClick={() => setSettingsOpen(true)}
-                  />
-                </Tooltip>
-                <Tooltip
-                  title={mode === 'dark' ? 'Switch to the light scheme' : 'Switch to the dark scheme'}
-                >
-                  <Button
-                    type="text"
-                    aria-label={mode === 'dark' ? 'Switch to light scheme' : 'Switch to dark scheme'}
-                    onClick={toggleTheme}
-                    icon={mode === 'dark' ? <BulbOutlined /> : <BulbFilled />}
-                  />
-                </Tooltip>
-              </>
+              <TitleBarActions
+                mode={mode}
+                onToggleTheme={toggleTheme}
+                workbenchOpen={workbenchOpen}
+                onToggleWorkbench={() => setWorkbenchOpen((o) => !o)}
+                onOpenSettings={() => setSettingsOpen(true)}
+                notifications={notifications}
+                unread={notifUnread}
+                onMarkAllRead={() => {
+                  const ts = Date.now();
+                  setNotifLastRead(ts);
+                  localStorage.setItem('notif-last-read', String(ts));
+                }}
+                onClear={() => {
+                  setNotifications([]);
+                  localStorage.setItem('notifications', '[]');
+                }}
+                onOpenSession={(sid) => {
+                  // The notification may outlive its session (deleted while
+                  // the panel was open).
+                  void api.loadSession(sid).then(setSession).catch(console.error);
+                }}
+              />
             }
           />
 
-          {/*
-            The shell owns its own text colour. antd's `Content` used to supply
-            it, and swapping that for a plain `<main>` silently dropped every
-            prose colour onto the browser default -- dark text on a dark ground
-            for the whole transcript. Same reason `fontFamily` is set on the
-            Layout: the shell must not depend on a library token reaching it.
-          */}
-          <div
-            style={{
-              flex: 1,
-              display: 'flex',
-              minHeight: 0,
-              minWidth: 0,
-              overflow: 'hidden',
-              color: color.ink,
-            }}
-          >
-            <aside
-              style={{
-                width: 248,
-                flex: '0 0 auto',
-                background: color.surface,
-                borderRight: `1px solid ${color.line}`,
-                display: 'flex',
-                flexDirection: 'column',
-                // `minHeight: 0` + `overflow: hidden` are what keep the rail's
-                // own footer inside the rail: without them its `marginTop: auto`
-                // pushes past the viewport and the version string lands under
-                // the status bar.
-                minHeight: 0,
-                overflow: 'hidden',
-              }}
-            >
+          <div className={styles.body}>
+            <aside className={styles.rail}>
               <SessionSidebar
                 sessions={sessions}
                 currentId={session?.id ?? null}
@@ -810,22 +754,11 @@ export default function App() {
               />
             </aside>
 
-            <div style={{ flex: 1, display: 'flex', minWidth: 0, minHeight: 0 }}>
-              {/* Both stay mounted and are hidden with `display`. The workbench
-                  SUBSCRIBES to the device stream and detects escalations, so
-                  unmounting it on every tab switch would blind the guard. */}
+            <div className={styles.panes}>
               <main
-                style={{
-                  flex: 1,
-                  // The transcript is the thing you are reading, and it was the
-                  // ONLY pane allowed to shrink: at the 980px window minimum the
-                  // 248px rail plus the 360px inspector left it 372px, which
-                  // wrapped code blocks mid-token. The inspector clamps instead
-                  // (see shell/Inspector.tsx) so this number actually holds.
-                  minWidth: 420,
-                  display: workbenchOpen ? 'none' : 'flex',
-                  flexDirection: 'column',
-                }}
+                data-pane="chat"
+                data-hidden={workbenchOpen ? 'true' : undefined}
+                className={styles.pane}
               >
                 <ChatView
                   session={session}
@@ -837,14 +770,9 @@ export default function App() {
                 />
               </main>
               <main
-                style={{
-                  flex: 1,
-                  // No floor here: the workbench scrolls internally and is the
-                  // pane you open on purpose, so a squeezed one is still usable.
-                  minWidth: 0,
-                  display: workbenchOpen ? 'flex' : 'none',
-                  flexDirection: 'column',
-                }}
+                data-pane="workbench"
+                data-hidden={workbenchOpen ? undefined : 'true'}
+                className={styles.pane}
               >
                 <WorkbenchView />
               </main>
@@ -853,10 +781,13 @@ export default function App() {
             <Inspector
               open={inspectorOpen}
               onToggle={() => setInspectorOpen((o) => !o)}
+              width={inspectorWidth}
+              onResize={setInspectorWidth}
               tabs={[
                 {
                   key: 'changes',
                   label: 'Changes',
+                  icon: Diff,
                   content: (
                     <PendingPane
                       title="Change cards"
@@ -867,18 +798,22 @@ export default function App() {
                 {
                   key: 'agents',
                   label: 'Subagents',
+                  icon: Bot,
                   badge: subagents.length || undefined,
                   content: <AgentsPane subagents={subagents} />,
                 },
                 {
                   key: 'todos',
                   label: 'Todos',
+                  icon: ListChecks,
                   badge: todos.length || undefined,
                   content: <TodosPane todos={todos} loading={todosLoading} />,
                 },
                 {
                   key: 'hardware',
                   label: 'Hardware',
+                  icon: Usb,
+                  fill: true,
                   content: <HardwarePane monitorLines={monitorLines} />,
                 },
               ]}
@@ -904,83 +839,59 @@ export default function App() {
             {session && (
               <>
                 <StatusDivider />
-                <Dropdown
-                  trigger={['click']}
+                <StatusMenu
+                  kind={session.mode === 'plan' ? 'attention' : 'ok'}
+                  label="Mode"
+                  value={session.mode}
+                  title="Switch between agent and plan"
                   disabled={running}
-                  menu={{
-                    items: [
-                      { key: 'agent', label: 'agent (all tools)' },
-                      { key: 'plan', label: 'plan (read-only tools)' },
-                    ],
-                    onClick: ({ key }) => void handleSetSessionProp(api.setSessionMode(session.id, key)),
-                  }}
-                >
-                  <span>
-                    <StatusItem
-                      kind={session.mode === 'plan' ? 'attention' : 'ok'}
-                      label="Mode"
-                      value={session.mode}
-                      title="Switch between agent and plan"
-                    />
-                  </span>
-                </Dropdown>
-                <Dropdown
-                  trigger={['click']}
+                  options={[
+                    { key: 'agent', label: 'agent (all tools)' },
+                    { key: 'plan', label: 'plan (read-only tools)' },
+                  ]}
+                  onSelect={(key) =>
+                    void handleSetSessionProp(api.setSessionMode(session.id, key))
+                  }
+                />
+                <StatusMenu
+                  kind="neutral"
+                  label="Thinking"
+                  value={session.thinking}
+                  title="Change the thinking level"
                   disabled={running}
-                  menu={{
-                    items: ['off', 'low', 'medium', 'high', 'xhigh', 'max'].map((t) => ({
-                      key: t,
-                      label: `thinking: ${t}`,
-                    })),
-                    onClick: ({ key }) =>
-                      void handleSetSessionProp(api.setSessionThinking(session.id, key)),
-                  }}
-                >
-                  <span>
-                    <StatusItem
-                      kind="neutral"
-                      label="Thinking"
-                      value={session.thinking}
-                      title="Change the thinking level"
-                    />
-                  </span>
-                </Dropdown>
-                <Dropdown
-                  trigger={['click']}
+                  options={['off', 'low', 'medium', 'high', 'xhigh', 'max'].map((t) => ({
+                    key: t,
+                    label: `thinking: ${t}`,
+                  }))}
+                  onSelect={(key) =>
+                    void handleSetSessionProp(api.setSessionThinking(session.id, key))
+                  }
+                />
+                <StatusMenu
+                  kind={
+                    usage === null
+                      ? 'neutral'
+                      : usage.pct > 90
+                        ? 'failed'
+                        : usage.pct > 70
+                          ? 'attention'
+                          : 'ok'
+                  }
+                  label="Context"
+                  value={usage ? `${usage.pct.toFixed(0)}%` : '…'}
+                  title={usage ? `${usage.total_chars} / ${usage.budget} chars` : 'usage unknown'}
                   disabled={running}
-                  menu={{
-                    items: [
-                      { key: '65536', label: '64k chars' },
-                      { key: '131072', label: '128k chars' },
-                      { key: '262144', label: '256k chars (default)' },
-                      { key: '524288', label: '512k chars' },
-                      { key: '1048576', label: '1M chars' },
-                    ],
-                    onClick: ({ key }) =>
-                      void handleSetSessionProp(api.setSessionBudget(session.id, Number(key))),
-                  }}
-                >
-                  <span>
-                    <StatusItem
-                      kind={
-                        usage === null
-                          ? 'neutral'
-                          : usage.pct > 90
-                            ? 'failed'
-                            : usage.pct > 70
-                              ? 'attention'
-                              : 'ok'
-                      }
-                      label="Context"
-                      value={usage ? `${usage.pct.toFixed(0)}%` : '…'}
-                      title={
-                        usage
-                          ? `${usage.total_chars} / ${usage.budget} chars`
-                          : 'usage unknown'
-                      }
-                    />
-                  </span>
-                </Dropdown>
+                  options={[
+                    { key: '65536', label: '64k chars' },
+                    { key: '131072', label: '128k chars' },
+                    { key: '262144', label: '256k chars (default)' },
+                    { key: '524288', label: '512k chars' },
+                    { key: '1048576', label: '1M chars' },
+                  ]}
+                  onSelect={(key) =>
+                    void handleSetSessionProp(api.setSessionBudget(session.id, Number(key)))
+                  }
+                />
                 <StatusDivider />
                 <StatusItem
                   kind="neutral"
@@ -989,8 +900,23 @@ export default function App() {
                 />
               </>
             )}
+            {/*
+              Pinned against the right edge and out of the readings' way. The agent
+              owns this list, so the bar only reports where it got to; `null` when
+              there is no list, because "0/0" would read as a failed task.
+            */}
+            {todosDone && (
+              <StatusTail>
+                <StatusItem
+                  kind={todos.every((t) => t.done) ? 'ok' : 'neutral'}
+                  label="Todos"
+                  value={todosDone}
+                  title="The agent's own todo list"
+                />
+              </StatusTail>
+            )}
           </StatusBar>
-        </Layout>
+        </div>
 
         <Drawer
           title="Settings"

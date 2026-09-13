@@ -1,0 +1,84 @@
+/*
+ * The bottom strip.
+ *
+ * `--h-min` (28px) rather than a height of its own: it is the same measurement as
+ * the small control, and a bar taller than its readings is a bar that draws
+ * attention to itself.
+ */
+.bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  box-sizing: border-box;
+  height: var(--h-min);
+  flex: 0 0 auto;
+  padding: 0 var(--sp-2);
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  color: var(--ink);
+  font-family: var(--ff-sans);
+  font-size: var(--fs-meta);
+  /* Readings are fixed-width by design; a bar that wrapped would push the
+     transcript up and move the whole window. */
+  overflow: hidden;
+}
+
+/*
+ * One reading.
+ *
+ * A `<button>` when it answers to a click and a `<span>` when it does not, sharing
+ * this class -- `data-interactive` is what keeps the affordances apart, so a value
+ * that cannot be opened never looks hoverable.
+ */
+.item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  box-sizing: border-box;
+  height: 22px;
+  padding: 0 var(--sp-1);
+  border: 0;
+  border-radius: var(--r-chip);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--fs-meta);
+  white-space: nowrap;
+}
+
+.item[data-interactive='true'] {
+  cursor: pointer;
+}
+
+.item[data-interactive='true']:hover {
+  background: var(--hover);
+}
+
+/* The caret is the only hint that a reading opens something; without it the mode
+   and the context usage look like the same kind of text. */
+.caret {
+  color: var(--muted);
+}
+
+.label {
+  color: var(--muted);
+}
+
+/* Every value in the bar is monospace, so six readings line up in columns and a
+   number that changes width does not shuffle its neighbours. */
+.value {
+  color: var(--ink);
+  font-family: var(--ff-mono);
+}
+
+.divider {
+  width: 1px;
+  height: 12px;
+  flex: none;
+  background: var(--line);
+}
+
+/* Anything that is not a reading -- the todo count, a spacer -- sits at the end. */
+.tail {
+  margin-left: auto;
+}

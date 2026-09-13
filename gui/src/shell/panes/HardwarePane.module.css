@@ -1,0 +1,47 @@
+/*
+ * The hardware pane's own column.
+ *
+ * It lives in an inspector body marked `data-fill`, which means the body hands
+ * over the whole box and the scroller moves inside -- so `min-height: 0` on the
+ * body row is the difference between a log that scrolls and a column that
+ * overflows the window.
+ */
+.root {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  gap: var(--sp-2);
+  font-family: var(--ff-sans);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: 0 0 auto;
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+.live {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--muted);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-meta);
+  /* The word sits on the same baseline as the two segment labels next to it, so
+     it reads as a third reading of the same row rather than a badge. */
+  white-space: nowrap;
+}
+
+.body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}

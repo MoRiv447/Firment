@@ -30,8 +30,9 @@
  * `App.tsx` does it at the top of the render body.
  */
 
-/** The two schemes. Resolved from `ui.theme` (auto/light/dark) by `theme.ts`. */
-export type ThemeMode = 'dark' | 'light';
+/** The two schemes. Moved to `lib/theme.ts`, which outlives this file. */
+export type { ThemeMode } from '../lib/theme';
+import type { ThemeMode } from '../lib/theme';
 
 /**
  * The dark palette. These are the values that shipped, unchanged: adding the

@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
-import { font, radius, color } from '../styles/tokens';
+
+import { Chip, Wordmark } from '../ui';
+import styles from './TitleBar.module.css';
 
 /**
  * The top strip: who this is, what you are working on, and three quiet actions.
@@ -14,8 +16,10 @@ import { font, radius, color } from '../styles/tokens';
  * thinking level, context usage) moved to the status bar, which is where live
  * session state belongs -- they are readings, not navigation.
  *
- * Parity note: the height is 44px rather than Qoder's ~36px because this bar
- * carries the project path, and a monospace path at 11px needs the room.
+ * Parity note: the height is `--h-bar` rather than the ~36px a native title bar
+ * gets, because this bar carries the project path and a monospace path needs the
+ * room. The window's own frame is still the operating system's; nothing here
+ * drags it.
  */
 export function TitleBar({
   project,
@@ -26,88 +30,37 @@ export function TitleBar({
   project: string;
   /** Branch and dirty count, when a project with a repository is open. */
   git?: { branch: string; dirty: number } | null;
-  /** The right-hand cluster. Composed by the caller so this file owns the
-   *  frame and not the set of things that happen to be buttons today. */
+  /**
+   * The right-hand cluster -- `TitleBarActions` in the app. Composed by the caller
+   * so this file owns the frame and not the set of things that happen to be
+   * buttons today.
+   */
   actions?: ReactNode;
 }) {
   return (
-    <header
-      style={{
-        height: 44,
-        flex: '0 0 auto',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 12,
-        padding: '0 12px',
-        background: color.surface,
-        borderBottom: `1px solid ${color.line}`,
-        fontFamily: font.sans,
-      }}
-    >
-      <img
-        src="/icons/logo-w-64.png"
-        alt=""
-        aria-hidden
-        style={{ width: 22, height: 22, borderRadius: radius.chip, objectFit: 'contain' }}
-      />
-      <span
-        style={{
-          fontSize: 13,
-          fontWeight: 800,
-          letterSpacing: 0.6,
-          color: color.ink,
-          textTransform: 'uppercase',
-        }}
-      >
-        Firment
-      </span>
+    <header data-ui="title-bar" className={styles.bar}>
+      <img src="/icons/logo-w-64.png" alt="" aria-hidden className={styles.mark} />
+      <Wordmark />
 
-      <span aria-hidden style={{ width: 1, height: 18, background: color.line }} />
+      <span aria-hidden className={styles.divider} />
 
       {/*
         The project path is the one piece of context worth pinning to the top:
-        every tool call, every session and the rail are all relative to it, and
-        it used to be a 165px-wide text input in the sidebar with no label.
-        `direction: rtl` keeps the tail of a long path visible -- the leaf is the
-        part you recognise -- without a JS truncation.
+        every tool call, every session and the rail are all relative to it, and it
+        used to be a 165px-wide text input in the sidebar with no label.
       */}
-      <span
-        title={project}
-        style={{
-          fontSize: 12,
-          fontFamily: font.mono,
-          color: color.muted,
-          maxWidth: 420,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-          direction: 'rtl',
-          textAlign: 'left',
-        }}
-      >
+      <span title={project} className={styles.project}>
         {project}
       </span>
 
       {git && (
-        <span
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            fontSize: 11,
-            fontFamily: font.mono,
-            color: color.muted,
-            padding: '2px 8px',
-            borderRadius: radius.chip,
-            background: color.surfaceRaised,
-          }}
-        >
+        <Chip mono title={git.dirty > 0 ? `${git.dirty} changed files` : 'Working tree is clean'}>
           {git.branch}
-          {git.dirty > 0 && <span style={{ color: color.warnInk }}>•{git.dirty}</span>}
-        </span>
+          {git.dirty > 0 ? ` ·${git.dirty}` : ''}
+        </Chip>
       )}
 
-      <span style={{ flex: 1 }} />
+      <span className={styles.spacer} />
       {actions}
     </header>
   );

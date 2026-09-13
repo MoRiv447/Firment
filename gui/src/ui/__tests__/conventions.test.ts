@@ -3,14 +3,19 @@ import { describe, expect, it } from 'vitest';
 /**
  * The rules that hold the layer together, checked instead of remembered.
  *
- * Stage 8 tightens these into CI, so they live as tests rather than as prose in a
- * document nobody opens. The files are read as text through Vite's `?raw` import
- * rather than `node:fs` -- the GUI has deliberately no Node types (see the
- * `@ts-expect-error` in `vite.config.ts`), and a gate that needs a new dependency
- * to run is a gate that gets deleted.
+ * "The layer" is `src/ui` plus `src/shell`: the primitives and the four regions
+ * built out of them. Stage 8 tightens these into CI, so they live as tests rather
+ * than as prose in a document nobody opens. The files are read as text through
+ * Vite's `?raw` import rather than `node:fs` -- the GUI has deliberately no Node
+ * types (see the `@ts-expect-error` in `vite.config.ts`), and a gate that needs a
+ * new dependency to run is a gate that gets deleted.
  *
  * Each rule exists because the old tree broke it:
  *
+ * * `styles/tokens.ts` is a JS object, so a colour read from it was frozen at
+ *   whichever scheme the cache had picked when it was first asked. That is the
+ *   specific reason the light scheme never followed a theme flip: the shell asked
+ *   `color.surface` for a string and got one.
  * * `data-ui` is the hash-proof handle. CSS Modules rewrite every class name, so
  *   `[class*="chip"]` is the only other way to find a component from a test, and
  *   that breaks the moment the file is renamed. The names are a closed set: adding
@@ -30,14 +35,25 @@ import { describe, expect, it } from 'vitest';
  */
 
 const SOURCES = import.meta.glob(
-  ['../*.ts', '../*.tsx', '../*.css', '../../dev/*.tsx', '../../dev/*.css'],
+  [
+    '../*.ts',
+    '../*.tsx',
+    '../*.css',
+    '../../shell/*.tsx',
+    '../../shell/*.css',
+    '../../shell/panes/*.tsx',
+    '../../shell/panes/*.css',
+    '../../dev/*.tsx',
+    '../../dev/*.css',
+  ],
   { query: '?raw', import: 'default', eager: true },
 ) as Record<string, string>;
 
 const paths = Object.keys(SOURCES);
-// `../../dev/…` starts with `../` too, so the gallery would otherwise be read as
-// part of the layer it displays.
-const inUi = (path: string) => path.startsWith('../') && !path.startsWith('../../');
+// Both `../../dev/…` and `../../shell/…` start with `../`, so a prefix test would
+// read the gallery as part of the layer it displays and demand barrel exports for
+// the shell. This means "sitting in `src/ui` itself".
+const inUi = (path: string) => /^..\//.test(path) && !path.slice(3).includes('/');
 const withExtension = (extension: string) => paths.filter((path) => path.endsWith(extension));
 
 const tsxFiles = withExtension('.tsx');
@@ -95,9 +111,18 @@ const GLOBAL_SELECTORS = new Set([
   'ul',
 ]);
 
-describe('Primitive layer conventions', () => {
+describe('Primitive layer and shell conventions', () => {
   it('imports nothing from antd, which is the point of the layer', () => {
     expect(codeFiles.filter((path) => /from ['"](antd|@ant-design)/.test(read(path)))).toEqual([]);
+  });
+
+  it('leaves the JS token module out of the layer and out of the shell', () => {
+    // Matching the import rather than the words: `ui/types.ts` names the file in a
+    // comment explaining exactly why it does not import it.
+    const offenders = codeFiles.filter((path) =>
+      /from ['"][^'"]*styles\/tokens['"]/.test(read(path)),
+    );
+    expect(offenders).toEqual([]);
   });
 
   it('names every root with a data-ui anchor from a closed list', () => {
@@ -106,17 +131,23 @@ describe('Primitive layer conventions', () => {
       for (const [, anchor] of read(path).matchAll(/data-ui="([a-z-]+)"/g)) anchors.add(anchor);
     }
     expect([...anchors].sort()).toEqual([
+      'agents-pane',
       'button',
       'checkbox',
       'chip',
       'empty-state',
       'field',
+      'hardware-pane',
       'icon',
       'input',
+      'inspector',
+      'inspector-body',
+      'inspector-rail',
       'key-value',
       'menu',
       'menu-item',
       'menu-separator',
+      'notifications-panel',
       'option',
       'popover',
       'radio',
@@ -126,13 +157,19 @@ describe('Primitive layer conventions', () => {
       'select',
       'skeleton',
       'slider',
+      'splitter',
       'stat',
+      'status-bar',
+      'status-dot',
+      'status-item',
       'switch',
       'tab',
       'tabs',
       'textarea',
+      'title-bar',
       'toast',
       'toast-stack',
+      'todos-pane',
       'wordmark',
     ]);
   });

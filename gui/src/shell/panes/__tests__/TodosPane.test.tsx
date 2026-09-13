@@ -33,9 +33,11 @@ describe('TodosPane', () => {
     // checked against what actually happened.
     render(<TodosPane todos={[todo('读电流环', true), todo('改 Ts')]} loading={false} />);
     // The decoration is on the row, not on the text span `getByText` returns.
-    expect(screen.getByText('读电流环').closest('li')).toHaveStyle({
-      textDecoration: 'line-through',
-    });
+    const done = screen.getByText('读电流环').closest('li');
+    expect(done).toHaveStyle({ textDecoration: 'line-through' });
+    // The sheet keys off this attribute, so a row that lost it would silently
+    // lose its strike in a browser while keeping it here.
+    expect(done).toHaveAttribute('data-done', 'true');
     expect(screen.getByText('改 Ts').closest('li')).not.toHaveStyle({
       textDecoration: 'line-through',
     });

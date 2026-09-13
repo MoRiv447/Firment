@@ -1,7 +1,11 @@
-import { useState } from 'react';
-import { font, radius, color, space, statusChip } from '../../styles/tokens';
+import { useId, useState } from 'react';
+import { Bot } from 'lucide-react';
+
+import { EmptyState, StatusDot } from '../../ui';
+import type { ChipStatus } from '../../ui';
 import { ToolCard } from '../../components/ToolCard';
 import type { SubagentState } from '../../lib/turnReducer';
+import styles from './AgentsPane.module.css';
 
 /**
  * The subagents this turn spawned.
@@ -28,84 +32,47 @@ function toolCounts(steps: SubagentState['steps']): string {
 
 function SubagentRow({ agent }: { agent: SubagentState }) {
   const [open, setOpen] = useState(false);
+  const stepsId = useId();
   const busy = !agent.done;
   const failed = agent.steps.filter((s) => s.status === 'failed').length;
-  const chip = statusChip(busy ? 'running' : failed > 0 ? 'failed' : 'ok');
+  const status: ChipStatus = busy ? 'running' : failed > 0 ? 'failed' : 'ok';
 
   return (
-    <div style={{ borderBottom: `1px solid ${color.line}` }}>
-      <div
+    <li className={styles.item}>
+      {/*
+       * A real `<button>` with `aria-expanded`. It used to be a `<div role="button">`
+       * with a hand-written key handler, which got Space wrong (the page scrolled as
+       * well as toggling) and never told anyone the row was a disclosure.
+       */}
+      <button
+        type="button"
+        className={styles.row}
+        aria-expanded={open}
+        aria-controls={open ? stepsId : undefined}
         onClick={() => setOpen((o) => !o)}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') setOpen((o) => !o);
-        }}
-        style={{
-          display: 'flex',
-          alignItems: 'baseline',
-          gap: 8,
-          padding: '7px 0',
-          cursor: 'pointer',
-          fontFamily: font.sans,
-        }}
       >
-        <span
-          aria-hidden
-          style={{
-            width: 6,
-            height: 6,
-            flex: '0 0 auto',
-            borderRadius: radius.chip,
-            background: chip.color,
-            transform: 'translateY(-1px)',
-          }}
-        />
-        <span
-          style={{
-            flex: 1,
-            minWidth: 0,
-            fontSize: 12,
-            color: color.ink,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-          title={agent.label}
-        >
+        <StatusDot status={status} pulse={busy} />
+        <span className={styles.label} title={agent.label}>
           {agent.label || '(no prompt)'}
         </span>
         {agent.depth > 1 && (
           // Nesting is worth a mark: a depth-2 agent was delegated *by* an agent,
           // and that changes how much you should trust its summary.
-          <span style={{ fontSize: 10, color: color.muted, fontFamily: font.mono }}>
-            d{agent.depth}
-          </span>
+          <span className={styles.meta}>d{agent.depth}</span>
         )}
-        <span style={{ fontSize: 10, color: color.muted, fontFamily: font.mono, whiteSpace: 'nowrap' }}>
-          {agent.steps.length} steps
-        </span>
-        <span style={{ fontSize: 10, color: chip.color, fontFamily: font.sans, whiteSpace: 'nowrap' }}>
-          {busy ? 'running' : failed > 0 ? 'failed' : 'done'}
-        </span>
-      </div>
+        <span className={styles.meta}>{agent.steps.length} steps</span>
+        {/* The dot carries the colour; the word only names the state. Two coloured
+            texts in a 320px column is a row that reads as an alert. */}
+        <span className={styles.state}>{busy ? 'running' : failed > 0 ? 'failed' : 'done'}</span>
+      </button>
       {open && (
-        <div style={{ paddingBottom: 8 }}>
+        <div id={stepsId} className={styles.body}>
           {agent.steps.length === 0 ? (
-            <span style={{ fontSize: 11, color: color.muted }}>No tool calls yet</span>
+            <p className={styles.none}>No tool calls yet</p>
           ) : (
             <>
-              <div
-                style={{
-                  fontSize: 11,
-                  color: color.muted,
-                  fontFamily: font.mono,
-                  marginBottom: 6,
-                }}
-              >
-                {toolCounts(agent.steps)}
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: space.controlGap }}>
+              <p className={styles.tally}>{toolCounts(agent.steps)}</p>
+              <div className={styles.steps}>
                 {agent.steps.map((t) => (
                   <ToolCard key={t.seq} tool={t} />
                 ))}
@@ -114,25 +81,25 @@ function SubagentRow({ agent }: { agent: SubagentState }) {
           )}
         </div>
       )}
-    </div>
+    </li>
   );
 }
 
 export function AgentsPane({ subagents }: { subagents: SubagentState[] }) {
   if (subagents.length === 0) {
     return (
-      <div style={{ fontSize: 11, lineHeight: 1.6, color: color.muted, fontFamily: font.sans }}>
-        No subagents this turn. When the agent calls the <code>task</code> tool it delegates to a
-        read-only research subagent, and that subagent's steps appear here rather than being
-        interleaved with the conversation.
-      </div>
+      <EmptyState
+        icon={Bot}
+        title="No subagents this turn"
+        hint="When the agent calls the task tool it delegates to a read-only research subagent, and that subagent's steps appear here rather than being interleaved with the conversation."
+      />
     );
   }
   return (
-    <div style={{ display: 'flex', flexDirection: 'column' }}>
+    <ul data-ui="agents-pane" className={styles.list}>
       {subagents.map((a) => (
         <SubagentRow key={a.id} agent={a} />
       ))}
-    </div>
+    </ul>
   );
 }

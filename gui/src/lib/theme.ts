@@ -12,7 +12,16 @@
  */
 
 import { createContext, useContext, useEffect, useState } from 'react';
-import type { ThemeMode } from '../styles/tokens';
+
+/**
+ * The two colour schemes.
+ *
+ * Declared here rather than in `styles/tokens.ts`, where it used to live: the
+ * token layer is deleted with antd, and a type that outlives it -- the theme
+ * setting, the scheme attribute on `<html>`, every context that carries a mode --
+ * cannot be allowed to go with it.
+ */
+export type ThemeMode = 'dark' | 'light';
 
 /** Mirrors `UiTheme` in firment-core. `system` is accepted as an alias. */
 export type ThemeSetting = 'auto' | 'light' | 'dark';
