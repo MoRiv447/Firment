@@ -121,11 +121,23 @@ export function SerialView({ lines }: { lines: Record<string, MonitorLine[]> }) 
   }, [currentLines]);
 
   return (
-    <div style={{ padding: 20, display: 'flex', flexDirection: 'column', height: '100%', gap: 12 }}>
+    // No padding: the inspector already pads this pane, and 20px on each side
+    // came out of a column that is 360px wide at its roomiest.
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 12 }}>
       <Card size="small" title="Serial monitor (read + write UART)">
-        <Space wrap>
+        {/* Fluid and wrapping: `Space` cannot shrink a 260px input, so on the
+            narrow pane the ELF field and the Start button were cut off with no
+            horizontal scroll to reach them. */}
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 8,
+            alignItems: 'center',
+          }}
+        >
           <Select
-            style={{ width: 150 }}
+            style={{ flex: '1 1 130px', minWidth: 0 }}
             value={port}
             onChange={setPort}
             options={ports.map((p) => ({ label: p, value: p }))}
@@ -135,6 +147,7 @@ export function SerialView({ lines }: { lines: Record<string, MonitorLine[]> }) 
             Refresh
           </Button>
           <InputNumber
+            style={{ flex: '0 1 110px', minWidth: 0 }}
             value={baud}
             onChange={(v) => setBaud(v ?? 115200)}
             min={1200}
@@ -142,7 +155,7 @@ export function SerialView({ lines }: { lines: Record<string, MonitorLine[]> }) 
           />
           <Input
             placeholder="ELF for symbol decoding (optional)"
-            style={{ width: 260 }}
+            style={{ flex: '1 1 100%', minWidth: 0 }}
             value={elf}
             onChange={(e) => setElf(e.target.value)}
           />
@@ -161,7 +174,7 @@ export function SerialView({ lines }: { lines: Record<string, MonitorLine[]> }) 
             </Button>
           )}
           <Tag>active: {activeText}</Tag>
-        </Space>
+        </div>
       </Card>
       <div
         ref={scrollRef}

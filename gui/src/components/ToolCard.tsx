@@ -134,10 +134,28 @@ export function ToolCard({
       ? 'ok'
       : tool.status === 'failed'
         ? 'failed'
-        : danger
-          ? 'attention'
-          : 'running';
-  const icon = tool.status === 'ok' ? '✓' : tool.status === 'failed' ? '✕' : danger ? '⚠' : '·';
+        : tool.status === 'unknown'
+          ? danger
+            ? 'attention'
+            : // Reopened history: no glyph, no green. The transcript does not
+              // record whether this call worked, so the card says nothing about
+              // it either way.
+              'neutral'
+          : danger
+            ? 'attention'
+            : 'running';
+  const icon =
+    tool.status === 'ok'
+      ? '✓'
+      : tool.status === 'failed'
+        ? '✕'
+        : tool.status === 'unknown'
+          ? danger
+            ? '⚠'
+            : ''
+          : danger
+            ? '⚠'
+            : '·';
   const path = editedPath(tool.args);
   // Not shown when it would only repeat the path the header already carries.
   const described = describeArgs(tool.args);

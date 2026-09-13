@@ -289,7 +289,14 @@ export interface ToolCardState {
   seq: number;
   name: string;
   args: unknown;
-  status: 'running' | 'ok' | 'failed';
+  /**
+   * `unknown` is the reopened-session case: the stored transcript records that a
+   * tool was called and what came back, but not whether it succeeded -- a denied
+   * call and a timed-out one are plain strings in the tool message. Historical
+   * cards render with it, so they do not print a check mark over work that may
+   * have failed.
+   */
+  status: 'running' | 'ok' | 'failed' | 'unknown';
   summary?: string;
   /** Unified diff (header line included) for edit/write tools. */
   detail?: string | null;

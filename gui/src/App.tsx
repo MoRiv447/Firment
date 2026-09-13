@@ -648,6 +648,11 @@ export default function App() {
       // 只在用户仍停留在同一个会话时回滚——盲目写入快照会把 A 会话的
       // 历史移植到当前打开的 B 会话上。
       setSession((s) => (s && s.id === sid ? { ...s, messages: snapshot } : s));
+      // The rollback above makes the message disappear, which with nothing
+      // said reads as "the click did nothing". `startTurn` refuses while the
+      // agent is busy, and the in-transcript quick-action buttons can only
+      // ever hit that path.
+      pushInfo(sid, `Not sent: ${err}`);
     });
   };
 
@@ -803,7 +808,12 @@ export default function App() {
               <main
                 style={{
                   flex: 1,
-                  minWidth: 0,
+                  // The transcript is the thing you are reading, and it was the
+                  // ONLY pane allowed to shrink: at the 980px window minimum the
+                  // 248px rail plus the 360px inspector left it 372px, which
+                  // wrapped code blocks mid-token. The inspector clamps instead
+                  // (see shell/Inspector.tsx) so this number actually holds.
+                  minWidth: 420,
                   display: workbenchOpen ? 'none' : 'flex',
                   flexDirection: 'column',
                 }}
@@ -820,6 +830,8 @@ export default function App() {
               <main
                 style={{
                   flex: 1,
+                  // No floor here: the workbench scrolls internally and is the
+                  // pane you open on purpose, so a squeezed one is still usable.
                   minWidth: 0,
                   display: workbenchOpen ? 'flex' : 'none',
                   flexDirection: 'column',
@@ -839,7 +851,7 @@ export default function App() {
                   content: (
                     <PendingPane
                       title="Change cards"
-                      body="One card per changed file: path, +N −M, the hunks, and what you can do next. A turn that touches several files folds to one summary first. The data is in the EditJournal; it needs a read-only command to surface it."
+                      body="Nothing yet. Once a turn edits files, each one is listed here with its path, how many lines went in and came out, and the diff itself; a turn that touches several files folds into one summary first."
                     />
                   ),
                 },

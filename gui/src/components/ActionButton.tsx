@@ -150,7 +150,11 @@ export function ActionButton({
           display: 'inline-flex',
           alignItems: 'center',
           gap: 6,
-          color: inert ? color.stepPendingInk : color.onAcid,
+          // Always `onAcid`. The grey this used to switch to while inert is
+          // 2.02:1 on the dark fill and 3.80:1 on the light one -- unreadable,
+          // and identical for "you cannot use this" and "it is working".
+          // Disabled is carried by the opacity above; loading by the spinner.
+          color: color.onAcid,
           fontWeight: 600,
           fontFamily: font.sans,
           // The cut steals from the left, so the label needs it back or it

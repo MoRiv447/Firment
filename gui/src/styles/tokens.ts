@@ -136,6 +136,23 @@ const dark = {
   hover: 'rgba(255,255,255,0.08)',
 
   /**
+   * The selected row: the sidebar item, the live conversation.
+   *
+   * A token pair rather than two reads of `brandAcid` / `onAcid` at the call
+   * site, because the two schemes cannot share one answer. Acid works here on
+   * dark -- `onAcid` is 13.28:1 on it -- and fails on light, where the same fill
+   * is 1.19:1 against the cream ground, which makes "this one is current"
+   * invisible. The light palette answers with a dark green fill instead; the
+   * call sites stay identical.
+   *
+   * Anything inside a selected row reads its text and icon colour from
+   * `onSelection`, never from `ink`: on dark `ink` is 1.01:1 on acid.
+   */
+  selection: '#B4F779',
+  /** 13.28:1 on `selection`. */
+  onSelection: '#15200D',
+
+  /**
    * The three states of a progress step (build / flash / monitor). Derived from
    * the tokens above rather than invented, so a step never introduces a fourth
    * green: done borrows the success pair, "current" is body ink plus the brand
@@ -175,7 +192,7 @@ export type Palette = { [K in keyof typeof dark]: string };
  * Two things worth knowing before editing:
  *
  * 1. **A ratio is meaningless without its ground.** `ink` is 17.72:1 on
- *    `surface` and 16.52:1 on `bg`; `muted` is 4.83 / 4.51. Both grounds are in
+ *    `surface` and 16.52:1 on `bg`; `muted` is 5.28 / 4.92. Both grounds are in
  *    use, so the pairs that matter are recorded in docs/design/tokens.md.
  * 2. **`brandAcid` is 1.27:1 here.** It is a fill and never text; anything
  *    green-and-readable on light uses `brandInk` (6.21:1), and the focus ring
@@ -190,8 +207,15 @@ const light: Palette = {
   surfaceRaised: '#FFFFFF',
   /** 17.72:1 on `surface`, 16.52:1 on `bg`. */
   ink: '#18181B',
-  /** 4.83:1 on `surface`, 4.51:1 on `bg` (the tighter of the two). */
-  muted: '#71717A',
+  /**
+   * 5.28:1 on `surface`, 4.92:1 on `bg`, 4.55:1 on `hover`.
+   *
+   * It used to be #71717A -- 4.83 / 4.51 -- and that was fine while the only
+   * coloured ground it had to clear was its own. Moving the hover wash off the
+   * acid tint (see `hover`) put a second, darker ground under it, so the ink
+   * moved down with it rather than leaving a label that only passes on paper.
+   */
+  muted: '#6B6B73',
   /** Hairline. 1.18:1 on `bg`: a line, not the 3:1 non-text threshold. */
   line: '#E4E4E7',
   /** Secondary button outline. 1.48:1 on `surface`. */
@@ -249,19 +273,47 @@ const light: Palette = {
   shadowLg: '0 12px 32px rgba(16,24,40,0.12)',
 
   /**
-   * Pale acid wash. Every neutral tried here fails: `muted` is 4.51:1 on `bg`
-   * and that ground is already the floor, so a grey hover pulls it under AA
-   * (4.40:1 at #F4F4F5, 4.47:1 at #F6F6F7). This tint is the only candidate
-   * that holds -- 4.68:1 for `muted`, 17.16:1 for `ink` -- and it reads as a
-   * weaker sibling of the solid-acid selection rather than competing with it.
+   * Warm neutral wash, 1.08:1 against `bg` -- a wash, not a border.
+   *
+   * This used to be a pale acid tint (#F6FEEF) because the argument at the time
+   * was that `muted` sat exactly on the AA floor and any grey wash would push it
+   * under. That was true of #71717A and it is not true of the darker
+   * `muted` above, which holds 4.55:1 here.
+   *
+   * The colour also has a second job now: the selected row is a solid dark-green
+   * fill, so a green hover would be a weaker sibling of the same signal and the
+   * two would read as two degrees of "selected". Hover is neutral, selection is
+   * green, and only one of them means "this one".
    */
-  hover: '#F6FEEF',
+  hover: '#EDEFE6',
+
+  /**
+   * `brandInk` as a fill: 5.79:1 against `bg`, 6.21:1 against `surface`, so the
+   * row announces itself by shape and weight and not by a glow.
+   *
+   * The obvious candidate was `brandAcid` -- it is the brand, and it is what the
+   * dark scheme uses. It is 1.19:1 on this ground, which is not a highlight, and
+   * it put white-or-ink text on a pastel fill: the reported "I cannot read the
+   * selected chat in light mode" is exactly this token and nothing else.
+   */
+  selection: '#3B6D11',
+  /** 6.21:1 on `selection`. White, not `onAcid`: on a dark green the acid is 4.89. */
+  onSelection: '#FFFFFF',
 
   /** 6.19:1 (done) / 16.52:1 (current) / 4.51:1 (pending) on `bg`. */
   stepDoneBg: '#EAF3DE',
   stepDoneInk: '#3F6212',
   stepCurrentInk: '#18181B',
-  stepRule: '#B4F779',
+  /**
+   * `brandInk`, not the acid.
+   *
+   * A 2px rule is a shape, so it needs 3:1 against its ground, and acid here is
+   * 1.19:1 on `bg` / 1.27:1 on `surface` -- which is why the current step, the
+   * live inspector tab and the todo progress bar all read as "nothing is
+   * selected" in light mode. The dark scheme keeps the acid because on #0F0F12
+   * it is 15:1.
+   */
+  stepRule: '#3B6D11',
   stepPendingInk: '#6B7280',
   /** 6.56:1 on `stepFailedBg`, mirrored from the removed-diff pair above. */
   stepFailedBg: '#FEE2E2',
@@ -489,6 +541,15 @@ export function antdTheme(mode: ThemeMode = 'dark') {
       colorSuccess: p.successInk,
       colorError: p.diffRemovedInk,
       colorWarning: p.warnInk,
+      /**
+       * antd's "text on a solid primary" alias, which it hardcodes to white.
+       *
+       * `colorPrimary` here is the acid, and white on acid is 1.27:1 -- this is
+       * what a checked `Tag.CheckableTag` renders its label with, so every workbench
+       * filter chip looked on-but-read-off. `onAcid` is the palette's own answer
+       * to "what sits on acid" (13.28:1), so the alias stops being a second source.
+       */
+      colorTextLightSolid: p.onAcid,
       borderRadius: radius.control,
       borderRadiusLG: radius.panel,
       borderRadiusSM: radius.chip,
@@ -504,8 +565,8 @@ export function antdTheme(mode: ThemeMode = 'dark') {
     components: {
       Menu: {
         itemBg: 'transparent',
-        itemSelectedBg: p.brandAcid,
-        itemSelectedColor: p.onAcid,
+        itemSelectedBg: p.selection,
+        itemSelectedColor: p.onSelection,
         itemHoverBg: p.hover,
         // Was 0 with the rest of the neo-brutalist frame; the selected tab is
         // the one item where the tier has to be visible, so it is `chip`.
@@ -515,6 +576,17 @@ export function antdTheme(mode: ThemeMode = 'dark') {
       // The acid fill carries `onAcid` text, never white-on-green: white on
       // #B4F779 is 1.3:1.
       Button: { fontWeight: 600, primaryColor: p.onAcid },
+      /**
+       * Focus and hover borders.
+       *
+       * Both default to a shade of `colorPrimary`, and `colorPrimary` is the
+       * acid because that is what a primary button is made of -- but a focus
+       * ring is not a fill, it is the one state a keyboard user has to be able
+       * to find. Acid on the light ground is 1.19:1, which is why `focusRing`
+       * exists as its own token in the first place.
+       */
+      Input: { activeBorderColor: p.focusRing, hoverBorderColor: p.lineStrong },
+      Select: { activeBorderColor: p.focusRing, hoverBorderColor: p.lineStrong },
       Tag: { borderRadiusSM: radius.chip, borderRadiusLG: radius.chip },
     },
   };

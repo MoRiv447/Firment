@@ -39,13 +39,21 @@ export function SettingsView() {
   const [newMsg, setNewMsg] = useState('');
 
   const load = () => {
-    void api.getSettings().then((s) => {
-      setSettings(s);
-      form.setFieldsValue(s);
-      // Publish the stored scheme so the shell repaints without needing its own
-      // fetch of the same settings.
-      setThemeSetting(s.theme ?? 'auto');
-    });
+    void api
+      .getSettings()
+      .then((s) => {
+        setSettings(s);
+        form.setFieldsValue(s);
+        // Publish the stored scheme so the shell repaints without needing its own
+        // fetch of the same settings.
+        setThemeSetting(s.theme ?? 'auto');
+      })
+      .catch((err) => {
+        // Without this the drawer sat on "Loading settings…" forever and the
+        // user had no way to tell a slow read from a failed one.
+        console.error(err);
+        setSaveErr(`could not read settings: ${err}`);
+      });
   };
 
   useEffect(() => {
@@ -64,6 +72,13 @@ export function SettingsView() {
   };
 
   const save = async () => {
+    // `providers` is not an editable field in this form -- it is carried over
+    // from the loaded settings. While that load is pending (or has failed), the
+    // carry-over value is `[]`, and saving would write it over the real list.
+    if (!settings) {
+      setSaveErr('settings are still loading — nothing has been saved');
+      return;
+    }
     setSaving(true);
     setSaveMsg('');
     setSaveErr('');

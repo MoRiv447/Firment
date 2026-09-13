@@ -1,20 +1,33 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/icons/logo-64.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <style>
-      /* 收紧高度链：防止内容撑破 100vh 导致 body 出现滚动条/白底 */
+      /*
+        The ground under the app before React paints, and the scrollbars.
+
+        These are the only two colours in this file, and they duplicate
+        gui/src/styles/tokens.ts on purpose: nothing runs here, so the values
+        cannot be read from the token layer. They used to be a single hardcoded
+        #141414 with grey thumbs, which meant the light scheme got a black band
+        behind every gap and dark scrollbars on white panels. Following the OS
+        scheme is the best available guess -- a forced `ui.theme` is still
+        corrected the moment React paints the app's own background.
+      */
       html,
       body,
       #root {
         height: 100%;
         margin: 0;
         overflow: hidden;
-        background: #141414;
+        background: #0f0f12;
       }
-      /* 全局滚动条美化（WebKit） */
+      :root {
+        color-scheme: dark;
+      }
+      /* Global scrollbar styling (WebKit / WebView2). */
       ::-webkit-scrollbar {
         width: 8px;
         height: 8px;
@@ -23,11 +36,27 @@
         background: transparent;
       }
       ::-webkit-scrollbar-thumb {
-        background: #3a3a3a;
+        background: #3f3f46;
         border-radius: 4px;
       }
       ::-webkit-scrollbar-thumb:hover {
-        background: #4a4a4a;
+        background: #52525b;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          color-scheme: light;
+        }
+        html,
+        body,
+        #root {
+          background: #f7f7f5;
+        }
+        ::-webkit-scrollbar-thumb {
+          background: #d4d4d8;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+          background: #a1a1aa;
+        }
       }
     </style>
     <title>Firment GUI</title>

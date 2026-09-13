@@ -153,7 +153,11 @@ export function ChatView({
                       `tool ${fmtElapsed(Date.now() - (lastRunning.startedAt ?? Date.now()))}`
                     : `idle ${fmtElapsed(idleSecs * 1000)}`}
                 </Text>
-                {idleSecs > 45 && (
+                {/* The same predicate the stall Alert below uses. At 45s this
+                    chip called a quiet-but-live build "no events", one tool
+                    timer two centimetres away saying it had been running for
+                    46 seconds. */}
+                {shouldShowStallNotice(idleSecs) && (
                   <Tag
                     style={{
                       ...statusChip('attention'),
@@ -293,10 +297,14 @@ export function ChatView({
         {session && (
           <Space size={6} style={{ marginBottom: 8, flexWrap: 'wrap' }}>
             <Tag
-              color={color.brandAcid}
+              // `background`, never antd's `color` prop: given a colour value,
+              // antd derives its own chip fill from a white base, so the dark
+              // scheme got a pale mint badge that no token produced.
               style={{
                 borderRadius: radius.chip,
                 fontWeight: 700,
+                background: color.brandAcid,
+                border: `1px solid ${color.brandAcid}`,
                 color: color.onAcid,
               }}
             >

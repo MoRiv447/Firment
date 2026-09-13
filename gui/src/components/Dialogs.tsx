@@ -12,11 +12,12 @@ function SessionChip({ sid }: { sid?: string }) {
   if (!sid) return null;
   return (
     <Tag
-      color={color.brandAcid}
       style={{
         borderRadius: radius.chip,
         color: color.onAcid,
         fontWeight: 700,
+        background: color.brandAcid,
+        border: `1px solid ${color.brandAcid}`,
       }}
     >
       chat {sid.slice(0, 8)}

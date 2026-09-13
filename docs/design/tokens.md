@@ -49,15 +49,18 @@ ratio below names the ground it was measured against, and
 | `surface` | `#18181B` | `#FFFFFF` | 1.07:1 vs `bg` — separation comes from the hairline, not the fill |
 | `surfaceRaised` | `#1F1F23` | `#FFFFFF` | distinguished by border and shadow |
 | `ink` | `#E4E4E7` | `#18181B` | 17.72:1 on `surface`, 16.52:1 on `bg` |
-| `muted` | `#A1A1AA` | `#71717A` | 4.83:1 on `surface`, **4.51:1 on `bg`** (the tighter of the two) |
+| `muted` | `#A1A1AA` | `#6B6B73` | 5.28:1 on `surface`, **4.92:1 on `bg`**, 4.55:1 on `hover` |
 | `line` | `#2A2A2F` | `#E4E4E7` | 1.18:1 — a hairline, not the 3:1 non-text threshold |
 | `lineStrong` | `#3F3F46` | `#D4D4D8` | 1.48:1 on `surface`; secondary button outlines |
 
 Dark reads: `ink` 15.08:1 on `bg`, `muted` 7.47:1.
 
-`muted` is a **neutral grey, never olive** — olive reads as disabled. On the light
-ground `muted` is already at 4.51:1, which is the AA floor: nothing may be placed
-under it that darkens the ground without re-measuring.
+`muted` is a **neutral grey, never olive** — olive reads as disabled. It is
+`#6B6B73` here rather than the `#71717A` that shipped: that value was 4.51:1 on
+`bg`, exactly on the AA floor, so the hover wash had to be a tint (anything greyer
+put a muted label under the line). One point of headroom is what lets `muted` sit
+on a neutral wash and still pass, and "4.51:1 on the page background" is not a
+value anyone should have to reason about twice.
 
 ### Brand vs status green — two different colours on purpose
 
@@ -65,7 +68,7 @@ under it that darkens the ground without re-measuring.
 |---|---|---|---|
 | `brandAcid` | `#B4F779` | `#B4F779` | **1.27:1** — fill only |
 | `onAcid` | `#15200D` | `#15200D` | 13.28:1 **on `brandAcid`** |
-| `brandInk` | `#3B6D11` | `#3B6D11` | 6.21:1 on `surface`, 5.79:1 on `bg` |
+| `brandInk` | `#3B6D11` | `#3B6D11` | 6.21:1 on `surface`, 5.79:1 on `bg`; also the light scheme's `selection` fill |
 
 `brandAcid` is 85° (acid lime); the success green is 145° (true green). They are
 60° apart, so they read as different things: the brand colour is *identity*, the
@@ -116,23 +119,39 @@ header. They are counted the same way the TUI counts them
 
 | Token | Dark | Light | Notes |
 |---|---|---|---|
-| `hover` | `rgba(255,255,255,0.08)` | `#F6FEEF` | row and menu hover wash |
+| `hover` | `rgba(255,255,255,0.08)` | `#EDEFE6` | row hover wash |
+| `selection` | `#B4F779` | `#3B6D11` | the chosen row: 5.79:1 on `bg` / 6.21:1 on `surface` in light |
+| `onSelection` | `#15200D` | `#FFFFFF` | text and icons **inside** a selected row: 13.28:1 / 6.21:1 |
 | `focusRing` | `#B4F779` | `#3B6D11` | keyboard focus |
 | `outline` | `#3F3F46` | `#D4D4D8` | the border on a card, chip or control |
 | `shadowSm` | `0 1px 2px rgba(0,0,0,.32)` | `0 1px 2px rgba(16,24,40,.06)` | raised rows, the selected session |
 | `shadowMd` | `0 4px 12px rgba(0,0,0,.36)` | `0 4px 12px rgba(16,24,40,.08)` | cards that need to lift |
 | `shadowLg` | `0 12px 32px rgba(0,0,0,.44)` | `0 12px 32px rgba(16,24,40,.12)` | popovers, dropdowns, modals |
 
-The light hover is an **acid tint, not a grey**. `muted` is 4.51:1 on `bg` and
-that ground is already the AA floor, so any grey dark enough to read as a hover
-pulls a muted label under it (4.40:1 at `#F4F4F5`, 4.47:1 at `#F6F6F7`). The tint
-is the only candidate that holds — 4.68:1 for `muted`, 17.16:1 for `ink` — and it
-reads as a weaker sibling of the solid-acid selection rather than competing with
-it.
+**The selected row is a pair, not the brand colour.** The dark scheme can select
+with the acid because `onAcid` on it is 13.28:1; the light scheme cannot, because
+the same fill is 1.19:1 against `#F7F7F5` — the row stopped being a highlight and
+became a smear, and everything written on it with `ink` was at 1.27:1. Light
+selects with `brandInk` and writes white on it. Two rules follow from the pair and
+are enforced by `styles/__tests__/tokens.test.ts`:
+
+- text and icons inside a selected row read `onSelection`, **never** `ink`;
+- a chip that lands on a selected row inverts to the pair, because every status
+  pair in the table is measured against `bg`/`surface` and neither of those is the
+  ground under it.
+
+The light hover is a **warm neutral, not a second green**. It used to be an acid
+tint on the argument that `muted` sat on the AA floor and any grey wash would
+push it under; `muted` moved to `#6B6B73` (4.55:1 on the wash) and the reason
+expired. It also has a job to not do: with the selection now a solid green fill, a
+green hover would read as a weaker degree of the same signal, and only one of them
+is allowed to mean "this one".
 
 The focus ring is **not** the acid in the light scheme: acid on a light ground is
 1.27:1 and a keyboard user cannot see it. The dark scheme can afford the acid ring
-(15.06:1); the light scheme uses `brandInk`.
+(15.06:1); the light scheme uses `brandInk`. That token reaches antd's own inputs
+through `antdTheme()`'s `Input`/`Select` overrides, because both default their
+focused border to `colorPrimary` — which here is the acid.
 
 **`outline` is a grey in both schemes, and the shadow is the second separator.**
 It used to be `#000000` in both, carrying the neo-brutalist frame: 2px and 3px
@@ -156,7 +175,7 @@ A progress row that looks pressable becomes a control that does nothing.
 |---|---|---|---|
 | done | `#14532D` fill, `#86EFAC` ink | `#EAF3DE` fill, `#3F6212` ink | 6.19:1 |
 | failed | `#3B1218` fill, `#FDA4AF` ink | `#FEE2E2` fill, `#9F1239` ink | 6.56:1 |
-| current | no fill, `#E4E4E7` ink, 2px `#B4F779` rule | no fill, `#18181B` ink, 2px `#B4F779` rule | 16.52:1 |
+| current | no fill, `#E4E4E7` ink, 2px `#B4F779` rule | no fill, `#18181B` ink, 2px `#3B6D11` rule | 16.52:1 ink; the rule is 6.21:1 |
 | pending | transparent, `#A1A1AA` ink | transparent, `#6B7280` ink | 4.51:1 |
 | unknown | transparent, muted ink, `○` | same | — |
 

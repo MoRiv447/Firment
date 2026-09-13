@@ -1,4 +1,5 @@
-import { Button, Input, List, Popconfirm, Space, Tag, Tooltip, Typography } from 'antd';
+import { useState } from 'react';
+import { Button, Input, List, Popconfirm, Tag, Tooltip, Typography } from 'antd';
 import {
   DeleteOutlined,
   FolderOpenOutlined,
@@ -10,6 +11,48 @@ import pkg from '../../package.json';
 import { color, font, radius, space } from '../styles/tokens';
 
 const { Text } = Typography;
+
+/**
+ * Chip colours for one row.
+ *
+ * A chip's own pair (`successBg` / `successInk` and friends) is measured against
+ * `bg` and `surface`, because that is where chips normally live. On a selected
+ * row neither ground is what the chip is sitting on, and the collision is not
+ * uniform: the transparent `NORMAL` chip is fine on dark acid and 1.3:1 on the
+ * light green fill, which is exactly the kind of bug a scheme switch is supposed
+ * to surface rather than hide.
+ *
+ * So a selected row inverts its chips instead: ground `onSelection`, ink
+ * `selection`. That pair is readable by construction (13.28:1 dark, 6.21:1
+ * light), needs no per-chip ground decisions, and costs only the chip's hue on
+ * the one row that is already marked by its fill -- the label itself still says
+ * which kind it is.
+ */
+function chipStyle(
+  selected: boolean,
+  pair: { background: string; color: string; border?: string },
+): { background: string; color: string; border: string } {
+  return selected
+    ? { background: color.onSelection, color: color.selection, border: color.onSelection }
+    : { background: pair.background, color: pair.color, border: pair.border ?? color.outline };
+}
+
+/** The one shape every chip on a row shares, so the only thing that differs
+ *  between them is what they say. `flex: 0 0 auto` matters as much as the
+ *  colours: without it a chip gives up width before the title does, and the
+ *  title is the part you are reading. */
+function tagStyle(c: { background: string; color: string; border: string }, fontSize: number) {
+  return {
+    fontSize,
+    marginRight: 0,
+    borderRadius: radius.chip,
+    border: `1px solid ${c.border}`,
+    background: c.background,
+    color: c.color,
+    lineHeight: '16px',
+    flex: '0 0 auto',
+  } as const;
+}
 
 export function SessionSidebar({
   sessions,
@@ -34,6 +77,11 @@ export function SessionSidebar({
   /** Open the Workbench view scoped to this session's project path. */
   onOpenWorkbench: (cwd: string) => void;
 }) {
+  // Pointer feedback. `transition: background` on a row was animating a change
+  // nothing ever made, which left a list of clickable rows that gave no sign of
+  // being clickable.
+  const [hovered, setHovered] = useState<string | null>(null);
+
   // ---- build the session tree -------------------------------------------
   // Branch sessions (parent_session set) nest under their parent; everything
   // else is a root. Roots WITH children are project mainlines and get a
@@ -70,19 +118,27 @@ export function SessionSidebar({
     // a main-kind session with nested branches. The folder button: any
     // session with children is a project root worth jumping from.
     const isProjectRoot = s.kind === 'mainline' && kids.length > 0;
+    const selected = s.id === currentId;
     return (
     <List.Item
       key={s.id}
       onClick={() => onSelect(s.id)}
+      onMouseEnter={() => setHovered(s.id)}
+      onMouseLeave={() => setHovered((h) => (h === s.id ? null : h))}
       style={{
         cursor: 'pointer',
         borderRadius: radius.tile,
         padding: '8px 10px',
         paddingLeft: 10 + depth * 16,
-        background: s.id === currentId ? color.brandAcid : undefined,
-        border: s.id === currentId ? `1px solid ${color.outline}` : '1px solid transparent',
-        boxShadow: s.id === currentId ? color.shadowMd : undefined,
+        background: selected ? color.selection : hovered === s.id ? color.hover : undefined,
+        // Present in both states so selecting a row never shifts its text by a
+        // pixel -- and transparent in both, because the fill is the signal. A
+        // grey ring around a saturated ground is what made the old selection
+        // look like a bordered box that happened to be green.
+        border: '1px solid transparent',
+        boxShadow: selected ? color.shadowSm : undefined,
         transition: 'background 0.15s ease',
+        minWidth: 0,
       }}
       actions={[
         ...(isProjectRoot
@@ -96,7 +152,10 @@ export function SessionSidebar({
                     e.stopPropagation();
                     onOpenWorkbench(s.cwd);
                   }}
-                  style={{ color: s.id === currentId ? color.ink : color.infoInk }}
+                  // `onSelection`, not `ink`: body ink on the dark scheme's
+                  // acid selection is 1.01:1, which is not a dimmed icon, it is
+                  // a missing one.
+                  style={{ color: selected ? color.onSelection : color.infoInk }}
                 />
               </Tooltip>,
             ]
@@ -114,113 +173,132 @@ export function SessionSidebar({
             type="text"
             icon={<DeleteOutlined />}
             onClick={(e) => e.stopPropagation()}
-            style={{ color: s.id === currentId ? color.ink : undefined }}
+            style={{ color: selected ? color.onSelection : undefined }}
           />
         </Popconfirm>,
       ]}
     >
-      <List.Item.Meta
-        title={
-          <Space size={4}>
-            {/* Category tag — exactly one per session. */}
-            {s.kind === 'mainline' && (
-              <Tag
-                style={{
-                  fontSize: 10,
-                  marginRight: 0,
-                  borderRadius: radius.chip,
-                  border: `1px solid ${color.outline}`,
-                  background: color.successBg,
-                  color: color.successInk,
-                  lineHeight: '16px',
-                }}
-              >
-                MAINLINE
-              </Tag>
-            )}
-            {(s.kind === 'branch' || depth > 0) && (
-              <Tag
-                style={{
-                  fontSize: 10,
-                  marginRight: 0,
-                  borderRadius: radius.chip,
-                  border: `1px solid ${color.outline}`,
+      {/*
+        Our own flex column rather than `List.Item.Meta`.
+
+        antd's meta wrapper is a flex item with `flex: 1` and no `min-width: 0`,
+        so its width came from the longest thing inside it: a first message with
+        a long word in it pushed the row past the rail and the text clipped
+        mid-glyph, with nothing on screen to say there was more. `minWidth: 0`
+        down this chain is what lets the title's own ellipsis do its job.
+      */}
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 2,
+          flex: '1 1 auto',
+          minWidth: 0,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+          {/* Category tag — exactly one per session. */}
+          {s.kind === 'mainline' && (
+            <Tag
+              style={tagStyle(
+                chipStyle(selected, { background: color.successBg, color: color.successInk }),
+                10,
+              )}
+            >
+              MAINLINE
+            </Tag>
+          )}
+          {(s.kind === 'branch' || depth > 0) && (
+            <Tag
+              style={tagStyle(
+                chipStyle(selected, {
                   background: color.surfaceRaised,
                   color: color.infoInk,
-                  lineHeight: '16px',
-                }}
-              >
-                ↳ BRANCH
-              </Tag>
-            )}
-            {s.kind === 'normal' && (
-              <Tag
-                style={{
-                  fontSize: 10,
-                  marginRight: 0,
-                  borderRadius: radius.chip,
-                  border: `1px solid ${color.successBorder}`,
-                  background: 'transparent',
-                  color: color.successInk,
-                  lineHeight: '16px',
-                }}
-              >
-                NORMAL
-              </Tag>
-            )}
-            <Text
-              style={{
-                fontSize: 13,
-                fontWeight: s.id === currentId ? 700 : 500,
-                color: s.id === currentId ? color.onAcid : color.ink,
-              }}
-              ellipsis={{ tooltip: s.preview }}
+                }),
+                10,
+              )}
             >
-              {/* ellipsis carries the FULL preview in its tooltip — the old
-                  code truncated first, so the tooltip showed the same 30
-                  chars as the row. */}
-              {s.preview}
-            </Text>
-          </Space>
-        }
-        description={
-          <Space size={4} wrap>
-            {runningIds?.has(s.id) && (
-              <Tag
-                color={color.brandAcid}
-                style={{
-                  fontSize: 10,
-                  marginRight: 0,
-                  borderRadius: radius.chip,
-                  color: color.onAcid,
-                  fontWeight: 700,
-                  lineHeight: '16px',
-                }}
-              >
-                ⚡ running
-              </Tag>
-            )}
-            <Tag
-              style={{
-                fontSize: 11,
-                marginRight: 0,
-                borderRadius: radius.chip,
-                border: `1px solid ${color.outline}`,
-                background: s.id === currentId ? color.bg : color.surfaceRaised,
-                color: s.id === currentId ? color.ink : color.muted,
-              }}
-            >
-              {s.model}
+              ↳ BRANCH
             </Tag>
-            <Text
-              type="secondary"
-              style={{ fontSize: 11, color: s.id === currentId ? color.ink : color.muted }}
+          )}
+          {s.kind === 'normal' && (
+            <Tag
+              style={tagStyle(
+                chipStyle(selected, {
+                  // Opaque even when unselected: `transparent` was the one chip
+                  // ground that let a selected row's fill show through the badge
+                  // and put green text on green.
+                  background: color.surface,
+                  color: color.successInk,
+                  border: color.successBorder,
+                }),
+                10,
+              )}
             >
-              {new Date(s.updated_at * 1000).toLocaleString()}
-            </Text>
-          </Space>
-        }
-      />
+              NORMAL
+            </Tag>
+          )}
+          <Text
+            style={{
+              fontSize: 13,
+              fontWeight: selected ? 700 : 500,
+              color: selected ? color.onSelection : color.ink,
+              flex: '1 1 auto',
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+            ellipsis={{ tooltip: s.preview }}
+          >
+            {/* ellipsis carries the FULL preview in its tooltip — the old
+                code truncated first, so the tooltip showed the same 30
+                chars as the row. */}
+            {s.preview}
+          </Text>
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+            flexWrap: 'wrap',
+            minWidth: 0,
+          }}
+        >
+          {runningIds?.has(s.id) && (
+            <Tag
+              // No `color=` prop: antd takes a preset colour name and derives
+              // its own background, and what it derives is a white-based tint
+              // (rgb(241,254,231)) even in dark mode. The fill has to be stated.
+              style={{
+                ...tagStyle(
+                  chipStyle(selected, {
+                    background: color.brandAcid,
+                    color: color.onAcid,
+                    border: color.brandAcid,
+                  }),
+                  10,
+                ),
+                fontWeight: 700,
+              }}
+            >
+              ⚡ running
+            </Tag>
+          )}
+          <Tag
+            style={tagStyle(
+              chipStyle(selected, { background: color.surfaceRaised, color: color.muted }),
+              11,
+            )}
+          >
+            {s.model}
+          </Tag>
+          <Text style={{ fontSize: 11, color: selected ? color.onSelection : color.muted }}>
+            {new Date(s.updated_at * 1000).toLocaleString()}
+          </Text>
+        </div>
+      </div>
     </List.Item>
     );
   };

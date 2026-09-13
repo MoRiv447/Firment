@@ -56,8 +56,8 @@ describe('text is readable on every ground it is used on', () => {
   const cases: Array<[string, string, string, number]> = [
     ['light ink on surface', '#18181B', '#FFFFFF', 17.72],
     ['light ink on bg', '#18181B', '#F7F7F5', 16.52],
-    ['light muted on surface', '#71717A', '#FFFFFF', 4.83],
-    ['light muted on bg', '#71717A', '#F7F7F5', 4.51],
+    ['light muted on surface', '#6B6B73', '#FFFFFF', 5.28],
+    ['light muted on bg', '#6B6B73', '#F7F7F5', 4.92],
     ['light brandInk on surface', '#3B6D11', '#FFFFFF', 6.21],
     ['light successInk on surface', '#15803D', '#FFFFFF', 5.02],
     ['light diffAddedInk on diffAddedBg', '#15803D', '#DCFCE7', 4.57],
@@ -98,13 +98,43 @@ describe('text is readable on every ground it is used on', () => {
     expect(contrast(paletteFor('dark').focusRing, paletteFor('dark').bg)).toBeGreaterThan(3);
   });
 
-  it('keeps the light hover wash from sinking the muted label', () => {
-    // Every neutral hover dark enough to read as a hover pulls `muted` under
-    // AA on the light ground (#F4F4F5 gives 4.40). This pins the reason the
-    // light hover is an acid tint instead.
-    expect(contrast(paletteFor('light').muted, paletteFor('light').hover)).toBeGreaterThanOrEqual(
-      AA,
-    );
+  it('keeps the hover wash from sinking the muted label', () => {
+    // The wash is only a wash if a label on top of it still passes. `muted` is
+    // dark enough now that a neutral ground holds it, which is what let the
+    // light hover stop being a second green state. (Dark is skipped: its wash is
+    // a translucent overlay, and the luminance helper reads hexes.)
+    const p = paletteFor('light');
+    expect(contrast(p.muted, p.hover)).toBeGreaterThanOrEqual(AA);
+    expect(contrast(p.ink, p.hover)).toBeGreaterThanOrEqual(AA);
+  });
+
+  it('makes the selected row readable in both schemes', () => {
+    // The reported bug: an acid selection is 13.28:1 to write on in dark and
+    // 1.19:1 against the cream ground in light, where it stopped being a
+    // highlight and became a smear. The pair is checked as text (AA) and as a
+    // shape against both grounds it sits on (3:1).
+    for (const mode of ['dark', 'light'] as const) {
+      const p = paletteFor(mode);
+      expect(contrast(p.onSelection, p.selection)).toBeGreaterThanOrEqual(AA);
+      expect(contrast(p.selection, p.bg)).toBeGreaterThanOrEqual(3);
+      expect(contrast(p.selection, p.surface)).toBeGreaterThanOrEqual(3);
+    }
+    // Body ink is not the ink for a filled row. On the dark scheme's acid it is
+    // 1.01:1 -- an invisible icon rather than a dimmed one, which is the bug
+    // this pair exists to make impossible.
+    const dark = paletteFor('dark');
+    expect(contrast(dark.ink, dark.selection)).toBeLessThan(1.6);
+  });
+
+  it('keeps a 2px brand mark visible on the ground it is drawn on', () => {
+    // stepRule is a shape, not text -- the current-step underline, the live
+    // inspector tab, the todo progress bar. Acid on a light ground is 1.19:1,
+    // which is why the light scheme cannot borrow the dark scheme's answer.
+    expect(contrast(paletteFor('dark').stepRule, paletteFor('dark').bg)).toBeGreaterThanOrEqual(3);
+    expect(
+      contrast(paletteFor('light').stepRule, paletteFor('light').surface),
+    ).toBeGreaterThanOrEqual(3);
+    expect(contrast(paletteFor('light').stepRule, paletteFor('light').bg)).toBeGreaterThanOrEqual(3);
   });
 });
 

@@ -1461,10 +1461,10 @@ export function WorkbenchView() {
                         alignItems: 'center',
                         gap: 8,
                         padding: '4px 8px',
-                        border:
-            s.id === currentSessionId
-              ? `1px solid ${color.brandAcid}`
-              : `1px solid ${color.line}`,
+                        // `selection`, not the acid: a 1px acid border on a
+                        // light ground is 1.27:1, so the selected card and its
+                        // neighbours were the same colour.
+                        border: `1px solid ${s.id === currentSessionId ? color.selection : color.line}`,
                         borderRadius: radius.control,
                       }}
                     >

@@ -27,6 +27,10 @@ function stateFor(status: ToolCardState['status']): StepState {
       return 'current';
     case 'ok':
       return 'done';
+    case 'unknown':
+      // Reopened history. `default` below means "the turn reported a failure",
+      // and an unrecorded outcome is not one.
+      return 'pending';
     default:
       return 'failed';
   }

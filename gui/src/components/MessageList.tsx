@@ -260,7 +260,7 @@ function CollapsedToolCard({ call, seq }: { call: ToolCall; seq: number }) {
     // tool-name tag.
     return (
       <ToolCard
-        tool={{ seq, name: call.name, args: call.arguments, status: 'ok' }}
+        tool={{ seq, name: call.name, args: call.arguments, status: 'unknown' }}
         standalone
         collapsible={{ open: true, onToggle: () => setOpen(false) }}
       />
@@ -287,12 +287,17 @@ function CollapsedToolCard({ call, seq }: { call: ToolCall; seq: number }) {
       <RightOutlined style={{ fontSize: 9, color: color.muted }} />
       <Tag
         style={{
-          ...statusChip('ok'),
+          // Neutral, and no check mark. The transcript stores that a tool ran
+          // and what came back, never whether it succeeded -- a denial and a
+          // timeout are just strings in the result -- so a green `✓` here was
+          // asserting something this data cannot support. The result card
+          // underneath is where the outcome is actually readable.
+          ...statusChip('neutral'),
           borderRadius: radius.chip,
           fontWeight: 700,
         }}
       >
-        ✓ {call.name}
+        {call.name}
       </Tag>
       <Text type="secondary" style={{ fontSize: 12, flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
         {preview}

@@ -91,7 +91,10 @@ export function Inspector({
   return (
     <aside
       style={{
-        width: 360,
+        // The pane that gives way. 360px is the right width on a normal display
+        // and the wrong one on a laptop at its minimum window size, and the
+        // thing that loses text when nothing shrinks here is the transcript.
+        width: 'clamp(240px, 26vw, 360px)',
         flex: '0 0 auto',
         borderLeft: `1px solid ${color.line}`,
         background: color.surface,

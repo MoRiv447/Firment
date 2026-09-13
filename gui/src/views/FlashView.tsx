@@ -62,7 +62,9 @@ export function FlashView() {
   };
 
   return (
-    <div style={{ padding: 20, height: '100%', overflowY: 'auto' }}>
+    // No padding: this view lives in the inspector, which already pads, and the
+    // two added up to a third of the pane's width on a laptop.
+    <div style={{ height: '100%', overflowY: 'auto' }}>
       <Card size="small" title="Flash / Run (probe-rs)">
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
           <Input
@@ -71,26 +73,29 @@ export function FlashView() {
             value={cwd}
             onChange={(e) => setCwd(e.target.value)}
           />
-          <Space wrap>
+          {/* A wrapping flex row, not fixed widths: a 420px field in a 360px
+              column was unreachable rather than merely cramped -- the pane
+              scrolls vertically only. */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             <Input
               placeholder="path to .elf/.bin (absolute)"
-              style={{ width: 420 }}
+              style={{ flex: '1 1 100%', minWidth: 0 }}
               value={file}
               onChange={(e) => setFile(e.target.value)}
             />
             <Input
               placeholder="chip (e.g. nrf52840)"
-              style={{ width: 160 }}
+              style={{ flex: '1 1 130px', minWidth: 0 }}
               value={chip}
               onChange={(e) => setChip(e.target.value)}
             />
             <Input
               placeholder="probe id (optional)"
-              style={{ width: 160 }}
+              style={{ flex: '1 1 130px', minWidth: 0 }}
               value={probe}
               onChange={(e) => setProbe(e.target.value)}
             />
-          </Space>
+          </div>
           <Space>
             <Button
               type="primary"
