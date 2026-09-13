@@ -1,0 +1,58 @@
+/*
+ * The only file in the GUI allowed element selectors, and the only one that
+ * styles anything not owned by a component.
+ *
+ * This is the content that used to live in an inline <style> in index.html.
+ * It moved here so the values can come from tokens.css instead of being
+ * hand-copied -- the old block duplicated four colours and invented two more
+ * (`#52525b` and `#a1a1aa` scrollbar thumbs) that existed in no token layer.
+ *
+ * Deliberately minimal: box-sizing, a reset and typography defaults belong to
+ * the component pass, not to the pass that moves the pre-paint styles. Adding
+ * `* { box-sizing: border-box }` here would silently reflow every hand-rolled
+ * div while antd still owns half the tree.
+ */
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+body {
+  /*
+   * The shell's own text colour, set where nothing has to remember to pass it.
+   *
+   * App.tsx carries a comment about the day antd's `Content` was swapped for a
+   * plain `<main>` and every prose colour silently fell to the browser default
+   * -- dark text on a dark ground, for the whole transcript. A component can
+   * still set its own colour; it just cannot be the thing that makes text
+   * legible by accident.
+   */
+  font-family: var(--ff-sans);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbars. WebView2/WebKit only; `color-scheme` in tokens.css handles the
+   native form controls and the overlay scrollbars that ignore these. */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  border-radius: var(--r-chip);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scroll-thumb-hover);
+}

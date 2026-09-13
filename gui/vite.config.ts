@@ -15,6 +15,11 @@ export default defineConfig(async () => ({
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
     include: ["src/**/*.test.{ts,tsx}"],
+    // Off by default in Vitest, which replaces every CSS module with an empty
+    // string -- including `?raw` ones. The token bridge test compares
+    // styles/tokens.css against styles/tokens.ts by value, so it has to be able
+    // to read the file.
+    css: true,
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

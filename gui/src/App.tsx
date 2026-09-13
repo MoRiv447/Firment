@@ -49,6 +49,7 @@ import { PendingPane } from './shell/panes/PendingPane';
 import { antdTheme, color, font, setActivePalette } from './styles/tokens';
 import {
   ThemeModeContext,
+  publishScheme,
   resolveTheme,
   setThemeSetting,
   useSystemPrefersDark,
@@ -85,6 +86,14 @@ export default function App() {
       })
       .catch((err: unknown) => console.error(err));
   }, []);
+
+  // The write side of the pre-paint contract in index.html. Unlike
+  // `setActivePalette` this can be an effect: the DOM attribute only has to
+  // match by the time the browser paints the next frame, and the first frame
+  // was already decided from the cache the last time this ran.
+  useEffect(() => {
+    publishScheme(themeSetting, mode);
+  }, [themeSetting, mode]);
 
   // Pin the opposite of what is on screen right now. `auto` has no icon of its
   // own, so toggling from `auto` deliberately leaves `auto` behind: the user

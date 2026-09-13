@@ -1,64 +1,51 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-scheme="dark">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/icons/logo-64.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <style>
-      /*
-        The ground under the app before React paints, and the scrollbars.
 
-        These are the only two colours in this file, and they duplicate
-        gui/src/styles/tokens.ts on purpose: nothing runs here, so the values
-        cannot be read from the token layer. They used to be a single hardcoded
-        #141414 with grey thumbs, which meant the light scheme got a black band
-        behind every gap and dark scrollbars on white panels. Following the OS
-        scheme is the best available guess -- a forced `ui.theme` is still
-        corrected the moment React paints the app's own background.
-      */
-      html,
-      body,
-      #root {
-        height: 100%;
-        margin: 0;
-        overflow: hidden;
-        background: #0f0f12;
-      }
-      :root {
-        color-scheme: dark;
-      }
-      /* Global scrollbar styling (WebKit / WebView2). */
-      ::-webkit-scrollbar {
-        width: 8px;
-        height: 8px;
-      }
-      ::-webkit-scrollbar-track {
-        background: transparent;
-      }
-      ::-webkit-scrollbar-thumb {
-        background: #3f3f46;
-        border-radius: 4px;
-      }
-      ::-webkit-scrollbar-thumb:hover {
-        background: #52525b;
-      }
-      @media (prefers-color-scheme: light) {
-        :root {
-          color-scheme: light;
+    <!--
+      The scheme, decided before first paint.
+
+      The old block here hand-copied four colours out of styles/tokens.ts
+      because nothing could run to read them, and resolved the scheme from
+      `prefers-color-scheme` -- so a pinned `ui.theme = light` on a dark machine
+      painted dark until React got there. Both problems are gone: the values now
+      come from tokens.css through the links below, and the decision comes from
+      the same localStorage cache React writes.
+
+      `data-scheme="dark"` on <html> is the no-JS fallback. Without it a blocked
+      script would leave every var(--*) unresolved and the whole window black on
+      black; with it, a failed script degrades to "dark until React says
+      otherwise", which is what used to happen on purpose.
+    -->
+    <link rel="stylesheet" href="/src/styles/tokens.css" />
+    <link rel="stylesheet" href="/src/styles/base.css" />
+    <script>
+      // Requires `csp: null` in src-tauri/tauri.conf.json. If a Content-Security-Policy
+      // is ever added, this inline script is silently blocked and the app falls back to
+      // the attribute above -- i.e. the flash comes back with no error anywhere. Move
+      // this into a linked .js file at the same point in <head> rather than deleting it.
+      (function () {
+        try {
+          var raw = localStorage.getItem('firment.ui.theme');
+          var setting = (raw || 'auto').trim().toLowerCase();
+          var systemDark = !(
+            window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches
+          );
+          // Mirrors resolveTheme() in src/lib/theme.ts: an unknown value behaves
+          // as `auto` rather than pinning a scheme nobody asked for.
+          var mode =
+            setting === 'light' ? 'light' : setting === 'dark' ? 'dark' : systemDark ? 'dark' : 'light';
+          document.documentElement.dataset.scheme = mode;
+          var cached = localStorage.getItem('firment.scheme.resolved');
+          if (mode !== cached) localStorage.setItem('firment.scheme.resolved', mode);
+        } catch (e) {
+          /* private mode, a blocked store, no localStorage: keep the fallback attribute */
         }
-        html,
-        body,
-        #root {
-          background: #f7f7f5;
-        }
-        ::-webkit-scrollbar-thumb {
-          background: #d4d4d8;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-          background: #a1a1aa;
-        }
-      }
-    </style>
+      })();
+    </script>
     <title>Firment GUI</title>
   </head>
 

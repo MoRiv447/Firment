@@ -127,3 +127,32 @@ export function useThemeSetting(): ThemeSetting {
   }, []);
   return setting;
 }
+
+// ---------------------------------------------------------------------------
+// The pre-paint contract.
+//
+// `index.html` cannot await `get_settings`, so it decides the first frame from
+// these two keys and the `matchMedia` fallback. `publishScheme` is the write
+// side: without it the cache freezes at whatever the very first boot guessed,
+// and a later `ui.theme = light` would keep flashing dark.
+// ---------------------------------------------------------------------------
+
+/** The `ui.theme` value itself: `auto` must survive, or the OS stops mattering. */
+export const THEME_SETTING_KEY = 'firment.ui.theme';
+/** The resolved `dark`/`light`, so the next boot needs no `matchMedia` guess. */
+export const RESOLVED_SCHEME_KEY = 'firment.scheme.resolved';
+
+/** Paint the scheme and leave it cached for the next cold start. */
+export function publishScheme(setting: ThemeSetting, mode: ThemeMode): void {
+  if (typeof document === 'undefined') return;
+  document.documentElement.dataset.scheme = mode;
+  try {
+    localStorage.setItem(THEME_SETTING_KEY, setting);
+    if (localStorage.getItem(RESOLVED_SCHEME_KEY) !== mode) {
+      localStorage.setItem(RESOLVED_SCHEME_KEY, mode);
+    }
+  } catch {
+    // A blocked store costs the next boot its cache and nothing else: the
+    // scheme is already painted by the line above.
+  }
+}

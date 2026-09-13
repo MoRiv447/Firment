@@ -1,0 +1,230 @@
+/*
+ * Design tokens, CSS side.
+ *
+ * Declared values only: the sole selectors in this file are the two scheme
+ * blocks and one scheme-independent `:root`. Anything that draws something
+ * lives in base.css or in a component's .module.css.
+ *
+ * Source of truth: docs/design/tokens.md. `styles/tokens.ts` is the mirror the
+ * antd layer still reads, and `styles/__tests__/tokens-css.test.ts` fails if
+ * the two disagree on any colour. That bridge is temporary -- when antd goes,
+ * `tokens.ts` goes with it and this file is the only source.
+ *
+ * Naming is kebab-case, matching web/src/styles/tokens.css so the two files
+ * can be compared line by line. `tokens.ts`'s camelCase keys map mechanically:
+ * `surfaceRaised` -> `--surface-raised`, `diffMetaInk` -> `--diff-meta-ink`.
+ *
+ * One deliberate merge: `lineStrong` and `outline` hold identical values in
+ * BOTH schemes (`#3F3F46` dark, `#D4D4D8` light), so there is one token here.
+ * `tokens.ts` keeps both names only because ~60 existing call sites read them;
+ * the bridge test asserts all three are equal rather than trusting it.
+ */
+
+/* ------------------------------------------------------------------ */
+/* Colour and elevation. Both blocks carry the same 37 keys -- the test
+   that checks this also checks the count, so a key added to one scheme
+   and forgotten in the other cannot land.                        */
+/* ------------------------------------------------------------------ */
+
+:root[data-scheme="dark"] {
+  /* Grounds and text. */
+  --bg: #0F0F12;
+  --surface: #18181B;
+  --surface-raised: #1F1F23;
+  --ink: #E4E4E7;                    /* 15.08:1 on bg */
+  --muted: #A1A1AA;                  /* 7.47:1 on bg. Never olive: reads as disabled. */
+  --line: #2A2A2F;                   /* a hairline, not a 3:1 non-text line */
+  --outline: #3F3F46;                /* control edges; also lineStrong */
+
+  /* Brand. Acid is a highlighter, never text: ~1.8:1 on a light ground. */
+  --brand-acid: #B4F779;
+  --on-acid: #15200D;                /* 13.28:1 on brand-acid */
+  --brand-ink: #3B6D11;              /* green that is readable AS text */
+  --brand-edge: #15200D;             /* the CTA's own edge; NOT outline (see tokens.ts:71-83) */
+
+  /* Status green: a different hue from the brand on purpose (145deg vs 85deg). */
+  --success-bg: #14532D;
+  --success-ink: #86EFAC;            /* 6.49:1 on success-bg */
+  --success-border: #166534;
+  --info-bg: #1A1E26;
+  --info-ink: #7DD3FC;
+  --warn-bg: #3F2E06;
+  --warn-ink: #EAB308;
+
+  /* Diff. */
+  --diff-added-bg: #14311C;
+  --diff-added-ink: #86EFAC;
+  --diff-removed-bg: #3B1218;
+  --diff-removed-ink: #FDA4AF;
+  --diff-meta-ink: #A1A1AA;
+
+  /* Elevation. The SECOND separator: a hairline separates first, so these stay soft. */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.32);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.36);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.44);
+
+  /* States. Hover is neutral so that only selection is green. */
+  --hover: rgba(255, 255, 255, 0.08);
+  --selection: #B4F779;
+  --on-selection: #15200D;           /* 13.28:1 on selection; ink is 1.01:1 on acid */
+
+  /* The three step states, derived so a step never invents a fourth green. */
+  --step-done-bg: #14532D;
+  --step-done-ink: #86EFAC;
+  --step-current-ink: #E4E4E7;
+  --step-rule: #B4F779;              /* a shape, not text */
+  --step-pending-ink: #A1A1AA;
+  --step-failed-bg: #3B1218;         /* the removed-diff family: same message, other size */
+  --step-failed-ink: #FDA4AF;
+
+  /* Keyboard focus. Dark can afford the acid ring (15.06:1); light cannot. */
+  --focus-ring: #B4F779;
+
+  /* Scrollbar. The thumb is `outline`; the hover shade exists nowhere else
+     and is kept at the value that shipped. */
+  --scroll-thumb: var(--outline);
+  --scroll-thumb-hover: #52525B;
+
+  color-scheme: dark;
+}
+
+:root[data-scheme="light"] {
+  --bg: #F7F7F5;
+  --surface: #FFFFFF;                /* 1.07:1 vs bg: separation is the hairline, not the fill */
+  --surface-raised: #FFFFFF;         /* told apart by border and shadow */
+  --ink: #18181B;                    /* 17.72:1 on surface, 16.52:1 on bg */
+  --muted: #6B6B73;                  /* 5.28 / 4.92 / 4.55 on surface / bg / hover */
+  --line: #E4E4E7;
+  --outline: #D4D4D8;
+
+  --brand-acid: #B4F779;             /* 1.27:1 here: a fill, never text */
+  --on-acid: #15200D;
+  --brand-ink: #3B6D11;              /* 6.21:1 on surface: green text uses this */
+  --brand-edge: #15200D;
+
+  --success-bg: #DCFCE7;
+  --success-ink: #15803D;            /* 4.57:1 on success-bg */
+  --success-border: #BBF7D0;
+  --info-bg: #E0F2FE;
+  --info-ink: #0369A1;               /* 5.17:1 on its own fill */
+  --warn-bg: #FEF3C7;
+  --warn-ink: #B45309;               /* 4.51:1 on its own fill */
+
+  --diff-added-bg: #DCFCE7;
+  --diff-added-ink: #15803D;
+  --diff-removed-bg: #FEE2E2;
+  --diff-removed-ink: #9F1239;       /* 6.56:1 on diff-removed-bg */
+  --diff-meta-ink: #71717A;
+
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06);
+  --shadow-md: 0 4px 12px rgba(16, 24, 40, 0.08);
+  --shadow-lg: 0 12px 32px rgba(16, 24, 40, 0.12);
+
+  --hover: #EDEFE6;
+  --selection: #3B6D11;              /* acid is 1.19:1 on this ground: not a highlight */
+  --on-selection: #FFFFFF;           /* white, not on-acid: acid on dark green is 4.89 */
+
+  --step-done-bg: #EAF3DE;
+  --step-done-ink: #3F6212;
+  --step-current-ink: #18181B;
+  --step-rule: #3B6D11;              /* a 2px rule needs 3:1; acid here is 1.19 */
+  --step-pending-ink: #6B7280;
+  --step-failed-bg: #FEE2E2;
+  --step-failed-ink: #9F1239;
+
+  --focus-ring: #3B6D11;             /* NOT the acid: 1.27:1 is invisible to a keyboard user */
+
+  --scroll-thumb: var(--outline);
+  --scroll-thumb-hover: #A1A1AA;
+
+  color-scheme: light;
+}
+
+/* ------------------------------------------------------------------ */
+/* Numbers. Identical in both schemes, so a third block. */
+/* ------------------------------------------------------------------ */
+
+:root {
+  /* Stacks. Prose and code are separate on purpose -- setting UI text in a
+     monospace was making every label shout. */
+  --ff-sans: 'Inter', 'Noto Sans SC', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --ff-mono: 'JetBrains Mono', 'Noto Sans SC', 'Cascadia Code', Consolas, monospace;
+
+  /*
+   * Type. Six steps named by role, so nobody picks a size "between" two and
+   * the 137 hardcoded fontSize values in the old tree have exactly one home
+   * each. `--fs-body` is the default: an element that sets nothing is body.
+   */
+  --fs-micro: 10px;    /* uppercase micro-labels, counters */
+  --fs-meta: 11px;     /* chips, tags, tab labels, timestamps, mono paths */
+  --fs-minor: 12px;    /* secondary text: tool args, session meta, status bar */
+  --fs-body: 13px;     /* DEFAULT: prose, inputs, log lines, card titles */
+  --fs-ui: 14px;       /* control labels, the active inspector tab */
+  --fs-display: 28px;  /* the wordmark, and nothing else */
+
+  --fw-book: 400;
+  --fw-label: 600;
+  --fw-strong: 700;
+  --fw-hero: 800;
+
+  --lh-tight: 1.35;
+  --lh-body: 1.6;
+  --lh-mono: 1.6;      /* diff and log lines */
+
+  /* Spacing, 4px base. */
+  --sp-05: 2px;
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+
+  /*
+   * Heights. `--h-row` is both the control height and the one-line list row,
+   * which is what makes a sidebar row, a menu item and an inspector tab read
+   * as one system rather than three.
+   */
+  --h-bar: 44px;
+  --h-row: 40px;
+  --h-input: 36px;
+
+  /* Radius. Three tiers; `tile: 8` is gone -- it only ever fed an antd
+     component token, and a rounded 16px tile next to a 12px cut corner is
+     the "five competing boxes" problem again. */
+  --r-chip: 4px;
+  --r-control: 6px;
+  --r-panel: 12px;
+  --r-round: 999px;
+
+  /* The slant: the brand's structural mark, on the primary CTA and nothing else. */
+  --slant-cut: 12px;
+  --slant-optic: 5px;
+  --slant-gap: 8px;
+
+  /* Motion. This group had five keys and zero call sites; it is now load-bearing. */
+  --t-in: 160ms;
+  --t-std: 200ms;
+  --t-out: 120ms;
+  --t-stagger: 40ms;
+  --t-spin: 900ms;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* One z story for the whole app. */
+  --z-sticky: 10;
+  --z-pane: 20;
+  --z-overlay: 40;
+  --z-menu: 50;
+  --z-dialog: 60;
+  --z-toast: 70;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --t-in: 1ms;
+    --t-std: 1ms;
+    --t-out: 1ms;
+    --t-stagger: 0ms;
+  }
+}
