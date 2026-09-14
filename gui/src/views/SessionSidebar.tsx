@@ -1,57 +1,138 @@
-import { useState } from 'react';
-import { Button, Input, List, Popconfirm, Tag, Tooltip, Typography } from 'antd';
-import {
-  DeleteOutlined,
-  FolderOpenOutlined,
-  SafetyCertificateOutlined,
-  ThunderboltOutlined,
-} from '@ant-design/icons';
-import type { SessionSummaryDto } from '../types';
-import pkg from '../../package.json';
-import { color, font, radius, space } from '../styles/tokens';
+import { useMemo, useState } from 'react';
+import { Bot, FolderOpen, ShieldCheck, Trash2, Zap } from 'lucide-react';
+import type { CSSProperties } from 'react';
 
-const { Text } = Typography;
+import pkg from '../../package.json';
+import { formatStamp } from '../lib/format';
+import type { SessionSummaryDto } from '../types';
+import {
+  Button,
+  Chip,
+  EmptyState,
+  IconButton,
+  PopConfirm,
+  TextInput,
+  Tooltip,
+  useTooltip,
+} from '../ui';
+import type { ButtonProps, ChipStatus } from '../ui';
+import styles from './SessionSidebar.module.css';
 
 /**
- * Chip colours for one row.
+ * The session rail: what to start, where to start it, and what is already there.
  *
- * A chip's own pair (`successBg` / `successInk` and friends) is measured against
- * `bg` and `surface`, because that is where chips normally live. On a selected
- * row neither ground is what the chip is sitting on, and the collision is not
- * uniform: the transparent `NORMAL` chip is fine on dark acid and 1.3:1 on the
- * light green fill, which is exactly the kind of bug a scheme switch is supposed
- * to surface rather than hide.
+ * Three things in here are deliberate and would be undone by accident:
  *
- * So a selected row inverts its chips instead: ground `onSelection`, ink
- * `selection`. That pair is readable by construction (13.28:1 dark, 6.21:1
- * light), needs no per-chip ground decisions, and costs only the chip's hue on
- * the one row that is already marked by its fill -- the label itself still says
- * which kind it is.
+ * * **No chip is ever re-painted for a selected row.** The version of this file
+ *   that ran on antd assembled every badge from `color.*` in JS and inverted the
+ *   pair when the row was selected, because a transparent chip on acid is green
+ *   text on green. `Chip` pairs its own fill and ink in CSS, and both are opaque,
+ *   so the selection rule belongs to the row alone and the rail's JS has no
+ *   colour in it at all.
+ * * **A row is one `<button>` and its controls are its siblings.** Nested
+ *   interactive content is invalid, and a `<div>` with buttons in it is why every
+ *   action used to need an `e.stopPropagation()`.
+ * * **Exactly one category chip per row.** `kind` arrives as an untyped `string`,
+ *   and the old markup was three independent `&&`s, so a mainline that was also
+ *   nested printed two. `kindOf` returns one and cannot return two.
  */
-function chipStyle(
-  selected: boolean,
-  pair: { background: string; color: string; border?: string },
-): { background: string; color: string; border: string } {
-  return selected
-    ? { background: color.onSelection, color: color.selection, border: color.onSelection }
-    : { background: pair.background, color: pair.color, border: pair.border ?? color.outline };
+
+/** One row of the flattened tree, with the two facts the walk worked out. */
+interface RailRow {
+  session: SessionSummaryDto;
+  depth: number;
+  /** A mainline with branches under it: the project root the workbench opens. */
+  isProjectRoot: boolean;
 }
 
-/** The one shape every chip on a row shares, so the only thing that differs
- *  between them is what they say. `flex: 0 0 auto` matters as much as the
- *  colours: without it a chip gives up width before the title does, and the
- *  title is the part you are reading. */
-function tagStyle(c: { background: string; color: string; border: string }, fontSize: number) {
-  return {
-    fontSize,
-    marginRight: 0,
-    borderRadius: radius.chip,
-    border: `1px solid ${c.border}`,
-    background: c.background,
-    color: c.color,
-    lineHeight: '16px',
-    flex: '0 0 auto',
-  } as const;
+/**
+ * Branches under their parent, everything else at the top, depth-first.
+ *
+ * A session whose parent is missing from the list is hoisted to a root rather
+ * than dropped: the kernel keeps `parent_session` pointing at whatever it forked
+ * from, and a row that rendered nowhere would be a session that could not be
+ * deleted from the GUI. A session that is its own parent is hoisted for the same
+ * reason, and because it would otherwise recurse forever as its own child.
+ */
+function buildRows(sessions: SessionSummaryDto[]): RailRow[] {
+  const ids = new Set(sessions.map((s) => s.id));
+  const byParent = new Map<string, SessionSummaryDto[]>();
+  const roots: SessionSummaryDto[] = [];
+
+  for (const s of sessions) {
+    const parent = s.parent_session;
+    if (parent && parent !== s.id && ids.has(parent)) {
+      const kids = byParent.get(parent) ?? [];
+      kids.push(s);
+      byParent.set(parent, kids);
+    } else {
+      roots.push(s);
+    }
+  }
+
+  // Newest first at the top, oldest first underneath: a mainline's branches read
+  // as a timeline of the work, and the newest of them is the one still open.
+  roots.sort((a, b) => b.updated_at - a.updated_at);
+  for (const kids of byParent.values()) kids.sort((a, b) => a.updated_at - b.updated_at);
+
+  const rows: RailRow[] = [];
+  const walk = (s: SessionSummaryDto, depth: number) => {
+    const kids = byParent.get(s.id) ?? [];
+    rows.push({ session: s, depth, isProjectRoot: s.kind === 'mainline' && kids.length > 0 });
+    for (const kid of kids) walk(kid, depth + 1);
+  };
+  for (const root of roots) walk(root, 0);
+  return rows;
+}
+
+/** The row's one judgement-free label: what kind of session this is. */
+function kindOf(session: SessionSummaryDto, depth: number): { status: ChipStatus; text: string } {
+  if (session.kind === 'mainline') return { status: 'ok', text: 'MAINLINE' };
+  if (session.kind === 'branch' || depth > 0) return { status: 'neutral', text: '↳ BRANCH' };
+  return { status: 'neutral', text: 'NORMAL' };
+}
+
+/**
+ * A control plus the tooltip that names it.
+ *
+ * `useTooltip` is per-control -- a tooltip hangs off one element -- so this
+ * wrapper is what three of the rail's four actions need, and it is the same
+ * shape `TitleBarActions.tsx` documents. The ref and the trigger attributes go
+ * on the button itself: a `<span>` around a tooltip's target would be an
+ * anonymous flex item between the row's controls and the row.
+ */
+function TipButton({ tipText, ...rest }: ButtonProps & { tipText: string }) {
+  const tip = useTooltip<HTMLButtonElement>();
+  return (
+    <>
+      <Button {...rest} ref={tip.anchorRef} {...tip.triggerProps} />
+      <Tooltip tip={tip} text={tipText} />
+    </>
+  );
+}
+
+/** Jump to the workbench scoped to this project. Only a root has one. */
+function WorkbenchAction({ cwd, onOpen }: { cwd: string; onOpen: (cwd: string) => void }) {
+  const tip = useTooltip<HTMLButtonElement>();
+  const label = "Open this project's workbench";
+  return (
+    <>
+      <IconButton
+        {...tip.triggerProps}
+        ref={tip.anchorRef}
+        size="sm"
+        label={label}
+        icon={FolderOpen}
+        onClick={() => {
+          tip.close();
+          // The row's own click handler is not in this subtree, so opening the
+          // workbench does not also select the session underneath.
+          onOpen(cwd);
+        }}
+      />
+      <Tooltip tip={tip} text={label} />
+    </>
+  );
 }
 
 export function SessionSidebar({
@@ -62,8 +143,8 @@ export function SessionSidebar({
   onSelect,
   onNew,
   onDelete,
-  onOpenWorkbench,
   runningIds,
+  onOpenWorkbench,
 }: {
   sessions: SessionSummaryDto[];
   currentId: string | null;
@@ -77,293 +158,176 @@ export function SessionSidebar({
   /** Open the Workbench view scoped to this session's project path. */
   onOpenWorkbench: (cwd: string) => void;
 }) {
-  // Pointer feedback. `transition: background` on a row was animating a change
-  // nothing ever made, which left a list of clickable rows that gave no sign of
-  // being clickable.
-  const [hovered, setHovered] = useState<string | null>(null);
-
-  // ---- build the session tree -------------------------------------------
-  // Branch sessions (parent_session set) nest under their parent; everything
-  // else is a root. Roots WITH children are project mainlines and get a
-  // workbench jump button. Orphaned branches (parent deleted) are hoisted to
-  // roots so they never vanish from the list.
-  const ids = new Set(sessions.map((s) => s.id));
-  const byParent = new Map<string, SessionSummaryDto[]>();
-  const roots: SessionSummaryDto[] = [];
-  for (const s of sessions) {
-    if (s.parent_session && ids.has(s.parent_session)) {
-      const arr = byParent.get(s.parent_session) ?? [];
-      arr.push(s);
-      byParent.set(s.parent_session, arr);
-    } else {
-      roots.push(s);
-    }
-  }
-  roots.sort((a, b) => b.updated_at - a.updated_at);
-  for (const [, arr] of byParent) arr.sort((a, b) => a.updated_at - b.updated_at);
-
-  const renderRow = (s: SessionSummaryDto, depth: number) => {
-    const kids = byParent.get(s.id) ?? [];
-    return (
-      <div key={s.id}>
-        {renderItem(s, depth, kids)}
-        {kids.map((k) => renderRow(k, depth + 1))}
-      </div>
-    );
-  };
-
-  const renderItem = (s: SessionSummaryDto, depth: number, kids: SessionSummaryDto[]) => {
-    // Category tag: every session carries exactly one of NORMAL / MAINLINE /
-    // BRANCH so the workbench model is visible at a glance. MAINLINE badge:
-    // a main-kind session with nested branches. The folder button: any
-    // session with children is a project root worth jumping from.
-    const isProjectRoot = s.kind === 'mainline' && kids.length > 0;
-    const selected = s.id === currentId;
-    return (
-    <List.Item
-      key={s.id}
-      onClick={() => onSelect(s.id)}
-      onMouseEnter={() => setHovered(s.id)}
-      onMouseLeave={() => setHovered((h) => (h === s.id ? null : h))}
-      style={{
-        cursor: 'pointer',
-        borderRadius: radius.tile,
-        padding: '8px 10px',
-        paddingLeft: 10 + depth * 16,
-        background: selected ? color.selection : hovered === s.id ? color.hover : undefined,
-        // Present in both states so selecting a row never shifts its text by a
-        // pixel -- and transparent in both, because the fill is the signal. A
-        // grey ring around a saturated ground is what made the old selection
-        // look like a bordered box that happened to be green.
-        border: '1px solid transparent',
-        boxShadow: selected ? color.shadowSm : undefined,
-        transition: 'background 0.15s ease',
-        minWidth: 0,
-      }}
-      actions={[
-        ...(isProjectRoot
-          ? [
-              <Tooltip key="wb" title="Open this project's workbench">
-                <Button
-                  size="small"
-                  type="text"
-                  icon={<FolderOpenOutlined />}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onOpenWorkbench(s.cwd);
-                  }}
-                  // `onSelection`, not `ink`: body ink on the dark scheme's
-                  // acid selection is 1.01:1, which is not a dimmed icon, it is
-                  // a missing one.
-                  style={{ color: selected ? color.onSelection : color.infoInk }}
-                />
-              </Tooltip>,
-            ]
-          : []),
-        <Popconfirm
-          key="del"
-          title="Delete this session?"
-          onConfirm={(e) => {
-            e?.stopPropagation();
-            onDelete(s.id);
-          }}
-        >
-          <Button
-            size="small"
-            type="text"
-            icon={<DeleteOutlined />}
-            onClick={(e) => e.stopPropagation()}
-            style={{ color: selected ? color.onSelection : undefined }}
-          />
-        </Popconfirm>,
-      ]}
-    >
-      {/*
-        Our own flex column rather than `List.Item.Meta`.
-
-        antd's meta wrapper is a flex item with `flex: 1` and no `min-width: 0`,
-        so its width came from the longest thing inside it: a first message with
-        a long word in it pushed the row past the rail and the text clipped
-        mid-glyph, with nothing on screen to say there was more. `minWidth: 0`
-        down this chain is what lets the title's own ellipsis do its job.
-      */}
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 2,
-          flex: '1 1 auto',
-          minWidth: 0,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
-          {/* Category tag — exactly one per session. */}
-          {s.kind === 'mainline' && (
-            <Tag
-              style={tagStyle(
-                chipStyle(selected, { background: color.successBg, color: color.successInk }),
-                10,
-              )}
-            >
-              MAINLINE
-            </Tag>
-          )}
-          {(s.kind === 'branch' || depth > 0) && (
-            <Tag
-              style={tagStyle(
-                chipStyle(selected, {
-                  background: color.surfaceRaised,
-                  color: color.infoInk,
-                }),
-                10,
-              )}
-            >
-              ↳ BRANCH
-            </Tag>
-          )}
-          {s.kind === 'normal' && (
-            <Tag
-              style={tagStyle(
-                chipStyle(selected, {
-                  // Opaque even when unselected: `transparent` was the one chip
-                  // ground that let a selected row's fill show through the badge
-                  // and put green text on green.
-                  background: color.surface,
-                  color: color.successInk,
-                  border: color.successBorder,
-                }),
-                10,
-              )}
-            >
-              NORMAL
-            </Tag>
-          )}
-          <Text
-            style={{
-              fontSize: 13,
-              fontWeight: selected ? 700 : 500,
-              color: selected ? color.onSelection : color.ink,
-              flex: '1 1 auto',
-              minWidth: 0,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-            ellipsis={{ tooltip: s.preview }}
-          >
-            {/* ellipsis carries the FULL preview in its tooltip — the old
-                code truncated first, so the tooltip showed the same 30
-                chars as the row. */}
-            {s.preview}
-          </Text>
-        </div>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 4,
-            flexWrap: 'wrap',
-            minWidth: 0,
-          }}
-        >
-          {runningIds?.has(s.id) && (
-            <Tag
-              // No `color=` prop: antd takes a preset colour name and derives
-              // its own background, and what it derives is a white-based tint
-              // (rgb(241,254,231)) even in dark mode. The fill has to be stated.
-              style={{
-                ...tagStyle(
-                  chipStyle(selected, {
-                    background: color.brandAcid,
-                    color: color.onAcid,
-                    border: color.brandAcid,
-                  }),
-                  10,
-                ),
-                fontWeight: 700,
-              }}
-            >
-              ⚡ running
-            </Tag>
-          )}
-          <Tag
-            style={tagStyle(
-              chipStyle(selected, { background: color.surfaceRaised, color: color.muted }),
-              11,
-            )}
-          >
-            {s.model}
-          </Tag>
-          <Text style={{ fontSize: 11, color: selected ? color.onSelection : color.muted }}>
-            {new Date(s.updated_at * 1000).toLocaleString()}
-          </Text>
-        </div>
-      </div>
-    </List.Item>
-    );
-  };
+  const rows = useMemo(() => buildRows(sessions), [sessions]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: 4, gap: 6 }}>
-      {/*
-        Two separate buttons, not `Space.Compact`.
-
-        Compact welds adjacent buttons into one block with shared edges, and
-        both of these were acid-filled -- so the sidebar opened with two green
-        rectangles fused together, which reads as one malformed control rather
-        than as two actions. They are also not the same weight: "New" is the
-        primary action and the plan-mode variant is its sibling, so only one of
-        them is filled. Neither carries a border any more: an acid fill inside a
-        grey ring looks like a mistake, which is how it read.
-      */}
-      <div style={{ display: 'flex', gap: space.controlGap }}>
-        <Tooltip title="New agent session (uses cwd below)">
-          <Button
-            icon={<ThunderboltOutlined />}
-            onClick={() => onNew('agent')}
-            type="primary"
-            style={{ flex: 1, fontWeight: 700 }}
-          >
-            New
-          </Button>
-        </Tooltip>
-        <Tooltip title="New plan-mode session (read-only tools)">
-          <Button icon={<SafetyCertificateOutlined />} onClick={() => onNew('plan')} />
-        </Tooltip>
+    <div data-ui="session-rail" className={styles.root}>
+      <div className={styles.head}>
+        <TipButton
+          tipText="New agent session, in the working directory below"
+          tier="primary"
+          edge="left"
+          icon={Zap}
+          onClick={() => onNew('agent')}
+        >
+          New
+        </TipButton>
+        <TipButton
+          tipText="New plan-mode session (read-only tools)"
+          aria-label="New plan-mode session"
+          tier="secondary"
+          icon={ShieldCheck}
+          onClick={() => onNew('plan')}
+        />
       </div>
-      <Input
-        placeholder="working dir (default C:\)"
-        size="small"
+
+      <TextInput
+        mono
+        aria-label="Working directory for new sessions"
+        placeholder="C:\"
+        spellCheck={false}
         value={workCwd}
         onChange={(e) => onWorkCwd(e.target.value)}
-        style={{
-          background: color.bg,
-          border: `1px solid ${color.outline}`,
-          borderRadius: radius.control,
-          color: color.ink,
-          fontFamily: font.mono,
-        }}
       />
-      <List
-        size="small"
-        dataSource={roots}
-        style={{ overflow: 'auto', flex: 1 }}
-        renderItem={(root) => renderRow(root, 0)}
-      />
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          marginTop: 'auto',
-          paddingTop: 6,
-          borderTop: `1px solid ${color.line}`,
-          color: color.muted,
-        }}
-      >
-        <Text style={{ fontSize: 10, letterSpacing: 1.2 }}>FIRMENT GUI</Text>
-        <Text style={{ fontSize: 10, fontFamily: font.mono }}>v{pkg.version}</Text>
+
+      {rows.length === 0 ? (
+        <div className={styles.empty}>
+          <EmptyState
+            icon={Bot}
+            title="No sessions yet"
+            hint="New above starts one in the working directory below."
+          />
+        </div>
+      ) : (
+        <ul className={styles.list}>
+          {rows.map((row) => (
+            <SessionRow
+              key={row.session.id}
+              row={row}
+              selected={row.session.id === currentId}
+              running={runningIds?.has(row.session.id) ?? false}
+              onSelect={() => onSelect(row.session.id)}
+              onOpenWorkbench={onOpenWorkbench}
+              onDelete={() => onDelete(row.session.id)}
+            />
+          ))}
+        </ul>
+      )}
+
+      <div className={styles.foot}>
+        <span>
+          {sessions.length} {sessions.length === 1 ? 'session' : 'sessions'}
+        </span>
+        <span className={styles.version}>v{pkg.version}</span>
       </div>
     </div>
+  );
+}
+
+function SessionRow({
+  row,
+  selected,
+  running,
+  onSelect,
+  onOpenWorkbench,
+  onDelete,
+}: {
+  row: RailRow;
+  selected: boolean;
+  running: boolean;
+  onSelect: () => void;
+  onOpenWorkbench: (cwd: string) => void;
+  onDelete: () => void;
+}) {
+  const { session, depth, isProjectRoot } = row;
+  const kind = kindOf(session, depth);
+  const updated = new Date(session.updated_at * 1000);
+
+  return (
+    <li
+      className={styles.item}
+      data-selected={selected || undefined}
+      style={{ '--depth': String(depth) } as CSSProperties}
+    >
+      <button
+        type="button"
+        data-ui="session-row"
+        className={styles.select}
+        aria-current={selected ? 'true' : undefined}
+        onClick={onSelect}
+      >
+        <span className={styles.top}>
+          <Chip status={kind.status} size="sm">
+            {kind.text}
+          </Chip>
+          {/* The tooltip carries the whole first message, not the 30 characters
+              the row has room for. */}
+          <span className={styles.title} title={session.preview}>
+            {session.preview}
+          </span>
+        </span>
+        <span className={styles.meta}>
+          {running ? (
+            <Chip status="running" size="sm" icon={Zap}>
+              running
+            </Chip>
+          ) : null}
+          <span className={styles.model} title={session.model}>
+            {session.model}
+          </span>
+          <span className={styles.stamp} title={updated.toLocaleString()}>
+            {formatStamp(session.updated_at)}
+          </span>
+        </span>
+      </button>
+
+      <span className={styles.controls}>
+        {isProjectRoot ? <WorkbenchAction cwd={session.cwd} onOpen={onOpenWorkbench} /> : null}
+        <DeleteAction preview={session.preview} onDelete={onDelete} />
+      </span>
+    </li>
+  );
+}
+
+/**
+ * Delete, with the question next to the row it is about.
+ *
+ * One `anchorRef` serves two panels here: the tooltip's and the confirmation's.
+ * `useOutsideDismiss` ignores a press inside either of them, which is what lets
+ * the trigger open the panel in a single gesture instead of opening it and
+ * dismissing it again on the way out.
+ */
+function DeleteAction({ preview, onDelete }: { preview: string; onDelete: () => void }) {
+  const tip = useTooltip<HTMLButtonElement>();
+  const [open, setOpen] = useState(false);
+  const label = 'Delete this session';
+  return (
+    <>
+      <IconButton
+        {...tip.triggerProps}
+        ref={tip.anchorRef}
+        size="sm"
+        label={label}
+        icon={Trash2}
+        onClick={() => {
+          tip.close();
+          setOpen(true);
+        }}
+      />
+      <Tooltip tip={tip} text={label} />
+      <PopConfirm
+        open={open}
+        anchorRef={tip.anchorRef}
+        onClose={() => setOpen(false)}
+        onConfirm={() => {
+          setOpen(false);
+          onDelete();
+        }}
+        tone="danger"
+        title="Delete this session?"
+        message={preview}
+        confirmLabel="Delete"
+      />
+    </>
   );
 }

@@ -43,11 +43,12 @@ const SOURCES = import.meta.glob(
     '../../shell/*.css',
     '../../shell/panes/*.tsx',
     '../../shell/panes/*.css',
-    // Stage 3 moved the transcript onto the layer, so it is gated like the layer.
-    // Named one file at a time rather than `../../components/*.tsx`: the two
-    // missing from the list -- `ActionButton.tsx`, `Dialogs.tsx` -- are the antd
-    // leftovers stage 7 deletes, and a wildcard would fail the suite over code
-    // that is already scheduled to die.
+    // Stage 3 moved the transcript onto the layer and stage 5 moved the session
+    // rail, so both are gated like the layer. Named one file at a time rather
+    // than `../../components/*.tsx`: the two missing from the list --
+    // `ActionButton.tsx`, `Dialogs.tsx` -- are the antd leftovers stage 7
+    // deletes, and a wildcard would fail the suite over code that is already
+    // scheduled to die.
     '../../components/LiveRun.tsx',
     '../../components/LiveRun.module.css',
     '../../components/Markdown.tsx',
@@ -60,6 +61,8 @@ const SOURCES = import.meta.glob(
     '../../components/ToolCard.module.css',
     '../../views/ChatView.tsx',
     '../../views/ChatView.module.css',
+    '../../views/SessionSidebar.tsx',
+    '../../views/SessionSidebar.module.css',
     '../../dev/*.tsx',
     '../../dev/*.css',
   ],
@@ -178,6 +181,8 @@ describe('Primitive layer and shell conventions', () => {
       'scrim',
       'segmented',
       'select',
+      'session-rail',
+      'session-row',
       'skeleton',
       'slider',
       'splitter',

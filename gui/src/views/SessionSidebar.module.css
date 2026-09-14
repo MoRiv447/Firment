@@ -1,0 +1,180 @@
+/*
+ * The session rail.
+ *
+ * Two decisions shape everything else in this file.
+ *
+ * * **The row's fill is the selection.** `Tabs.module.css` keeps the active tab a
+ *   rule rather than a block because "a filled tab would compete with the
+ *   selected row in the sidebar" -- so this is the one place in the shell allowed
+ *   to paint `--selection` as a background, and everything written on it has to
+ *   switch to `--on-selection` with it (body ink is 1.01:1 on the dark scheme's
+ *   acid, which is not a dimmed label, it is a missing one). The chips need no
+ *   such rule, because every fill `Chip` can wear is opaque: that is the whole
+ *   reason the rail used to build chip colours in JS and no longer does.
+ * * **Depth is padding, not a guide line.** The rail is 248px and a session
+ *   title is a sentence, so a level costs one spacing token and the `↳` on the
+ *   branch chip is what actually says "this one is underneath".
+ */
+
+.root {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--sp-2);
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--sp-2);
+}
+
+.head {
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--sp-2);
+}
+
+/* "New" is the action and the plan-mode variant is its sibling, so only the
+   first of them takes the room. */
+.head > :first-child {
+  flex: 1 1 auto;
+}
+
+.list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--sp-05);
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+/* `EmptyState` is `height: 100%` for a pane that fills its parent; in this
+   column it is a flex item, so the room comes from here instead. */
+.empty {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.item {
+  display: flex;
+  align-items: stretch;
+  gap: var(--sp-1);
+  padding-inline-start: calc(var(--depth, 0) * var(--sp-4));
+}
+
+/*
+ * The row proper, and the reason it is a `<button>` with its controls beside it
+ * rather than a `<div>` with them inside: a nested interactive element is
+ * invalid, and the old row was a clickable box holding two buttons, which is
+ * why every one of them needed an `e.stopPropagation()`.
+ */
+.select {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-05);
+  box-sizing: border-box;
+  min-width: 0;
+  padding: var(--sp-2);
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  transition: background var(--t-out) var(--ease);
+}
+
+.select:hover {
+  background: var(--hover);
+}
+
+/* Outranks the hover rule above, so a selected row stays acid under the
+   pointer instead of flashing grey at the moment you are looking at it. */
+.item[data-selected='true'] .select {
+  background: var(--selection);
+  color: var(--on-selection);
+  box-shadow: var(--shadow-sm);
+}
+
+.top {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--fs-body);
+  line-height: var(--lh-tight);
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  font-size: var(--fs-meta);
+  color: var(--muted);
+}
+
+/* The chips on this line keep their own grounds; only the bare text has to move
+   with the row. */
+.item[data-selected='true'] .meta {
+  color: var(--on-selection);
+}
+
+.model {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--ff-mono);
+}
+
+.stamp {
+  /* The oldest thing in the row and the thing you compare across rows, so it
+     holds the right edge and every minute it prints is the same width. */
+  flex: 0 0 auto;
+  margin-inline-start: auto;
+  font-family: var(--ff-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--sp-05);
+}
+
+.foot {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--sp-2);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: var(--fs-micro);
+}
+
+/* The version is the only fact here that nobody scans for, so it sits at the
+   edge in the one monospace on the line. */
+.version {
+  margin-inline-start: auto;
+  font-family: var(--ff-mono);
+}
