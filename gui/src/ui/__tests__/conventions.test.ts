@@ -151,6 +151,8 @@ describe('Primitive layer and shell conventions', () => {
       'agents-pane',
       'button',
       'callout',
+      'change-row',
+      'changes-pane',
       'chat',
       'checkbox',
       'chip',

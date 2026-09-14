@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useRef, useState } from 'react';
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { ConfigProvider, Drawer, theme } from 'antd';
 import { Bot, Diff, ListChecks, Usb } from 'lucide-react';
 import {
@@ -30,6 +30,7 @@ import { AskDialog, PermissionDialog } from './components/Dialogs';
 import { ChatView } from './views/ChatView';
 import { SessionSidebar } from './views/SessionSidebar';
 import { SettingsView } from './views/SettingsView';
+import { sessionChanges } from './lib/changes';
 import { initialTurnState, turnsReducer } from './lib/turnReducer';
 import type { TurnMap } from './lib/turnReducer';
 import { WorkbenchView } from './views/WorkbenchView';
@@ -40,7 +41,7 @@ import { TitleBarActions } from './shell/TitleBarActions';
 import { AgentsPane } from './shell/panes/AgentsPane';
 import { TodosPane, todoSummary } from './shell/panes/TodosPane';
 import { HardwarePane } from './shell/panes/HardwarePane';
-import { PendingPane } from './shell/panes/PendingPane';
+import { ChangesPane } from './shell/panes/ChangesPane';
 import { antdTheme, setActivePalette } from './styles/tokens';
 import styles from './App.module.css';
 import {
@@ -120,6 +121,19 @@ export default function App() {
     (session ? turnsById[session.id] : undefined) ?? initialTurnState();
   const { running, turn, subagents } = currentTurnState;
   const anyRunning = Object.values(turnsById).some((t) => t.running);
+  // What the agent has written, for the Changes pane. Three sources, because the
+  // transcript alone misses the turn still streaming and the streaming turn alone
+  // misses everything from before this app session opened the chat. Subagent steps
+  // are the third: a nested run shares the parent's events but not its stored
+  // messages, so its edits reach here no other way.
+  const changes = useMemo(
+    () =>
+      sessionChanges(
+        session?.messages ?? [],
+        [...(turn ? Object.values(turn.tools) : []), ...subagents.flatMap((a) => a.steps)],
+      ),
+    [session, turn, subagents],
+  );
   // The chat the user is looking at. When it changes, a finished turn kept by
   // that chat's slot is superseded by the transcript now on screen: turn_end
   // only refreshes and syncs the chat that was OPEN, so a chat that finished
@@ -788,12 +802,8 @@ export default function App() {
                   key: 'changes',
                   label: 'Changes',
                   icon: Diff,
-                  content: (
-                    <PendingPane
-                      title="Change cards"
-                      body="Nothing yet. Once a turn edits files, each one is listed here with its path, how many lines went in and came out, and the diff itself; a turn that touches several files folds into one summary first."
-                    />
-                  ),
+                  badge: changes.length || undefined,
+                  content: <ChangesPane changes={changes} />,
                 },
                 {
                   key: 'agents',

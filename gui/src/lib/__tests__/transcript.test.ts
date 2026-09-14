@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { groupTranscript, pairRun } from '../MessageList';
+import { groupTranscript, pairRun } from '../transcript';
 import type { ChatMessage } from '../../types';
 
 /**

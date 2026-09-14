@@ -2,6 +2,7 @@ import { useId } from 'react';
 import { ChevronDown, ChevronRight, CircleCheck, CircleX, TriangleAlert } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
+import { editedPath } from '../lib/changes';
 import { parseDiff } from '../lib/diff';
 import { quickActionsFor } from '../lib/quickActions';
 import { describeArgs } from '../lib/toolArgs';
@@ -68,31 +69,16 @@ function chipStatus(status: ToolCardState['status'], danger: boolean): ChipStatu
 }
 
 /**
- * The file a tool touched, read from its arguments.
- *
- * `args` is `unknown` (it arrives as JSON from the backend), so every step is
- * checked rather than assumed. This exists because the card lost the path: the
- * diff body drops its file headers, so once a diff is attached the path appears
- * nowhere else on the card.
- */
-function editedPath(args: unknown): string | undefined {
-  if (!args || typeof args !== 'object') return undefined;
-  const record = args as Record<string, unknown>;
-  for (const key of ['path', 'file_path', 'file']) {
-    const value = record[key];
-    if (typeof value === 'string' && value) return value;
-  }
-  return undefined;
-}
-
-/**
  * The change, line by line, in the states `parseDiff` produced.
  *
  * Colour per line kind rather than per character run: the diff family is a pair
  * of fills and a pair of inks measured against each other, and hunk headers are
  * `--diff-meta-ink` because they are structure, not content.
+ *
+ * Exported because the Changes pane renders the same diffs, and a second diff
+ * renderer is a second opinion on what `+12 −3` means.
  */
-function DiffBody({ detail }: { detail: string }) {
+export function DiffBody({ detail }: { detail: string }) {
   const diff = parseDiff(detail);
   if (!diff) {
     // Not a diff: a build's output, a file's contents. It still gets the mono

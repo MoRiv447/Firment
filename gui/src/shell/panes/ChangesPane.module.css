@@ -1,0 +1,134 @@
+/*
+ * The Changes pane: a column of paths with their magnitude on the right.
+ *
+ * Two things decide the layout. The column is 240–560px wide, so a Windows path
+ * never fits and the tail is the only part worth reading (`shortenPath` cuts the
+ * front, the `title` keeps the whole thing). And every row is a number the reader
+ * may want to check against the body under it, so the numbers are mono and
+ * tabular, and they land on the same edge in every row because the path takes the
+ * free space rather than because anything measures the column.
+ */
+.root {
+  color: var(--ink);
+  font-family: var(--ff-sans);
+  font-size: var(--fs-body);
+}
+
+/*
+ * The summary line. It is the header of the list, not a control, so nothing here
+ * brightens on hover and nothing here is clickable.
+ */
+.head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--fs-minor);
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  border-bottom: 1px solid var(--line);
+}
+
+.item:last-child {
+  border-bottom: 0;
+}
+
+/*
+ * The row's head is a `<button>` when there is a diff to open and a `<div>` when
+ * there is not. Both get this rule, so the reset below is what makes the two
+ * elements land at the same height and the same type.
+ */
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  box-sizing: border-box;
+  width: 100%;
+  min-height: var(--h-min);
+  padding: var(--sp-2) 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-minor);
+  text-align: left;
+}
+
+/* Only a row that folds invites the click, and only then does it look like one. */
+.row[data-fold='true'] {
+  cursor: pointer;
+}
+
+.row[data-fold='true']:hover {
+  background: var(--hover);
+}
+
+/*
+ * The path is the row's subject, so it takes the space and truncates; the
+ * counters behind it never get pushed out.
+ */
+.path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-family: var(--ff-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.counts {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: var(--sp-1);
+  font-family: var(--ff-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--fw-label);
+  white-space: nowrap;
+}
+
+/* The diff family, as on the card: an added line and a passed check are not the
+   same message, and acid is identity rather than feedback. */
+.counts [data-kind='added'] {
+  color: var(--diff-added-ink);
+}
+
+.counts [data-kind='removed'] {
+  color: var(--diff-removed-ink);
+}
+
+/* A row with no diff to count. `--muted` because it says what is missing rather
+   than what happened. */
+.created {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-label);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.meta {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+.tally {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.body {
+  padding-bottom: var(--sp-2);
+}
