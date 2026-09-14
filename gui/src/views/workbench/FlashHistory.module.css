@@ -1,0 +1,71 @@
+/*
+ * One row per burn.
+ *
+ * The row wraps by design: the four readings -- badge, chip, image, time -- fit a
+ * workbench card at a normal width, and an error message does not. Giving
+ * `.error` a full line is what keeps the record readable without turning the card
+ * into a table nobody can scan.
+ */
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  padding-block: var(--sp-1);
+  border-bottom: 1px solid var(--line);
+}
+
+.row:last-child {
+  border-bottom: 0;
+  padding-block-end: 0;
+}
+
+.row:first-child {
+  padding-block-start: 0;
+}
+
+.chip,
+.file,
+.stamp {
+  font-family: var(--ff-mono);
+  font-size: var(--fs-meta);
+}
+
+.chip {
+  /* The board is what the burn was for, so it wins the space when the row runs
+     out: the image name truncates first. */
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.file {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.stamp {
+  flex: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.error {
+  flex: 1 1 100%;
+  color: var(--step-failed-ink);
+  font-size: var(--fs-minor);
+  overflow-wrap: anywhere;
+}
+
+.none {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-minor);
+  line-height: var(--lh-tight);
+}

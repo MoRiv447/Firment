@@ -15,6 +15,7 @@
 
 export { Button, IconButton } from './Button';
 export type { ButtonProps } from './Button';
+export { Card } from './Card';
 export { Callout } from './Callout';
 export { Checkbox } from './Checkbox';
 export { Chip } from './Chip';

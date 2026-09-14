@@ -1,8 +1,7 @@
-import { Card, List, Space, Statistic, Tag, Typography } from 'antd';
-import { radius, statusChip } from '../../styles/tokens';
-import type { ElfCardDto, QualityItemDto, TimelineEntryDto } from '../../types';
-
-const { Text } = Typography;
+import { formatBytes, formatStamp } from '../../lib/format';
+import type { ElfCardDto, GateThresholdsDto, QualityItemDto, TimelineEntryDto } from '../../types';
+import { Card, Chip, Stat } from '../../ui';
+import styles from './insights.module.css';
 
 /**
  * The three read-only report cards under "Insights".
@@ -15,27 +14,34 @@ const { Text } = Typography;
  * being non-empty, an ELF card on `elf` being present). That is the design
  * system's "unconfigured -> hidden entirely" rule: an empty card that says "no
  * data" is worse than no card, because it looks like a failure.
+ *
+ * The sizes here go through `formatBytes` rather than `(n / 1024).toFixed(1)`
+ * with a separate `KiB` span next to it. The arithmetic was right up to the
+ * first 1 MiB binary, where it printed "1024.0 KiB"; the formatter ends the same
+ * ladder at GiB and says which unit it landed on.
  */
+
+/** The gate is a promise about the next change, so it says by how much it allows. */
+function gateNote(gate: GateThresholdsDto): string {
+  const limits = [
+    `stack +${gate.stack_threshold}B`,
+    `flash +${gate.flash_threshold_kib}KiB`,
+    `ram +${gate.ram_threshold_kib}KiB`,
+  ].join(' · ');
+  return gate.strict ? `gate thresholds: ${limits} · strict` : `gate thresholds: ${limits}`;
+}
 
 /** The firmware's flash/RAM budget, and the gate the change is measured against. */
 export function ElfBudget({ elf }: { elf: ElfCardDto }) {
   return (
-    <Card type="inner" size="small" title="ELF budget" style={{ marginBottom: 12 }}>
-      <Space wrap size={24}>
-        <Statistic title="flash" value={(elf.flash_bytes / 1024).toFixed(1)} suffix="KiB" />
-        <Statistic title="RAM (data+bss)" value={(elf.ram_bytes / 1024).toFixed(1)} suffix="KiB" />
-        <Statistic title="functions" value={elf.functions} />
-      </Space>
-      {elf.gate && (
-        <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 6 }}>
-          gate thresholds: stack +{elf.gate.stack_threshold}B · flash +
-          {elf.gate.flash_threshold_kib}KiB · ram +{elf.gate.ram_threshold_kib}KiB
-          {elf.gate.strict ? ' · strict' : ''}
-        </Text>
-      )}
-      <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
-        {elf.file}
-      </Text>
+    <Card title="ELF budget">
+      <div className={styles.facts}>
+        <Stat value={formatBytes(elf.flash_bytes)} label="flash" />
+        <Stat value={formatBytes(elf.ram_bytes)} label="RAM (data+bss)" />
+        <Stat value={elf.functions} label="functions" />
+      </div>
+      {elf.gate && <p className={styles.note}>{gateNote(elf.gate)}</p>}
+      <p className={styles.note}>{elf.file}</p>
     </Card>
   );
 }
@@ -49,19 +55,17 @@ export function ElfBudget({ elf }: { elf: ElfCardDto }) {
  */
 export function VerificationBadges({ quality }: { quality: QualityItemDto[] }) {
   return (
-    <Card
-      type="inner"
-      size="small"
-      title="Verification badges (mainline)"
-      style={{ marginBottom: 12 }}
-    >
-      <Space wrap size={8}>
+    <Card title="Verification badges (mainline)">
+      <div className={styles.badges}>
         {quality.map((q) => (
-          <Tag key={q.tool} style={{ ...statusChip(q.ok ? 'ok' : 'failed'), borderRadius: radius.chip, fontSize: 12 }}>
+          // The snippet is what the tool printed. It does not fit on a badge and
+          // it is the first thing someone wants when one says FAIL, so it is the
+          // badge's own description rather than a second line under it.
+          <Chip key={q.tool} status={q.ok ? 'ok' : 'failed'} mono title={q.snippet}>
             {q.tool}: {q.ok ? 'PASS' : 'FAIL'}
-          </Tag>
+          </Chip>
         ))}
-      </Space>
+      </div>
     </Card>
   );
 }
@@ -74,28 +78,24 @@ export function VerificationBadges({ quality }: { quality: QualityItemDto[] }) {
  */
 export function ChangeTimeline({ timeline }: { timeline: TimelineEntryDto[] }) {
   return (
-    <Card type="inner" size="small" title="Change timeline (mainline)">
-      <List
-        size="small"
-        dataSource={timeline}
-        renderItem={(entry) => (
-          <List.Item style={{ padding: '4px 0' }}>
-            <div style={{ width: '100%' }}>
-              <Text type="secondary" style={{ fontSize: 11 }}>
-                #{entry.seq} · {new Date(entry.created_at * 1000).toLocaleString()}
-              </Text>
-              {entry.files.map((f) => (
-                <div key={f.path} style={{ fontSize: 12 }}>
-                  <Text code>{f.path}</Text>{' '}
-                  <Text type="secondary">
-                    {f.old_lines} → {f.new_lines}
-                  </Text>
-                </div>
-              ))}
-            </div>
-          </List.Item>
-        )}
-      />
+    <Card title="Change timeline (mainline)">
+      {timeline.map((entry) => (
+        <div key={entry.seq} className={styles.entry}>
+          <p className={styles.stamp} title={new Date(entry.created_at * 1000).toLocaleString()}>
+            #{entry.seq} · {formatStamp(entry.created_at)}
+          </p>
+          {entry.files.map((f) => (
+            <p key={f.path} className={styles.file}>
+              <code className={styles.path} title={f.path}>
+                {f.path}
+              </code>
+              <span className={styles.delta}>
+                {f.old_lines} → {f.new_lines}
+              </span>
+            </p>
+          ))}
+        </div>
+      ))}
     </Card>
   );
 }

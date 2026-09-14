@@ -1,8 +1,9 @@
-import { Card, Tag, Typography } from 'antd';
-import type { FlashHistoryDto } from '../../types';
-import { color, font, radius, statusChip } from '../../styles/tokens';
+import { Check, X } from 'lucide-react';
 
-const { Text } = Typography;
+import { formatStamp } from '../../lib/format';
+import type { FlashHistoryDto } from '../../types';
+import { Card, Chip } from '../../ui';
+import styles from './FlashHistory.module.css';
 
 /**
  * The burn log: every `flash` the agent ran, success or failure.
@@ -16,65 +17,40 @@ const { Text } = Typography;
  * durable record: a flash that failed is still a row, which is the point. The
  * history is how you tell "it never flashed" from "it flashed and the board did
  * nothing".
+ *
+ * A failed row now also says why. `error` was already in the record and the card
+ * dropped it, so the row that exists to answer "did it reach the board?" answered
+ * "no" and stopped there.
  */
 export function FlashHistory({ history }: { history: FlashHistoryDto[] }) {
   return (
-    <Card
-      type="inner"
-      title="Flash history"
-      size="small"
-      extra={
-        <Text type="secondary" style={{ fontSize: 11 }}>
-          .firment/work/flash-history.jsonl
-        </Text>
-      }
-    >
+    <Card title="Flash history" extra=".firment/work/flash-history.jsonl">
       {history.length === 0 ? (
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          No flashes recorded yet. Every run of the agent's flash tool lands here, successful or not.
-        </Text>
+        <p className={styles.none}>
+          No flashes recorded yet. Every run of the agent's flash tool lands here, successful or
+          not.
+        </p>
       ) : (
         history.map((f, i) => (
-          <div
-            key={`${f.ts}-${i}`}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '3px 6px',
-              borderBottom: `1px solid ${color.line}`,
-            }}
-          >
-            <Tag
-              // A badge, so `radius.chip` -- not the tile tier. The fill comes
-              // from the status pair, which is what makes the tick readable in
-              // both schemes (docs/design/tokens.md, "Radius").
-              style={{
-                ...statusChip(f.ok ? 'ok' : 'failed'),
-                borderRadius: radius.chip,
-                fontSize: 10,
-                fontWeight: 700,
-              }}
+          <div key={`${f.ts}-${i}`} className={styles.row}>
+            <Chip
+              size="sm"
+              status={f.ok ? 'ok' : 'failed'}
+              icon={f.ok ? Check : X}
+              title={f.ok ? undefined : (f.error ?? undefined)}
             >
-              {f.ok ? '✓' : '✗'}
-            </Tag>
-            <Text style={{ fontSize: 11, fontFamily: font.mono }}>{f.chip}</Text>
-            <Text
-              type="secondary"
-              style={{
-                fontSize: 11,
-                flex: 1,
-                overflow: 'hidden',
-                whiteSpace: 'nowrap',
-                textOverflow: 'ellipsis',
-                fontFamily: font.mono,
-              }}
-            >
+              {f.ok ? 'OK' : 'FAIL'}
+            </Chip>
+            <span className={styles.chip} title={f.chip}>
+              {f.chip}
+            </span>
+            <span className={styles.file} title={f.file}>
               {f.file}
-            </Text>
-            <Text type="secondary" style={{ fontSize: 10 }}>
-              {new Date(f.ts * 1000).toLocaleString()}
-            </Text>
+            </span>
+            <span className={styles.stamp} title={new Date(f.ts * 1000).toLocaleString()}>
+              {formatStamp(f.ts)}
+            </span>
+            {!f.ok && f.error ? <span className={styles.error}>{f.error}</span> : null}
           </div>
         ))
       )}

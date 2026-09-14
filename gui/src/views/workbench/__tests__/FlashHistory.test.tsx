@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { FlashHistory } from '../FlashHistory';
-import { radius } from '../../../styles/tokens';
 import type { FlashHistoryDto } from '../../../types';
 
 /**
@@ -26,6 +25,9 @@ function burn(over: Partial<FlashHistoryDto> = {}): FlashHistoryDto {
   };
 }
 
+/** The chip a row's word sits in: the fill is chosen by CSS from its status. */
+const chipOf = (word: string) => screen.getByText(word).closest('[data-ui="chip"]');
+
 describe('FlashHistory', () => {
   it('says where the record lives and what it means when empty', () => {
     render(<FlashHistory history={[]} />);
@@ -39,7 +41,7 @@ describe('FlashHistory', () => {
     render(<FlashHistory history={[burn()]} />);
     expect(screen.getByText('stm32f407vetx')).toBeInTheDocument();
     expect(screen.getByText('build/fw.elf')).toBeInTheDocument();
-    expect(screen.getByText('✓')).toBeInTheDocument();
+    expect(screen.getByText('OK')).toBeInTheDocument();
   });
 
   it('keeps a failed burn in the list, marked as one', () => {
@@ -51,9 +53,30 @@ describe('FlashHistory', () => {
         history={[burn(), burn({ ts: 1_700_000_100, ok: false, error: 'no probe found' })]}
       />,
     );
-    expect(screen.getByText('✓')).toBeInTheDocument();
-    expect(screen.getByText('✗')).toBeInTheDocument();
+    expect(screen.getByText('OK')).toBeInTheDocument();
+    expect(screen.getByText('FAIL')).toBeInTheDocument();
     expect(screen.getAllByText('stm32f407vetx')).toHaveLength(2);
+  });
+
+  it('writes the reason on the row that failed', () => {
+    // The record always carried `error` and the card dropped it, so a burn could
+    // be marked FAIL and say nothing about why while the answer sat in the DTO.
+    render(<FlashHistory history={[burn({ ok: false, error: 'no probe found' })]} />);
+    expect(screen.getByText('no probe found')).toBeInTheDocument();
+  });
+
+  it('carries the reason on the badge too, for a row read by its chip', () => {
+    render(<FlashHistory history={[burn({ ok: false, error: 'no probe found' })]} />);
+    expect(chipOf('FAIL')).toHaveAttribute('title', 'no probe found');
+  });
+
+  it('marks the outcome with a status, not with a colour in the markup', () => {
+    // The fill and the ink are a CSS pair keyed on `data-status`; asserting the
+    // attribute is what survives the numbers being re-scaled. A hardcoded
+    // `borderRadius` assertion was already wrong once, on the day the tiers moved.
+    render(<FlashHistory history={[burn(), burn({ ts: 1_700_000_100, ok: false, error: 'x' })]} />);
+    expect(chipOf('OK')).toHaveAttribute('data-status', 'ok');
+    expect(chipOf('FAIL')).toHaveAttribute('data-status', 'failed');
   });
 
   it('renders every burn, in the order given', () => {
@@ -70,23 +93,11 @@ describe('FlashHistory', () => {
     expect(files).toEqual(['first.elf', 'second.elf', 'third.elf']);
   });
 
-  it('keeps the status chip a chip, not a hard-edged tile', () => {
-    render(<FlashHistory history={[burn()]} />);
-    // The extraction fixed a drift: this badge was `borderRadius: 0`, which was
-    // the tile radius. A badge is a chip (docs/design/tokens.md).
-    //
-    // Asserted against the token, not against `2px`: the literal made this test
-    // fail the day the tiers were re-scaled, which is noise -- the invariant it
-    // guards is "a badge does not use the tile tier", and that survives a
-    // re-scale.
-    const chip = screen.getByText('✓');
-    expect(chip).toHaveStyle({ borderRadius: `${radius.chip}px` });
-    expect(radius.chip).not.toBe(radius.tile);
-  });
-
-  it('sets the code-ish columns in the mono stack', () => {
-    render(<FlashHistory history={[burn()]} />);
-    const chipName = screen.getByText('stm32f407vetx');
-    expect(chipName.style.fontFamily).toContain('JetBrains Mono');
+  it('leaves the styling to the stylesheet', () => {
+    // Nothing on this card is decided per row, so nothing needs an inline style --
+    // and the moment one appears, the row has a second source of truth for what
+    // the tokens say.
+    const { container } = render(<FlashHistory history={[burn(), burn({ ts: 2, ok: false })]} />);
+    expect(container.querySelectorAll('[style]')).toHaveLength(0);
   });
 });

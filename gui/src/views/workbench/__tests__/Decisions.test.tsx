@@ -80,6 +80,22 @@ describe('Decisions', () => {
     expect(screen.getByRole('button', { name: /record/ })).toBeDisabled();
   });
 
+  it('records from Enter in the rationale field', async () => {
+    const { onAdd, drafts } = setup({ decisions: [] });
+    fireEvent.change(drafts()[0], { target: { value: 'I2C bus at 400k' } });
+    fireEvent.keyDown(drafts()[1], { key: 'Enter' });
+    await waitFor(() => expect(onAdd).toHaveBeenCalledWith('I2C bus at 400k', ''));
+  });
+
+  it('will not queue a second decision from Enter while a write is in flight', () => {
+    // The button is disabled then, but the key path is not, and the backend
+    // appends: a second send is a duplicate row rather than a no-op.
+    const { onAdd, drafts } = setup({ decisions: [], busy: true });
+    fireEvent.change(drafts()[0], { target: { value: 'I2C bus at 400k' } });
+    fireEvent.keyDown(drafts()[1], { key: 'Enter' });
+    expect(onAdd).not.toHaveBeenCalled();
+  });
+
   it('removes by rendered position, not by date', () => {
     const { onRemove } = setup();
     // The caller adds one, because the backend list is 1-based while this list

@@ -44,17 +44,22 @@ const timeline: TimelineEntryDto[] = [
 
 describe('ElfBudget', () => {
   it('reports the budget in KiB, not bytes', () => {
-    const { container } = render(<ElfBudget elf={elfCard()} />);
-    // Asserted on the container rather than by text: antd's Statistic splits a
-    // value into separate spans for the integer and decimal parts, so
-    // `getByText('24.0')` cannot match it however the markup is queried.
-    const text = container.textContent ?? '';
     // 24576 bytes is 24.0 KiB; a raw byte count is unreadable at a glance.
-    expect(text).toContain('24.0');
-    expect(text).toContain('4.0');
-    expect(text).not.toContain('24576');
-    expect(text).toContain('42');
-    expect(screen.getAllByText('KiB')).toHaveLength(2);
+    render(<ElfBudget elf={elfCard()} />);
+    expect(screen.getByText('24.0 KiB')).toBeInTheDocument();
+    expect(screen.getByText('4.0 KiB')).toBeInTheDocument();
+    expect(screen.getByText('42')).toBeInTheDocument();
+    expect(screen.queryByText('24576')).toBeNull();
+  });
+
+  it('carries on past KiB instead of printing 1024.0 KiB', () => {
+    // The hand-rolled `(n / 1024).toFixed(1)` this card used was right up to the
+    // first 1 MiB binary, where it said "1024.0 KiB". A firmware image crosses
+    // that line routinely, so the ladder is the thing being tested, not the
+    // rounding.
+    render(<ElfBudget elf={elfCard({ flash_bytes: 1_572_864 })} />);
+    expect(screen.getByText('1.5 MiB')).toBeInTheDocument();
+    expect(screen.queryByText('1024.0 KiB')).toBeNull();
   });
 
   it('names the gate thresholds the change is measured against', () => {

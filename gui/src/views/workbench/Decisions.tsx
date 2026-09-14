@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { Button, Card, Input, Space, Tag, Tooltip, Typography } from 'antd';
-import type { DecisionEntryDto } from '../../types';
-import { color, radius } from '../../styles/tokens';
+import { Plus, X } from 'lucide-react';
 
-const { Text } = Typography;
+import type { DecisionEntryDto } from '../../types';
+import { Button, Card, Chip, IconButton, TextInput } from '../../ui';
+import styles from './Decisions.module.css';
 
 /**
  * The decision log -- ADR-lite.
@@ -19,6 +19,7 @@ const { Text } = Typography;
  * them inside the success branch), but the knowledge now lives next to the
  * fields instead of in a 1500-line parent.
  */
+
 export function Decisions({
   decisions,
   busy,
@@ -36,7 +37,9 @@ export function Decisions({
   const [body, setBody] = useState('');
 
   const submit = async () => {
-    if (!title.trim()) return;
+    // The button is disabled while a write is in flight; Enter is not, and the
+    // backend appends, so an unguarded key path queues a second decision.
+    if (busy || !title.trim()) return;
     if (await onAdd(title, body)) {
       setTitle('');
       setBody('');
@@ -44,79 +47,56 @@ export function Decisions({
   };
 
   return (
-    <Card
-      type="inner"
-      title="Decisions (ADR-lite)"
-      size="small"
-      extra={
-        <Tooltip title="Branches whose title matches a decision automatically inherit it at creation">
-          <Text type="secondary" style={{ fontSize: 11 }}>
-            inherited by matching branches
-          </Text>
-        </Tooltip>
-      }
-    >
+    <Card title="Decisions (ADR-lite)" extra="matching branches inherit these at creation">
       {decisions.length === 0 && (
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          No decisions recorded. Log chip/peripheral/protocol choices here — the agent's
-          decision tool writes the same list.
-        </Text>
+        <p className={styles.none}>
+          No decisions recorded. Log chip/peripheral/protocol choices here -- the agent's decision
+          tool writes the same list.
+        </p>
       )}
       {decisions.map((d, i) => (
-        <div
-          key={`${d.date}-${i}`}
-          style={{
-            display: 'flex',
-            alignItems: 'flex-start',
-            gap: 8,
-            padding: '4px 6px',
-            borderBottom: `1px solid ${color.line}`,
-          }}
-        >
-          <Tag style={{ borderRadius: radius.chip, fontSize: 10, minWidth: 76, textAlign: 'center' }}>
-            {d.date || '—'}
-          </Tag>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <Text style={{ fontSize: 12, fontWeight: 600 }}>{d.title}</Text>
-            {d.body && (
-              <div>
-                <Text type="secondary" style={{ fontSize: 11 }}>
-                  {d.body}
-                </Text>
-              </div>
-            )}
+        <div key={`${d.date}-${i}`} className={styles.row}>
+          {/* A date is an identifier of when, not a judgement, so the chip is
+              `neutral`; `mono` is what keeps two of them the same width. */}
+          <span className={styles.date}>
+            <Chip size="sm" mono>
+              {d.date || '—'}
+            </Chip>
+          </span>
+          <div className={styles.text}>
+            <p className={styles.headline}>{d.title}</p>
+            {d.body ? <p className={styles.rationale}>{d.body}</p> : null}
           </div>
-          <Button
-            size="small"
-            type="text"
-            danger
+          <IconButton
+            tier="ghost"
+            size="sm"
+            icon={X}
+            label={`Remove decision: ${d.title}`}
             disabled={busy}
-            aria-label={`Remove decision: ${d.title}`}
             onClick={() => onRemove(i)}
-          >
-            ✕
-          </Button>
+          />
         </div>
       ))}
-      <Space.Compact style={{ width: '100%', marginTop: 8 }}>
-        <Input
-          size="small"
+      <div className={styles.draft}>
+        <TextInput
+          size="sm"
           placeholder="decision headline (I2C bus at 400k)"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          style={{ maxWidth: 260 }}
         />
-        <Input
-          size="small"
+        <TextInput
+          size="sm"
           placeholder="rationale / constraints (optional)"
           value={body}
           onChange={(e) => setBody(e.target.value)}
-          onPressEnter={submit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') submit();
+          }}
         />
-        <Button size="small" type="dashed" disabled={busy || !title.trim()} onClick={submit}>
+        <Button size="sm" icon={Plus} disabled={busy || !title.trim()} onClick={submit}>
           record
         </Button>
-      </Space.Compact>
+      </div>
     </Card>
   );
 }

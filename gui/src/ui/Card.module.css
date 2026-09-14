@@ -1,0 +1,59 @@
+/*
+ * The card: one hairline, one head, one body.
+ *
+ * Same separation vocabulary as the tool card in the transcript -- `--outline`
+ * around the outside, `--line` under the head -- because a panel and a card are
+ * the same kind of object at two sizes, and two spellings of "this is a box" is
+ * how the old workbench read as a set of unrelated widgets.
+ *
+ * No padding on the card itself: the head and the body each carry their own, so
+ * a card with no body does not open a gap under its title, and a caller cannot
+ * shift the whole thing by adding one number.
+ */
+.card {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  min-width: 0;
+  border: 1px solid var(--outline);
+  border-radius: var(--r-panel);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--ff-sans);
+  font-size: var(--fs-body);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  box-sizing: border-box;
+  min-height: var(--h-min);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--line);
+}
+
+.title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--fs-minor);
+  font-weight: var(--fw-label);
+  line-height: var(--lh-tight);
+}
+
+.extra {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-tight);
+  text-align: end;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  min-width: 0;
+}

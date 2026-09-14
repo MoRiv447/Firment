@@ -14,6 +14,7 @@ import { currentThemeSetting, setThemeSetting } from '../lib/theme';
 import {
   Button,
   Callout,
+  Card,
   Checkbox,
   Chip,
   Confirm,
@@ -457,6 +458,28 @@ export function Showcase() {
                 </Button>
               }
             />
+          </div>
+        </Section>
+
+        <Section title="Card" note="Head, body, one hairline. The second has no extra, so the head cannot lean on it.">
+          <div className={styles.cards}>
+            <Card title="Flash history" extra=".firment/work/flash-history.jsonl">
+              <span className={styles.line}>
+                <Chip size="sm" status="ok">
+                  OK
+                </Chip>
+                <code>stm32f407vet6</code>
+              </span>
+              <span className={styles.line}>
+                <Chip size="sm" status="failed">
+                  FAIL
+                </Chip>
+                <code>no probe found</code>
+              </span>
+            </Card>
+            <Card title="Decisions (ADR-lite)">
+              <KeyValue label="HSE 8 MHz" value="the crystal holds -20°C" />
+            </Card>
           </div>
         </Section>
       </main>

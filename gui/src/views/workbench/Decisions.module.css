@@ -1,0 +1,61 @@
+/*
+ * The decision log's rows and its draft line.
+ *
+ * `.date` is a wrapper with a fixed width rather than a width on the chip, because
+ * `Chip` does not take a `className` -- by design, since a chip that can be
+ * resized from two files away is a chip whose alignment depends on which view is
+ * rendering it. The ten rows of a log read as a list because their headlines
+ * start at the same column, and that is the one thing the card has to get right.
+ */
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding-block: var(--sp-1);
+  border-bottom: 1px solid var(--line);
+}
+
+.row:last-child {
+  border-bottom: 0;
+}
+
+.date {
+  flex: none;
+  width: 78px;
+}
+
+.text {
+  flex: 1;
+  min-width: 0;
+}
+
+.headline {
+  margin: 0;
+  font-size: var(--fs-minor);
+  font-weight: var(--fw-label);
+  line-height: var(--lh-tight);
+}
+
+.rationale {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-tight);
+  overflow-wrap: anywhere;
+}
+
+/* headline, rationale, commit -- one line, and the two fields take the room while
+   the button takes only what its label needs. */
+.draft {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) auto;
+  gap: var(--sp-2);
+  align-items: center;
+}
+
+.none {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-minor);
+  line-height: var(--lh-tight);
+}
