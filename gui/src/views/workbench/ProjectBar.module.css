@@ -1,0 +1,37 @@
+/*
+ * The project picker.
+ *
+ * The field takes the row and the button takes what it needs: `TextInput`'s frame
+ * is `width: 100%`, so the column decides the width and nothing here has to know
+ * the 380px the old input carried.
+ */
+.bar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.pick {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: var(--sp-2);
+  align-items: start;
+}
+
+.known {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.label {
+  color: var(--muted);
+  font-size: var(--fs-minor);
+}
+
+/* A path is read character by character, and the button's own padding is enough. */
+.path {
+  font-family: var(--ff-mono);
+  font-size: var(--fs-meta);
+}

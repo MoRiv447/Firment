@@ -14,13 +14,12 @@ import {
 } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import { useEffect, useRef, useState } from 'react';
-import { api, notifySessionsChanged, onAgentEvent, onWorkbenchOpen } from '../lib/api';
+import { api, notifySessionsChanged, onWorkbenchOpen } from '../lib/api';
+import { isUnder, pathKey } from '../lib/paths';
 import type {
-  AlertEntry,
   BoardPinmapDto,
   DecisionEntryDto,
   DeviceBindingDto,
-  DeviceEntry,
   ElfCardDto,
   EscalationEntry,
   FlashHistoryDto,
@@ -33,34 +32,17 @@ import type {
 } from '../types';
 import { color, font, radius, statusChip } from '../styles/tokens';
 import type { StatusKind } from '../styles/tokens';
-import type { ReactNode } from 'react';
 import { ActionButton } from '../components/ActionButton';
 import { FlashHistory } from './workbench/FlashHistory';
 import { ChangeTimeline, ElfBudget, VerificationBadges } from './workbench/insights';
 import { Decisions } from './workbench/Decisions';
+import { ProjectBar } from './workbench/ProjectBar';
+import { ProjectSummary } from './workbench/ProjectSummary';
+import { TrafficPane } from './workbench/TrafficPane';
+import { alertFromFrame, foldEscalation } from './workbench/guard';
+import { useDeviceTraffic } from './workbench/useDeviceTraffic';
 
 const { Text } = Typography;
-
-/**
- * A label with its value underneath, both in body type.
- *
- * The thing this replaces: `Statistic`, which sets its value at display size.
- * That is right for a count and wrong for a branch name or a session id -- the
- * card was rendering "not a git repository" and `307f6f73` as if they were
- * headline numbers, a tiny grey label floating over a huge grey string with no
- * relationship between the two. `mono` marks the values that are identifiers
- * rather than prose.
- */
-function Field({ label, value, mono }: { label: string; value: ReactNode; mono?: boolean }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <Text type="secondary" style={{ fontSize: 11, lineHeight: '14px' }}>
-        {label}
-      </Text>
-      <Text style={{ fontSize: 13, fontFamily: mono ? font.mono : undefined }}>{value}</Text>
-    </div>
-  );
-}
 
 /**
  * Project workbench (W1): mainline + branch session tree over
@@ -74,111 +56,9 @@ function Field({ label, value, mono }: { label: string; value: ReactNode; mono?:
  * `sbc-guard/rules.toml`. docs/gui-workbench.md lists exactly these.
  */
 export function WorkbenchView() {
-  // The Devices & guard card SUBSCRIBES ITSELF to the raw event stream:
-  // it must work with no project open and no session loaded, independent
-  // of App-level routing. (The component stays mounted on every tab —
-  // hidden via display — so escalation detection never goes blind.)
-  const [liveDevices, setLiveDevices] = useState<Record<string, DeviceEntry>>({});
-  const [liveAlerts, setLiveAlerts] = useState<AlertEntry[]>([]);
-  const [liveGuard, setLiveGuard] = useState<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-    // Pull the backend's last known status FIRST: events emitted before
-    // this listener attached are gone, and without the pull the card would
-    // sit on "unknown" until the next heartbeat.
-    void api
-      .mqttStatus()
-      .then((frame) => {
-        if (!cancelled && frame) setLiveGuard(frame);
-      })
-      .catch(() => {});
-    void onAgentEvent((e) => {
-      if (cancelled) return;
-      if (e.type === 'device_frame') {
-        const ts = Date.now();
-        setLiveDevices((prev) => ({
-          ...prev,
-          [e.node]: {
-            node: e.node,
-            lastKind: e.kind,
-            lastFrame: e.frame.slice(0, 200),
-            ts,
-            count: (prev[e.node]?.count ?? 0) + 1,
-          },
-        }));
-        if (e.kind === 'alert') {
-          setLiveAlerts((prev) =>
-            [{ node: e.node, frame: e.frame.slice(0, 300), ts }, ...prev].slice(0, 30),
-          );
-          // Escalation detection: bound node + sev >= project threshold.
-          const c = escalationCtxRef.current;
-          let parsed: Record<string, unknown> = {};
-          try {
-            parsed = JSON.parse(e.frame);
-          } catch {
-            /* raw frame — still escalatable with defaults */
-          }
-          const rank = (s: unknown) =>
-            ({ debug: 0, info: 1, warn: 2, error: 3 })[String(s)] ?? 1;
-          const node = String(parsed.node ?? e.node);
-          if (!c.bindings.some((b) => b.node === node)) return;
-          const revised = parsed.revised === true;
-          const entry: EscalationEntry = {
-            // One pending per node+rule: the revised alert UPDATES the raw
-            // one instead of duplicating it.
-            id: `${node}-${String(parsed.rule ?? '')}`,
-            ts,
-            node,
-            sev: String(parsed.sev ?? 'warn'),
-            rule: String(parsed.rule ?? ''),
-            summary: String(parsed.summary ?? ''),
-            payload: String(parsed.payload ?? e.frame).slice(0, 300),
-          };
-          const existingIdx = escalRef.current.findIndex((x) => x.id === entry.id);
-          if (revised) {
-            if (existingIdx === -1) return; // raw was dismissed — respect that
-            const next = [...escalRef.current];
-            next[existingIdx] = { ...next[existingIdx], ...entry, ts: next[existingIdx].ts };
-            escalRef.current = next;
-            setEscalations(next);
-            try {
-              localStorage.setItem(`guard-pending-${c.cwd}`, JSON.stringify(next));
-            } catch {
-              /* ignore */
-            }
-            return;
-          }
-          if (existingIdx !== -1) return;
-          if (rank(parsed.sev) < rank(c.sev)) return;
-          const next = [entry, ...escalRef.current].slice(0, 20);
-          escalRef.current = next;
-          setEscalations(next);
-          try {
-            localStorage.setItem(`guard-pending-${c.cwd}`, JSON.stringify(next));
-          } catch {
-            /* storage full — pending list just won't survive restarts */
-          }
-          if (autoRunRef.current) {
-            // Same path as the manual button (builds the mainline prompt
-            // and dispatches the correctly-shaped event).
-            runEscalationRef.current(entry);
-          }
-        }
-      } else if (e.type === 'guard_status') {
-        setLiveGuard(e.frame);
-      }
-    }).then((u) => {
-      if (cancelled) u();
-      else unlisten = u;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, []);
-  const devices = Object.values(liveDevices).sort((a, b) => b.ts - a.ts);
-  const guardFrame = liveGuard;
+  // Device traffic (the unfiltered stream + the guard link) is subscribed by
+  // `useDeviceTraffic` below rather than up here: the alert callback has to
+  // close over `runEscalation`, which is defined after the loaders it calls.
   const [cwd, setCwd] = useState('');
   const [state, setState] = useState<WorkbenchStateDto | null>(null);
   const [sessions, setSessions] = useState<SessionSummaryDto[]>([]);
@@ -217,23 +97,20 @@ export function WorkbenchView() {
   const [autoRun, setAutoRun] = useState(
     () => localStorage.getItem('escalation-auto-run') === '1',
   );
-  // Mirrors for the [] -deps event subscriber (stale-closure-proof).
+  // The pending list is mirrored in a ref as well as in state: two alerts can
+  // land inside one React batch, and the second fold has to see the first.
   const escalRef = useRef<EscalationEntry[]>([]);
-  const autoRunRef = useRef(autoRun);
-  autoRunRef.current = autoRun;
-  // Bridged: the [] -deps subscriber calls the LATEST handler through this
-  // ref (runEscalation is defined further down, closing over fresh state).
-  const runEscalationRef = useRef<(entry: EscalationEntry) => void>(() => {});
-  autoRunRef.current = autoRun;
-  const escalationCtxRef = useRef({
-    bindings: [] as DeviceBindingDto[],
-    sev: 'warn',
-    cwd: '',
-  });
-  escalationCtxRef.current = {
-    bindings,
-    sev: state?.config.guard_escalate_sev ?? 'warn',
-    cwd,
+
+  /** The one way the pending list changes, so the per-project copy in
+   * localStorage cannot drift from the list on screen. */
+  const setPending = (next: EscalationEntry[]) => {
+    escalRef.current = next;
+    setEscalations(next);
+    try {
+      localStorage.setItem(`guard-pending-${cwd.trim()}`, JSON.stringify(next));
+    } catch {
+      /* storage full — the pending list just won't survive a restart */
+    }
   };
   // ADR-lite decision log ([[decision]]); branches whose title matches a
   // decision inherit it automatically at creation.
@@ -253,8 +130,7 @@ export function WorkbenchView() {
   const rememberProject = (dir: string) => {
     localStorage.setItem('workbench-last-cwd', dir);
     setProjects((prev) => {
-      const norm = dir.replace(/\\/g, '/').replace(/\/$/, '');
-      const next = [dir, ...prev.filter((p) => p.replace(/\\/g, '/').replace(/\/$/, '') !== norm)];
+      const next = [dir, ...prev.filter((p) => pathKey(p) !== pathKey(dir))];
       localStorage.setItem('workbench-projects', JSON.stringify(next.slice(0, 8)));
       return next.slice(0, 8);
     });
@@ -268,17 +144,10 @@ export function WorkbenchView() {
       const wb = await api.workbenchState(dir);
       const all = await api.listSessions();
       setState(wb);
-      // Only show sessions belonging to this project root. Prefix matching
-      // must respect the directory boundary: without it D:\fw\thermo also
-      // swallows every session under D:\fw\thermostat.
-      const root = dir.replace(/\\/g, '/').replace(/\/$/, '').toLowerCase();
-      const rootPrefix = root.endsWith(':') ? `${root}/` : `${root}/`;
-      setSessions(
-        all.filter((s) => {
-          const c = s.cwd.replace(/\\/g, '/').toLowerCase();
-          return c === root || c.startsWith(rootPrefix);
-        }),
-      );
+      // Only show sessions belonging to this project root. `isUnder` respects
+      // the directory boundary: without it D:\fw\thermo also swallows every
+      // session under D:\fw\thermostat.
+      setSessions(all.filter((s) => isUnder(dir, s.cwd)));
       setCurrentSessionId(null);
       // Return the FRESH state so callers can chain insights on the new
       // mainline without waiting for the next React render.
@@ -484,14 +353,7 @@ export function WorkbenchView() {
   };
 
   const dropEscalation = (id: string) => {
-    const next = escalRef.current.filter((x) => x.id !== id);
-    escalRef.current = next;
-    setEscalations(next);
-    try {
-      localStorage.setItem(`guard-pending-${cwd.trim()}`, JSON.stringify(next));
-    } catch {
-      /* ignore */
-    }
+    setPending(escalRef.current.filter((x) => x.id !== id));
   };
 
   /** Hand an escalation to the project's mainline session: synthesized
@@ -513,7 +375,22 @@ export function WorkbenchView() {
     );
     dropEscalation(entry.id);
   };
-  runEscalationRef.current = runEscalation;
+
+  // The alert half of the stream is decided here and not in the hook: what
+  // counts as an escalation belongs to the project, not to the transport.
+  const traffic = useDeviceTraffic((frame, node, ts) => {
+    const alert = alertFromFrame(frame, node, ts);
+    const fold = foldEscalation(escalRef.current, alert, {
+      threshold: state?.config.guard_escalate_sev ?? 'warn',
+      bound: bindings.some((b) => b.node === alert.node),
+    });
+    if (fold.kind === 'none') return;
+    setPending(fold.entries);
+    // Same path as the manual button: it builds the mainline prompt and
+    // dispatches the correctly-shaped event.
+    if (fold.kind === 'escalated' && autoRun) runEscalation(fold.entry);
+  });
+  const devices = traffic.devices;
 
   const toggleAutoRun = (on: boolean) => {
     setAutoRun(on);
@@ -714,195 +591,24 @@ export function WorkbenchView() {
   return (
     <div style={{ padding: 20, height: '100%', overflowY: 'auto' }}>
       <Card size="small" title="Project workbench">
-        {/* SBC data plane: broker link + node table + alert ring. Global
-            (nodes belong to the machine, not a project) and DEFAULT
-            COLLAPSED — per-project context lives in the project's own
-            Devices card below. */}
-        <details style={{ marginBottom: 12 }}>
-          <summary style={{ cursor: 'pointer', fontSize: 12, color: color.muted }}>
-            All device traffic (unfiltered) — click to expand
-          </summary>
-        <Card
-          type="inner"
-          size="small"
-          title="Devices & guard"
-          style={{ marginTop: 8 }}
-          extra={
-            (() => {
-              // Three states: positive off, positive online, and "no news
-              // yet" — never render unknown as off.
-              let state: 'on' | 'off' | 'unknown' = 'unknown';
-              try {
-                const g = JSON.parse(guardFrame || '{}');
-                if (g.connected === true) state = 'on';
-                else if (g.connected === false) state = 'off';
-              } catch {
-                /* non-JSON frame — treat as unknown */
-              }
-              return (
-                <Tag
-                  style={{ ...statusChip(state === 'on' ? 'ok' : 'neutral'), borderRadius: radius.chip, fontWeight: 700 }}
-                  
-                >
-                  {state === 'on' ? '● broker online' : state === 'off' ? '○ broker off' : '… broker ?'}
-                </Tag>
-              );
-            })()
-          }
-        >
-          {devices.length === 0 && liveAlerts.length === 0 ? (
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              No device traffic yet. Configure [mqtt] broker in config.toml (e.g.
-              "192.168.1.6:1883") and restart; nodes publish to firment/device/#.
-            </Text>
-          ) : (
-            <>
-              {devices.map((d) => (
-                <div
-                  key={d.node}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    padding: '3px 0',
-                    borderBottom: `1px solid ${color.line}`,
-                  }}
-                >
-                  <Tag style={{ ...statusChip('running'), borderRadius: radius.chip, fontWeight: 700 }}>
-                    {d.node}
-                  </Tag>
-                  <Tag style={{ borderRadius: radius.chip, fontSize: 10 }}>{d.lastKind}</Tag>
-                  <Text style={{ fontSize: 11, flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-                    {d.lastFrame}
-                  </Text>
-                  <Text type="secondary" style={{ fontSize: 10 }}>
-                    ×{d.count} · {new Date(d.ts).toLocaleTimeString()}
-                  </Text>
-                </div>
-              ))}
-              {liveAlerts.length > 0 && (
-                <div style={{ marginTop: 8 }}>
-                  <Text type="warning" style={{ fontSize: 11, fontWeight: 700 }}>
-                    ⚠ recent alerts ({liveAlerts.length})
-                  </Text>
-                  {liveAlerts.slice(0, 5).map((a, i) => (
-                    <div key={i} style={{ fontSize: 11, padding: '2px 0' }}>
-                      <Tag style={{ ...statusChip('failed'), borderRadius: radius.chip, fontSize: 10 }}>{a.node}</Tag>
-                      <Text type="secondary" style={{ fontSize: 11 }}>{a.frame}</Text>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {(() => {
-                let err: string | null = null;
-                try {
-                  const g = JSON.parse(guardFrame || '{}');
-                  if (g.connected === false) err = String(g.error ?? 'disconnected');
-                } catch {
-                  /* non-JSON frame — ignore */
-                }
-                return err ? (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    style={{ marginTop: 6, borderRadius: radius.control }}
-                    message={`mqtt link: ${err} (retrying every 3s)`}
-                  />
-                 ) : null;
-               })()}
-             </>
-           )}
-         </Card>
-        </details>
+        <TrafficPane traffic={traffic} />
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Space wrap>
-            <Input
-              placeholder="project path (e.g. D:\fw\thermostat)"
-              style={{ width: 380 }}
-              value={cwd}
-              onChange={(e) => setCwd(e.target.value)}
-              onPressEnter={() => void load()}
-              // Same 40px control height as the CTA beside it, so the row is
-              // level rather than assembled.
-              size="large"
-            />
-            <ActionButton tier="primary" loading={busy} onClick={() => void load()}>
-              Open project
-            </ActionButton>
-          </Space>
-
-          {projects.length > 0 && (
-            <Space wrap size={4}>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                known projects:
-              </Text>
-              {projects.map((p) => (
-                <Tag
-                  key={p}
-                  style={{ ...statusChip(p === cwd ? 'running' : 'neutral'), borderRadius: radius.chip, cursor: 'pointer', fontSize: 12 }}
-                  
-                  onClick={() => {
-                    setCwd(p);
-                    void load(p);
-                  }}
-                >
-                  {p}
-                </Tag>
-              ))}
-            </Space>
-          )}
-
-          {error && <Alert type="error" showIcon message={error} />}
+          <ProjectBar
+            cwd={cwd}
+            projects={projects}
+            busy={busy}
+            error={error}
+            onCwd={setCwd}
+            onOpen={() => void load()}
+            onPick={(dir) => {
+              setCwd(dir);
+              void load(dir);
+            }}
+          />
 
           {state && (
             <>
-              <Card type="inner" title={`Project: ${state.config.project_name || '(unnamed)'}`} size="small">
-                {/*
-                  Labelled values in body type, not `Statistic`.
-
-                  `Statistic` renders its value at display size -- 24px -- which
-                  is right for a count and wrong for everything else that was in
-                  here: a branch name, a session id and the words "not a git
-                  repository" were all being set as if they were headline
-                  numbers. That is what made the card look broken rather than
-                  dense: one huge grey string with a tiny label over it, and no
-                  relationship between the two.
-                */}
-                <Space wrap size={24}>
-                  {state.git ? (
-                    <>
-                      <Field label="branch" value={state.git.branch || '(none)'} mono />
-                      <Field label="dirty files" value={state.git.dirty_files} />
-                    </>
-                  ) : (
-                    <Field label="git" value="not a repository" />
-                  )}
-                  <Field
-                    label="mainline"
-                    value={
-                      state.config.mainline_session
-                        ? state.config.mainline_session.slice(0, 8)
-                        : '(unset)'
-                    }
-                    mono
-                  />
-                </Space>
-                {state.config.toml_raw && (
-                  <details style={{ marginTop: 8 }}>
-                    <summary>
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        .firment/workbench.toml
-                      </Text>
-                    </summary>
-                    <pre style={{ fontSize: 11 }}>{state.config.toml_raw}</pre>
-                  </details>
-                )}
-                {!state.config.toml_raw && (
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    No .firment/workbench.toml yet — creating a branch will generate it.
-                  </Text>
-                )}
-              </Card>
+              <ProjectSummary state={state} />
 
               <Card
                 type="inner"

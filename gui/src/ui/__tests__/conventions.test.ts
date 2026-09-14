@@ -65,12 +65,12 @@ const SOURCES = import.meta.glob(
     '../../views/ChatView.module.css',
     '../../views/SessionSidebar.tsx',
     '../../views/SessionSidebar.module.css',
-    '../../views/workbench/Decisions.tsx',
-    '../../views/workbench/Decisions.module.css',
-    '../../views/workbench/FlashHistory.tsx',
-    '../../views/workbench/FlashHistory.module.css',
-    '../../views/workbench/insights.tsx',
-    '../../views/workbench/insights.module.css',
+    // Stage 6 split the workbench into panes under `views/workbench/`, and every
+    // file in that directory is on the layer, so it is gated as a directory. `*`
+    // does not cross `/`, which leaves its `__tests__` to the suite that runs them.
+    '../../views/workbench/*.tsx',
+    '../../views/workbench/*.ts',
+    '../../views/workbench/*.css',
     '../../dev/*.tsx',
     '../../dev/*.css',
   ],

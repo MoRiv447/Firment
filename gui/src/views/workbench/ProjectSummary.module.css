@@ -1,0 +1,31 @@
+/*
+ * The project summary: three facts and, below them, the file they came from.
+ */
+.toml {
+  margin-top: var(--sp-1);
+}
+
+.summary {
+  color: var(--muted);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-minor);
+  cursor: pointer;
+}
+
+.raw {
+  max-height: 260px;
+  margin: var(--sp-2) 0 0;
+  overflow: auto;
+  color: var(--muted);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-tight);
+  white-space: pre-wrap;
+}
+
+.none {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-minor);
+  line-height: var(--lh-body);
+}

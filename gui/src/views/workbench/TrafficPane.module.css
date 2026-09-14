@@ -1,0 +1,82 @@
+/*
+ * The collapsible traffic dump.
+ *
+ * `summary` is the only part of this that is a control; everything under it is
+ * the card's own rows, so the styles here are one line of affordance and a list.
+ */
+.traffic {
+  margin-bottom: var(--sp-3);
+}
+
+.summary {
+  padding: var(--sp-1) 0;
+  color: var(--muted);
+  font-size: var(--fs-minor);
+  cursor: pointer;
+}
+
+.none {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-minor);
+  line-height: var(--lh-body);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-05) 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.row:last-of-type {
+  border-bottom: 0;
+}
+
+.frame {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--ff-mono);
+  font-size: var(--fs-meta);
+}
+
+.count {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.alerts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-05);
+  margin-top: var(--sp-2);
+}
+
+.alertHead {
+  margin: 0;
+  color: var(--warn-ink);
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-label);
+}
+
+.alert {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.alertFrame {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-meta);
+}
