@@ -1,0 +1,200 @@
+/*
+ * The transcript column.
+ *
+ * One flex column with one gap: the rows are the rhythm, and a component that
+ * also carries a margin is how the old tree ended up with messages spaced by
+ * three different rules (the container's `gap`, the card's `margin: 6px 0`, and
+ * a `padding-top` on the fold).
+ */
+.transcript {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  font-family: var(--ff-sans);
+}
+
+/*
+ * The user's own message: the one bubble on the acid fill.
+ *
+ * `--on-acid` and `--brand-acid` are a measured pair (13.28:1). The bubble used
+ * to take `--ink` for its text, and `ink` is near-white in the dark scheme, so
+ * the message you had just typed was the least legible thing on screen. The pair
+ * now sits in a single rule, which is the only reason it cannot come apart again
+ * in one scheme and not the other.
+ *
+ * No border and no shadow: the fill separates it from the transcript already,
+ * and a grey ring around a green block is what made every filled control in the
+ * old app look like a mistake.
+ */
+.bubble {
+  align-self: flex-end;
+  max-width: 80%;
+  padding: var(--sp-2) var(--sp-4);
+  border-radius: var(--r-panel);
+  background: var(--brand-acid);
+  color: var(--on-acid);
+  font-weight: var(--fw-label);
+  line-height: var(--lh-body);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.assistant {
+  max-width: 88%;
+  min-width: 0;
+}
+
+.calls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-bottom: var(--sp-2);
+}
+
+.system {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+
+.systemText {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-minor);
+  line-height: var(--lh-body);
+  white-space: pre-wrap;
+}
+
+/* ------------------------------------------------------------------ */
+/* A run, folded. */
+
+.run {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+/*
+ * The fold line is a full-width row, so its hover is the row and not a pill
+ * around the words. It is a real `<button>`: the old one was a `<div>` with
+ * `role="button"` and a hand-written Enter/Space handler, which is the same
+ * control with two of its behaviours missing and no focus order.
+ */
+.runHead {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-1) 0;
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-minor);
+  text-align: left;
+  cursor: pointer;
+}
+
+.runHead:hover {
+  background: var(--hover);
+}
+
+.runSteps {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.runDot {
+  opacity: 0.5;
+}
+
+/* The shape of the work -- `read_file ×4 · edit_file` -- in mono, because it is a
+   list of identifiers rather than a sentence. */
+.runTools {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The hairline that fills whatever the labels did not take: it is what makes a
+   fold read as one line across the column instead of three loose words. */
+.rule {
+  flex: 1 1 auto;
+  min-width: var(--sp-3);
+  height: 1px;
+  background: var(--line);
+}
+
+.runBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding-left: var(--sp-4);
+}
+
+/* ------------------------------------------------------------------ */
+/* A tool answer no card claimed. */
+
+.orphan {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.orphanHead {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--outline);
+  border-radius: var(--r-control);
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-minor);
+  text-align: left;
+  cursor: pointer;
+}
+
+.orphanHead:hover {
+  background: var(--hover);
+}
+
+.orphanPreview {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.orphanLines {
+  flex: 0 0 auto;
+  font-family: var(--ff-mono);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+.orphanBody {
+  box-sizing: border-box;
+  max-height: 260px;
+  margin: 0;
+  padding: var(--sp-2);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-control);
+  background: var(--bg);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-minor);
+  line-height: var(--lh-mono);
+  white-space: pre-wrap;
+  word-break: break-all;
+}

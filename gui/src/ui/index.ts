@@ -15,6 +15,7 @@
 
 export { Button, IconButton } from './Button';
 export type { ButtonProps } from './Button';
+export { Callout } from './Callout';
 export { Checkbox } from './Checkbox';
 export { Chip } from './Chip';
 export { confirm, Confirm } from './Confirm';
@@ -53,4 +54,4 @@ export type { ToastItem, ToastTone } from './toastStore';
 export { TOOLTIP_DELAY, Tooltip, useTooltip } from './Tooltip';
 export type { TooltipController } from './Tooltip';
 export { Wordmark } from './Wordmark';
-export type { Align, ChipStatus, Side, Size, Tier } from './types';
+export type { Align, CalloutTone, ChipStatus, Side, Size, Tier } from './types';

@@ -1,14 +1,37 @@
-import { Alert, Card, Space, Tag, Typography } from 'antd';
-import { DownOutlined, RightOutlined } from '@ant-design/icons';
-import type { ToolCardState } from '../types';
-import { color, font, radius, space, statusChip } from '../styles/tokens';
-import type { StatusKind } from '../styles/tokens';
+import { useId } from 'react';
+import { ChevronDown, ChevronRight, CircleCheck, CircleX, TriangleAlert } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+
+import { parseDiff } from '../lib/diff';
 import { quickActionsFor } from '../lib/quickActions';
-import { ActionButton } from './ActionButton';
 import { describeArgs } from '../lib/toolArgs';
+import type { ToolCardState } from '../types';
+import { Button, Callout, Chip, Icon } from '../ui';
+import type { ChipStatus } from '../ui';
+import styles from './ToolCard.module.css';
 
-const { Text } = Typography;
+/**
+ * One tool call, and what came back.
+ *
+ * The old card was an antd `Card` with a hand-painted header: `Space` for the
+ * row, `Tag` for the name, `Text` for everything else, and a colour read out of
+ * `styles/tokens.ts` for each of them. Two of those reads are the reason the
+ * header is written in CSS now -- `statusChip('attention')` spread a fill and an
+ * ink into an inline style, and an inline style cannot follow a theme flip.
+ *
+ * What the card says about the call is capped by what the transcript knows:
+ * `status === 'unknown'` is a reopened session, where the stored record has the
+ * call and the returned text but never whether the call worked -- a denial and a
+ * timeout are both plain strings in a tool message. So an unknown call gets no
+ * mark and no green.
+ */
 
+/**
+ * Is this the kind of command that should not be one keystroke from a device?
+ *
+ * The pattern is deliberately over-broad: the card is not enforcing anything, it
+ * is deciding whether to say "look at this before you allow it".
+ */
 function dangerousName(name: string, args: unknown): boolean {
   if (name === 'shell' || name === 'build' || name === 'verify') {
     const txt = typeof args === 'string' ? args : JSON.stringify(args ?? {});
@@ -19,24 +42,29 @@ function dangerousName(name: string, args: unknown): boolean {
   return false;
 }
 
-/** How much of a diff body the card renders before it stops (`detail` itself
- * is already capped at 8000 chars upstream). */
-const DIFF_MAX_CHARS = 4000;
+/** The mark the chip carries. `unknown` has none, because nothing was measured. */
+function markFor(status: ToolCardState['status'], danger: boolean): LucideIcon | null {
+  if (status === 'running') return null;
+  if (status === 'ok') return CircleCheck;
+  if (status === 'failed') return CircleX;
+  // `unknown` is a reopened session: nothing was measured, so nothing is marked,
+  // unless the command itself is one worth flagging.
+  return danger ? TriangleAlert : null;
+}
 
-/**
- * `+N -M` for the header, counted exactly the way the TUI counts it
- * (`crates/firment-tui/src/view.rs`): over the diff body only. The first line
- * is the "Edited <path>" header, which `DiffBody` drops, so counting it would
- * be counting a line nobody sees.
- */
-function diffCounts(detail: string): { added: number; removed: number } {
-  let added = 0;
-  let removed = 0;
-  for (const line of detail.split('\n').slice(1)) {
-    if (line.startsWith('+')) added += 1;
-    else if (line.startsWith('-')) removed += 1;
+function chipStatus(status: ToolCardState['status'], danger: boolean): ChipStatus {
+  switch (status) {
+    case 'ok':
+      return 'ok';
+    case 'failed':
+      return 'failed';
+    case 'unknown':
+      // Reopened history: neutral, and the danger case is the one thing worth
+      // colouring -- the command is still as dangerous as it was when it ran.
+      return danger ? 'attention' : 'neutral';
+    default:
+      return danger ? 'attention' : 'running';
   }
-  return { added, removed };
 }
 
 /**
@@ -44,10 +72,8 @@ function diffCounts(detail: string): { added: number; removed: number } {
  *
  * `args` is `unknown` (it arrives as JSON from the backend), so every step is
  * checked rather than assumed. This exists because the card lost the path: the
- * diff body drops the "Edited <path>" header on the assumption that the summary
- * already shows it, and the summary is only rendered when there is *no* detail.
- * The two conditions cannot both hold, so the path was on screen in neither
- * place once a diff was attached.
+ * diff body drops its file headers, so once a diff is attached the path appears
+ * nowhere else on the card.
  */
 function editedPath(args: unknown): string | undefined {
   if (!args || typeof args !== 'object') return undefined;
@@ -60,223 +86,141 @@ function editedPath(args: unknown): string | undefined {
 }
 
 /**
- * The change a tool made, line by line.
+ * The change, line by line, in the states `parseDiff` produced.
  *
- * The header line is dropped: it is the same "Edited <path> …" text the card
- * summary already shows, so printing it here would duplicate it. Colors are
- * the SUCCESS family on purpose — the acid brand green would read as "brand"
- * rather than "added", and the whole point is to tell added from removed.
+ * Colour per line kind rather than per character run: the diff family is a pair
+ * of fills and a pair of inks measured against each other, and hunk headers are
+ * `--diff-meta-ink` because they are structure, not content.
  */
 function DiffBody({ detail }: { detail: string }) {
-  const body = detail.length > DIFF_MAX_CHARS ? `${detail.slice(0, DIFF_MAX_CHARS)}…` : detail;
+  const diff = parseDiff(detail);
+  if (!diff) {
+    // Not a diff: a build's output, a file's contents. It still gets the mono
+    // block -- the card is not the place to guess at prose.
+    return (
+      <pre data-ui="tool-output" className={styles.raw}>
+        {detail}
+      </pre>
+    );
+  }
   return (
-    <div
-      style={{
-        border: `1px solid ${color.outline}`,
-        background: color.bg,
-        fontSize: 12,
-        fontFamily: font.mono,
-        maxHeight: 260,
-        overflow: 'auto',
-      }}
-    >
-      {body
-        .split('\n')
-        .slice(1)
-        .map((line, i) => {
-          const added = line.startsWith('+');
-          const removed = line.startsWith('-');
-          return (
-            <div
-              key={i}
-              style={{
-                padding: '0 6px',
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-all',
-                color: added
-                  ? color.diffAddedInk
-                  : removed
-                    ? color.diffRemovedInk
-                    : color.diffMetaInk,
-                background: added ? color.diffAddedBg : removed ? color.diffRemovedBg : undefined,
-                fontWeight: added || removed ? 600 : 400,
-              }}
-            >
-              {line || ' '}
-            </div>
-          );
-        })}
+    <div data-ui="tool-diff" className={styles.diff}>
+      {diff.lines.map((line, i) => (
+        <div key={i} data-kind={line.kind} className={styles.line}>
+          {line.text || ' '}
+        </div>
+      ))}
+      {diff.truncated && (
+        <div data-kind="hunk" className={styles.line}>
+          …
+        </div>
+      )}
     </div>
   );
 }
 
 export function ToolCard({
   tool,
-  standalone,
   collapsible,
   onAction,
 }: {
   tool: ToolCardState;
-  standalone?: boolean;
-  /** When set, the card title carries a chevron and toggles on click — used
-   * by historical (collapsed-by-default) renderings so the tool name shows
-   * exactly once in both states. */
+  /** When set, the header is a button that opens and closes the body -- used by
+   * historical (collapsed-by-default) renderings so the tool name shows exactly
+   * once in both states. */
   collapsible?: { open: boolean; onToggle: () => void };
   /** Sends a canned request to the agent. See lib/quickActions.ts. */
   onAction?: (prompt: string) => void;
 }) {
   const danger = dangerousName(tool.name, tool.args);
-  // An antd preset name ('green') is a colour written down outside the token
-  // layer -- it is neither a hex literal nor a radius, so no-literal-tokens
-  // cannot see it. statusChip() reads both halves from one measured pair.
-  const tagStatus: StatusKind =
-    tool.status === 'ok'
-      ? 'ok'
-      : tool.status === 'failed'
-        ? 'failed'
-        : tool.status === 'unknown'
-          ? danger
-            ? 'attention'
-            : // Reopened history: no glyph, no green. The transcript does not
-              // record whether this call worked, so the card says nothing about
-              // it either way.
-              'neutral'
-          : danger
-            ? 'attention'
-            : 'running';
-  const icon =
-    tool.status === 'ok'
-      ? '✓'
-      : tool.status === 'failed'
-        ? '✕'
-        : tool.status === 'unknown'
-          ? danger
-            ? '⚠'
-            : ''
-          : danger
-            ? '⚠'
-            : '·';
+  const status = chipStatus(tool.status, danger);
+  const mark = markFor(tool.status, danger);
+  const open = collapsible ? collapsible.open : true;
+  const bodyId = useId();
   const path = editedPath(tool.args);
   // Not shown when it would only repeat the path the header already carries.
   const described = describeArgs(tool.args);
   const argsLine = described && described !== path ? described : '';
-  const counts = tool.detail ? diffCounts(tool.detail) : null;
-  const hasCounts = counts !== null && (counts.added > 0 || counts.removed > 0);
+  const diff = parseDiff(tool.detail);
 
-  const inner = (
-    <Space direction="vertical" size={4} style={{ width: '100%' }}>
-      {/*
-        A described line, not `<pre>{JSON.stringify(args, null, 2)}</pre>`.
-        Every card in the transcript opened with a pretty-printed API payload,
-        which is a debug view of the request rather than a record of what
-        happened -- `{"path":"src/foc/current.c"}` above a one-line file read.
-        `describeArgs` names the subject and keeps the rest to a glance.
-
-        The full arguments are not lost: expanding a card is what the raw shape
-        was for, and the ledger has them verbatim.
-      */}
-      {argsLine && (
-        <Text type="secondary" style={{ fontFamily: font.mono, fontSize: 12 }}>
-          {argsLine}
-        </Text>
+  const head = (
+    <>
+      {collapsible && (
+        <Icon src={collapsible.open ? ChevronDown : ChevronRight} size="sm" tone="muted" />
       )}
-      {tool.detail ? (
-        <DiffBody detail={tool.detail} />
-      ) : (
-        tool.status !== 'running' &&
-        tool.summary && (
-          <Text type="secondary" style={{ whiteSpace: 'pre-wrap' }}>
-            {tool.summary}
-          </Text>
-        )
+      <Chip status={status} icon={mark ?? undefined} size="sm">
+        {tool.name}
+      </Chip>
+      {path && <span className={styles.path}>{path}</span>}
+      <span className={styles.seq}>#{tool.seq}</span>
+      {diff && (diff.added > 0 || diff.removed > 0) && (
+        // Right-aligned by `margin-inline-start: auto`, so the counts sit at the
+        // far edge of the row rather than next to the tool name.
+        <span className={styles.counts}>
+          <span data-kind="added">+{diff.added}</span>
+          <span data-kind="removed">-{diff.removed}</span>
+        </span>
       )}
-      {danger && <Alert type="warning" showIcon message="Dangerous command - verify before allowing" />}
-      {/*
-        What you do *after* an edit, in the design system's own three tiers. Only
-        once the edit has finished: an offer to build a change that is still
-        being written is an offer to build something else.
-      */}
-      {onAction && tool.status !== 'running' && quickActionsFor(tool.name).length > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: space.controlGap, marginTop: 4 }}>
-          {quickActionsFor(tool.name).map((action) => (
-            <ActionButton
-              key={action.key}
-              tier={action.tier}
-              onClick={() => onAction(action.prompt)}
-            >
-              {action.label}
-            </ActionButton>
-          ))}
-        </div>
-      )}
-    </Space>
+    </>
   );
 
   return (
-    <Card
-      size="small"
-      style={{
-        ...(standalone ? {} : { margin: '6px 0' }),
-        borderRadius: radius.tile,
-        border: `1px solid ${color.outline}`,
-        boxShadow: color.shadowMd,
-        background: color.surface,
-      }}
-      styles={{
-        body: { paddingTop: 8 },
-        header: {
-          minHeight: 38,
-          borderBottom: collapsible ? 'none' : `1px solid ${color.line}`,
-          ...(collapsible ? { cursor: 'pointer' } : {}),
-        },
-      }}
-      onClick={collapsible?.onToggle}
-      title={
-        // Flex rather than `Space`: the counts are right-aligned, and a `Space`
-        // would pack them next to the tool name instead of at the far edge.
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
-          <Space size={8}>
-            {collapsible &&
-              (collapsible.open ? (
-                <DownOutlined style={{ fontSize: 9, color: color.muted }} />
-              ) : (
-                <RightOutlined style={{ fontSize: 9, color: color.muted }} />
+    <article data-ui="tool-card" data-open={open ? 'true' : 'false'} className={styles.card}>
+      {collapsible ? (
+        <button
+          type="button"
+          data-ui="tool-card-head"
+          data-fold="true"
+          className={styles.head}
+          aria-expanded={open}
+          aria-controls={bodyId}
+          onClick={collapsible.onToggle}
+        >
+          {head}
+        </button>
+      ) : (
+        <div data-ui="tool-card-head" className={styles.head}>
+          {head}
+        </div>
+      )}
+      {open && (
+        <div id={bodyId} className={styles.body}>
+          {/*
+            A described line, not `<pre>{JSON.stringify(args, null, 2)}</pre>`.
+            Every card used to open with a pretty-printed API payload -- a debug
+            view of the request in the most-read part of the interface, with the
+            tool's own subject buried inside it. `describeArgs` names the subject
+            and keeps the rest to a glance; the raw shape is still in the ledger.
+          */}
+          {argsLine && <p className={styles.args}>{argsLine}</p>}
+          {tool.detail ? (
+            <DiffBody detail={tool.detail} />
+          ) : (
+            tool.status !== 'running' &&
+            tool.summary && <p className={styles.summary}>{tool.summary}</p>
+          )}
+          {danger && <Callout tone="warn">Dangerous command — verify before allowing</Callout>}
+          {/*
+            What you do *after* an edit. Only once the edit has finished: an offer
+            to build a change that is still being written is an offer to build
+            something else.
+          */}
+          {onAction && tool.status !== 'running' && quickActionsFor(tool.name).length > 0 && (
+            <div className={styles.actions}>
+              {quickActionsFor(tool.name).map((action) => (
+                <Button
+                  key={action.key}
+                  tier={action.tier}
+                  size="sm"
+                  onClick={() => onAction(action.prompt)}
+                >
+                  {action.label}
+                </Button>
               ))}
-            {tool.status !== 'running' && <Text strong>{icon}</Text>}
-            <Tag
-              style={{
-                ...statusChip(tagStatus),
-                borderRadius: radius.chip,
-                fontWeight: 700,
-              }}
-            >
-              {tool.status === 'running' ? `${icon} ${tool.name}` : tool.name}
-            </Tag>
-            {path && (
-              <Text style={{ fontFamily: font.mono, fontSize: 12 }}>{path}</Text>
-            )}
-            <Text type="secondary" style={{ fontSize: 12 }}>#{tool.seq}</Text>
-          </Space>
-          {hasCounts && (
-            <span
-              style={{
-                marginLeft: 'auto',
-                fontFamily: font.mono,
-                fontSize: 12,
-                fontWeight: 700,
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {/* The diff family, not the brand green: an added line and a
-                  passed check are not the same message. */}
-              <span style={{ color: color.diffAddedInk }}>+{counts.added}</span>{' '}
-              <span style={{ color: color.diffRemovedInk }}>-{counts.removed}</span>
-            </span>
+            </div>
           )}
         </div>
-      }
-    >
-      {inner}
-    </Card>
+      )}
+    </article>
   );
 }

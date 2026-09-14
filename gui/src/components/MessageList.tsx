@@ -1,125 +1,35 @@
 import { memo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Alert, Space, Tag, Typography } from 'antd';
-import { DownOutlined, RightOutlined } from '@ant-design/icons';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import type { Components } from 'react-markdown';
-import { ToolCard } from './ToolCard';
-import { describeArgs } from '../lib/toolArgs';
+import { ChevronDown, ChevronRight, Terminal } from 'lucide-react';
+
 import type { ChatMessage, ToolCall } from '../types';
-import { color, font, radius, statusChip } from '../styles/tokens';
-import { useThemeMode } from '../lib/theme';
-
-const { Text } = Typography;
-
-// Shared markdown pipeline: GFM is what makes pipe tables render as real
-// tables — react-markdown does NOT support them by default, and without it
-// a finished table collapsed into one long line of raw pipes.
-const remarkPlugins = [remarkGfm];
-
-const mdComponents: Components = {
-  // ReactMarkdown's <p> carries a default 1em margin that adds a visible
-  // gap under short messages; zero it.
-  p: ({ children }) => <div style={{ margin: 0 }}>{children}</div>,
-  ul: ({ children }) => <ul style={{ margin: 0, paddingLeft: 20 }}>{children}</ul>,
-  ol: ({ children }) => <ol style={{ margin: 0, paddingLeft: 20 }}>{children}</ol>,
-  pre: ({ children }) => (
-    <pre
-      style={{
-        margin: '6px 0 0',
-        // Long code lines used to push a horizontal scrollbar onto the WHOLE
-        // chat scroll container — scroll inside the block instead.
-        overflowX: 'auto',
-        background: color.bg,
-        border: `1px solid ${color.outline}`,
-        padding: 8,
-      }}
-    >
-      {children}
-    </pre>
-  ),
-  code: ({ className, children, ...rest }) => {
-    // Fenced blocks render code inside pre>code: only INLINE code gets the
-    // pill background (the pre above already styles the block).
-    const inline = !String(className || '').includes('language-');
-    if (!inline) {
-      return (
-        <code className={className} {...rest}>
-          {children}
-        </code>
-      );
-    }
-    return (
-      <code
-        className={className}
-        {...rest}
-        style={{
-          background: color.surfaceRaised,
-          padding: '1px 5px',
-          border: `1px solid ${color.outline}`,
-        }}
-      >
-        {children}
-      </code>
-    );
-  },
-  table: ({ children }) => (
-    <table
-      style={{
-        borderCollapse: 'collapse',
-        margin: '8px 0',
-        border: `1px solid ${color.outline}`,
-        boxShadow: color.shadowMd,
-      }}
-    >
-      {children}
-    </table>
-  ),
-  th: ({ children }) => (
-    <th
-      style={{
-        border: `1px solid ${color.outline}`,
-        background: color.surfaceRaised,
-        padding: '5px 10px',
-        textAlign: 'left',
-        fontWeight: 700,
-      }}
-    >
-      {children}
-    </th>
-  ),
-  td: ({ children }) => (
-    <td style={{ border: `1px solid ${color.outline}`, padding: '4px 10px' }}>{children}</td>
-  ),
-};
-
-export function Markdown({ children }: { children: string }) {
-  return (
-    <ReactMarkdown remarkPlugins={remarkPlugins} components={mdComponents}>
-      {children}
-    </ReactMarkdown>
-  );
-}
-
-function ToolCallBlock({ calls, startSeq = 0 }: { calls: ToolCall[]; startSeq?: number }) {
-  return (
-    <Space direction="vertical" style={{ width: '100%' }} size={4}>
-      {calls.map((c, i) => (
-        <CollapsedToolCard key={c.id || i} call={c} seq={startSeq + i + 1} />
-      ))}
-    </Space>
-  );
-}
+import { Chip, Icon } from '../ui';
+import { Markdown } from './Markdown';
+import { ToolCard } from './ToolCard';
+import styles from './MessageList.module.css';
 
 /**
- * One entry in the transcript after grouping.
+ * The transcript: what the agent said, and the machinery rows folded away.
  *
- * The unit of the transcript used to be the *message*, so a turn that read four
- * files and made two edits produced twelve rows: six tool-call cards and six
- * result cards, none of which anybody reads. A run of tool work is one event in
- * the story ("it went and looked at things"), so it is one row that opens.
+ * Two things changed when this moved off antd and off the JS token module. The
+ * obvious one is that the colours follow the scheme now -- every row used to be
+ * painted from `styles/tokens.ts`, which is a snapshot of whichever palette was
+ * cached when the file was first read, and `useThemeMode()` had to be called here
+ * purely so this `memo` would notice a theme flip. That subscription is gone: CSS
+ * custom properties re-resolve on their own.
+ *
+ * The second is what a row *is*. A run of tool work used to render two rows per
+ * call -- the call card, then the result card holding the same text -- so a turn
+ * that read four files and made two edits cost twelve lines to say "it went and
+ * looked at things, then changed two files". One call is now one card, and the
+ * result is the card's body.
  */
+
+/** One entry in the transcript after grouping.
+ *
+ * The unit of the transcript used to be the *message*, which is why it read like
+ * a log. A run of tool work is one event in the story, so it is one row that
+ * opens. */
 export type TranscriptRow =
   | { kind: 'single'; key: string; message: ChatMessage }
   | { kind: 'run'; key: string; messages: ChatMessage[] };
@@ -160,6 +70,43 @@ export function groupTranscript(messages: ChatMessage[]): TranscriptRow[] {
   return rows;
 }
 
+/** A call and, when the transcript has it, the text that came back. */
+export interface RunEntry {
+  call: ToolCall;
+  /** `undefined` while the result has not arrived (a live run) or when the
+   *  stored transcript never paired them. */
+  result?: string;
+}
+
+/**
+ * Pair each tool call in a run with the tool message that answers it.
+ *
+ * The pairing key is the call id the backend assigns, which is the only thing
+ * that survives a session being written to disk and read back. Results that no
+ * call in this run claims come back separately rather than being dropped: the
+ * transcript on disk can be interrupted by a paragraph of prose between a call
+ * and its answer, and then the answer arrives in the run *after* the call.
+ */
+export function pairRun(messages: ChatMessage[]): { entries: RunEntry[]; orphans: ChatMessage[] } {
+  const results = new Map<string, string>();
+  for (const m of messages) {
+    if (m.role === 'tool' && m.tool_call_id) results.set(m.tool_call_id, m.content);
+  }
+  const entries: RunEntry[] = [];
+  for (const m of messages) {
+    if (m.role !== 'assistant') continue;
+    for (const call of m.tool_calls ?? []) {
+      const result = call.id ? results.get(call.id) : undefined;
+      if (result !== undefined) results.delete(call.id!);
+      entries.push({ call, result });
+    }
+  }
+  const orphans = messages.filter(
+    (m) => m.role === 'tool' && (!m.tool_call_id || results.has(m.tool_call_id)),
+  );
+  return { entries, orphans };
+}
+
 /** `read_file ×4 · edit_file` -- what the run did, not how many messages it took. */
 function summariseRun(messages: ChatMessage[]): { steps: number; tools: string } {
   const calls = messages.flatMap((m) => m.tool_calls ?? []);
@@ -173,301 +120,188 @@ function summariseRun(messages: ChatMessage[]): { steps: number; tools: string }
 }
 
 /**
- * A run of tool work, folded to one line.
+ * A historical call: collapsed to its own head until opened.
  *
- * The line is the whole point: `› 12 步 · read_file ×4 · edit_file ×2` costs one
- * row where the messages cost twelve, and the transcript goes back to reading as
- * prose with machinery behind it. Nothing is hidden that cannot be opened in one
- * click.
+ * Its body is the result the transcript stored, which is why the fold exists --
+ * a `read_file` answer is up to 2000 characters of file, and twelve of those
+ * end-to-end is the reason nobody scrolled.
  */
-export function ToolRun({ messages }: { messages: ChatMessage[] }) {
+function HistoryCard({
+  call,
+  result,
+  seq,
+  onAction,
+}: {
+  call: ToolCall;
+  result?: string;
+  seq: number;
+  onAction?: (prompt: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <ToolCard
+      tool={{
+        seq,
+        name: call.name,
+        args: call.arguments,
+        status: 'unknown',
+        // A diff in the answer is rendered as a diff; anything else is the raw
+        // block, which `ToolCard` picks by trying to parse it.
+        detail: result ?? null,
+      }}
+      collapsible={{ open, onToggle: () => setOpen((o) => !o) }}
+      onAction={onAction}
+    />
+  );
+}
+
+/**
+ * A tool answer no card claimed.
+ *
+ * Rare and worth keeping visible: the text is the output of something the agent
+ * ran, and a transcript that silently loses it cannot be trusted to show the
+ * rest either.
+ */
+function ResultRow({ message }: { message: ChatMessage }) {
+  const [open, setOpen] = useState(false);
+  const firstLine = message.content.split('\n')[0] ?? '';
+  const preview = firstLine.length > 110 ? `${firstLine.slice(0, 110)}…` : firstLine || '(empty)';
+  const lines = message.content.split('\n').length;
+  return (
+    <div data-ui="tool-result" className={styles.orphan}>
+      <button
+        type="button"
+        className={styles.orphanHead}
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <Icon src={open ? ChevronDown : ChevronRight} size="sm" tone="muted" />
+        <Chip status="neutral" size="sm" icon={Terminal}>
+          {message.name ?? 'tool'}
+        </Chip>
+        {!open && <span className={styles.orphanPreview}>{preview}</span>}
+        {!open && lines > 1 && <span className={styles.orphanLines}>{lines} lines</span>}
+      </button>
+      {open && <pre className={styles.orphanBody}>{message.content}</pre>}
+    </div>
+  );
+}
+
+/** A run of tool work, folded to one line. */
+export function ToolRun({
+  messages,
+  onAction,
+}: {
+  messages: ChatMessage[];
+  onAction?: (prompt: string) => void;
+}) {
   const [open, setOpen] = useState(false);
   const { steps, tools } = summariseRun(messages);
-  let seq = 0;
+  const { entries, orphans } = pairRun(messages);
   return (
-    <div style={{ width: '100%' }}>
-      <div
+    <div data-ui="tool-run" className={styles.run}>
+      <button
+        type="button"
+        className={styles.runHead}
+        aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') setOpen((o) => !o);
-        }}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          cursor: 'pointer',
-          padding: '3px 0',
-          color: color.muted,
-          fontFamily: font.sans,
-          fontSize: 12,
-        }}
       >
-        <span style={{ fontSize: 9 }}>{open ? '▾' : '▸'}</span>
-        <span>{steps} steps</span>
+        <Icon src={open ? ChevronDown : ChevronRight} size="sm" tone="muted" />
+        <span className={styles.runSteps}>{steps} steps</span>
         {tools && (
           <>
-            <span aria-hidden style={{ opacity: 0.5 }}>
+            <span aria-hidden className={styles.runDot}>
               ·
             </span>
-            <span
-              style={{
-                fontFamily: font.mono,
-                fontSize: 11,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {tools}
-            </span>
+            <span className={styles.runTools}>{tools}</span>
           </>
         )}
-        <span
-          aria-hidden
-          style={{ flex: 1, height: 1, background: color.line, minWidth: 12 }}
-        />
-      </div>
+        <span aria-hidden className={styles.rule} />
+      </button>
       {open && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 6 }}>
-          {messages.map((m, i) => {
-            const key = `r${i}-${m.tool_call_id || m.tool_calls?.[0]?.id || i}`;
-            if (m.role === 'assistant') {
-              return <ToolCallBlock key={key} calls={m.tool_calls ?? []} startSeq={seq++} />;
-            }
-            return (
-              <div key={key} style={{ display: 'flex', justifyContent: 'flex-start' }}>
-                <ToolResultCard name={m.name} content={m.content} />
-              </div>
-            );
-          })}
+        <div className={styles.runBody}>
+          {entries.map((entry, i) => (
+            <HistoryCard
+              key={entry.call.id ?? i}
+              call={entry.call}
+              result={entry.result}
+              seq={i + 1}
+              onAction={onAction}
+            />
+          ))}
+          {orphans.map((message, i) => (
+            <ResultRow key={message.tool_call_id ?? `o${i}`} message={message} />
+          ))}
         </div>
       )}
     </div>
   );
 }
 
-/// Historical tool calls start collapsed (name + one-line arg preview);
-/// the header toggles open AND closed — expanding swaps in the full card
-/// below it. Live cards during streaming stay expanded.
-function CollapsedToolCard({ call, seq }: { call: ToolCall; seq: number }) {
-  const [open, setOpen] = useState(false);
-  const preview = describeArgs(call.arguments);
-  if (open) {
-    // Expanded: the ToolCard itself carries the chevron in its title and
-    // collapses on click — rendering our own header too would duplicate the
-    // tool-name tag.
-    return (
-      <ToolCard
-        tool={{ seq, name: call.name, args: call.arguments, status: 'unknown' }}
-        standalone
-        collapsible={{ open: true, onToggle: () => setOpen(false) }}
-      />
-    );
-  }
+/** Tool calls carried by a message that also has prose: the prose is the row,
+ *  so the calls sit above it rather than being folded into a run. */
+function CallList({ calls, onAction }: { calls: ToolCall[]; onAction?: (prompt: string) => void }) {
   return (
-    <div
-      onClick={() => setOpen(true)}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6,
-        cursor: 'pointer',
-        padding: '4px 10px',
-        // Full width like every sibling. Without this the row sized to its
-        // content, so a card whose preview happened to be longer came out wider
-        // than the one above it -- four tool rows, four different right edges.
-        // `ToolResultCard` below already wraps for the same reason.
-        width: '100%',
-        border: `1px solid ${color.outline}`,
-        background: color.surface,
-      }}
-    >
-      <RightOutlined style={{ fontSize: 9, color: color.muted }} />
-      <Tag
-        style={{
-          // Neutral, and no check mark. The transcript stores that a tool ran
-          // and what came back, never whether it succeeded -- a denial and a
-          // timeout are just strings in the result -- so a green `✓` here was
-          // asserting something this data cannot support. The result card
-          // underneath is where the outcome is actually readable.
-          ...statusChip('neutral'),
-          borderRadius: radius.chip,
-          fontWeight: 700,
-        }}
-      >
-        {call.name}
-      </Tag>
-      <Text type="secondary" style={{ fontSize: 12, flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-        {preview}
-      </Text>
+    <div className={styles.calls}>
+      {calls.map((call, i) => (
+        <HistoryCard key={call.id ?? i} call={call} seq={i + 1} onAction={onAction} />
+      ))}
     </div>
   );
 }
 
-/// Historical tool RESULT: stored content can carry a huge spill excerpt
-/// (up to 2000 chars of raw output kept inline by the backend), so these
-/// start collapsed behind a one-line header too.
-function ToolResultCard({ name, content }: { name?: string; content: string }) {
-  const [open, setOpen] = useState(false);
-  const firstLine = content.split('\n')[0] ?? '';
-  const preview =
-    firstLine.length > 110 ? `${firstLine.slice(0, 110)}…` : firstLine || '(empty)';
-  const lines = content.split('\n').length;
+function SystemRow({ content }: { content: string }) {
   return (
-    <div style={{ width: '100%' }}>
-      <div
-        onClick={() => setOpen((o) => !o)}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          cursor: 'pointer',
-          padding: '4px 10px',
-          border: `1px solid ${color.outline}`,
-          background: color.surface,
-        }}
-      >
-        {open ? (
-          <DownOutlined style={{ fontSize: 9, color: color.muted }} />
-        ) : (
-          <RightOutlined style={{ fontSize: 9, color: color.muted }} />
-        )}
-        <Tag
-          style={{
-            ...statusChip('attention'),
-            borderRadius: radius.chip,
-            fontWeight: 700,
-            boxShadow: color.shadowSm,
-          }}
-        >
-          tool // {name}
-        </Tag>
-        {!open && (
-          <Text type="secondary" style={{ fontSize: 12, flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-            {preview}
-          </Text>
-        )}
-        {!open && lines > 1 && (
-          <Text type="secondary" style={{ fontSize: 11 }}>
-            {lines} lines
-          </Text>
-        )}
-      </div>
-      {open && (
-        <Alert
-          type="info"
-          showIcon
-          style={{
-            borderRadius: radius.chip,
-            border: `1px solid ${color.outline}`,
-            borderTopWidth: 0,
-          }}
-          message={
-            <Text style={{ fontSize: 12, whiteSpace: 'pre-wrap' }}>
-              {content.slice(0, 2000)}
-              {content.length > 2000 ? '…' : ''}
-            </Text>
-          }
-        />
-      )}
+    <div className={styles.system}>
+      <Chip status="running" size="sm">
+        system
+      </Chip>
+      <p className={styles.systemText}>{content}</p>
     </div>
   );
 }
 
-// Memoized: `messages` is referentially stable while a turn streams (only
-// the live-turn state changes), so without this every text delta re-parsed
-// the WHOLE transcript through react-markdown.
 export const MessageList = memo(function MessageList({
   messages,
+  onAction,
 }: {
   messages: ChatMessage[];
+  /** Sends a canned request to the agent -- the same path the composer uses. See
+   *  lib/quickActions.ts. */
+  onAction?: (prompt: string) => void;
 }): ReactNode {
-  // Subscription only, no value used: memo compares props, and `messages` does
-  // not change when the colour scheme does, so without a context read here this
-  // subtree would keep painting the previous scheme's colours. Reading the
-  // context is what makes the memo follow the theme.
-  useThemeMode();
-
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <div data-ui="transcript" className={styles.transcript}>
       {groupTranscript(messages).map((row) => {
-        // Runs are folded to one row; everything else keeps the per-message
-        // rendering it had. `row.key` is derived from the message that starts
-        // the row, never from the index alone -- index keys made expansion
-        // state migrate to the wrong card when the optimistic-append →
-        // transcript-refresh cycle shifted rows.
+        // `row.key` is derived from the message that starts the row, never from
+        // the index alone -- index keys made expansion state migrate to the wrong
+        // card when the optimistic-append → transcript-refresh cycle shifted rows.
         if (row.kind === 'run') {
-          return <ToolRun key={row.key} messages={row.messages} />;
+          return <ToolRun key={row.key} messages={row.messages} onAction={onAction} />;
         }
         const m = row.message;
         const key = row.key;
         if (m.role === 'user') {
           return (
-            <div key={key} style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <div
-                style={{
-                  maxWidth: '80%',
-                  background: color.brandAcid,
-                  borderRadius: radius.tile,
-                  padding: '10px 16px',
-                  lineHeight: 1.65,
-                  // `onAcid`, not `ink`. This is the acid fill, so the text on
-                  // it is the one token measured against acid (13.28:1). `ink`
-                  // is near-white in the dark scheme, so the user's own message
-                  // was rendering at about 1.3:1 -- measured, not guessed: 320
-                  // near-white pixels inside the bubble in dark, 0 in light.
-                  //
-                  // No border and no shadow: the fill already separates the
-                  // bubble from the transcript, and a grey ring around a green
-                  // block is what made every filled control look like a mistake.
-                  color: color.onAcid,
-                  fontWeight: 500,
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                }}
-              >
-                {/* Plain text: the user's pasted snake_case / #include lines
-                    are code, not prose to italicize. */}
-                {m.content}
-              </div>
+            // Plain text, not markdown: the user's pasted `snake_case` and
+            // `#include` lines are code, not prose to italicize.
+            <div key={key} data-ui="user-bubble" className={styles.bubble}>
+              {m.content}
             </div>
           );
         }
         if (m.role === 'assistant') {
           return (
-            <div key={key} style={{ maxWidth: '88%', lineHeight: 1.7 }}>
-              {m.tool_calls && m.tool_calls.length > 0 && (
-                <ToolCallBlock calls={m.tool_calls} />
-              )}
+            <div key={key} className={styles.assistant}>
+              {!!m.tool_calls?.length && <CallList calls={m.tool_calls} onAction={onAction} />}
               {m.content && <Markdown>{m.content}</Markdown>}
             </div>
           );
         }
         if (m.role === 'tool') {
-          return (
-            <div key={key} style={{ display: 'flex', justifyContent: 'flex-start', maxWidth: '92%' }}>
-              <ToolResultCard name={m.name} content={m.content} />
-            </div>
-          );
+          return <ResultRow key={key} message={m} />;
         }
-        return (
-          <div key={key}>
-            <Tag
-              style={{
-                ...statusChip('running'),
-                borderRadius: radius.chip,
-                fontWeight: 700,
-              }}
-            >
-              system
-            </Tag>
-            <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'pre-wrap' }}>
-              {m.content}
-            </Text>
-          </div>
-        );
+        return <SystemRow key={key} content={m.content} />;
       })}
     </div>
   );

@@ -43,6 +43,23 @@ const SOURCES = import.meta.glob(
     '../../shell/*.css',
     '../../shell/panes/*.tsx',
     '../../shell/panes/*.css',
+    // Stage 3 moved the transcript onto the layer, so it is gated like the layer.
+    // Named one file at a time rather than `../../components/*.tsx`: the two
+    // missing from the list -- `ActionButton.tsx`, `Dialogs.tsx` -- are the antd
+    // leftovers stage 7 deletes, and a wildcard would fail the suite over code
+    // that is already scheduled to die.
+    '../../components/LiveRun.tsx',
+    '../../components/LiveRun.module.css',
+    '../../components/Markdown.tsx',
+    '../../components/Markdown.module.css',
+    '../../components/MessageList.tsx',
+    '../../components/MessageList.module.css',
+    '../../components/StepProgress.tsx',
+    '../../components/StepProgress.module.css',
+    '../../components/ToolCard.tsx',
+    '../../components/ToolCard.module.css',
+    '../../views/ChatView.tsx',
+    '../../views/ChatView.module.css',
     '../../dev/*.tsx',
     '../../dev/*.css',
   ],
@@ -133,6 +150,8 @@ describe('Primitive layer and shell conventions', () => {
     expect([...anchors].sort()).toEqual([
       'agents-pane',
       'button',
+      'callout',
+      'chat',
       'checkbox',
       'chip',
       'empty-state',
@@ -144,6 +163,8 @@ describe('Primitive layer and shell conventions', () => {
       'inspector-body',
       'inspector-rail',
       'key-value',
+      'live-run',
+      'markdown',
       'menu',
       'menu-item',
       'menu-separator',
@@ -162,6 +183,8 @@ describe('Primitive layer and shell conventions', () => {
       'status-bar',
       'status-dot',
       'status-item',
+      'step-item',
+      'step-progress',
       'switch',
       'tab',
       'tabs',
@@ -170,6 +193,14 @@ describe('Primitive layer and shell conventions', () => {
       'toast',
       'toast-stack',
       'todos-pane',
+      'tool-card',
+      'tool-card-head',
+      'tool-diff',
+      'tool-output',
+      'tool-result',
+      'tool-run',
+      'transcript',
+      'user-bubble',
       'wordmark',
     ]);
   });

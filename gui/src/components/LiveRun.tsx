@@ -1,20 +1,28 @@
 import { useEffect, useState } from 'react';
-import { font, radius, color, space, statusChip } from '../styles/tokens';
-import { ToolCard } from './ToolCard';
+import { ChevronDown, ChevronRight } from 'lucide-react';
+
 import type { ToolCardState } from '../types';
+import { Icon, StatusDot } from '../ui';
+import type { ChipStatus } from '../ui';
+import { ToolCard } from './ToolCard';
+import styles from './LiveRun.module.css';
 
 /**
  * A live turn's tool work, folded to one line while it happens.
  *
- * The historical transcript folds a finished run to `▸ 2 步 · read_file · edit_file`
- * (see `MessageList`). A running one cannot use the same line, because the
- * question during a run is not "what did it do" but "what is it doing *now*" --
- * so the header names the tool that is in flight and counts the seconds, and
- * everything already finished waits behind the fold.
+ * The historical transcript folds a finished run to `▸ 12 steps · read_file ×4 ·
+ * edit_file ×2` (see `MessageList`). A running one cannot use the same line,
+ * because the question during a run is not "what did it do" but "what is it doing
+ * *now*" -- so the header names the tool that is in flight and counts the seconds,
+ * and everything already finished waits behind the fold.
  *
  * That is the difference between a progress line and a log. Five cards scrolling
- * past is a log; `⏺ edit_file · 12s · 4 步` is a status, and it costs one row
+ * past is a log; `⏺ edit_file · 12s · 4 steps` is a status, and it costs one row
  * whether the turn has taken two steps or forty.
+ *
+ * The state colour is a `StatusDot` rather than a swatch of `statusChip().color`:
+ * the chip helper returned a colour string for an inline style, which is the
+ * exact shape of the bug that kept a run painted in the previous scheme's green.
  */
 
 /** `read_file ×4 · edit_file` -- the shape of the work, not its length. */
@@ -54,69 +62,38 @@ export function LiveRun({
   const current = [...sorted].reverse().find((t) => t.status === 'running');
   const failed = sorted.filter((t) => t.status === 'failed').length;
 
-  // The dot reports the session, not the individual step: a run with a failure
-  // in it is a failed run even if the steps after it succeeded, and a run with
+  // The dot reports the run, not the individual step: a run with a failure in it
+  // is a failed run even if the steps after it succeeded, and a run with
   // something in flight is neither.
-  const chip = statusChip(busy ? 'running' : failed > 0 ? 'failed' : 'ok');
+  const status: ChipStatus = busy ? 'running' : failed > 0 ? 'failed' : 'ok';
 
   return (
-    <div style={{ width: '100%', margin: '6px 0' }}>
-      <div
+    <div data-ui="live-run" className={styles.root}>
+      <button
+        type="button"
+        className={styles.head}
+        aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') setOpen((o) => !o);
-        }}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          cursor: 'pointer',
-          padding: '3px 0',
-          fontFamily: font.sans,
-          fontSize: 12,
-        }}
       >
-        <span style={{ fontSize: 9, color: color.muted }}>{open ? '▾' : '▸'}</span>
-        <span
-          aria-hidden
-          style={{
-            width: 6,
-            height: 6,
-            flex: '0 0 auto',
-            borderRadius: radius.chip,
-            background: chip.color,
-          }}
-        />
+        <Icon src={open ? ChevronDown : ChevronRight} size="sm" tone="muted" />
+        <StatusDot status={status} pulse={busy} />
         {current ? (
-          // The tool in flight, by name. This is the one piece of the run that
-          // is worth a permanent line.
-          <span style={{ color: color.ink, fontFamily: font.mono }}>{current.name}</span>
+          // The tool in flight, by name. This is the one piece of the run that is
+          // worth a permanent line.
+          <span className={styles.current}>{current.name}</span>
         ) : (
-          <span style={{ color: color.muted }}>{sorted.length} steps</span>
+          <span className={styles.steps}>{sorted.length} steps</span>
         )}
-        {seconds !== null && (
-          <span style={{ color: color.muted, fontFamily: font.mono }}>{seconds}s</span>
-        )}
+        {seconds !== null && <span className={styles.steps}>{seconds}s</span>}
         {sorted.length > 1 && (
-          <span
-            style={{
-              color: color.muted,
-              fontFamily: font.mono,
-              fontSize: 11,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
+          <span className={styles.tools}>
             {sorted.length} steps · {toolCounts(sorted)}
           </span>
         )}
-        <span aria-hidden style={{ flex: 1, height: 1, background: color.line, minWidth: 12 }} />
-      </div>
+        <span aria-hidden className={styles.rule} />
+      </button>
       {open && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: space.controlGap, paddingTop: 6 }}>
+        <div className={styles.body}>
           {sorted.map((t) => (
             <ToolCard key={t.seq} tool={t} onAction={onAction} />
           ))}

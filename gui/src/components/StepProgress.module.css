@@ -1,0 +1,57 @@
+/*
+ * The progress row, and the five states it can be in.
+ *
+ * Every rule below keys on `data-state` rather than on a class the component
+ * appends, so the pairing between a fill and its ink cannot come apart -- the
+ * failure the old `ink(state)` / `fill(state)` helper pair invited.
+ */
+.root {
+  display: flex;
+  align-items: stretch;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  font-family: var(--ff-sans);
+}
+
+.step {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-3);
+  border-bottom: 2px solid transparent;
+  color: var(--step-pending-ink);
+  font-size: var(--fs-body);
+  font-weight: var(--fw-book);
+  /* A report, not a control: the cursor stays an arrow on purpose. */
+  cursor: default;
+}
+
+.mark {
+  /* Only a pending step dims, and only the glyph: the label has to stay
+     readable or "not yet" reads as "unavailable". */
+  opacity: 1;
+}
+
+.step[data-state='done'] {
+  background: var(--step-done-bg);
+  border-radius: var(--r-chip);
+  color: var(--step-done-ink);
+}
+
+.step[data-state='failed'] {
+  background: var(--step-failed-bg);
+  border-radius: var(--r-chip);
+  color: var(--step-failed-ink);
+}
+
+/* The current step's only chrome is the rule underneath it, in the brand green
+   that is a shape rather than text (`--step-rule` is 3:1+ on both grounds). */
+.step[data-state='current'] {
+  border-bottom-color: var(--step-rule);
+  color: var(--step-current-ink);
+  font-weight: var(--fw-label);
+}
+
+.step[data-state='pending'] .mark {
+  opacity: 0.7;
+}

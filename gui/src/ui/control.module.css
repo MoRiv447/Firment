@@ -49,6 +49,21 @@
   font-family: var(--ff-mono);
 }
 
+/*
+ * The one box that grows: `TextArea` sets `data-grow` and hands up a line count,
+ * so the composer follows what someone typed instead of scrolling inside two
+ * rows. The cap is a count multiplied by the frame's own line height, which is
+ * why it is a `calc()` and not a pixel -- at a bigger type step eight rows are
+ * taller, and "eight rows" is what the caller meant.
+ *
+ * Without `field-sizing` support the rule is inert and the box keeps the height
+ * its `rows` attribute asks for.
+ */
+.frame[data-grow='true'] > [data-ui='textarea'] {
+  field-sizing: content;
+  max-height: calc(var(--textarea-max-rows, 8) * var(--lh-body) * 1em);
+}
+
 .trigger {
   /* A `Select` trigger is a button wearing the frame: it needs the text alignment
      and the cursor of a control, not the UA centring of a `<button>`. */

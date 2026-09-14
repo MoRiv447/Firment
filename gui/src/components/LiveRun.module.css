@@ -1,0 +1,75 @@
+/*
+ * The live run line, and the cards behind it.
+ *
+ * Same row shape as the historical fold in `MessageList.module.css` -- glyph,
+ * mark, words, hairline -- and deliberately written twice rather than shared:
+ * the two lines differ in what they emphasise (one names the tool in flight and
+ * claims the column's full width, the other counts steps in muted type), and a
+ * shared sheet for two consumers is how one of them stops being legible.
+ */
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-1) 0;
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-family: var(--ff-sans);
+  font-size: var(--fs-minor);
+  text-align: left;
+  cursor: pointer;
+}
+
+.head:hover {
+  background: var(--hover);
+}
+
+/* The tool that is running right now: body ink against a muted row, so the one
+   live fact in the line is the one thing that stands out. */
+.current {
+  flex: 0 0 auto;
+  color: var(--ink);
+  font-family: var(--ff-mono);
+}
+
+.steps {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-family: var(--ff-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.tools {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rule {
+  flex: 1 1 auto;
+  min-width: var(--sp-3);
+  height: 1px;
+  background: var(--line);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding-left: var(--sp-4);
+}

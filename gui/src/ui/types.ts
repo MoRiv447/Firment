@@ -30,6 +30,15 @@ export type Tier = 'primary' | 'secondary' | 'ghost' | 'danger';
  */
 export type ChipStatus = 'ok' | 'failed' | 'running' | 'attention' | 'neutral';
 
+/**
+ * What a `Callout` is telling you.
+ *
+ * Deliberately not `ChipStatus`: a block of notice prose has no "running" and no
+ * "no judgement" state, and its three tones are the three fill/ink pairs in the
+ * palette that stay legible under a paragraph (`--info-ink` on `--info-bg`, etc).
+ */
+export type CalloutTone = 'info' | 'warn' | 'failed';
+
 /** Which side of its anchor a floating panel lands on, after `place()` flips it. */
 export type Side = 'top' | 'bottom' | 'left' | 'right';
 

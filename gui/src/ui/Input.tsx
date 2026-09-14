@@ -1,6 +1,6 @@
 import { Search } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { InputHTMLAttributes, Ref, TextareaHTMLAttributes } from 'react';
+import type { CSSProperties, InputHTMLAttributes, Ref, TextareaHTMLAttributes } from 'react';
 
 import { cx } from './cx';
 import frame from './control.module.css';
@@ -68,6 +68,13 @@ export function TextInput({
 export interface TextAreaProps extends NativeTextArea {
   /** A line count, not a pixel height -- see the note on `TextArea`. */
   rows?: number;
+  /**
+   * Grow with what is typed, stopping at this many lines.
+   *
+   * Off by default, because a box that grows is right for a composer and wrong
+   * for a settings field whose height is what keeps the panel from moving.
+   */
+  maxRows?: number;
   mono?: boolean;
   invalid?: boolean;
   ref?: Ref<HTMLTextAreaElement>;
@@ -78,7 +85,11 @@ export interface TextAreaProps extends NativeTextArea {
  *
  * `rows` is a count of lines rather than a height so the box follows the type step
  * -- eight rows at `--fs-body` is a different box than eight rows at
- * `--fs-minor`, and "eight lines" is what the author meant either way.
+ * `--fs-minor`, and "eight lines" is what the author meant either way. `maxRows`
+ * is a count for the same reason, and it reaches the stylesheet as a custom
+ * property rather than as a `maxHeight` so the height stays in the cascade: a
+ * media query or a bigger type step can still reach a `calc()` in lines, and
+ * cannot reach a pixel a component wrote on the element.
  */
 export function TextArea({
   mono = false,
@@ -86,6 +97,7 @@ export function TextArea({
   id,
   disabled,
   rows = 4,
+  maxRows,
   ref,
   ...rest
 }: TextAreaProps) {
@@ -98,6 +110,10 @@ export function TextArea({
       data-mono={mono || undefined}
       data-disabled={disabled || undefined}
       data-invalid={a11y['aria-invalid'] ? 'true' : undefined}
+      data-grow={maxRows ? 'true' : undefined}
+      style={
+        maxRows ? ({ '--textarea-max-rows': String(maxRows) } as CSSProperties) : undefined
+      }
     >
       <textarea
         {...rest}

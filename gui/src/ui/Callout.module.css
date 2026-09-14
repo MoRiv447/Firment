@@ -1,0 +1,67 @@
+/*
+ * The notice block.
+ *
+ * `align-items: flex-start` rather than `center`: the glyph hangs at the first
+ * line of text, and a mark that floats level with a four-line paragraph is
+ * decoration rather than a signal.
+ */
+.root {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  box-sizing: border-box;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-control);
+  font-family: var(--ff-sans);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+}
+
+.glyph {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding-top: 0.2em;
+}
+
+.text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--sp-05);
+  min-width: 0;
+}
+
+.title {
+  margin: 0;
+  font-weight: var(--fw-label);
+}
+
+.body {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.root[data-mono='true'] .body {
+  font-family: var(--ff-mono);
+  font-size: var(--fs-minor);
+  line-height: var(--lh-mono);
+  white-space: pre-wrap;
+}
+
+/* Fill and ink are one documented pair each, so a tone cannot be put together
+   from two tokens measured against different grounds. */
+.root[data-tone='info'] {
+  background: var(--info-bg);
+  color: var(--info-ink);
+}
+
+.root[data-tone='warn'] {
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+}
+
+.root[data-tone='failed'] {
+  background: var(--step-failed-bg);
+  color: var(--step-failed-ink);
+}

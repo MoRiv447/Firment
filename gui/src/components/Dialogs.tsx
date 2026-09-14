@@ -75,7 +75,7 @@ export function PermissionDialog({
           This chat wants to run a tool before continuing.
         </Text>
       </Space>
-      <ToolCard tool={toolCard} standalone />
+      <ToolCard tool={toolCard} />
       {req.reason && (
         <Alert style={{ marginTop: 8 }} type="info" showIcon message={<Text>{req.reason}</Text>} />
       )}

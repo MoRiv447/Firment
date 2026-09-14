@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { groupTranscript } from '../MessageList';
+import { groupTranscript, pairRun } from '../MessageList';
 import type { ChatMessage } from '../../types';
 
 /**
@@ -79,5 +79,62 @@ describe('groupTranscript', () => {
 
   it('handles an empty transcript', () => {
     expect(groupTranscript([])).toEqual([]);
+  });
+});
+
+/**
+ * A call and its answer are two messages, and the card needs both.
+ *
+ * The diff, the `+N -M` counts and the quick actions all come from the tool
+ * result, which the live turn carries on the card itself. A reopened session has
+ * no live turn -- so every historical card rendered as if the tool had never
+ * answered, which is why the same edit looked rich while it happened and bare
+ * afterwards. `pairRun` is the join; these are the four cases it has to get
+ * right, including the one where joining is wrong: an answer no call claimed.
+ */
+describe('pairRun', () => {
+  const callMessage = (...calls: [string, string][]): ChatMessage => ({
+    role: 'assistant',
+    content: '',
+    tool_calls: calls.map(([id, name]) => ({ id, name, arguments: {} })),
+  });
+
+  it('hands a call the result that carries its id', () => {
+    const { entries } = pairRun([
+      callMessage(['t1', 'edit_file']),
+      result('t1', '--- src/main.c\n+++ src/main.c\n@@ -1,1 +1,1 @@\n-a\n+b'),
+    ]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].call.name).toBe('edit_file');
+    expect(entries[0].result).toContain('@@');
+  });
+
+  it('leaves the result undefined while a call is still in flight', () => {
+    const { entries, orphans } = pairRun([callMessage(['t1', 'build'])]);
+    expect(entries[0].result).toBeUndefined();
+    // Nothing to show is not the same as something hidden.
+    expect(orphans).toEqual([]);
+  });
+
+  it('pairs two calls from one assistant message in order', () => {
+    const { entries } = pairRun([
+      callMessage(['t1', 'read_file'], ['t2', 'edit_file']),
+      result('t1', 'first'),
+      result('t2', 'second'),
+    ]);
+    expect(entries.map((e) => [e.call.id, e.result])).toEqual([
+      ['t1', 'first'],
+      ['t2', 'second'],
+    ]);
+  });
+
+  it('keeps an answer no call claimed, and does not count it twice', () => {
+    // An id with no call is a real transcript shape: a session interrupted
+    // between the tool running and the assistant message being written. Dropping
+    // the row would drop the only copy of what the tool printed.
+    const messages = [callMessage(['t1', 'read_file']), result('t1', 'used'), result('t9', 'lost')];
+    const { entries, orphans } = pairRun(messages);
+    expect(entries).toHaveLength(1);
+    expect(orphans.map((m) => m.content)).toEqual(['lost']);
   });
 });

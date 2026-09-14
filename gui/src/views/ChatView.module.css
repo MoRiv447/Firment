@@ -1,0 +1,183 @@
+/*
+ * Chat pane: transcript, live turn, composer.
+ *
+ * The scroll region is the only element in here that scrolls, and it is the
+ * reason two of the rules below exist:
+ *
+ * * The jump pill is `position: sticky`, not `absolute`. An absolutely
+ *   positioned child of a scroll container is placed against the *content*
+ *   box, so "bottom: 12px" puts it at the bottom of the transcript -- which is
+ *   exactly where a user who scrolled up is not looking.
+ * * Nothing in `.scroll` carries `transform`, `filter` or `will-change`. An
+ *   ancestor with one of those becomes the containing block for a `fixed`
+ *   popover, so the day someone adds a fade-in here every `Tooltip` in the
+ *   transcript starts opening in the wrong place.
+ */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-6) var(--sp-8);
+}
+
+/* ------------------------------------------------------------------ */
+/* The live row: spinner, what the agent is doing, and one number. */
+/* ------------------------------------------------------------------ */
+
+.phase {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--muted);
+  font-size: var(--fs-minor);
+}
+
+.phaseText {
+  font-family: var(--ff-mono);
+}
+
+.phaseTimer {
+  /* The counter climbs while everything else in the row is still, so it may
+     not change width as it does -- `tabular-nums` is what keeps the row from
+     twitching once a second. */
+  margin-inline-start: auto;
+  font-family: var(--ff-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------------ */
+/* Reasoning. The transcript shows the tail while there is no answer yet,
+   and collapses into a disclosure the moment there is one. */
+/* ------------------------------------------------------------------ */
+
+.thinking {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  color: var(--muted);
+  font-style: italic;
+  font-size: var(--fs-minor);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: var(--lh-body);
+}
+
+.reasoning {
+  border: 1px solid var(--line);
+  border-radius: var(--r-control);
+  background: var(--surface);
+  font-size: var(--fs-minor);
+}
+
+.reasoningHead {
+  /* A `summary` is the only element here that needs its marker removed, and it
+     is reached by its class rather than by a type selector. */
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.reasoningHead::marker,
+.reasoningHead::-webkit-details-marker {
+  display: none;
+  content: '';
+}
+
+.reasoningBody {
+  padding: var(--sp-2);
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: var(--lh-body);
+}
+
+/* ------------------------------------------------------------------ */
+/* Jump-to-bottom. */
+/* ------------------------------------------------------------------ */
+
+.jump {
+  position: sticky;
+  bottom: 0;
+  align-self: center;
+  /* Sticky keeps the element in flow, so the row it occupies would otherwise
+     push the last message up by its own height every time it appears. */
+  margin-bottom: calc(var(--h-min) * -1);
+  z-index: var(--z-sticky);
+}
+
+/* ------------------------------------------------------------------ */
+/* Composer. */
+/* ------------------------------------------------------------------ */
+
+.composer {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-8) var(--sp-4);
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  font-size: var(--fs-meta);
+  color: var(--muted);
+}
+
+.provider {
+  font-family: var(--ff-mono);
+}
+
+.model {
+  font-family: var(--ff-mono);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cwd {
+  /* The path is the least important thing in the row and the longest, so it is
+     the one that gives way; the full value stays in the `title`. */
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-inline-start: auto;
+  font-family: var(--ff-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inputRow {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-2);
+}
+
+.inputRow > :first-child {
+  flex: 1 1 auto;
+}

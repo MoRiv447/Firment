@@ -74,9 +74,10 @@ describe('LiveRun', () => {
         tools={[tool({ seq: 1, name: 'build', status: 'failed' }), tool({ seq: 2, name: 'read_file' })]}
       />,
     );
-    const dot = container.querySelector('span[aria-hidden]') as HTMLElement;
-    // The dot carries the hue; the exact token is the design system's business.
-    expect(dot.style.background).not.toBe('');
+    const dot = container.querySelector('[data-ui="status-dot"]') as HTMLElement;
+    // The run reports itself through this attribute; which hue `failed` maps to
+    // is `StatusDot`'s own contract, not this component's.
+    expect(dot.getAttribute('data-status')).toBe('failed');
   });
 
   it('renders nothing at all when no tool has run', () => {

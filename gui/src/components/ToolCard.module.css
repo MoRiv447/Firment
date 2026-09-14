@@ -1,0 +1,172 @@
+/*
+ * The tool card.
+ *
+ * `--r-panel` and one hairline: the transcript is a column of prose with
+ * machinery in it, and a card that drew three borders, a shadow and a 16px
+ * radius was the loudest thing on the page. Elevation is `--shadow-sm` --
+ * `tokens.css` says a hairline separates first, so shadows stay soft.
+ */
+.card {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--outline);
+  border-radius: var(--r-panel);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  color: var(--ink);
+  font-family: var(--ff-sans);
+  font-size: var(--fs-body);
+}
+
+/*
+ * The header is a `<button>` when the card folds and a `<div>` when it does not,
+ * and both of them get this one rule -- so the reset below is what makes the two
+ * elements land at the same height, the same text alignment and the same type.
+ */
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  box-sizing: border-box;
+  width: 100%;
+  min-height: var(--h-input);
+  padding: var(--sp-1) var(--sp-2);
+  border: 0;
+  border-radius: var(--r-panel) var(--r-panel) 0 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--fs-minor);
+  text-align: left;
+}
+
+/* The hairline under the header separates it from a body, so it exists only
+   while there is one -- a collapsed card with a line across its own middle is a
+   card that looks broken. */
+.card[data-open='true'] .head {
+  border-bottom: 1px solid var(--line);
+}
+
+/* Only a header that folds is allowed to invite a click: the live card's header
+   says the same thing and does nothing when you press it. */
+.head[data-fold='true'] {
+  cursor: pointer;
+}
+
+.head[data-fold='true']:hover {
+  background: var(--hover);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+}
+
+/* The subject of the call: a path, a pattern, a command. Mono because it is a
+   literal the agent used, not a sentence about it. */
+.path {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-minor);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seq {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+.args,
+.summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-minor);
+  line-height: var(--lh-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.args {
+  font-family: var(--ff-mono);
+}
+
+/* `margin-inline-start: auto` is the whole alignment story: the counts go to the
+   far edge of the header and nothing has to measure the row to put them there. */
+.counts {
+  display: inline-flex;
+  gap: var(--sp-2);
+  margin-inline-start: auto;
+  font-family: var(--ff-mono);
+  font-size: var(--fs-minor);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--fw-label);
+  white-space: nowrap;
+}
+
+/* The diff family rather than the brand green: an added line and a passed check
+   are not the same message, and acid is identity, not feedback. */
+.counts [data-kind='added'] {
+  color: var(--diff-added-ink);
+}
+
+.counts [data-kind='removed'] {
+  color: var(--diff-removed-ink);
+}
+
+.diff,
+.raw {
+  box-sizing: border-box;
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-control);
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-minor);
+  line-height: var(--lh-mono);
+}
+
+.line {
+  padding: 0 var(--sp-1);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.line[data-kind='added'] {
+  background: var(--diff-added-bg);
+  color: var(--diff-added-ink);
+}
+
+.line[data-kind='removed'] {
+  background: var(--diff-removed-bg);
+  color: var(--diff-removed-ink);
+}
+
+/* A hunk header is structure, so it is the one line kind allowed to look like
+   the interface's own grey rather than like content. */
+.line[data-kind='hunk'] {
+  color: var(--diff-meta-ink);
+  font-weight: var(--fw-label);
+}
+
+/* The action row under a finished edit. `--sp-1` of top margin is the only
+   spacing that is not a `gap`, because this row is the last thing in the body
+   and wants to sit further from the diff than the body's own rhythm. */
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+}

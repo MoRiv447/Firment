@@ -13,6 +13,7 @@ import type { ReactNode } from 'react';
 import { currentThemeSetting, setThemeSetting } from '../lib/theme';
 import {
   Button,
+  Callout,
   Checkbox,
   Chip,
   Confirm,
@@ -410,6 +411,18 @@ export function Showcase() {
             }}
             onCancel={() => setConfirmOpen(false)}
           />
+        </Section>
+
+        <Section title="Callout" note="Three tones; each fill and ink pair is taken from one [data-tone] rule.">
+          <div className={styles.types}>
+            <Callout>Provider key verified against the endpoint.</Callout>
+            <Callout tone="warn" title="The agent is waiting">
+              No event for 132s — the stream budget is 120s, so this turn may be wedged.
+            </Callout>
+            <Callout tone="failed" mono title="error: failed to open .cargo-build-lock">
+              {'拒绝访问。 (os error 5)\nretry with CARGO_BUILD_JOBS=1'}
+            </Callout>
+          </div>
         </Section>
 
         <Section title="Content" note="What a pane shows when it has nothing, something, or a number.">

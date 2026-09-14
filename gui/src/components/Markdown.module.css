@@ -1,0 +1,135 @@
+/*
+ * Prose, at the size the transcript is read at.
+ *
+ * Every rule is keyed to a class that `Markdown.tsx` puts on the element it
+ * renders. That is longer than `.root p { … }` and it is on purpose: a module
+ * sheet that reaches for a bare element selector styles every `<p>` in the app
+ * through its hashed class (see the gate in `ui/__tests__/conventions.test.ts`),
+ * and the transcript is the one place where a stray descendant rule used to
+ * change what a tool card looked like.
+ *
+ * Vertical rhythm comes from each block's own margin rather than from a `gap` on
+ * the root: markdown nests (a list inside a paragraph inside a list item) and a
+ * gap only spaces the top level.
+ */
+.root {
+  color: var(--ink);
+  font-family: var(--ff-sans);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  overflow-wrap: anywhere;
+}
+
+.p {
+  margin: 0 0 var(--sp-2);
+}
+
+.p:last-child {
+  margin-bottom: 0;
+}
+
+.list {
+  margin: 0 0 var(--sp-2);
+  padding-left: var(--sp-5);
+}
+
+.item + .item {
+  margin-top: var(--sp-1);
+}
+
+.h1,
+.h2,
+.h3 {
+  margin: var(--sp-3) 0 var(--sp-2);
+  font-weight: var(--fw-label);
+  line-height: var(--lh-tight);
+}
+
+/* The ladder is narrow on purpose: an agent's heading is a section of a reply,
+   not a page title, and `--fs-display` belongs to the wordmark and nothing else. */
+.h1 {
+  font-size: var(--fs-ui);
+}
+
+.h2 {
+  font-size: var(--fs-body);
+}
+
+.h3 {
+  font-size: var(--fs-minor);
+}
+
+/* Code fences scroll inside themselves. Without this a long line put a
+   horizontal scrollbar on the whole transcript, which moved every other message
+   sideways. */
+.pre {
+  box-sizing: border-box;
+  margin: 0 0 var(--sp-2);
+  padding: var(--sp-2);
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-control);
+  background: var(--bg);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-minor);
+  line-height: var(--lh-mono);
+}
+
+.inlineCode {
+  padding: 0 var(--sp-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-chip);
+  background: var(--surface-raised);
+  color: var(--ink);
+  font-family: var(--ff-mono);
+  font-size: 0.95em;
+}
+
+.link {
+  color: var(--brand-ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.quote {
+  margin: 0 0 var(--sp-2);
+  padding-left: var(--sp-3);
+  border-left: 2px solid var(--outline);
+  color: var(--muted);
+}
+
+.rule {
+  height: 1px;
+  margin: var(--sp-3) 0;
+  border: 0;
+  background: var(--line);
+}
+
+/* The wrapper scrolls, the table keeps its own borders: a wide table inside a
+   prose column must not widen the column, which is the same rule as `.pre`. */
+.tableWrap {
+  margin: 0 0 var(--sp-2);
+  overflow-x: auto;
+}
+
+.table {
+  border-collapse: collapse;
+  font-size: var(--fs-minor);
+}
+
+.th,
+.td {
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--line);
+  text-align: left;
+}
+
+.th {
+  background: var(--surface-raised);
+  color: var(--ink);
+  font-weight: var(--fw-label);
+}
+
+.td {
+  color: var(--ink);
+}

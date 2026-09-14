@@ -1,23 +1,34 @@
-import { Alert, Button, Input, Space, Spin, Tag, Typography } from 'antd';
-import { ArrowDownOutlined, SendOutlined, StopOutlined } from '@ant-design/icons';
 import { useEffect, useRef, useState } from 'react';
-import { MessageList, Markdown } from '../components/MessageList';
+import { ArrowDown, Bot, Brain, Square, Send } from 'lucide-react';
+
 import { LiveRun } from '../components/LiveRun';
+import { Markdown } from '../components/Markdown';
+import { MessageList } from '../components/MessageList';
 import { StepProgress } from '../components/StepProgress';
+import { formatDuration } from '../lib/format';
 import { shouldShowStallNotice, stallNotice } from '../lib/stallHint';
 import { workflowSteps } from '../lib/steps';
 import type { RunningTurn, SessionDto } from '../types';
-import { color, font, radius, statusChip } from '../styles/tokens';
+import { Button, Callout, Chip, EmptyState, Icon, Spinner, TextArea } from '../ui';
+import styles from './ChatView.module.css';
 
-const { Text } = Typography;
-const { TextArea } = Input;
-
-function fmtElapsed(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  return `${Math.floor(s / 60)}m ${s % 60}s`;
-}
-
+/**
+ * The chat pane: the transcript, the live turn above it, and the composer below.
+ *
+ * Three things in here are load-bearing and easy to break by accident, so they
+ * are the parts this file keeps on the record:
+ *
+ * * **Stick-to-bottom scrolling.** The stream follows only while the user is at
+ *   the bottom, and a scroll up detaches until they re-engage -- a transcript
+ *   that jumps while you are reading the middle of it is unusable.
+ * * **The stall notice.** It waits until past the agent's own stream budget,
+ *   because a model writing one enormous tool-call argument is silent without
+ *   anything being wrong.
+ * * **The two timers.** The row next to the spinner used to reset whenever any
+ *   text arrived, so a chatty stream kept reporting "0s" while a 90-second build
+ *   ran underneath it. One number is the running tool's own elapsed time, the
+ *   other is the idle gap, and they are never the same reading.
+ */
 export function ChatView({
   session,
   running,
@@ -43,9 +54,8 @@ export function ChatView({
   // visible turn (text delta, new tool, or a tool finishing) for too long.
   // Tool STATUS transitions count as change: a 90s build is a running tool,
   // not a wedged turn. What does NOT count here is a model writing one huge
-  // tool-call argument — the turn is alive downstream but invisible to this
-  // key, which is why the notice waits until past the agent's own 120s
-  // stream budget (see STALL_NOTICE_SECS) rather than crying at 60s.
+  // tool-call argument — which is why the notice waits until past the agent's
+  // own 120s stream budget (see STALL_NOTICE_SECS) rather than crying at 60s.
   const lastChangeRef = useRef<number>(Date.now());
   const [stuck, setStuck] = useState(false);
   const notice = stallNotice(idleSecs);
@@ -72,10 +82,6 @@ export function ChatView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running]);
 
-  // Stick-to-bottom scrolling: follow the stream only while the user is at
-  // the bottom; scrolling up detaches (a jump pill appears) until they
-  // re-engage. The scroll itself is coalesced into one rAF per change so a
-  // delta burst costs one layout read+write, not one per event.
   const stickRef = useRef(true);
   const rafRef = useRef<number | null>(null);
   const [detached, setDetached] = useState(false);
@@ -92,9 +98,9 @@ export function ChatView({
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
-    const stuck = el.scrollTop + el.clientHeight >= el.scrollHeight - 80;
-    stickRef.current = stuck;
-    setDetached(!stuck);
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 80;
+    stickRef.current = atBottom;
+    setDetached(!atBottom);
   };
   useEffect(() => {
     followIfStuck();
@@ -102,6 +108,13 @@ export function ChatView({
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
     };
   }, [session?.messages.length, turn?.text, turn?.tools]);
+
+  const jumpToBottom = () => {
+    stickRef.current = true;
+    setDetached(false);
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  };
 
   const send = () => {
     const trimmed = input.trim();
@@ -117,291 +130,131 @@ export function ChatView({
   const steps = workflowSteps(toolList);
   const runningTools = toolList.filter((t) => t.status === 'running');
   const lastRunning = runningTools[runningTools.length - 1];
+  const waiting = running && !lastRunning && !turn?.text;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div
-        ref={scrollRef}
-        onScroll={onScroll}
-        style={{
-          flex: 1,
-          overflow: 'auto',
-          padding: '24px 28px',
-          background: color.bg,
-          position: 'relative',
-        }}
-      >
-        {session && (
+    <div data-ui="chat" className={styles.root}>
+      <div ref={scrollRef} onScroll={onScroll} className={styles.scroll}>
+        {session ? (
           <>
-            <MessageList messages={session.messages} />
+            <MessageList messages={session.messages} onAction={onSend} />
             {running && (
-              <div style={{ margin: '12px 0', display: 'flex', alignItems: 'center', gap: 10 }}>
-                <Spin size="small" />
-                <Text type="secondary" style={{ fontSize: 13 }}>
+              <div className={styles.phase}>
+                <Spinner size="sm" label="Working" />
+                <span className={styles.phaseText}>
                   {lastRunning
                     ? `running ${lastRunning.name}…`
-                    : turn && turn.text === ''
+                    : waiting
                       ? 'thinking…'
                       : 'generating…'}
-                </Text>
-                <Text type="secondary" style={{ fontSize: 12, fontFamily: font.mono }}>
+                </span>
+                <span className={styles.phaseTimer}>
                   {lastRunning
-                    ? // The RUNNING TOOL's own elapsed, not time since the
-                      // last visible event (a chatty stream used to keep
-                      // resetting this to 0s and a finished wave kept it
-                      // climbing under the final text phase).
-                      `tool ${fmtElapsed(Date.now() - (lastRunning.startedAt ?? Date.now()))}`
-                    : `idle ${fmtElapsed(idleSecs * 1000)}`}
-                </Text>
-                {/* The same predicate the stall Alert below uses. At 45s this
-                    chip called a quiet-but-live build "no events", one tool
-                    timer two centimetres away saying it had been running for
-                    46 seconds. */}
+                    ? // The RUNNING TOOL's own elapsed, not time since the last
+                      // visible event.
+                      `tool ${formatDuration(Date.now() - (lastRunning.startedAt ?? Date.now()))}`
+                    : `idle ${formatDuration(idleSecs * 1000)}`}
+                </span>
                 {shouldShowStallNotice(idleSecs) && (
-                  <Tag
-                    style={{
-                      ...statusChip('attention'),
-                      borderRadius: radius.chip,
-                      fontWeight: 700,
-                    }}
-                  >
+                  <Chip status="attention" size="sm">
                     no events for {idleSecs}s
-                  </Tag>
+                  </Chip>
                 )}
               </div>
             )}
             {infos.map((i) => (
-              <Alert
-                key={i.id}
-                type="warning"
-                showIcon
-                style={{ margin: '8px 0', borderRadius: radius.control }}
-                message={i.text}
-              />
+              <Callout key={i.id} tone="warn">
+                {i.text}
+              </Callout>
             ))}
             {stuck && (
-              <Alert
-                type="warning"
-                showIcon
-                style={{ margin: '8px 0', borderRadius: radius.control }}
-                message={notice.message}
-                description={notice.description}
-              />
+              <Callout tone="warn" title={notice.message}>
+                {notice.description}
+              </Callout>
             )}
-            {steps && (
-              <div style={{ margin: '8px 0' }}>
-                <StepProgress steps={steps} />
-              </div>
-            )}
+            {steps && <StepProgress steps={steps} />}
             <LiveRun tools={toolList} onAction={onSend} />
-            {turn && turn.thinking && !turn.text && (
-              <div
-                style={{
-                  marginTop: 10,
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                  color: color.infoInk,
-                  fontStyle: 'italic',
-                  fontSize: 13,
-                  lineHeight: 1.6,
-                }}
-              >
-                💭 {turn.thinking.slice(-400)}
+            {!!turn?.thinking && !turn.text && (
+              <div className={styles.thinking}>
+                <Icon src={Brain} tone="muted" />
+                <span>{turn.thinking.slice(-400)}</span>
               </div>
             )}
-            {turn && turn.thinking && turn.text && (
-              <details style={{ marginTop: 8, color: color.infoInk, fontSize: 12 }}>
-                <summary style={{ cursor: 'pointer', fontStyle: 'italic', userSelect: 'none' }}>
-                  💭 reasoning…
+            {!!turn?.thinking && !!turn.text && (
+              <details className={styles.reasoning}>
+                <summary className={styles.reasoningHead}>
+                  <Icon src={Brain} tone="muted" />
+                  reasoning
                 </summary>
-                <div
-                  style={{
-                    whiteSpace: 'pre-wrap',
-                    wordBreak: 'break-word',
-                    fontStyle: 'italic',
-                    marginTop: 4,
-                    lineHeight: 1.6,
-                  }}
-                >
-                  {turn.thinking.slice(-1200)}
-                </div>
+                <div className={styles.reasoningBody}>{turn.thinking.slice(-1200)}</div>
               </details>
             )}
-            {turn && turn.text && (
-              <div
-                style={{
-                  marginTop: 10,
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                  color: color.ink,
-                  lineHeight: 1.7,
-                }}
-              >
-                {/* Same renderer as the committed transcript: the reply no
-                    longer snaps from raw markdown to formatted at turn end. */}
-                <Markdown>{turn.text}</Markdown>
-              </div>
-            )}
+            {!!turn?.text && <Markdown>{turn.text}</Markdown>}
           </>
+        ) : (
+          <EmptyState
+            icon={Bot}
+            title="No session open"
+            hint="Open or create a session from the sidebar to begin."
+          />
         )}
         {detached && (
           <Button
-            size="small"
-            icon={<ArrowDownOutlined />}
-            onClick={() => {
-              stickRef.current = true;
-              const el = scrollRef.current;
-              if (el) el.scrollTop = el.scrollHeight;
-              setDetached(false);
-            }}
-            style={{
-              position: 'absolute',
-              bottom: 16,
-              left: '50%',
-              transform: 'translateX(-50%)',
-              borderRadius: radius.control,
-              border: `1px solid ${color.outline}`,
-              boxShadow: color.shadowSm,
-              fontWeight: 700,
-              zIndex: 5,
-            }}
+            size="sm"
+            icon={ArrowDown}
+            className={styles.jump}
+            onClick={jumpToBottom}
+            aria-label="Jump to the bottom of the transcript"
           >
             Jump to bottom
           </Button>
         )}
-        {!session && (
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flex: 1,
-              minHeight: 240,
-              gap: 10,
-              color: color.muted,
-            }}
-          >
-            <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: 0.5 }}>Firment</div>
-            <div style={{ fontSize: 13 }}>Open or create a session from the sidebar to begin.</div>
+      </div>
+      <div className={styles.composer}>
+        {session && (
+          <div className={styles.meta}>
+            <span className={styles.provider}>{session.provider}</span>
+            <span className={styles.model}>{session.model}</span>
+            <Chip status={session.mode === 'plan' ? 'attention' : 'ok'} size="sm">
+              {session.mode}
+            </Chip>
+            <span className={styles.cwd} title={session.cwd}>
+              {session.cwd}
+            </span>
           </div>
         )}
-      </div>
-      <div
-        style={{
-          padding: '14px 20px 16px',
-          borderTop: `1px solid ${color.line}`,
-          background: color.surface,
-        }}
-      >
-        {session && (
-          <Space size={6} style={{ marginBottom: 8, flexWrap: 'wrap' }}>
-            <Tag
-              // `background`, never antd's `color` prop: given a colour value,
-              // antd derives its own chip fill from a white base, so the dark
-              // scheme got a pale mint badge that no token produced.
-              style={{
-                borderRadius: radius.chip,
-                fontWeight: 700,
-                background: color.brandAcid,
-                border: `1px solid ${color.brandAcid}`,
-                color: color.onAcid,
-              }}
-            >
-              {session.provider}
-            </Tag>
-            <Tag
-              style={{
-                borderRadius: radius.chip,
-                border: `1px solid ${color.outline}`,
-                color: color.ink,
-                fontWeight: 600,
-              }}
-            >
-              {session.model}
-            </Tag>
-            <Tag
-              style={{
-                // The fill used to be `warnInk`/`successInk` with `outline` as
-                // the text: those inks are bright in the dark scheme and dark
-                // in the light one, so this chip was readable in exactly one of
-                // the two.
-                ...statusChip(session.mode === 'plan' ? 'attention' : 'ok'),
-                borderRadius: radius.chip,
-                fontWeight: 700,
-              }}
-            >
-              {session.mode}
-            </Tag>
-            <Tag
-              style={{
-                borderRadius: radius.chip,
-                border: `1px solid ${color.outline}`,
-                color: color.muted,
-                fontFamily: font.mono,
-                background: color.bg,
-              }}
-            >
-              {session.cwd}
-            </Tag>
-          </Space>
-        )}
-        <Space.Compact style={{ width: '100%' }}>
+        <div className={styles.inputRow}>
           <TextArea
+            aria-label="Ask the agent"
+            placeholder="Ask the agent… (Enter to send, Shift+Enter for newline)"
             value={input}
+            rows={2}
+            maxRows={8}
             onChange={(e) => setInput(e.target.value)}
-            onPressEnter={(e) => {
-              if (!e.shiftKey) {
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 send();
               }
             }}
-            placeholder="Ask the agent… (Enter to send, Shift+Enter for newline)"
-            autoSize={{ minRows: 2, maxRows: 8 }}
             disabled={running || !session}
-            style={{
-              fontSize: 14,
-              background: color.bg,
-              border: `1px solid ${color.outline}`,
-              borderRadius: radius.control,
-              boxShadow: color.shadowLg,
-              color: color.ink,
-              fontFamily: font.mono,
-            }}
           />
           {running ? (
-            <Button
-              danger
-              icon={<StopOutlined />}
-              onClick={onCancel}
-              style={{
-                height: 'auto',
-                borderRadius: radius.control,
-                border: `1px solid ${color.outline}`,
-                boxShadow: color.shadowLg,
-                fontWeight: 700,
-              }}
-            >
+            <Button tier="danger" icon={Square} onClick={onCancel}>
               Stop
             </Button>
           ) : (
             <Button
-              type="primary"
-              icon={<SendOutlined />}
+              tier="primary"
+              edge="left"
+              icon={Send}
               onClick={send}
               disabled={!session || !input.trim()}
-              style={{
-                height: 'auto',
-                borderRadius: radius.control,
-                border: `1px solid ${color.outline}`,
-                boxShadow: color.shadowLg,
-                fontWeight: 700,
-              }}
             >
               Send
             </Button>
           )}
-        </Space.Compact>
+        </div>
       </div>
     </div>
   );
