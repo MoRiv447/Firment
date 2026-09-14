@@ -1,0 +1,44 @@
+/*
+ * The stack inside the two kernel dialogs.
+ *
+ * The panel's body already carries the padding and the type step, so all that is
+ * missing is the vertical rhythm between a chip, a question and an answer -- and
+ * rhythm is what a `gap` does rather than a margin on each of four children,
+ * which is how the antd version spelled it (`marginTop: 8` here, `marginBottom: 8`
+ * there, and the two never agreed).
+ *
+ * `options` wraps instead of stacking because `ask_user` caps the list at nine and
+ * describes them as short. Nine full-width rows would push the question off the
+ * top of the panel; nine short labels fit two to a line and the panel keeps its
+ * shape.
+ */
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.asking {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
+}
+
+.hint {
+  min-width: 0;
+  font-size: var(--fs-minor);
+  color: var(--muted);
+}
+
+.question {
+  margin: 0;
+  line-height: var(--lh-body);
+  overflow-wrap: break-word;
+}
+
+.options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
