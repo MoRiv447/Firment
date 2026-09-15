@@ -9,16 +9,14 @@ import {
   Space,
   Tag,
   Typography,
-  Popconfirm,
   Divider,
 } from 'antd';
-import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import type { ProviderEntryDto, SettingsDto } from '../types';
-import { color, font, radius, statusChip } from '../styles/tokens';
 import { setThemeSetting } from '../lib/theme';
 import { ActionButton } from '../components/ActionButton';
+import { ProvidersCard } from './settings/ProvidersCard';
 
 const { Text } = Typography;
 
@@ -31,11 +29,6 @@ export function SettingsView() {
   const [saveErr, setSaveErr] = useState('');
   const [form] = Form.useForm<SettingsDto>();
 
-  // new-provider form
-  const [newName, setNewName] = useState('');
-  const [newType, setNewType] = useState('openai');
-  const [newBaseUrl, setNewBaseUrl] = useState('');
-  const [newModel, setNewModel] = useState('');
   const [newMsg, setNewMsg] = useState('');
 
   const load = () => {
@@ -100,22 +93,21 @@ export function SettingsView() {
     }
   };
 
-  const upsertProvider = async () => {
-    const name = newName.trim();
-    if (!name || !newModel.trim()) {
-      setNewMsg('name and model are required');
-      return;
-    }
+  const upsertProvider = async (fields: {
+    name: string;
+    type: string;
+    baseUrl: string | null;
+    model: string;
+  }) => {
     try {
-      await api.setProvider(name, newType, newBaseUrl.trim() || null, newModel.trim());
-      setNewMsg(`saved provider "${name}"`);
-      setNewName('');
-      setNewModel('');
-      setNewBaseUrl('');
+      await api.setProvider(fields.name, fields.type, fields.baseUrl, fields.model);
+      setNewMsg(`saved provider "${fields.name}"`);
       load();
+      return true;
     } catch (err) {
       setNewMsg(`failed: ${err}`);
       console.error(err);
+      return false;
     }
   };
 
@@ -150,17 +142,6 @@ export function SettingsView() {
     );
   };
 
-  // per-provider API key editing: update local state on change, persist on save
-  const setProviderKeyLocal = (p: ProviderEntryDto, key: string) => {
-    setSettings((s) =>
-      s
-        ? {
-            ...s,
-            providers: s.providers.map((x) => (x.name === p.name ? { ...x, api_key: key } : x)),
-          }
-        : s,
-    );
-  };
 
   const saveProviderKey = async (p: ProviderEntryDto) => {
     const key = p.api_key?.trim() ?? '';
@@ -185,129 +166,16 @@ export function SettingsView() {
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         {!settings && <Alert type="info" showIcon message="Loading settings…" />}
 
-        <Card title="Providers" size="small">
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              Each provider has its own API key, base URL and model. The default provider is
-              used for new sessions; delete any provider — the default automatically moves to
-              the next one.
-            </Text>
-            {(settings?.providers ?? []).map((p) => (
-              <div
-                key={p.name}
-                style={{
-                  border: `1px solid ${color.outline}`,
-                  borderRadius: radius.panel,
-                  padding: 10,
-                  background: color.surface,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 8,
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <Text strong style={{ color: color.ink }}>{p.name}</Text>
-                  {p.is_default && (
-                    <Tag
-                      style={{
-                        ...statusChip('attention'),
-                        borderRadius: radius.chip,
-                        fontWeight: 700,
-                      }}
-                    >
-                      DEFAULT
-                    </Tag>
-                  )}
-                  <div style={{ flex: 1 }} />
-                  <Popconfirm
-                    title={`Delete "${p.name}"?`}
-                    description="The default (if this one) moves to another provider."
-                    onConfirm={() => removeProvider(p)}
-                  >
-                    <Button size="small" danger icon={<DeleteOutlined />} />
-                  </Popconfirm>
-                </div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <Select
-                    style={{ width: 120 }}
-                    value={p.type}
-                    onChange={(v) => editProvider({ ...p, type: v })}
-                    options={[{ label: 'openai', value: 'openai' }, { label: 'anthropic', value: 'anthropic' }]}
-                  />
-                  <Input
-                    style={{ flex: 1, minWidth: 200, fontFamily: font.mono }}
-                    placeholder="base url"
-                    value={p.base_url ?? ''}
-                    onChange={(e) => setProviderLocal(p, { base_url: e.target.value || null })}
-                    onBlur={() => editProvider(p)}
-                  />
-                  <Input
-                    style={{ flex: 1, minWidth: 140 }}
-                    placeholder="model"
-                    value={p.model}
-                    onChange={(e) => setProviderLocal(p, { model: e.target.value })}
-                    onBlur={() => editProvider(p)}
-                  />
-                </div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                  <Input.Password
-                    style={{ flex: 1, minWidth: 260, fontFamily: font.mono }}
-                    placeholder={`api key for ${p.name} (empty = use env)`}
-                    value={p.api_key ?? ''}
-                    onChange={(e) => setProviderKeyLocal(p, e.target.value)}
-                  />
-                  <Button size="small" onClick={() => saveProviderKey(p)}>
-                    Save key
-                  </Button>
-                </div>
-              </div>
-            ))}
-            <Divider style={{ margin: '4px 0' }} />
-            <Text strong style={{ color: color.ink }}>Add provider</Text>
-            <Space wrap>
-              {/* Every control on the row is 40px: the design system's control
-                  height. A 40px CTA beside 32px inputs is the one thing that
-                  makes a row look assembled rather than designed. */}
-              <Input
-                size="large"
-                style={{ width: 130 }}
-                placeholder="name (e.g. deepseek)"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-              />
-              <Select
-                size="large"
-                style={{ width: 120 }}
-                value={newType}
-                onChange={(v) => setNewType(v ?? 'openai')}
-                options={[{ label: 'openai', value: 'openai' }, { label: 'anthropic', value: 'anthropic' }]}
-              />
-              <Input
-                size="large"
-                style={{ width: 260, fontFamily: font.mono }}
-                placeholder="base url (e.g. https://api.deepseek.com/v1)"
-                value={newBaseUrl}
-                onChange={(e) => setNewBaseUrl(e.target.value)}
-              />
-              <Input
-                size="large"
-                style={{ width: 180 }}
-                placeholder="model (e.g. deepseek-v4-flash)"
-                value={newModel}
-                onChange={(e) => setNewModel(e.target.value)}
-              />
-              <ActionButton tier="primary" icon={<PlusOutlined />} onClick={upsertProvider}>
-                Save provider
-              </ActionButton>
-            </Space>
-            {newMsg && <Text type="secondary" style={{ fontSize: 12 }}>{newMsg}</Text>}
-            {keyMsg && <Text type="success" style={{ fontSize: 12 }}>{keyMsg}</Text>}
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              Providers are stored in config.toml; keys in auth.json. Pick the default in the
-              Agent card below.
-            </Text>
-          </Space>
-        </Card>
+        <ProvidersCard
+          providers={settings?.providers ?? []}
+          newMsg={newMsg}
+          keyMsg={keyMsg}
+          onChange={setProviderLocal}
+          onPersist={editProvider}
+          onSaveKey={saveProviderKey}
+          onRemove={removeProvider}
+          onAdd={upsertProvider}
+        />
 
         <Card title="Agent" size="small">
           <Form form={form} layout="vertical">
