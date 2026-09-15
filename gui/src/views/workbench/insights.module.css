@@ -72,3 +72,12 @@
   font-size: var(--fs-meta);
   font-variant-numeric: tabular-nums;
 }
+
+/* The failure notice sits above the cards it failed to fill, and needs air
+   between it and the first of them. It carries the margin rather than the
+   callout because the callout has no spacing of its own -- it must not, or every
+   use of it would inherit this gap. */
+.notice {
+  margin-bottom: var(--sp-3);
+}
+

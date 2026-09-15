@@ -1,16 +1,20 @@
+import { RotateCw } from 'lucide-react';
+
 import { formatBytes, formatStamp } from '../../lib/format';
 import type { ElfCardDto, GateThresholdsDto, QualityItemDto, TimelineEntryDto } from '../../types';
-import { Card, Chip, Stat } from '../../ui';
+import { Button, Callout, Card, Chip, Stat } from '../../ui';
 import styles from './insights.module.css';
 
 /**
- * The three read-only report cards under "Insights".
+ * The read-only report cards under "Insights", and the card that holds them.
  *
- * They were three anonymous blocks inside the 1600-line `WorkbenchView`. All
- * three take data and render it -- no handlers, no drafts, nothing to lift --
- * which is what made them a seam rather than a cut.
+ * The three report cards were three anonymous blocks inside the 1600-line
+ * `WorkbenchView`. All three take data and render it -- no handlers, no drafts,
+ * nothing to lift -- which is what made them a seam rather than a cut. The
+ * wrapper above them came last, and it is here rather than in a file of its own
+ * because on a case-insensitive filesystem `Insights.tsx` *is* this file.
  *
- * Each one renders nothing when it has nothing (a caller guards on the array
+ * Each report renders nothing when it has nothing (a caller guards on the array
  * being non-empty, an ELF card on `elf` being present). That is the design
  * system's "unconfigured -> hidden entirely" rule: an empty card that says "no
  * data" is worse than no card, because it looks like a failure.
@@ -20,6 +24,54 @@ import styles from './insights.module.css';
  * first 1 MiB binary, where it printed "1024.0 KiB"; the formatter ends the same
  * ladder at GiB and says which unit it landed on.
  */
+
+/**
+ * The container, plus the one control that reloads all three.
+ *
+ * The refresh is gated on a mainline session existing rather than on anything in
+ * here: without a mainline there is nothing to ask about, and a refresh button
+ * that can only fail is worse than a disabled one.
+ */
+export function Insights({
+  elf,
+  elfError,
+  quality,
+  timeline,
+  hasMainline,
+  busy,
+  onRefresh,
+}: {
+  elf: ElfCardDto | null;
+  elfError: string | null;
+  quality: QualityItemDto[];
+  timeline: TimelineEntryDto[];
+  /** Whether a mainline session exists — without one there is nothing to load. */
+  hasMainline: boolean;
+  busy: boolean;
+  onRefresh: () => void;
+}) {
+  return (
+    <Card
+      title="Insights"
+      extra={
+        <Button size="sm" icon={RotateCw} disabled={busy || !hasMainline} onClick={onRefresh}>
+          refresh
+        </Button>
+      }
+    >
+      {elfError && (
+        <div className={styles.notice}>
+          <Callout tone="warn" title="ELF budget card unavailable">
+            {elfError}
+          </Callout>
+        </div>
+      )}
+      {elf && <ElfBudget elf={elf} />}
+      {quality.length > 0 && <VerificationBadges quality={quality} />}
+      {timeline.length > 0 && <ChangeTimeline timeline={timeline} />}
+    </Card>
+  );
+}
 
 /** The gate is a promise about the next change, so it says by how much it allows. */
 function gateNote(gate: GateThresholdsDto): string {

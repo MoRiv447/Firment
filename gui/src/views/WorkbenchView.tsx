@@ -1,5 +1,4 @@
 import {
-  Alert,
   Button,
   Card,
   Empty,
@@ -33,7 +32,7 @@ import { color, font, radius, statusChip } from '../styles/tokens';
 import type { StatusKind } from '../styles/tokens';
 import { ActionButton } from '../components/ActionButton';
 import { FlashHistory } from './workbench/FlashHistory';
-import { ChangeTimeline, ElfBudget, VerificationBadges } from './workbench/insights';
+import { Insights } from './workbench/insights';
 import { Decisions } from './workbench/Decisions';
 import { Bindings } from './workbench/Bindings';
 import { Hardware } from './workbench/Hardware';
@@ -746,34 +745,15 @@ export function WorkbenchView() {
                 )}
               </Card>
 
-              <Card
-                type="inner"
-                title="Insights"
-                size="small"
-                extra={
-                  <Button
-                    size="small"
-                    icon={<ReloadOutlined />}
-                    disabled={busy || !state.config.mainline_session}
-                    onClick={() => refreshInsights(state.root, state.config.mainline_session)}
-                  >
-                    refresh
-                  </Button>
-                }
-              >
-                {elfError && (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    style={{ marginBottom: 12 }}
-                    message="ELF budget card unavailable"
-                    description={elfError}
-                  />
-                )}
-                {elf && <ElfBudget elf={elf} />}
-                {quality.length > 0 && <VerificationBadges quality={quality} />}
-                {timeline.length > 0 && <ChangeTimeline timeline={timeline} />}
-              </Card>
+              <Insights
+                elf={elf}
+                elfError={elfError}
+                quality={quality}
+                timeline={timeline}
+                hasMainline={Boolean(state.config.mainline_session)}
+                busy={busy}
+                onRefresh={() => refreshInsights(state.root, state.config.mainline_session)}
+              />
 
               <Card
                 type="inner"

@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { ChangeTimeline, ElfBudget, VerificationBadges } from '../insights';
+import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { ChangeTimeline, ElfBudget, Insights, VerificationBadges } from '../insights';
 import type { ElfCardDto, QualityItemDto, TimelineEntryDto } from '../../../types';
 
 /**
@@ -132,5 +132,71 @@ describe('ChangeTimeline', () => {
     );
     expect(screen.getByText('a.c')).toBeInTheDocument();
     expect(screen.getByText('b.c')).toBeInTheDocument();
+  });
+});
+
+/**
+ * The container: the one control, and the one failure it can report.
+ *
+ * The three reports have their own tests above. What this adds is the gate on the
+ * refresh and the notice -- the two things that are true only of the wrapper.
+ */
+describe('Insights', () => {
+  function setup(over: Partial<Parameters<typeof Insights>[0]> = {}) {
+    const onRefresh = vi.fn();
+    render(
+      <Insights
+        elf={null}
+        elfError={null}
+        quality={[]}
+        timeline={[]}
+        hasMainline
+        busy={false}
+        onRefresh={onRefresh}
+        {...over}
+      />,
+    );
+    return { onRefresh };
+  }
+
+  it('refreshes all three at once', () => {
+    const { onRefresh } = setup();
+    fireEvent.click(screen.getByRole('button', { name: /refresh/ }));
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('will not offer a refresh that can only fail', () => {
+    // Without a mainline session there is nothing to ask about.
+    setup({ hasMainline: false });
+    expect(screen.getByRole('button', { name: /refresh/ })).toBeDisabled();
+  });
+
+  it('will not refresh while a write is in flight', () => {
+    setup({ busy: true });
+    expect(screen.getByRole('button', { name: /refresh/ })).toBeDisabled();
+  });
+
+  it('says why the ELF card is missing, and still shows the others', () => {
+    // The blocks fail independently: the budget card can be unreadable while the
+    // badges are fine.
+    setup({
+      elfError: 'no .elf found under .firment/work',
+      quality: [{ tool: 'clippy', ok: true, snippet: '' }],
+    });
+    expect(screen.getByText('ELF budget card unavailable')).toBeInTheDocument();
+    expect(screen.getByText(/no .elf found/)).toBeInTheDocument();
+    expect(screen.getByText('clippy: PASS')).toBeInTheDocument();
+  });
+
+  it('shows no notice when there is no error', () => {
+    setup();
+    expect(screen.queryByText(/unavailable/)).toBeNull();
+  });
+
+  it('draws nothing under the title when nothing loaded', () => {
+    // Three empty placeholders would read as three failures.
+    setup();
+    expect(screen.getByText('Insights')).toBeInTheDocument();
+    expect(screen.queryByText(/budget/i)).toBeNull();
   });
 });
