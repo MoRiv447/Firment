@@ -163,10 +163,30 @@
 /* The cut corner. Primary only -- see `ButtonProps.edge`.             */
 /* ------------------------------------------------------------------ */
 
+/*
+ * No edge layer.
+ *
+ * This used to be a 1px outer box in `--brand-edge` with the acid fill inset
+ * inside it, because a `border` cannot follow a `clip-path`'s diagonal. It
+ * worked, and it was still the wrong answer: a grey-green hairline around a
+ * green block is the "ring around the CTA" that the primary tier's own comment
+ * argues against, and it made the cut read as a shape *inside* a button rather
+ * than as the button's edge.
+ *
+ * The radius is 8px. The scale currently reads chip 4 / control 6 / panel 12, and
+ * `docs/design/tokens.md` describes the ladder as 徽章 2 / 控件 4 / 卡片 8 -- so the
+ * two do not agree, and neither has an 8 for a button. This is the value the
+ * slanted button is supposed to wear; which of the two sources wins is a decision
+ * above this file. The radius sits on the root with `overflow: hidden`, so the
+ * fill rounds with it, and the `clip-path` cuts the diagonal on top of that.
+ * Anything much past 8px starts to fight the cut: two curves on one corner is what
+ * makes a slant look soft.
+ */
 .root[data-edge] {
-  border-radius: 0;
-  padding: 1px;
-  background: var(--brand-edge);
+  border-radius: 8px;
+  overflow: hidden;
+  padding: 0;
+  background: none;
 }
 
 .root[data-edge='left'] {
@@ -182,8 +202,6 @@
   );
 }
 
-/* The inner cut is 2px narrower because the box it clips has already lost 1px at
-   each end -- anything else and the two diagonals stop being parallel. */
 .root[data-edge] .fill {
   background: var(--brand-acid);
 }
@@ -194,24 +212,12 @@
      back or the label reads off-centre. */
   padding-left: calc(var(--pad-x, var(--sp-4)) + var(--slant-optic));
   padding-right: var(--pad-x, var(--sp-4));
-  clip-path: polygon(
-    0 0,
-    100% 0,
-    100% calc(100% - 1px),
-    calc(var(--slant-cut) - 2px) calc(100% - 1px)
-  );
 }
 
 .root[data-edge='both'] .fill {
   /* The diagonal is at its widest halfway up the box, which is where the text
      is, so half the cut is the clearance it needs. */
   padding-inline: calc(var(--pad-x, var(--sp-4)) + var(--slant-cut) / 2);
-  clip-path: polygon(
-    calc(var(--slant-cut) - 2px) 0,
-    100% 0,
-    calc(100% - (var(--slant-cut) - 2px)) calc(100% - 1px),
-    0 calc(100% - 1px)
-  );
 }
 
 .root[data-tier='primary'][data-edge]:not(:disabled):hover {
