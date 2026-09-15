@@ -10,7 +10,13 @@
   padding-inline: var(--sp-2);
   border-bottom: 1px solid var(--line);
   font-family: var(--ff-sans);
+  /* `overflow-x: auto` alone is what put a scrollbar on BOTH axes: a `visible`
+     `overflow-y` is computed as `auto` as soon as the other axis is not, so the
+     strip grew a vertical bar to scroll the height its horizontal bar had just
+     consumed. The strip does scroll sideways -- four labels do not fit a narrow
+     inspector -- but never downwards. */
   overflow-x: auto;
+  overflow-y: hidden;
   scrollbar-width: thin;
 }
 
