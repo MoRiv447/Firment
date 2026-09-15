@@ -1,0 +1,72 @@
+/*
+ * The hardware card: one row of chips, an editable chip field, and the probe
+ * list.
+ *
+ * The chip button is the only place here that looks like a control and is one,
+ * so it carries its own border rather than borrowing the chip surface: hovering
+ * it has to offer something, and the surface tokens have no hover state.
+ */
+.row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-1);
+}
+
+.chipButton {
+  height: var(--h-row);
+  padding-inline: var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-chip);
+  background: var(--surface-raised);
+  color: var(--ink);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-micro);
+  cursor: pointer;
+}
+
+.chipButton:hover:enabled {
+  background: var(--hover);
+}
+
+.chipButton:disabled {
+  cursor: default;
+  color: var(--muted);
+}
+
+/* chip · save · cancel — the field takes the room the buttons do not. */
+.edit {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: var(--sp-2);
+  align-items: center;
+  margin-bottom: var(--sp-1);
+}
+
+.ports {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin-bottom: var(--sp-1);
+}
+
+.label {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-micro);
+}
+
+.probe {
+  margin: 0;
+  font-family: var(--ff-mono);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-tight);
+}
+
+.none {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-minor);
+  line-height: var(--lh-tight);
+}

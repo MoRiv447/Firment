@@ -36,6 +36,7 @@ import { FlashHistory } from './workbench/FlashHistory';
 import { ChangeTimeline, ElfBudget, VerificationBadges } from './workbench/insights';
 import { Decisions } from './workbench/Decisions';
 import { Bindings } from './workbench/Bindings';
+import { Hardware } from './workbench/Hardware';
 import { Escalations } from './workbench/Escalations';
 import { ProjectBar } from './workbench/ProjectBar';
 import { ProjectSummary } from './workbench/ProjectSummary';
@@ -85,9 +86,6 @@ export function WorkbenchView() {
   // Hardware inventory: serial ports + probe-rs probes + default chip.
   // Refreshed behind an explicit button (probe-rs enumeration takes ~1s).
   const [hardware, setHardware] = useState<HardwareInfoDto | null>(null);
-  // Inline editor state for the default chip (Hardware card).
-  const [chipEditing, setChipEditing] = useState(false);
-  const [chipDraft, setChipDraft] = useState('');
   // Burn history (.firment/work/flash-history.jsonl) — 何日向哪块板烧了哪个镜像。
   const [flashHistory, setFlashHistory] = useState<FlashHistoryDto[]>([]);
   // Guard escalations: alerts at/above the project's escalate_sev for BOUND
@@ -211,6 +209,36 @@ export function WorkbenchView() {
 
   /** dir override: the startup-restore path passes the persisted path
    * directly because the `cwd` state it just set is not visible yet. */
+  /**
+   * Enumeration and the global chip write stay here, not in Hardware: the
+   * payload, the error slot and the busy flag all belong to this component.
+   */
+  const refreshHardware = async () => {
+    if (!cwd.trim()) return;
+    setBusy(true);
+    try {
+      setHardware(await api.workbenchHardwareList(cwd.trim()));
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveChip = async (chip: string) => {
+    setBusy(true);
+    try {
+      const saved = await api.setDefaultChip(chip);
+      setHardware((prev) => (prev ? { ...prev, default_chip: saved } : prev));
+      return true;
+    } catch (err) {
+      setError(String(err));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const load = async (dir?: string) => {
     const target = (dir ?? cwd).trim();
     if (!target) return;
@@ -629,135 +657,12 @@ export function WorkbenchView() {
                 onDismiss={dropEscalation}
               />
 
-              <Card
-                type="inner"
-                title="Hardware"
-                size="small"
-                extra={
-                  <Button
-                    size="small"
-                    icon={<ReloadOutlined />}
-                    disabled={busy}
-                    onClick={async () => {
-                      if (!cwd.trim()) return;
-                      setBusy(true);
-                      try {
-                        setHardware(await api.workbenchHardwareList(cwd.trim()));
-                      } catch (err) {
-                        setError(String(err));
-                      } finally {
-                        setBusy(false);
-                      }
-                    }}
-                  >
-                    refresh
-                  </Button>
-                }
-              >
-                {!hardware ? (
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    Not loaded yet — hit refresh to enumerate serial ports and probe-rs probes.
-                  </Text>
-                ) : (
-                  <>
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 6, alignItems: 'center' }}>
-                      <Tooltip title="Used by the flash tool when no chip parameter is passed. Saved to global config.">
-                        <Tag
-                          style={{ borderRadius: radius.chip, fontSize: 11, cursor: chipEditing ? 'default' : 'pointer' }}
-                          onClick={() => {
-                            setChipDraft(String(hardware.default_chip));
-                            setChipEditing(true);
-                          }}
-                        >
-                          chip: {hardware.default_chip || '(unset)'} ✎
-                        </Tag>
-                      </Tooltip>
-                      <Tag
-                        style={{ ...statusChip(hardware.probe_rs_available ? 'ok' : 'neutral'), borderRadius: radius.chip, fontSize: 11 }}
-                        
-                      >
-                        probe-rs {hardware.probe_rs_available ? 'available' : 'not installed'}
-                      </Tag>
-                    </div>
-                    {chipEditing && (
-                      <Space.Compact style={{ width: '100%', marginBottom: 6 }}>
-                        <Input
-                          size="small"
-                          placeholder="default chip (e.g. stm32g431rb — empty to unset)"
-                          value={chipDraft}
-                          onChange={(e) => setChipDraft(e.target.value)}
-                          onPressEnter={async () => {
-                            setBusy(true);
-                            try {
-                              const saved = await api.setDefaultChip(chipDraft.trim());
-                              setHardware({ ...hardware, default_chip: saved });
-                              setChipEditing(false);
-                            } catch (err) {
-                              setError(String(err));
-                            } finally {
-                              setBusy(false);
-                            }
-                          }}
-                          style={{ fontFamily: font.mono, fontSize: 11 }}
-                        />
-                        <Button
-                          size="small"
-                          type="primary"
-                          disabled={busy}
-                          onClick={async () => {
-                            setBusy(true);
-                            try {
-                              const saved = await api.setDefaultChip(chipDraft.trim());
-                              setHardware({ ...hardware, default_chip: saved });
-                              setChipEditing(false);
-                            } catch (err) {
-                              setError(String(err));
-                            } finally {
-                              setBusy(false);
-                            }
-                          }}
-                        >
-                          save
-                        </Button>
-                        <Button size="small" onClick={() => setChipEditing(false)}>
-                          cancel
-                        </Button>
-                      </Space.Compact>
-                    )}
-                    {hardware.serial_ports.length === 0 ? (
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        No serial ports found.
-                      </Text>
-                    ) : (
-                      <div style={{ marginBottom: 6 }}>
-                        {hardware.serial_ports.map((p) => (
-                          <Tag
-                            key={p}
-                            style={{ ...statusChip('running'), borderRadius: radius.chip, fontFamily: font.mono, fontSize: 11 }}
-                            
-                          >
-                            {p}
-                          </Tag>
-                        ))}
-                      </div>
-                    )}
-                    {hardware.probes.length > 0 && (
-                      <>
-                        <Text type="secondary" style={{ fontSize: 11 }}>
-                          probe-rs probes:
-                        </Text>
-                        <div>
-                          {hardware.probes.map((p, i) => (
-                            <div key={i} style={{ fontSize: 11, fontFamily: font.mono }}>
-                              {p}
-                            </div>
-                          ))}
-                        </div>
-                      </>
-                     )}
-                   </>
-                 )}
-               </Card>
+              <Hardware
+                hardware={hardware}
+                busy={busy}
+                onRefresh={refreshHardware}
+                onSaveChip={saveChip}
+              />
 
                <FlashHistory history={flashHistory} />
 
