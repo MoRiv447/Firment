@@ -1,0 +1,85 @@
+/*
+ * The pin table: board picker, the claimed rows, and the claim line.
+ *
+ * A board chip is a control, not a status, so it is a button wearing the chip
+ * radius -- `aria-pressed` carries the selection rather than colour alone, since
+ * the running-status colour is already spoken for by the pin rows below.
+ */
+.boards {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin-bottom: var(--sp-2);
+}
+
+.board {
+  height: var(--h-row);
+  padding-inline: var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-chip);
+  background: var(--surface-raised);
+  color: var(--ink);
+  font-size: var(--fs-micro);
+  cursor: pointer;
+}
+
+.board:hover {
+  background: var(--hover);
+}
+
+.board[aria-pressed='true'] {
+  border-color: var(--brand-edge);
+  background: var(--success-bg);
+  color: var(--success-ink);
+}
+
+.pins {
+  margin-bottom: var(--sp-2);
+}
+
+.pin {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding-block: 3px;
+  border-bottom: 1px solid var(--line);
+}
+
+.pin:last-of-type {
+  border-bottom: 0;
+}
+
+.func {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-minor);
+  line-height: var(--lh-tight);
+}
+
+.owner {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--fs-micro);
+}
+
+/* The pin is narrow and fixed; the function takes the rest. */
+.claim {
+  display: grid;
+  grid-template-columns: minmax(0, 0.4fr) minmax(0, 1fr) auto;
+  gap: var(--sp-2);
+  align-items: center;
+  margin-top: var(--sp-1);
+}
+
+.hint {
+  color: var(--muted);
+  font-size: var(--fs-micro);
+}
+
+.none {
+  margin: 0 0 var(--sp-1);
+  color: var(--muted);
+  font-size: var(--fs-minor);
+  line-height: var(--lh-tight);
+}

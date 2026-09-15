@@ -37,6 +37,7 @@ import { ChangeTimeline, ElfBudget, VerificationBadges } from './workbench/insig
 import { Decisions } from './workbench/Decisions';
 import { Bindings } from './workbench/Bindings';
 import { Hardware } from './workbench/Hardware';
+import { Pinmap } from './workbench/Pinmap';
 import { Escalations } from './workbench/Escalations';
 import { ProjectBar } from './workbench/ProjectBar';
 import { ProjectSummary } from './workbench/ProjectSummary';
@@ -78,9 +79,6 @@ export function WorkbenchView() {
   // table, scoped per board (board name == MQTT node name).
   const [pinmap, setPinmap] = useState<BoardPinmapDto[]>([]);
   const [pinBoard, setPinBoard] = useState<string | null>(null);
-  const [newBoard, setNewBoard] = useState('');
-  const [newPin, setNewPin] = useState('');
-  const [newFunc, setNewFunc] = useState('');
   // Per-project device bindings ([devices.<node>] in workbench.toml).
   const [bindings, setBindings] = useState<DeviceBindingDto[]>([]);
   // Hardware inventory: serial ports + probe-rs probes + default chip.
@@ -317,15 +315,15 @@ export function WorkbenchView() {
     setBusy(false);
   };
 
-  const addPin = async () => {
-    if (!cwd.trim() || !pinBoard || !newPin.trim() || !newFunc.trim()) return;
+  const claimPin = async (pin: string, func: string) => {
+    if (!cwd.trim() || !pinBoard) return false;
     setBusy(true);
     try {
-      setPinmap(await api.workbenchPinmapSet(cwd.trim(), pinBoard, newPin, newFunc, 'user'));
-      setNewPin('');
-      setNewFunc('');
+      setPinmap(await api.workbenchPinmapSet(cwd.trim(), pinBoard, pin, func, 'user'));
+      return true;
     } catch (err) {
       setError(String(err));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -343,11 +341,6 @@ export function WorkbenchView() {
     }
   };
 
-  const addBoard = () => {
-    const name = newBoard.trim();
-    if (name) setPinBoard(name);
-    setNewBoard('');
-  };
 
   const bindDevice = async (node: string, role: string): Promise<boolean> => {
     if (!cwd.trim() || !node.trim()) return false;
@@ -666,113 +659,14 @@ export function WorkbenchView() {
 
                <FlashHistory history={flashHistory} />
 
-               <Card
-                 type="inner"
-                 title="Pin assignments"
-                size="small"
-                extra={
-                  <Text type="secondary" style={{ fontSize: 11 }}>
-                    board-scoped, shared with the agent's pinmap tool
-                  </Text>
-                }
-              >
-                {pinmap.length === 0 && !pinBoard && (
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    No boards/pins yet. Pick a board name (use the device's MQTT node name,
-                    e.g. s3-node-1) and claim pins — the agent sees the same table.
-                  </Text>
-                )}
-                <Space wrap size={4} style={{ marginBottom: 6 }}>
-                  {pinmap.map((b) => (
-                    <Tag
-                      key={b.board}
-                      style={{ ...statusChip(b.board === pinBoard ? 'running' : 'neutral'), borderRadius: radius.chip, cursor: 'pointer', fontSize: 12 }}
-                      
-                      onClick={() => setPinBoard(b.board)}
-                    >
-                      {b.board} ({b.pins.length})
-                    </Tag>
-                  ))}
-                  <Input
-                    size="small"
-                    placeholder="new board name"
-                    value={newBoard}
-                    onChange={(e) => setNewBoard(e.target.value)}
-                    onPressEnter={addBoard}
-                    style={{ width: 150, fontFamily: font.mono, fontSize: 11 }}
-                  />
-                  <Button size="small" type="dashed" disabled={busy || !newBoard.trim()} onClick={addBoard}>
-                    use board
-                  </Button>
-                </Space>
-                {pinBoard && (
-                  <>
-                    {(() => {
-                      const selected = pinmap.find((b) => b.board === pinBoard);
-                      if (!selected || selected.pins.length === 0) {
-                        return (
-                          <Text type="secondary" style={{ fontSize: 12 }}>
-                            Board "{pinBoard}" has no claimed pins yet.
-                          </Text>
-                        );
-                      }
-                      return (
-                        <div style={{ marginBottom: 8 }}>
-                          {selected.pins.map((p) => (
-                            <div
-                              key={p.pin}
-                              style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: 8,
-                                padding: '3px 6px',
-                                borderBottom: `1px solid ${color.line}`,
-                              }}
-                            >
-                              <Tag style={{ ...statusChip('running'), borderRadius: radius.chip, fontWeight: 700, minWidth: 64, textAlign: 'center' }}>
-                                {p.pin}
-                              </Tag>
-                              <Text style={{ flex: 1, fontSize: 12 }}>{p.func}</Text>
-                              <Text type="secondary" style={{ fontSize: 11 }}>
-                                {p.owner || '—'}
-                              </Text>
-                              <Button
-                                size="small"
-                                type="text"
-                                danger
-                                disabled={busy}
-                                onClick={() => removePin(p.pin)}
-                              >
-                                ✕
-                              </Button>
-                            </div>
-                          ))}
-                        </div>
-                      );
-                    })()}
-                    <Space.Compact style={{ width: '100%', marginTop: 4 }}>
-                      <Input
-                        size="small"
-                        placeholder="pin (PA5)"
-                        value={newPin}
-                        onChange={(e) => setNewPin(e.target.value)}
-                        onPressEnter={addPin}
-                        style={{ maxWidth: 110, fontFamily: font.mono }}
-                      />
-                      <Input
-                        size="small"
-                        placeholder="function (LED / USART1_TX…)"
-                        value={newFunc}
-                        onChange={(e) => setNewFunc(e.target.value)}
-                        onPressEnter={addPin}
-                      />
-                      <Button size="small" type="dashed" disabled={busy} onClick={addPin}>
-                        claim on {pinBoard}
-                      </Button>
-                    </Space.Compact>
-                  </>
-                )}
-              </Card>
+              <Pinmap
+                boards={pinmap}
+                selected={pinBoard}
+                busy={busy}
+                onSelectBoard={setPinBoard}
+                onClaimPin={claimPin}
+                onRemovePin={removePin}
+              />
 
               <Decisions
                 decisions={decisions}
