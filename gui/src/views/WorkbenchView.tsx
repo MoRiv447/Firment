@@ -4,7 +4,6 @@ import {
   Empty,
   Input,
   Modal,
-  Select,
   Space,
   Tag,
   Tooltip,
@@ -28,11 +27,13 @@ import type {
   TimelineEntryDto,
   WorkbenchStateDto,
 } from '../types';
-import { color, font, radius, statusChip } from '../styles/tokens';
+import { color, radius, statusChip } from '../styles/tokens';
 import type { StatusKind } from '../styles/tokens';
 import { ActionButton } from '../components/ActionButton';
 import { FlashHistory } from './workbench/FlashHistory';
+import { Knowledge } from './workbench/Knowledge';
 import { Insights } from './workbench/insights';
+import { confirm } from '../ui';
 import { Decisions } from './workbench/Decisions';
 import { Bindings } from './workbench/Bindings';
 import { Hardware } from './workbench/Hardware';
@@ -114,7 +115,6 @@ export function WorkbenchView() {
   const [kbKey, setKbKey] = useState<string | null>(null);
   const [kbDraft, setKbDraft] = useState('');
   const [kbDirty, setKbDirty] = useState(false);
-  const [newCheatName, setNewCheatName] = useState('');
   // Save baselines (disk mtime per key, captured when the draft was loaded):
   // passed back to workbench_kb_save so an external edit (agent, other
   // editor) is refused instead of silently overwritten. undefined = the file
@@ -475,14 +475,14 @@ export function WorkbenchView() {
       if (msg.includes('[ConcurrentChange]')) {
         // The file changed on disk while the draft was open. Offer a reload
         // instead of letting the user fight a silent last-writer-wins.
-        Modal.confirm({
+        void confirm({
           title: 'The file changed on disk',
-          content: 'The knowledge file was modified by the agent or another program while you were editing it. Discard your draft and reload from disk?',
-          okText: 'Reload',
-          cancelText: 'Keep draft',
-          onOk: () => {
-            if (kbKey) selectKbFile(kbKey);
-          },
+          message:
+            'The knowledge file was modified by the agent or another program while you were editing it. Discard your draft and reload from disk?',
+          confirmLabel: 'Reload',
+          cancelLabel: 'Keep draft',
+        }).then((reload) => {
+          if (reload && kbKey) selectKbFile(kbKey);
         });
       } else {
         setError(msg);
@@ -509,10 +509,10 @@ export function WorkbenchView() {
     }
   };
 
-  const newCheatsheet = async () => {
-    if (!cwd.trim()) return;
-    let name = newCheatName.trim();
-    if (!name) return;
+  const newCheatsheet = async (raw: string) => {
+    if (!cwd.trim()) return false;
+    let name = raw.trim();
+    if (!name) return false;
     if (!name.endsWith('.toml')) name += '.toml';
     const key = `cheatsheet:${name}`;
     setBusy(true);
@@ -520,14 +520,15 @@ export function WorkbenchView() {
       // Create empty, reload list, and jump straight into editing it. The
       // fresh-create baseline (0) refuses when the file appeared meanwhile.
       await api.workbenchKbSave(cwd.trim(), key, '# project cheatsheet\n', 0);
-      const files = await api.workbenchKbList(cwd.trim());
-      setKbFiles(files);
+      const next = await api.workbenchKbList(cwd.trim());
+      setKbFiles(next);
       setKbKey(key);
-      setKbDraft(files.find((f) => f.key === key)?.content ?? '');
+      setKbDraft(next.find((f) => f.key === key)?.content ?? '');
       setKbDirty(false);
-      setNewCheatName('');
+      return true;
     } catch (err) {
       setError(String(err));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -674,76 +675,21 @@ export function WorkbenchView() {
                 onRemove={removeDecision}
               />
 
-              <Card
-                type="inner"
-                title="Project knowledge"
-                size="small"
-                extra={
-                  <Space size={4}>
-                    <Input
-                      size="small"
-                      placeholder="new-cheatsheet.toml"
-                      value={newCheatName}
-                      onChange={(e) => setNewCheatName(e.target.value)}
-                      onPressEnter={newCheatsheet}
-                      style={{ width: 150, fontFamily: font.mono, fontSize: 11 }}
-                    />
-                    <Button size="small" type="dashed" disabled={busy || !newCheatName.trim()} onClick={newCheatsheet}>
-                      +
-                    </Button>
-                  </Space>
-                }
-              >
-                {kbFiles.length === 0 ? (
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    No knowledge files yet. AGENTS.md is injected into every session's system
-                    prompt; docs/vendor-index.toml is the hardware knowledge index; cheatsheets
-                    live under .firment/cheatsheets/.
-                  </Text>
-                ) : (
-                  <>
-                    <Select
-                      size="small"
-                      style={{ width: '100%', marginBottom: 8, fontFamily: font.mono }}
-                      value={kbKey ?? undefined}
-                      onChange={selectKbFile}
-                      options={kbFiles.map((f) => ({
-                        value: f.key,
-                        label: `${f.key}${f.exists ? '' : ' (new)'}`,
-                      }))}
-                    />
-                    <Input.TextArea
-                      value={kbDraft}
-                      onChange={(e) => {
-                        setKbDraft(e.target.value);
-                        setKbDirty(true);
-                      }}
-                      rows={10}
-                      styles={{ textarea: { fontFamily: font.mono, fontSize: 12 } }}
-                      placeholder={
-                        kbKey === 'AGENTS.md'
-                          ? 'Project memory for every session: coding rules, hardware notes, gotchas…'
-                          : undefined
-                      }
-                    />
-                    <Space style={{ marginTop: 6 }}>
-                      <Button
-                        size="small"
-                        type="primary"
-                        disabled={busy || !kbDirty}
-                        onClick={saveKbFile}
-                      >
-                        save{kbDirty ? ' •' : ''}
-                      </Button>
-                      {kbKey?.startsWith('cheatsheet:') && (
-                        <Button size="small" danger disabled={busy} onClick={deleteKbFile}>
-                          delete cheatsheet
-                        </Button>
-                      )}
-                    </Space>
-                  </>
-                )}
-              </Card>
+              <Knowledge
+                files={kbFiles}
+                selected={kbKey}
+                draft={kbDraft}
+                dirty={kbDirty}
+                busy={busy}
+                onSelect={selectKbFile}
+                onDraft={(text) => {
+                  setKbDraft(text);
+                  setKbDirty(true);
+                }}
+                onSave={saveKbFile}
+                onDelete={deleteKbFile}
+                onCreate={newCheatsheet}
+              />
 
               <Insights
                 elf={elf}

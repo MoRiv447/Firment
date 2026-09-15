@@ -1,0 +1,32 @@
+/*
+ * The knowledge editor: a picker, the text, and the two controls under it.
+ *
+ * `.pick` is a grid with one cell so the select trigger -- a `<button>` -- fills
+ * the row. A button in a block context is only as wide as its label, and a file
+ * picker that shrinks to fit `AGENTS.md` looks like a tag rather than a field.
+ */
+.pick {
+  display: grid;
+  margin-bottom: var(--sp-2);
+}
+
+.create {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-1);
+  align-items: center;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+.none {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-minor);
+  line-height: var(--lh-tight);
+}
