@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import stepSheetRaw from '../StepProgress.module.css?raw';
+import tokensRaw from '../../styles/tokens.css?raw';
 import { StepProgress } from '../StepProgress';
-import { paletteFor, setActivePalette } from '../../styles/tokens';
 
 /**
  * The two components the design language is made of.
@@ -31,6 +31,25 @@ import { paletteFor, setActivePalette } from '../../styles/tokens';
  * against each other's ground.
  */
 const stepSheet = stepSheetRaw.replace(/\/\*[\s\S]*?\*\//g, '');
+
+/**
+ * The custom properties of one scheme, read out of the stylesheet.
+ *
+ * These assertions used to compare values from the JS palette module
+ * `styles/tokens.ts`. The palette is CSS now, so the same question is asked of
+ * the same declarations the browser reads -- which is the version that cannot
+ * drift from what is rendered.
+ */
+const schemeTokens = (scheme: 'dark' | 'light'): Map<string, string> => {
+  const css = tokensRaw.replace(/\/\*[\s\S]*?\*\//g, '');
+  const block = new RegExp(`\\[data-scheme="${scheme}"\\]\\s*\\{([^}]*)\\}`).exec(css);
+  return new Map(
+    [...(block?.[1] ?? '').matchAll(/(--[\w-]+)\s*:\s*([^;]+)/g)].map(([, name, value]) => [
+      name,
+      value.trim(),
+    ]),
+  );
+};
 
 const stepRules = new Map<string, Record<string, string>>(
   [...stepSheet.matchAll(/([^{}]+)\{([^}]*)\}/g)].map(([, selector, body]) => [
@@ -103,8 +122,9 @@ describe('StepProgress', () => {
     // grey that reads "unavailable", and the two are different values on purpose.
     expect(stepRules.get('.step')?.color).toBe('var(--step-pending-ink)');
     expect(stepRule('pending').color).toBeUndefined();
-    const light = paletteFor('light');
-    expect(light.stepPendingInk).not.toBe(light.muted);
+    const light = schemeTokens('light');
+    expect(light.get('--step-pending-ink')).not.toBe(light.get('--muted'));
+    expect(light.get('--step-pending-ink')).toBeTruthy();
     // Only the glyph dims, so the label never loses its weight.
     expect(stepRules.get(".step[data-state='pending'] .mark")?.opacity).toBe('0.7');
   });
@@ -152,13 +172,12 @@ describe('StepProgress', () => {
   });
 
   it('keeps a failed step distinct from the brand and success greens', () => {
-    setActivePalette('light');
-    const light = paletteFor('light');
+    const light = schemeTokens('light');
     // Three outcomes, three colours: a failure must not be able to read as
     // "passed", and it must not borrow the brand green either.
-    expect(light.stepFailedInk).not.toBe(light.stepDoneInk);
-    expect(light.stepFailedInk).not.toBe(light.brandAcid);
-    expect(light.stepFailedBg).not.toBe(light.stepDoneBg);
+    expect(light.get('--step-failed-ink')).not.toBe(light.get('--step-done-ink'));
+    expect(light.get('--step-failed-ink')).not.toBe(light.get('--brand-acid'));
+    expect(light.get('--step-failed-bg')).not.toBe(light.get('--step-done-bg'));
   });
 });
 
