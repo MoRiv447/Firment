@@ -1,0 +1,77 @@
+/*
+ * The session rows.
+ *
+ * A row is one line: what kind of conversation it is, what it is about, and the
+ * three things you can do to it. The preview takes the slack and truncates --
+ * a session's name is the first thing in it, so the tail is the part worth
+ * losing.
+ */
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.reload {
+  display: grid;
+  place-items: center;
+  width: var(--h-row);
+  height: var(--h-row);
+  border: 1px solid transparent;
+  border-radius: var(--r-control);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.reload:hover:enabled {
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.reload:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.empty {
+  display: grid;
+  justify-items: center;
+  gap: var(--sp-3);
+  padding-block: var(--sp-2);
+}
+
+.rows {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-control);
+}
+
+/* The selection pair, not the brand: a 1px acid border on a light ground is
+   1.27:1, so the selected card and its neighbours were the same colour. */
+.row[data-current='true'] {
+  border-color: var(--selection);
+}
+
+.preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--fs-ui);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.parent {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--fs-micro);
+}

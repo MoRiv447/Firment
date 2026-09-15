@@ -1,15 +1,10 @@
 import {
-  Button,
   Card,
-  Empty,
   Input,
   Modal,
   Space,
-  Tag,
-  Tooltip,
   Typography,
 } from 'antd';
-import { ReloadOutlined } from '@ant-design/icons';
 import { useEffect, useRef, useState } from 'react';
 import { api, notifySessionsChanged, onWorkbenchOpen } from '../lib/api';
 import { isUnder, pathKey } from '../lib/paths';
@@ -27,11 +22,9 @@ import type {
   TimelineEntryDto,
   WorkbenchStateDto,
 } from '../types';
-import { color, radius, statusChip } from '../styles/tokens';
-import type { StatusKind } from '../styles/tokens';
-import { ActionButton } from '../components/ActionButton';
 import { FlashHistory } from './workbench/FlashHistory';
 import { Knowledge } from './workbench/Knowledge';
+import { SessionTree } from './workbench/SessionTree';
 import { Insights } from './workbench/insights';
 import { confirm } from '../ui';
 import { Decisions } from './workbench/Decisions';
@@ -597,17 +590,6 @@ export function WorkbenchView() {
     }
   };
 
-  // Session-tree kind filter: 'all' shows everything; the other values keep
-  // only sessions of that category.
-  const [kindFilter, setKindFilter] = useState<'all' | 'normal' | 'mainline' | 'branch'>('all');
-
-  const tree = sessions
-    .filter((s) => kindFilter === 'all' || s.kind === kindFilter)
-    .map((s) => ({
-      ...s,
-      isMainline:
-        state?.config.mainline_session === s.id || s.kind === 'mainline',
-    }));
 
   return (
     <div style={{ padding: 20, height: '100%', overflowY: 'auto' }}>
@@ -701,92 +683,17 @@ export function WorkbenchView() {
                 onRefresh={() => refreshInsights(state.root, state.config.mainline_session)}
               />
 
-              <Card
-                type="inner"
-                title="Session tree"
-                size="small"
-                extra={
-                  <Space size={4}>
-                    {(['all', 'normal', 'mainline', 'branch'] as const).map((f) => (
-                      <Tag.CheckableTag
-                        key={f}
-                        checked={kindFilter === f}
-                        onChange={() => setKindFilter(f)}
-                        style={{ fontSize: 11 }}
-                      >
-                        {f.toUpperCase()}
-                      </Tag.CheckableTag>
-                    ))}
-                    <Tooltip title="Reload sessions from disk">
-                      <Button size="small" type="text" loading={busy} onClick={() => void load()} icon={<ReloadOutlined />} />
-                    </Tooltip>
-                  </Space>
-                }
-              >
-                {tree.length === 0 && (
-                  <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                    <Empty description="No sessions under this path yet" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-                    {kindFilter === 'all' && (
-                      <ActionButton tier="primary" loading={busy} onClick={createMainline}>
-                        New mainline chat here
-                      </ActionButton>
-                    )}
-                  </Space>
-                )}
-                <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                  {tree.map((s) => {
-                    // Mainline / branch / plain session. A mainline is an
-                    // emphasis, not a warning, so it gets `attention`'s pair
-                    // rather than a gold preset.
-                    const kindStatus: StatusKind =
-                      s.kind === 'mainline' ? 'attention' : s.kind === 'branch' ? 'running' : 'ok';
-                    return (
-                    <div
-                      key={s.id}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 8,
-                        padding: '4px 8px',
-                        // `selection`, not the acid: a 1px acid border on a
-                        // light ground is 1.27:1, so the selected card and its
-                        // neighbours were the same colour.
-                        border: `1px solid ${s.id === currentSessionId ? color.selection : color.line}`,
-                        borderRadius: radius.control,
-                      }}
-                    >
-                      <Tag style={{ ...statusChip(kindStatus), borderRadius: radius.chip }}>
-                        {s.isMainline ? 'MAINLINE' : s.kind.toUpperCase()}
-                      </Tag>
-                      <Text style={{ flex: 1, fontSize: 13 }} ellipsis>
-                        {s.preview || s.id.slice(0, 8)}
-                      </Text>
-                      {s.parent_session && (
-                        <Text type="secondary" style={{ fontSize: 11 }}>
-                          of {s.parent_session.slice(0, 8)}
-                        </Text>
-                      )}
-                      {!s.isMainline && (
-                        <Button size="small" disabled={busy} onClick={() => setMainline(s.id)}>
-                          set mainline
-                        </Button>
-                      )}
-                      <Button size="small" type="default" disabled={busy} onClick={() => loadSession(s.id)}>
-                        open
-                      </Button>
-                      <Button
-                        size="small"
-                        type="dashed"
-                        disabled={busy}
-                        onClick={() => setBranchModal({ parentId: s.id, title: '' })}
-                      >
-                        + branch
-                      </Button>
-                    </div>
-                    );
-                  })}
-                </Space>
-              </Card>
+              <SessionTree
+                sessions={sessions}
+                mainlineSession={state?.config.mainline_session}
+                currentId={currentSessionId}
+                busy={busy}
+                onReload={() => void load()}
+                onNewMainline={createMainline}
+                onSetMainline={setMainline}
+                onOpen={loadSession}
+                onBranch={(parentId) => setBranchModal({ parentId, title: '' })}
+              />
             </>
           )}
         </Space>
