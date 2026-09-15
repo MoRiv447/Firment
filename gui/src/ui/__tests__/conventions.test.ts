@@ -63,6 +63,12 @@ const SOURCES = import.meta.glob(
     '../../components/ToolCard.module.css',
     '../../views/ChatView.tsx',
     '../../views/ChatView.module.css',
+    // Stage 6f emptied the workbench's shell: the last antd in the view went
+    // with it, so the file is gated like the layer it is now written against.
+    // Until this line existed, "no antd in WorkbenchView" was a promise in a
+    // handoff document rather than something that could fail.
+    '../../views/WorkbenchView.tsx',
+    '../../views/WorkbenchView.module.css',
     '../../views/SessionSidebar.tsx',
     '../../views/SessionSidebar.module.css',
     // Stage 6 split the workbench into panes under `views/workbench/`, and every

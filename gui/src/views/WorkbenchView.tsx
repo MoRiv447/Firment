@@ -1,10 +1,7 @@
-import {
-  Card,
-  Space,
-} from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { api, notifySessionsChanged, onWorkbenchOpen } from '../lib/api';
 import { isUnder, pathKey } from '../lib/paths';
+import styles from './WorkbenchView.module.css';
 import type {
   BoardPinmapDto,
   DecisionEntryDto,
@@ -589,112 +586,110 @@ export function WorkbenchView() {
 
 
   return (
-    <div style={{ padding: 20, height: '100%', overflowY: 'auto' }}>
-      <Card size="small" title="Project workbench">
-        <TrafficPane traffic={traffic} />
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <ProjectBar
-            cwd={cwd}
-            projects={projects}
-            busy={busy}
-            error={error}
-            onCwd={setCwd}
-            onOpen={() => void load()}
-            onPick={(dir) => {
-              setCwd(dir);
-              void load(dir);
-            }}
-          />
+    <div className={styles.page}>
+      <TrafficPane traffic={traffic} />
+      <div className={styles.stack}>
+        <ProjectBar
+          cwd={cwd}
+          projects={projects}
+          busy={busy}
+          error={error}
+          onCwd={setCwd}
+          onOpen={() => void load()}
+          onPick={(dir) => {
+            setCwd(dir);
+            void load(dir);
+          }}
+        />
 
-          {state && (
-            <>
-              <ProjectSummary state={state} />
+        {state && (
+          <>
+            <ProjectSummary state={state} />
 
-              <Bindings
-                bindings={bindings}
-                devices={traffic.devices}
-                busy={busy}
-                onBind={bindDevice}
-                onUnbind={unbindDevice}
-              />
+            <Bindings
+              bindings={bindings}
+              devices={traffic.devices}
+              busy={busy}
+              onBind={bindDevice}
+              onUnbind={unbindDevice}
+            />
 
-              <Escalations
-                entries={escalations}
-                threshold={escalateSev}
-                mainline={state.config.mainline_session}
-                busy={busy}
-                autoRun={autoRun}
-                onAutoRun={toggleAutoRun}
-                onDiagnose={runEscalation}
-                onDismiss={dropEscalation}
-              />
+            <Escalations
+              entries={escalations}
+              threshold={escalateSev}
+              mainline={state.config.mainline_session}
+              busy={busy}
+              autoRun={autoRun}
+              onAutoRun={toggleAutoRun}
+              onDiagnose={runEscalation}
+              onDismiss={dropEscalation}
+            />
 
-              <Hardware
-                hardware={hardware}
-                busy={busy}
-                onRefresh={refreshHardware}
-                onSaveChip={saveChip}
-              />
+            <Hardware
+              hardware={hardware}
+              busy={busy}
+              onRefresh={refreshHardware}
+              onSaveChip={saveChip}
+            />
 
-               <FlashHistory history={flashHistory} />
+             <FlashHistory history={flashHistory} />
 
-              <Pinmap
-                boards={pinmap}
-                selected={pinBoard}
-                busy={busy}
-                onSelectBoard={setPinBoard}
-                onClaimPin={claimPin}
-                onRemovePin={removePin}
-              />
+            <Pinmap
+              boards={pinmap}
+              selected={pinBoard}
+              busy={busy}
+              onSelectBoard={setPinBoard}
+              onClaimPin={claimPin}
+              onRemovePin={removePin}
+            />
 
-              <Decisions
-                decisions={decisions}
-                busy={busy}
-                onAdd={addDecision}
-                onRemove={removeDecision}
-              />
+            <Decisions
+              decisions={decisions}
+              busy={busy}
+              onAdd={addDecision}
+              onRemove={removeDecision}
+            />
 
-              <Knowledge
-                files={kbFiles}
-                selected={kbKey}
-                draft={kbDraft}
-                dirty={kbDirty}
-                busy={busy}
-                onSelect={selectKbFile}
-                onDraft={(text) => {
-                  setKbDraft(text);
-                  setKbDirty(true);
-                }}
-                onSave={saveKbFile}
-                onDelete={deleteKbFile}
-                onCreate={newCheatsheet}
-              />
+            <Knowledge
+              files={kbFiles}
+              selected={kbKey}
+              draft={kbDraft}
+              dirty={kbDirty}
+              busy={busy}
+              onSelect={selectKbFile}
+              onDraft={(text) => {
+                setKbDraft(text);
+                setKbDirty(true);
+              }}
+              onSave={saveKbFile}
+              onDelete={deleteKbFile}
+              onCreate={newCheatsheet}
+            />
 
-              <Insights
-                elf={elf}
-                elfError={elfError}
-                quality={quality}
-                timeline={timeline}
-                hasMainline={Boolean(state.config.mainline_session)}
-                busy={busy}
-                onRefresh={() => refreshInsights(state.root, state.config.mainline_session)}
-              />
+            <Insights
+              elf={elf}
+              elfError={elfError}
+              quality={quality}
+              timeline={timeline}
+              hasMainline={Boolean(state.config.mainline_session)}
+              busy={busy}
+              onRefresh={() => refreshInsights(state.root, state.config.mainline_session)}
+            />
 
-              <SessionTree
-                sessions={sessions}
-                mainlineSession={state?.config.mainline_session}
-                currentId={currentSessionId}
-                busy={busy}
-                onReload={() => void load()}
-                onNewMainline={createMainline}
-                onSetMainline={setMainline}
-                onOpen={loadSession}
-                onBranch={setBranchParentId}
-              />
-            </>
-          )}
-        </Space>
-      </Card>
+            <SessionTree
+              sessions={sessions}
+              mainlineSession={state?.config.mainline_session}
+              currentId={currentSessionId}
+              busy={busy}
+              onReload={() => void load()}
+              onNewMainline={createMainline}
+              onSetMainline={setMainline}
+              onOpen={loadSession}
+              onBranch={setBranchParentId}
+            />
+          </>
+        )}
+      </div>
 
       <BranchDialog
         parentId={branchParentId}

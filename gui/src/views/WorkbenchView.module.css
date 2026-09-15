@@ -1,0 +1,22 @@
+/*
+ * The workbench page: the panes, in one column, with the gap antd's `Space` used
+ * to provide.
+ *
+ * The page had a `Card` for a title ("Project workbench") that no longer said
+ * anything the tab does not, and a one-child `Space` around everything. Both were
+ * layout, so both are here: `.page` is the scroll container and `.stack` is the
+ * column. `align-content: start` keeps the panes at their own heights instead of
+ * stretching the last one down the page.
+ */
+.page {
+  height: 100%;
+  overflow-y: auto;
+  padding: var(--sp-5);
+}
+
+.stack {
+  display: grid;
+  align-content: start;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+}
