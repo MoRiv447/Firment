@@ -1,9 +1,6 @@
 import {
   Card,
-  Input,
-  Modal,
   Space,
-  Typography,
 } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { api, notifySessionsChanged, onWorkbenchOpen } from '../lib/api';
@@ -23,6 +20,7 @@ import type {
   WorkbenchStateDto,
 } from '../types';
 import { FlashHistory } from './workbench/FlashHistory';
+import { BranchDialog } from './workbench/BranchDialog';
 import { Knowledge } from './workbench/Knowledge';
 import { SessionTree } from './workbench/SessionTree';
 import { Insights } from './workbench/insights';
@@ -37,8 +35,6 @@ import { ProjectSummary } from './workbench/ProjectSummary';
 import { TrafficPane } from './workbench/TrafficPane';
 import { alertFromFrame, foldEscalation } from './workbench/guard';
 import { useDeviceTraffic } from './workbench/useDeviceTraffic';
-
-const { Text } = Typography;
 
 /**
  * Project workbench (W1): mainline + branch session tree over
@@ -60,7 +56,7 @@ export function WorkbenchView() {
   const [sessions, setSessions] = useState<SessionSummaryDto[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [branchModal, setBranchModal] = useState<{ parentId: string; title: string } | null>(null);
+  const [branchParentId, setBranchParentId] = useState<string | null>(null);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [elf, setElf] = useState<ElfCardDto | null>(null);
   const [elfError, setElfError] = useState<string | null>(null);
@@ -527,18 +523,19 @@ export function WorkbenchView() {
     }
   };
 
-  const createBranch = async () => {
-    if (!branchModal) return;
+  const createBranch = async (title: string) => {
+    if (!branchParentId) return false;
     setBusy(true);
     try {
-      const id = await api.workbenchBranchCreate(branchModal.parentId, branchModal.title);
-      setBranchModal(null);
+      const id = await api.workbenchBranchCreate(branchParentId, title);
+      setBranchParentId(null);
       await refresh(cwd.trim());
       setCurrentSessionId(id);
-      // The sidebar owns its own session list: tell it a branch was added.
       notifySessionsChanged();
+      return true;
     } catch (err) {
       setError(String(err));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -692,33 +689,19 @@ export function WorkbenchView() {
                 onNewMainline={createMainline}
                 onSetMainline={setMainline}
                 onOpen={loadSession}
-                onBranch={(parentId) => setBranchModal({ parentId, title: '' })}
+                onBranch={setBranchParentId}
               />
             </>
           )}
         </Space>
       </Card>
 
-      <Modal
-        title="New branch conversation"
-        open={!!branchModal}
-        onOk={createBranch}
-        onCancel={() => setBranchModal(null)}
-        okButtonProps={{ disabled: !branchModal?.title.trim() }}
-      >
-        <Input
-          placeholder="branch title (e.g. sensor drift hunt)"
-          value={branchModal?.title ?? ''}
-          onChange={(e) =>
-            setBranchModal((prev) => (prev ? { ...prev, title: e.target.value } : prev))
-          }
-          onPressEnter={createBranch}
-        />
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          Fresh context linked to{' '}
-          {branchModal?.parentId.slice(0, 8)} — inherits cwd/provider/model only.
-        </Text>
-      </Modal>
+      <BranchDialog
+        parentId={branchParentId}
+        busy={busy}
+        onCancel={() => setBranchParentId(null)}
+        onCreate={createBranch}
+      />
     </div>
   );
 }

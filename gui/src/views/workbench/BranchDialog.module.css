@@ -1,0 +1,8 @@
+/* The one line under the name field. It is a caveat, so it is quiet: the field
+   above it is the thing to read. */
+.note {
+  margin: var(--sp-2) 0 0;
+  color: var(--muted);
+  font-size: var(--fs-minor);
+  line-height: var(--lh-tight);
+}
