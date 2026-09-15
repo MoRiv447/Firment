@@ -188,6 +188,7 @@ describe('Primitive layer and shell conventions', () => {
       'menu',
       'menu-item',
       'menu-separator',
+      'multiselect',
       'notifications-panel',
       'option',
       'popover',

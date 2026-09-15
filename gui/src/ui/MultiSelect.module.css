@@ -1,0 +1,84 @@
+/*
+ * The multi-select field: chips, a filter input, and the rows.
+ *
+ * The frame is the shared control frame (`control.module.css`), the same one
+ * `TextInput` and `Select` wear, so this lines up in a mixed panel without any
+ * measuring -- but its contents wrap, which is why the height is `auto` and the
+ * padding is smaller than a single-line control's.
+ */
+.frame {
+  height: auto;
+  min-height: var(--h-input);
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  padding-block: var(--sp-05);
+  cursor: text;
+}
+
+.field {
+  flex: 1;
+  min-width: 60px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  outline: none;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-05);
+  padding-inline: var(--sp-1) var(--sp-05);
+  border: 1px solid var(--line);
+  border-radius: var(--r-chip);
+  background: var(--surface-raised);
+  font-size: var(--fs-micro);
+  white-space: nowrap;
+}
+
+.chipText {
+  font-family: var(--ff-mono);
+}
+
+.remove {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.remove:hover:enabled {
+  color: var(--ink);
+}
+
+.remove:disabled {
+  cursor: default;
+}
+
+.option {
+  justify-content: space-between;
+}
+
+/* The row that offers what you typed is not one of the choices, and reads as an
+   offer rather than an item: it is separated and muted. */
+.option[data-create] {
+  margin-top: var(--sp-1);
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.empty {
+  margin: 0;
+  padding: var(--sp-2);
+  color: var(--muted);
+  font-size: var(--fs-minor);
+}

@@ -25,6 +25,8 @@ export interface PopoverProps {
   /** Roomier: a panel holding prose or a form rather than a flush list of rows. */
   padded?: boolean;
   role?: 'menu' | 'listbox' | 'dialog' | 'tooltip' | 'group';
+  /** A listbox whose rows toggle instead of replacing the selection. */
+  multiselectable?: boolean;
   id?: string;
   labelledBy?: string;
   /** `Menu` moves focus into the panel, so it needs the node. */
@@ -68,6 +70,8 @@ export function Popover({
   matchAnchorWidth = false,
   padded = false,
   role,
+  /** Only meaningful with `role="listbox"`: the panel answers Enter per row. */
+  multiselectable = false,
   id,
   labelledBy,
   panelRef,
@@ -98,6 +102,7 @@ export function Popover({
       data-ready={ready || undefined}
       data-padded={padded || undefined}
       role={role}
+      aria-multiselectable={multiselectable || undefined}
       aria-labelledby={labelledBy}
       style={style}
       className={cx(panel.panel, matchAnchorWidth && panel.matchWidth, className)}

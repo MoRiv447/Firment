@@ -12,6 +12,7 @@ import type { Size } from './types';
 import { useFieldProps } from './Field';
 import { useListKeyboard } from './useListKeyboard';
 
+/** A row in a list: the value it writes, and what to show for it. */
 export interface SelectOption {
   value: string;
   label: ReactNode;

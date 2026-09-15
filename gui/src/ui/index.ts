@@ -32,6 +32,7 @@ export { KeyValue } from './KeyValue';
 export { NumberField } from './NumberField';
 export type { NumberFieldProps } from './NumberField';
 export { Menu } from './Menu';
+export { MultiSelect } from './MultiSelect';
 export type { MenuEntry, MenuItem, MenuSeparator } from './Menu';
 export { Drawer, Modal } from './Modal';
 export { PopConfirm } from './PopConfirm';
