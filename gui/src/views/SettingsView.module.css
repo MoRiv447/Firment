@@ -1,0 +1,18 @@
+/*
+ * The settings page: one column of cards, scrollable.
+ *
+ * A `Callout` rather than antd's `Alert` for the loading state, which also means
+ * the page has no antd left in it at all -- the last view to get there before the
+ * dependency itself goes.
+ */
+.page {
+  height: 100%;
+  overflow-y: auto;
+  padding: var(--sp-5);
+}
+
+.stack {
+  display: grid;
+  align-content: start;
+  gap: var(--sp-4);
+}
