@@ -1,0 +1,70 @@
+/*
+ * The pending-findings list.
+ *
+ * Two lines per row: the finding with its actions, then the bookkeeping (when,
+ * which rule, what the device actually said). They are two lines because the
+ * second one is only read once the first one has been agreed with, and a row
+ * that puts `payload` and `summary` side by side is a row where neither is
+ * readable.
+ */
+.head {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.sev {
+  color: var(--muted);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+.auto {
+  margin: 0 0 var(--sp-2);
+  color: var(--muted);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-tight);
+}
+
+.row {
+  padding-block: var(--sp-1);
+  border-bottom: 1px solid var(--line);
+}
+
+.row:last-of-type {
+  border-bottom: 0;
+}
+
+.line {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--fs-minor);
+}
+
+.meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.payload {
+  font-family: var(--ff-mono);
+  overflow-wrap: anywhere;
+}
+
+.none {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-minor);
+  line-height: var(--lh-body);
+}

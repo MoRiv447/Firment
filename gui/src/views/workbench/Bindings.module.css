@@ -1,0 +1,58 @@
+/*
+ * The binding list and its draft line.
+ *
+ * A row is one line high by intent: node, role, and how recently it spoke. The
+ * `.seen` column is `flex: none` so a long role wraps before the timestamp is
+ * squeezed out of the card — the timestamp is the reason the row is green.
+ */
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding-block: var(--sp-1);
+  border-bottom: 1px solid var(--line);
+}
+
+.row:last-of-type {
+  border-bottom: 0;
+}
+
+.role {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-minor);
+  line-height: var(--lh-tight);
+}
+
+.note {
+  color: var(--muted);
+}
+
+.allow {
+  color: var(--muted);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-micro);
+}
+
+.seen {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+/* node, role, bind — the two fields share the line and the button takes its own. */
+.draft {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) auto;
+  gap: var(--sp-2);
+  align-items: center;
+  margin-top: var(--sp-2);
+}
+
+.none {
+  margin: 0 0 var(--sp-1);
+  color: var(--muted);
+  font-size: var(--fs-minor);
+  line-height: var(--lh-tight);
+}

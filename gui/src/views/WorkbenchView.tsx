@@ -7,7 +7,6 @@ import {
   Modal,
   Select,
   Space,
-  Switch,
   Tag,
   Tooltip,
   Typography,
@@ -36,6 +35,8 @@ import { ActionButton } from '../components/ActionButton';
 import { FlashHistory } from './workbench/FlashHistory';
 import { ChangeTimeline, ElfBudget, VerificationBadges } from './workbench/insights';
 import { Decisions } from './workbench/Decisions';
+import { Bindings } from './workbench/Bindings';
+import { Escalations } from './workbench/Escalations';
 import { ProjectBar } from './workbench/ProjectBar';
 import { ProjectSummary } from './workbench/ProjectSummary';
 import { TrafficPane } from './workbench/TrafficPane';
@@ -81,8 +82,6 @@ export function WorkbenchView() {
   const [newFunc, setNewFunc] = useState('');
   // Per-project device bindings ([devices.<node>] in workbench.toml).
   const [bindings, setBindings] = useState<DeviceBindingDto[]>([]);
-  const [bindNode, setBindNode] = useState('');
-  const [bindRole, setBindRole] = useState('');
   // Hardware inventory: serial ports + probe-rs probes + default chip.
   // Refreshed behind an explicit button (probe-rs enumeration takes ~1s).
   const [hardware, setHardware] = useState<HardwareInfoDto | null>(null);
@@ -322,19 +321,17 @@ export function WorkbenchView() {
     setNewBoard('');
   };
 
-  const bindDevice = async () => {
-    if (!cwd.trim() || !bindNode.trim()) return;
+  const bindDevice = async (node: string, role: string): Promise<boolean> => {
+    if (!cwd.trim() || !node.trim()) return false;
     setBusy(true);
     try {
       // note/allow omitted → backend PRESERVES existing values (an allow
       // whitelist is never wiped by a role-only rebind).
-      setBindings(
-        await api.workbenchDevicesSet(cwd.trim(), bindNode.trim(), bindRole.trim()),
-      );
-      setBindNode('');
-      setBindRole('');
+      setBindings(await api.workbenchDevicesSet(cwd.trim(), node.trim(), role.trim()));
+      return true;
     } catch (err) {
       setError(String(err));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -378,10 +375,14 @@ export function WorkbenchView() {
 
   // The alert half of the stream is decided here and not in the hook: what
   // counts as an escalation belongs to the project, not to the transport.
+  // `||` and not `??`: an empty threshold is an unset one, and a level the rank
+  // table does not know would score as `info` while the card printed
+  // "sev ≥ warn".
+  const escalateSev = state?.config.guard_escalate_sev || 'warn';
   const traffic = useDeviceTraffic((frame, node, ts) => {
     const alert = alertFromFrame(frame, node, ts);
     const fold = foldEscalation(escalRef.current, alert, {
-      threshold: state?.config.guard_escalate_sev ?? 'warn',
+      threshold: escalateSev,
       bound: bindings.some((b) => b.node === alert.node),
     });
     if (fold.kind === 'none') return;
@@ -390,7 +391,6 @@ export function WorkbenchView() {
     // dispatches the correctly-shaped event.
     if (fold.kind === 'escalated' && autoRun) runEscalation(fold.entry);
   });
-  const devices = traffic.devices;
 
   const toggleAutoRun = (on: boolean) => {
     setAutoRun(on);
@@ -610,168 +610,24 @@ export function WorkbenchView() {
             <>
               <ProjectSummary state={state} />
 
-              <Card
-                type="inner"
-                title="Devices"
-                size="small"
-                extra={
-                  <Text type="secondary" style={{ fontSize: 11 }}>
-                    nodes this project owns — the agent's device_cmd can only reach these
-                  </Text>
-                }
-              >
-                {bindings.length === 0 && (
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    No devices bound. Bind a node (use its MQTT node name) so the agent can
-                    send it commands via device_cmd.
-                  </Text>
-                )}
-                {bindings.map((d) => {
-                  const live = devices.find((x) => x.node === d.node);
-                  return (
-                    <div
-                      key={d.node}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 8,
-                        padding: '4px 6px',
-                        borderBottom: `1px solid ${color.line}`,
-                      }}
-                    >
-                      <Tag
-                        style={{ ...statusChip(live ? 'ok' : 'neutral'), borderRadius: radius.chip, fontWeight: 700 }}
-                        
-                      >
-                        {live ? '●' : '○'} {d.node}
-                      </Tag>
-                      <Text style={{ flex: 1, fontSize: 12 }}>
-                        {d.role || '—'}
-                        {d.note ? <Text type="secondary"> · {d.note}</Text> : null}
-                        {d.allow.length > 0 && (
-                          <Text type="secondary" style={{ fontSize: 10 }}>
-                            {' '}
-                            [allow: {d.allow.join(', ')}]
-                          </Text>
-                        )}
-                      </Text>
-                      {live && (
-                        <Text type="secondary" style={{ fontSize: 10 }}>
-                          ×{live.count} · {new Date(live.ts).toLocaleTimeString()}
-                        </Text>
-                      )}
-                      <Button size="small" type="text" danger disabled={busy} onClick={() => unbindDevice(d.node)}>
-                        ✕
-                      </Button>
-                    </div>
-                  );
-                })}
-                <Space.Compact style={{ width: '100%', marginTop: 8 }}>
-                  {devices.filter((d) => !bindings.some((b) => b.node === d.node)).length > 0 ? (
-                    <Select
-                      size="small"
-                      placeholder="pick an online node"
-                      style={{ minWidth: 150 }}
-                      value={bindNode || undefined}
-                      onChange={(v) => setBindNode(v)}
-                      options={devices
-                        .filter((d) => !bindings.some((b) => b.node === d.node))
-                        .map((d) => ({ value: d.node, label: `${d.node} (${d.count} frames)` }))}
-                    />
-                  ) : (
-                    <Input
-                      size="small"
-                      placeholder="node name (s3-node-1)"
-                      value={bindNode}
-                      onChange={(e) => setBindNode(e.target.value)}
-                      style={{ maxWidth: 170, fontFamily: font.mono }}
-                    />
-                  )}
-                  <Input
-                    size="small"
-                    placeholder="role (main mcu / sensor node…)"
-                    value={bindRole}
-                    onChange={(e) => setBindRole(e.target.value)}
-                    onPressEnter={bindDevice}
-                  />
-                  <Button size="small" type="dashed" disabled={busy || !bindNode.trim()} onClick={bindDevice}>
-                    bind
-                  </Button>
-                </Space.Compact>
-              </Card>
+              <Bindings
+                bindings={bindings}
+                devices={traffic.devices}
+                busy={busy}
+                onBind={bindDevice}
+                onUnbind={unbindDevice}
+              />
 
-              <Card
-                type="inner"
-                title="Escalations (guard)"
-                size="small"
-                extra={
-                  <Space size={8}>
-                    <Text type="secondary" style={{ fontSize: 11 }}>
-                      sev ≥ {state.config.guard_escalate_sev || 'warn'}
-                    </Text>
-                    <Tooltip title="Automatically hand new escalations to the mainline session">
-                      <Space size={4}>
-                        <Text style={{ fontSize: 11 }}>auto</Text>
-                        <Switch size="small" checked={autoRun} onChange={toggleAutoRun} />
-                      </Space>
-                    </Tooltip>
-                  </Space>
-                }
-              >
-                {escalations.length === 0 ? (
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    No pending escalations. Alerts from bound nodes at or above the severity
-                    threshold land here for one-click diagnosis.
-                  </Text>
-                ) : (
-                  <>
-                    {state.config.mainline_session ? null : (
-                      <Alert
-                        type="warning"
-                        showIcon
-                        style={{ marginBottom: 6, borderRadius: radius.control }}
-                        message="No mainline session registered — set one first to enable diagnosis."
-                      />
-                    )}
-                    {escalations.map((e) => (
-                      <div
-                        key={e.id}
-                        style={{
-                          padding: '5px 6px',
-                          borderBottom: `1px solid ${color.line}`,
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <Tag
-                            style={{ ...statusChip(e.sev === 'error' ? 'failed' : 'attention'), borderRadius: radius.chip, fontSize: 10, fontWeight: 700 }}
-                            
-                          >
-                            {e.sev}
-                          </Tag>
-                          <Tag style={{ borderRadius: radius.chip, fontSize: 10 }}>{e.node}</Tag>
-                          <Text style={{ fontSize: 12, flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-                            {e.summary || e.payload}
-                          </Text>
-                          <Button
-                            size="small"
-                            type="primary"
-                            disabled={busy || !state.config.mainline_session}
-                            onClick={() => runEscalation(e)}
-                          >
-                            diagnose
-                          </Button>
-                          <Button size="small" type="text" disabled={busy} onClick={() => dropEscalation(e.id)}>
-                            ✕
-                          </Button>
-                        </div>
-                        <Text type="secondary" style={{ fontSize: 10 }}>
-                          {new Date(e.ts).toLocaleTimeString()} · {e.rule || 'no rule'} · {e.payload.slice(0, 120)}
-                        </Text>
-                      </div>
-                    ))}
-                  </>
-                )}
-              </Card>
+              <Escalations
+                entries={escalations}
+                threshold={escalateSev}
+                mainline={state.config.mainline_session}
+                busy={busy}
+                autoRun={autoRun}
+                onAutoRun={toggleAutoRun}
+                onDiagnose={runEscalation}
+                onDismiss={dropEscalation}
+              />
 
               <Card
                 type="inner"
