@@ -1,0 +1,84 @@
+/*
+ * The serial pane: controls, the terminal, and the send row.
+ *
+ * No outer padding: the inspector already pads this pane, and 20px on each side
+ * came out of a column that is 360px wide at its roomiest.
+ */
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: var(--sp-3);
+}
+
+/* Wrapping and shrinkable. A flex row cannot shrink a fixed-width field, and on
+   this pane that cut the ELF box and the Start button off. */
+.controls {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.portField {
+  flex: 1 1 130px;
+  min-width: 0;
+}
+
+.baudField {
+  flex: 0 1 110px;
+  min-width: 0;
+}
+
+/* The ELF path is the one control that wants the whole row. */
+.elfField {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.output {
+  flex: 1;
+  overflow: auto;
+  padding: var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-panel);
+  background: var(--bg);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-mono);
+}
+
+/* Chunks arrive mid-word, so they are wrapped as text rather than as lines. */
+.block {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.stderr {
+  color: var(--warn-ink);
+}
+
+.waiting {
+  margin: 0;
+  color: var(--muted);
+}
+
+.sendRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-2);
+}
+
+.sendFoot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+}
+
+.sendMsg {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-minor);
+}

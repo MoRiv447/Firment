@@ -1,12 +1,20 @@
-import { Button, Card, Checkbox, Input, InputNumber, Select, Space, Tag, Typography } from 'antd';
-import { CaretRightOutlined, SendOutlined, StopOutlined } from '@ant-design/icons';
+import { Play, RefreshCw, Send, Square } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+
 import { api, onMonitorExited } from '../lib/api';
 import type { MonitorLine } from '../types';
-import { color, font, radius } from '../styles/tokens';
+import { Button, Card, Checkbox, Chip, Field, NumberField, Select, TextInput } from '../ui';
+import { toStream } from './serial/stream';
+import styles from './SerialView.module.css';
 
-const { Text } = Typography;
-
+/**
+ * The serial monitor: open a port, watch it, type into it.
+ *
+ * The layout is deliberate about one thing -- the controls wrap and can shrink.
+ * They used to be a `Space`, which cannot shrink a 260px field, so on the narrow
+ * inspector pane the ELF box and the Start button were cut off with no way to
+ * scroll to them. The pane is 360px at its roomiest.
+ */
 export function SerialView({ lines }: { lines: Record<string, MonitorLine[]> }) {
   const [ports, setPorts] = useState<string[]>([]);
   const [port, setPort] = useState('COM1');
@@ -78,12 +86,11 @@ export function SerialView({ lines }: { lines: Record<string, MonitorLine[]> }) 
   };
 
   const send = async () => {
-    const trimmed = sendText;
-    if (!trimmed || !active.includes(port)) {
+    if (!sendText || !open) {
       setSendMsg('Start the monitor first, then type something to send.');
       return;
     }
-    const data = appendCrLf ? `${trimmed}\r\n` : trimmed;
+    const data = appendCrLf ? `${sendText}\r\n` : sendText;
     try {
       await api.monitorSend(port, data);
       setSendMsg(`→ sent ${data.length} bytes`);
@@ -93,145 +100,96 @@ export function SerialView({ lines }: { lines: Record<string, MonitorLine[]> }) 
     }
   };
 
+  const open = active.includes(port);
   const activeText = active.length > 0 ? active.join(', ') : 'none';
   const currentLines = lines[port] ?? [];
-
-  // Render as a continuous stream: chunks that don't end with a newline are
-  // glued onto the previous chunk instead of starting a fresh line, exactly
-  // like a real serial terminal. stderr chunks keep their own colour.
-  const stream = useMemo(() => {
-    const blocks: { text: string; stderr: boolean }[] = [];
-    let last: { text: string; stderr: boolean } | null = null;
-    for (const l of currentLines) {
-      const stderr = l.kind === 'stderr';
-      const endsWithNl = l.line.endsWith('\n');
-      const text = endsWithNl ? l.line.slice(0, -1) : l.line;
-      if (last && last.stderr === stderr && !last.text.endsWith('\n')) {
-        // continuation of the previous chunk on the same terminal line
-        last.text += text;
-      } else {
-        last = { text, stderr };
-        blocks.push(last);
-      }
-      // keep track of the newline boundary so the next chunk doesn't glue
-      // onto a completed line
-      if (endsWithNl) last = null;
-    }
-    return blocks;
-  }, [currentLines]);
+  const stream = useMemo(() => toStream(currentLines), [currentLines]);
 
   return (
-    // No padding: the inspector already pads this pane, and 20px on each side
-    // came out of a column that is 360px wide at its roomiest.
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 12 }}>
-      <Card size="small" title="Serial monitor (read + write UART)">
-        {/* Fluid and wrapping: `Space` cannot shrink a 260px input, so on the
-            narrow pane the ELF field and the Start button were cut off with no
-            horizontal scroll to reach them. */}
-        <div
-          style={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 8,
-            alignItems: 'center',
-          }}
-        >
-          <Select
-            style={{ flex: '1 1 130px', minWidth: 0 }}
-            value={port}
-            onChange={setPort}
-            options={ports.map((p) => ({ label: p, value: p }))}
-            placeholder="COM port"
-          />
-          <Button size="small" onClick={refreshPorts}>
+    <div className={styles.page}>
+      <Card title="Serial monitor (read + write UART)">
+        <div className={styles.controls}>
+          <div className={styles.portField}>
+            <Select
+              ariaLabel="Port"
+              value={port}
+              onChange={setPort}
+              options={ports.map((p) => ({ label: p, value: p }))}
+              placeholder="COM port"
+            />
+          </div>
+          <Button size="sm" icon={RefreshCw} onClick={() => void refreshPorts()}>
             Refresh
           </Button>
-          <InputNumber
-            style={{ flex: '0 1 110px', minWidth: 0 }}
-            value={baud}
-            onChange={(v) => setBaud(v ?? 115200)}
-            min={1200}
-            max={3000000}
-          />
-          <Input
-            placeholder="ELF for symbol decoding (optional)"
-            style={{ flex: '1 1 100%', minWidth: 0 }}
-            value={elf}
-            onChange={(e) => setElf(e.target.value)}
-          />
-          {active.includes(port) ? (
-            <Button danger icon={<StopOutlined />} onClick={() => stop(port)}>
+          <div className={styles.baudField}>
+            <Field label="Baud">
+              <NumberField
+                min={1200}
+                max={3000000}
+                value={baud}
+                onValueChange={(n) => setBaud(n ?? 115200)}
+              />
+            </Field>
+          </div>
+          <div className={styles.elfField}>
+            <Field label="ELF for symbol decoding (optional)">
+              <TextInput
+                mono
+                value={elf}
+                onChange={(e) => setElf(e.target.value)}
+                placeholder="firmware.elf"
+              />
+            </Field>
+          </div>
+          {open ? (
+            <Button tier="danger" icon={Square} onClick={() => void stop(port)}>
               Stop on {port}
             </Button>
           ) : (
-            <Button
-              type="primary"
-              icon={<CaretRightOutlined />}
-              onClick={start}
-              loading={starting}
-            >
+            <Button tier="primary" icon={Play} disabled={starting} onClick={() => void start()}>
               Start
             </Button>
           )}
-          <Tag>active: {activeText}</Tag>
+          <Chip size="sm" mono>
+            active: {activeText}
+          </Chip>
         </div>
       </Card>
-      <div
-        ref={scrollRef}
-        style={{
-          flex: 1,
-          overflow: 'auto',
-          background: color.bg,
-          border: `1px solid ${color.line}`,
-          borderRadius: radius.panel,
-          padding: 10,
-          fontFamily: font.mono,
-          fontSize: 12.5,
-          lineHeight: 1.5,
-        }}
-      >
-        {stream.length === 0 && (
-          <Text type="secondary">No output yet — start the monitor above.</Text>
-        )}
-        {stream.map((b, i) => (
-          <div key={i} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-            {b.stderr ? (
-              <span style={{ color: color.warnInk }}>{b.text}</span>
-            ) : (
-              <span>{b.text}</span>
-            )}
+
+      <div ref={scrollRef} className={styles.output}>
+        {stream.length === 0 && <p className={styles.waiting}>No output yet — start the monitor above.</p>}
+        {stream.map((block, i) => (
+          <div key={i} className={styles.block}>
+            {block.stderr ? <span className={styles.stderr}>{block.text}</span> : <span>{block.text}</span>}
           </div>
         ))}
       </div>
-      <Card size="small" title="Send to device">
-        <Space.Compact style={{ width: '100%' }}>
-          <Input
+
+      <Card title="Send to device">
+        <div className={styles.sendRow}>
+          <TextInput
+            mono
             value={sendText}
             onChange={(e) => setSendText(e.target.value)}
-            onPressEnter={send}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void send();
+            }}
             placeholder="Type data to send… (Enter to send)"
-            style={{ fontFamily: font.mono }}
-            disabled={!active.includes(port)}
+            disabled={!open}
           />
           <Button
-            type="primary"
-            icon={<SendOutlined />}
-            onClick={send}
-            disabled={!sendText || !active.includes(port)}
+            tier="primary"
+            icon={Send}
+            disabled={!sendText || !open}
+            onClick={() => void send()}
           >
             Send
           </Button>
-        </Space.Compact>
-        <Space size={12} style={{ marginTop: 8 }}>
-          <Checkbox checked={appendCrLf} onChange={(e) => setAppendCrLf(e.target.checked)}>
-            append \r\n
-          </Checkbox>
-          {sendMsg && (
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {sendMsg}
-            </Text>
-          )}
-        </Space>
+        </div>
+        <div className={styles.sendFoot}>
+          <Checkbox checked={appendCrLf} onChange={setAppendCrLf} label={'append \\r\\n'} />
+          {sendMsg && <p className={styles.sendMsg}>{sendMsg}</p>}
+        </div>
       </Card>
     </div>
   );

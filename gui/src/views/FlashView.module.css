@@ -1,0 +1,87 @@
+/*
+ * Flash / Run.
+ *
+ * Same rule as the serial pane: no outer padding (the inspector pads), and every
+ * control can shrink, because this pane is 360px wide at its best.
+ */
+.page {
+  height: 100%;
+  overflow-y: auto;
+}
+
+.fields {
+  display: grid;
+  gap: var(--sp-3);
+}
+
+.target {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.fileField {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.smallField {
+  flex: 1 1 130px;
+  min-width: 0;
+}
+
+.actions {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.timeout {
+  flex: 0 1 140px;
+  min-width: 0;
+}
+
+.note {
+  margin: var(--sp-3) 0 0;
+  color: var(--muted);
+  font-size: var(--fs-minor);
+  line-height: var(--lh-tight);
+}
+
+.cmd {
+  font-family: var(--ff-mono);
+  font-size: var(--fs-micro);
+}
+
+/* Persistent, so a flash shows a panel rather than a blank pane. */
+.result {
+  min-height: 200px;
+  max-height: 420px;
+  overflow: auto;
+  margin-top: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--outline);
+  border-radius: var(--r-control);
+  background: var(--surface-raised);
+}
+
+.head {
+  margin: 0;
+  font-size: var(--fs-minor);
+  font-weight: var(--fw-strong);
+  color: var(--warn-ink);
+}
+
+.result[data-ok] .head {
+  color: var(--success-ink);
+}
+
+.out {
+  margin: var(--sp-2) 0 0;
+  font-family: var(--ff-mono);
+  font-size: var(--fs-minor);
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--ink);
+}

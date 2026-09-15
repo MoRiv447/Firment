@@ -69,6 +69,13 @@ const SOURCES = import.meta.glob(
     // handoff document rather than something that could fail.
     '../../views/WorkbenchView.tsx',
     '../../views/WorkbenchView.module.css',
+    // Stage 7: the last three views, one at a time as each left antd behind.
+    '../../views/SettingsView.tsx',
+    '../../views/SettingsView.module.css',
+    '../../views/SerialView.tsx',
+    '../../views/SerialView.module.css',
+    '../../views/FlashView.tsx',
+    '../../views/FlashView.module.css',
     '../../views/SessionSidebar.tsx',
     '../../views/SessionSidebar.module.css',
     // Stage 6 split the workbench into panes under `views/workbench/`, and every
