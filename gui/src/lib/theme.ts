@@ -11,7 +11,7 @@
  * it never falls back to the system preference behind the user's back.
  */
 
-import { createContext, useContext, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 /**
  * The two colour schemes.
@@ -76,21 +76,6 @@ export function useSystemPrefersDark(enabled: boolean): boolean {
   return isDark;
 }
 
-/**
- * The active scheme, for components that must re-render when it changes.
- *
- * Most components do not need this: they read `color.x` during render, and a
- * re-render of the tree picks up the new palette by itself. The exception is a
- * `React.memo` component -- memoisation compares props, so a theme change
- * leaves it showing the previous scheme's colours. Subscribing to this context
- * is what makes memoised subtrees follow the theme.
- */
-export const ThemeModeContext = createContext<ThemeMode>('dark');
-
-/** The active scheme; subscribing also invalidates `React.memo`. */
-export function useThemeMode(): ThemeMode {
-  return useContext(ThemeModeContext);
-}
 
 // ---------------------------------------------------------------------------
 // The `ui.theme` setting itself.

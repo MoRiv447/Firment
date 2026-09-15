@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { ConfigProvider, Drawer, theme } from 'antd';
 import { Bot, Diff, ListChecks, Usb } from 'lucide-react';
 import {
   api,
@@ -42,10 +41,9 @@ import { AgentsPane } from './shell/panes/AgentsPane';
 import { TodosPane, todoSummary } from './shell/panes/TodosPane';
 import { HardwarePane } from './shell/panes/HardwarePane';
 import { ChangesPane } from './shell/panes/ChangesPane';
-import { antdTheme, setActivePalette } from './styles/tokens';
+import { Drawer } from './ui';
 import styles from './App.module.css';
 import {
-  ThemeModeContext,
   publishScheme,
   resolveTheme,
   setThemeSetting,
@@ -62,7 +60,6 @@ export default function App() {
   const themeSetting = useThemeSetting();
   const systemIsDark = useSystemPrefersDark(themeSetting === 'auto');
   const mode = resolveTheme(themeSetting, systemIsDark);
-  setActivePalette(mode);
 
   // Read the persisted setting once at startup. Reusing `get_settings` rather
   // than adding a command just for this: it is one local IPC call, and a
@@ -84,10 +81,10 @@ export default function App() {
       .catch((err: unknown) => console.error(err));
   }, []);
 
-  // The write side of the pre-paint contract in index.html. Unlike
-  // `setActivePalette` this can be an effect: the DOM attribute only has to
-  // match by the time the browser paints the next frame, and the first frame
-  // was already decided from the cache the last time this ran.
+  // The write side of the pre-paint contract in index.html. It can be an
+  // effect: the DOM attribute only has to match by the time the browser paints
+  // the next frame, and the first frame was already decided by the cache that
+  // ran in `index.html`.
   useEffect(() => {
     publishScheme(themeSetting, mode);
   }, [themeSetting, mode]);
@@ -697,16 +694,7 @@ export default function App() {
   const todosDone = todoSummary(todos);
 
   return (
-    // The provider exists for the memoised subtrees: a `React.memo` component
-    // compares props only, so without a subscription here a theme flip would
-    // leave it painting the previous scheme's colours.
-    <ThemeModeContext.Provider value={mode}>
-      <ConfigProvider
-        theme={{
-          ...antdTheme(mode),
-          algorithm: mode === 'dark' ? theme.darkAlgorithm : theme.defaultAlgorithm,
-        }}
-      >
+    <>
         {/*
           Three rows: the title bar, the working surface, the status bar. Every
           measurement that used to be an inline style here is in `App.module.css`,
@@ -930,11 +918,9 @@ export default function App() {
 
         <Drawer
           title="Settings"
-          placement="right"
-          width={760}
+          size="lg"
           open={settingsOpen}
           onClose={() => setSettingsOpen(false)}
-          destroyOnHidden
         >
           <SettingsView />
         </Drawer>
@@ -947,7 +933,6 @@ export default function App() {
         {askQueue[0] && (
           <AskDialog req={askQueue[0]} onClose={() => setAskQueue((q) => q.slice(1))} />
         )}
-      </ConfigProvider>
-    </ThemeModeContext.Provider>
+    </>
   );
 }
