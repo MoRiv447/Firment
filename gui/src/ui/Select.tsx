@@ -45,6 +45,8 @@ export function Select({
   disabled = false,
   invalid = false,
   mono = false,
+  clearable = false,
+  clearLabel = 'Clear',
   id,
   ariaLabel,
 }: {
@@ -59,6 +61,17 @@ export function Select({
   invalid?: boolean;
   /** The chosen value is a path, a port or a model id, so it reads better in mono. */
   mono?: boolean;
+  /**
+   * Offer a row that unsets the value, as the *last row of the list* rather than
+   * a `×` that appears on hover.
+   *
+   * The row emits the empty string, which is why this does not widen `onChange`:
+   * the call sites already treat `''` as "unset" -- the select's own value is
+   * `string | undefined` and the field that writes it stores `''`. `undefined`
+   * would have made every existing caller handle a second absent value.
+   */
+  clearable?: boolean;
+  clearLabel?: string;
   id?: string;
   ariaLabel?: string;
 }) {
@@ -70,9 +83,20 @@ export function Select({
 
   const a11y = useFieldProps({ id, invalid });
 
+  // `''` is how a cleared select reads, so it is not a chosen value: the
+  // placeholder belongs there, not the word "Clear".
+  const cleared = value === undefined || value === '';
+
+  const items = useMemo(() => {
+    // No row when there is nothing to clear: an option that does nothing when
+    // picked is worse than no option.
+    if (!clearable || cleared) return options;
+    return [...options, { value: '', label: clearLabel }];
+  }, [options, clearable, clearLabel, cleared]);
+
   const selectedIndex = useMemo(
-    () => options.findIndex((option) => option.value === value),
-    [options, value],
+    () => (cleared ? -1 : items.findIndex((option) => option.value === value)),
+    [items, value, cleared],
   );
 
   // A disabled row keeps an empty label rather than its own: typeahead matches by
@@ -80,10 +104,10 @@ export function Select({
   // answer the pointer gets, where the row is painted dead and Enter refuses it.
   const labels = useMemo(
     () =>
-      options.map((option) =>
+      items.map((option) =>
         option.disabled ? '' : typeof option.label === 'string' ? option.label : '',
       ),
-    [options],
+    [items],
   );
 
   // Start the cursor on the current value, not on the top of the list: a user who
@@ -93,20 +117,20 @@ export function Select({
   }, [open, selectedIndex]);
 
   const commit = (index: number) => {
-    const option = options[index];
+    const option = items[index];
     if (!option || option.disabled) return;
     onChange(option.value);
     setOpen(false);
   };
 
   const listKeys = useListKeyboard({
-    count: options.length,
+    count: items.length,
     active: cursor,
     onActive: setCursor,
     onCommit: commit,
     onClose: () => setOpen(false),
     labels,
-    isEnabled: (index) => !options[index]?.disabled,
+    isEnabled: (index) => !items[index]?.disabled,
   });
 
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
@@ -127,7 +151,7 @@ export function Select({
     document.getElementById(`${base}-${cursor}`)?.scrollIntoView?.({ block: 'nearest' });
   }, [open, cursor, base]);
 
-  const shown = selectedIndex >= 0 ? options[selectedIndex] : null;
+  const shown = selectedIndex >= 0 ? items[selectedIndex] : null;
 
   return (
     <>
@@ -165,9 +189,9 @@ export function Select({
         matchAnchorWidth
         closeOnScroll={false}
       >
-        {options.map((option, index) => (
+        {items.map((option, index) => (
           <div
-            key={option.value}
+            key={option.value === '' ? '__clear' : option.value}
             id={`${base}-${index}`}
             data-ui="option"
             role="option"
@@ -175,6 +199,7 @@ export function Select({
             data-active={index === cursor || undefined}
             data-selected={index === selectedIndex || undefined}
             data-disabled={option.disabled || undefined}
+            data-clear={option.value === '' && clearable ? true : undefined}
             className={cx(rows.item, styles.option)}
             onPointerEnter={() => {
               if (!option.disabled) setCursor(index);

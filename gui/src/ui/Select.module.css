@@ -57,3 +57,11 @@
   line-height: var(--lh-tight);
   white-space: normal;
 }
+
+/* The clear row is a way out, not a choice: separated from the options above it
+   and painted muted, so it cannot be mistaken for one of them. */
+.option[data-clear] {
+  margin-top: var(--sp-1);
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+}
