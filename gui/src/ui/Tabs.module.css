@@ -34,7 +34,7 @@
   gap: var(--sp-2);
   box-sizing: border-box;
   min-height: var(--h-row);
-  /* Shrinkable, never growing: tabs are content-width, but they must give way
+  /* Shrinkable, never growing: a label tab is content-width, but it must give way
      before the strip does. */
   flex: 0 1 auto;
   min-width: 0;
@@ -87,4 +87,22 @@
   font-family: var(--ff-mono);
   font-size: var(--fs-meta);
   font-variant-numeric: tabular-nums;
+}
+
+/*
+ * An icon-only tab shares the strip instead of hugging its icon.
+ *
+ * At four tabs the labels do not fit 210px whatever padding they get, so the icons
+ * carry the meaning and the tooltip carries the name. That left four 29px buttons
+ * packed at the left end of the column with a wide empty gap beside the panel
+ * toggle -- which reads as something missing rather than as restraint. Equal shares
+ * fill the row, and turn each hit target from 29px into about 45px on the way.
+ *
+ * Only for the icon case: stretching words across the strip would be the opposite
+ * mistake, and a label tab should stay as wide as its word. The extra attribute
+ * selector is also what makes this win over `.tab` above without being moved.
+ */
+.tab[data-icon-only] {
+  flex: 1 1 0;
+  justify-content: center;
 }
