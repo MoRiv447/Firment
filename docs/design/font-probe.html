@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="kqqSPQ37k81DHvaym3oOx0">
+<head data-page-node-id="8qHBNxlHUYbmS80HBZQppa">
+<meta charset="utf-8" data-page-node-id="zSxxVMXYPGhle36H3SHiYf">
+<title>Firment 字体探针 — 用真实字符串选</title>
+<!-- 用 CDN 只是为了这一页能立刻看到;真要进应用,字体文件必须随应用打包(见页尾)。 -->
+<link rel="preconnect" href="https://fonts.googleapis.com" data-page-node-id="4ZeTLYDSxHAQVYehVCNAsP">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin data-page-node-id="e8Yr1AcVEy9OoIlr2WEOuj">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=JetBrains+Mono:wght@400;500&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" data-page-node-id="5tZBMgYAdEWFlJkuVK10kY">
+<style>
+  :root {
+    --ink-l: #18181B; --muted-l: #6B6B73; --bg-l: #F7F7F5; --surface-l: #FFFFFF;
+    --line-l: #E4E4E7; --acid: #B4F779; --on-acid: #15200D;
+    --ink-d: #F4F4F5; --muted-d: #A1A1AA; --bg-d: #0F0F12; --surface-d: #18181B; --line-d: #2A2A2F;
+    --ok-l: #15803D; --ok-d: #86EFAC;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 26px 30px 60px; background: #EDEDEA; color: #18181B;
+    font: 14px/1.5 system-ui, "Segoe UI", sans-serif; }
+  h1 { font-size: 19px; margin: 0 0 6px; }
+  .lede { margin: 0 0 8px; color: #55555C; max-width: 78ch; }
+  .lede b { color: #18181B; }
+  .rule { margin: 26px 0 12px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+    color: #6B6B73; font-weight: 600; }
+  .grid { display: grid; gap: 14px; grid-template-columns: 1fr; }
+  @media (min-width: 1100px) { .grid { grid-template-columns: 1fr 1fr; } }
+
+  .card { border: 1px solid #DCDCD6; border-radius: 10px; overflow: hidden; background: #fff; }
+  .card > header { display: flex; align-items: baseline; gap: 10px; padding: 10px 14px;
+    border-bottom: 1px solid #E4E4E7; background: #FAFAF8; }
+  .card > header b { font-size: 13px; }
+  .card > header span { font-size: 11.5px; color: #6B6B73; }
+  .card > header em { margin-left: auto; font-style: normal; font-size: 11px; color: #8A8A93; }
+
+  /* 同一个面板,只换 font-family。 */
+  .panel { padding: 14px 16px; }
+  .panel.light { --ink: var(--ink-l); --muted: var(--muted-l); --bg: var(--bg-l);
+    --surface: var(--surface-l); --line: var(--line-l); --ok: var(--ok-l); }
+  .panel.dark { --ink: var(--ink-d); --muted: var(--muted-d); --bg: var(--bg-d);
+    --surface: var(--surface-d); --line: var(--line-d); --ok: var(--ok-d); }
+
+  .surface { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  .dark .surface { box-shadow: 0 1px 2px rgba(0,0,0,.32); }
+  .light .surface { box-shadow: 0 1px 2px rgba(16,24,40,.06); }
+
+  /* 会话行:一行的标题 + 一行元信息 —— 侧栏真实的形状。 */
+  .row { display: flex; align-items: center; gap: 10px; }
+  .chip { font-size: 10px; font-weight: 600; letter-spacing: .04em; padding: 1px 6px;
+    border: 1px solid var(--line); border-radius: 4px; color: var(--muted); }
+  .title { font-size: 15px; font-weight: 500; color: var(--ink); }
+  .meta { margin-left: auto; font-size: 11px; color: var(--muted); }
+  .mono { font-family: 'Cascadia Code', ui-monospace, monospace; }
+
+  .prose { margin: 12px 0 0; font-size: 15px; line-height: 1.6; color: var(--ink); }
+  .muted { color: var(--muted); }
+  .path { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
+  .nums { margin: 8px 0 0; font-size: 12.5px; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .add { color: var(--ok); }
+</style>
+</head>
+<body data-page-node-id="rqIJc7WWGuBxs3YcZgP3sO">
+
+<h1 data-page-node-id="cG8Zx37IfNGRH5QzVpTVnu">字体探针:同一块面板,只换 font-family</h1>
+<p class="lede" data-page-node-id="H1VfZyTExdzNPuCQKydeSl">
+  用的是<b data-page-node-id="9XY8uH2EqsyXHGJSyqaBrd">应用里真实的字符串</b>:一行会话标题、空态那句话、一条路径、两个计数。
+  <b data-page-node-id="ciEFwDp3mfPHtP5L5eZ7zk">关键前提</b>:现在应用里 <code data-page-node-id="hRmqa6HPq6ybrivioLN3nx">Inter</code> / <code data-page-node-id="VoaDHPQJS0ksbHHzAYMazZ">JetBrains Mono</code> 只是写在 font-family 里,
+  <b data-page-node-id="nmpgRqn55bHoeVNUbUBsxe">没有随应用打包</b>,你机器上也没装 → 所以你现在看到的一直是 <b data-page-node-id="a92ZvFaEEFRjCbIe99uxxA">system-ui(Segoe UI)</b>。
+  下面的 <b data-page-node-id="liBoiiT4nGQZ4paW0J28xA">第 1 张就是"现状"</b>,拿它当基线比。
+</p>
+<p class="lede muted" data-page-node-id="8l0nC9NfkS8eDDaJFUhQBN">
+  某一行如果和第 1 张长得一模一样,说明那个字体没加载成功(CDN 被挡或没联网)—— 以那一行为准判断。
+</p>
+
+<p class="rule" data-page-node-id="tSt7f2L3xtzxlKIgzghPZM">Sans —— 界面正文(你最可能不满的就是它)</p>
+<div class="grid" data-page-node-id="G0AnkaWr6mxhYx8XAg5BYp">
+
+  <div class="card" data-page-node-id="DNYWHBNA6xAKGqtpwvU8Dd">
+    <header data-page-node-id="LTiP2MjPv6h6g4gFlAIPJs"><b data-page-node-id="zy1xBgZ0cfun6lA9BQpXJr">① 现状</b><span data-page-node-id="DUgNEJtFdUuf3tyCWlzjR2">system-ui → Segoe UI</span><em data-page-node-id="oGimCF0U9ME3CfRgXW3ji8">基线,零成本</em></header>
+    <div class="panel light" style="font-family: system-ui, 'Segoe UI', sans-serif;" data-page-node-id="3b7xdOsfGmRH3ZyIeEgz9N">
+      <div class="surface" data-page-node-id="brtdMAxY4DfHL681wmReso">
+        <div class="row" data-page-node-id="YBAP8sZeJyq39fzFN0wUkS"><span class="chip" data-page-node-id="wxl4W8R42fh0IP304nFrqt">NORMAL</span><span class="title" data-page-node-id="FMEi5Py87nRkp3Yc4nOkpk">JTAG 连不上的排查</span><span class="meta" data-page-node-id="PEZHUraQt16khFrBPfhtBi">22:15</span></div>
+        <p class="prose" data-page-node-id="zKzsJf3x9ZzwgPiXWK7fgJ">Describe what you want done. The agent reads and writes inside this project.</p>
+        <p class="path mono" data-page-node-id="wxVCsjCKWkKjSS1qk8CpXz">D:\OldStudy66\Firment\crates\firment-core</p>
+        <p class="nums" data-page-node-id="JpaciQDuO6M38tECrY3HU5">+22 <span class="add" data-page-node-id="p1Qi3YTWGisjpaBV81Ij9I">−10</span> · 605 passed · 48 files</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-page-node-id="LZ32McX2ZqdYavTz2CmCzV">
+    <header data-page-node-id="Zkq92gqiXZfxyYzd1a9420"><b data-page-node-id="UVkdmaVbERGnioSfmMK7Oa">② Inter</b><span data-page-node-id="TzeM4E2BRwJBU4F0it2Zxa">现在声明着的那一个</span><em data-page-node-id="S7YwiTiE1VtBvOClQF7ZsN">最中性</em></header>
+    <div class="panel light" style="font-family: 'Inter', system-ui, sans-serif;" data-page-node-id="1a2sGFslsBlnlr4cZiL45f">
+      <div class="surface" data-page-node-id="HXXHSP1Oc4jtpA7PTO1R6i">
+        <div class="row" data-page-node-id="ggs58OIxmzS7Ht96GVzJLh"><span class="chip" data-page-node-id="KrIYjVbtqvf67iWDaunilv">NORMAL</span><span class="title" data-page-node-id="uVb4gRlGGzdoYSXpEhkUrr">JTAG 连不上的排查</span><span class="meta" data-page-node-id="8N4cVtdtHHN4WKmGcEINKp">22:15</span></div>
+        <p class="prose" data-page-node-id="YDXEc5lcYyLlJGDqwLjEfI">Describe what you want done. The agent reads and writes inside this project.</p>
+        <p class="path mono" data-page-node-id="CZJPQZIZ1gzvGDyfY5YYHN">D:\OldStudy66\Firment\crates\firment-core</p>
+        <p class="nums" data-page-node-id="Icw7CAJFOK3te10W7EtxZC">+22 <span class="add" data-page-node-id="54rEzz4prDeu50NsRELRY0">−10</span> · 605 passed · 48 files</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-page-node-id="3NdgyaBIXmHYXfqA1UsJqj">
+    <header data-page-node-id="X5Ew0zWwvIT7nOALt6RB9i"><b data-page-node-id="bOzr9wyBjj6EnEeqKQqSkc">③ IBM Plex Sans</b><span data-page-node-id="cuvb3dhVw6WFzGm5Oylv5Q">偏工程感,和 Plex Mono 同族</span><em data-page-node-id="ZeexaF6DR1No9WfOZRPiD4">有性格但不吵</em></header>
+    <div class="panel light" style="font-family: 'IBM Plex Sans', system-ui, sans-serif;" data-page-node-id="dEKBco7CE4YOiKRwyHj4Lz">
+      <div class="surface" data-page-node-id="tb6mLe9twHoDBm1JMD8ZUV">
+        <div class="row" data-page-node-id="J87LdEmeAxhJJ5XrQVFDrJ"><span class="chip" data-page-node-id="1RDGAKbpooIa7juf3T0ROt">NORMAL</span><span class="title" data-page-node-id="VfDOTO7XDDLgYv2YqweiSk">JTAG 连不上的排查</span><span class="meta" data-page-node-id="tkHOby3JiOp1DKV6ednL6d">22:15</span></div>
+        <p class="prose" data-page-node-id="wqHHG5ef9PXKACD5m7pBxb">Describe what you want done. The agent reads and writes inside this project.</p>
+        <p class="path mono" data-page-node-id="YS8l5uZ9PnD2tbuHzZByyO">D:\OldStudy66\Firment\crates\firment-core</p>
+        <p class="nums" data-page-node-id="cf47TgYHxDLuuRcbORSJOJ">+22 <span class="add" data-page-node-id="PXKgEDGaBD77eNcLodAJxJ">−10</span> · 605 passed · 48 files</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-page-node-id="2qbWybIb8nB6Oif3yG9HP8">
+    <header data-page-node-id="cBNiBNT57PskIEekkvynq2"><b data-page-node-id="UTUBSMNRsmHjxZfV6W227i">④ Geist Sans</b><span data-page-node-id="SJLzgrAOBLn5tF4ZfJxFq4">Vercel 那套,几何、当下</span><em data-page-node-id="BZs913LzwHSSCeqXQM2rKR">最"现代 UI"</em></header>
+    <div class="panel light" style="font-family: 'Geist', system-ui, sans-serif;" data-page-node-id="zzx9BgteYa3uyEELVVbwFw">
+      <div class="surface" data-page-node-id="IZyMB9EC2FS4q2qwNQHZm8">
+        <div class="row" data-page-node-id="8BPD5H3l6pjc22WT27omOi"><span class="chip" data-page-node-id="OWX8ZnYK4rxeEk2CDqonIF">NORMAL</span><span class="title" data-page-node-id="mBTw54UJPwF8wfDLCB7zAV">JTAG 连不上的排查</span><span class="meta" data-page-node-id="H8eMaesou1I54bZ8YpZTQR">22:15</span></div>
+        <p class="prose" data-page-node-id="MAUl4g6XbwhnidHfP5DA1v">Describe what you want done. The agent reads and writes inside this project.</p>
+        <p class="path mono" data-page-node-id="XdYp6Hj828e18FxgVeGlAc">D:\OldStudy66\Firment\crates\firment-core</p>
+        <p class="nums" data-page-node-id="qFasfFCIN6Es5c4bK8Zd8J">+22 <span class="add" data-page-node-id="MPAZafM65JwzpBAAxZN0XJ">−10</span> · 605 passed · 48 files</p>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<p class="rule" data-page-node-id="4S2roWRt5FlU3lmjdGrA77">Dark —— 同一批,换到暗色(字体在两种配色下都得站得住)</p>
+<div class="grid" data-page-node-id="ppfqphH5Ge0EzVyprVyMqv">
+
+  <div class="card" data-page-node-id="Gt4KrlGTYYIpzGhb3pSCsD">
+    <header data-page-node-id="fS4vZxefKegX7LaGpKIsoD"><b data-page-node-id="vEETEyuwIeXVNm6rDDVijJ">① 现状</b><span data-page-node-id="HtRkMOJwOy4pnB4AQiEyUv">system-ui</span><em data-page-node-id="IvHeOlH7grR0vpeIdwIfOk"></em></header>
+    <div class="panel dark" style="font-family: system-ui, 'Segoe UI', sans-serif;" data-page-node-id="1eLSGUQuxr5oZJPCPUX9tr">
+      <div class="surface" data-page-node-id="10nphVu3CPUJT9p7jHAQF8">
+        <div class="row" data-page-node-id="tPWPqKvB2gMicYr4aA0mec"><span class="chip" data-page-node-id="103oVD3aS1AGjv9VKPhYEF">NORMAL</span><span class="title" data-page-node-id="siouk2bEGBvZD5xCpYHxiE">JTAG 连不上的排查</span><span class="meta" data-page-node-id="NbPa62xQN1Lkf3fZ8UvboX">22:15</span></div>
+        <p class="prose" data-page-node-id="Pe0vucVGBHJ8H7yzGHya1U">Describe what you want done. The agent reads and writes inside this project.</p>
+        <p class="path mono" data-page-node-id="ZHyOlCIn4vCGsRAlIP4upx">D:\OldStudy66\Firment\crates\firment-core</p>
+        <p class="nums" data-page-node-id="rd85m59smuutoYlnYMO35a">+22 <span class="add" data-page-node-id="BIAFeqP3f9ip78VB2TWrqm">−10</span> · 605 passed · 48 files</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-page-node-id="bsnPiL0yf05oPKuONATs6c">
+    <header data-page-node-id="JOWnRTKghFfkQ1qTsDIrzy"><b data-page-node-id="556UEt8xGVQ2gHqsoBqQKi">② Inter</b><span data-page-node-id="GySsYtzXvFta3WLLlDqDaW"></span><em data-page-node-id="a0zM6o4SBDL3yoSXfITs7C"></em></header>
+    <div class="panel dark" style="font-family: 'Inter', system-ui, sans-serif;" data-page-node-id="FCIUJVEBdHbiqjuLAgVNvX">
+      <div class="surface" data-page-node-id="jFGPXRktf0JacrBiuBZ8YB">
+        <div class="row" data-page-node-id="qCwELtIXIWZnS1kFr176aG"><span class="chip" data-page-node-id="MB6t0BA1Ym5hFTjj0fbDaK">NORMAL</span><span class="title" data-page-node-id="jvMVmlsqPgtSsuntyHUEUq">JTAG 连不上的排查</span><span class="meta" data-page-node-id="xauEFcnkXtCcn6xa9y6Ka2">22:15</span></div>
+        <p class="prose" data-page-node-id="4F6jemWz7dNcJMfnnTlIsF">Describe what you want done. The agent reads and writes inside this project.</p>
+        <p class="path mono" data-page-node-id="XrEUMxb35TICpDZfBAC3Uk">D:\OldStudy66\Firment\crates\firment-core</p>
+        <p class="nums" data-page-node-id="kHn1Jvqsb01NMxJ5JD8Poq">+22 <span class="add" data-page-node-id="6MRcAXpNruVvwab7PGKNqs">−10</span> · 605 passed · 48 files</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-page-node-id="eNPGGzsEhGPGNh7hVdmLen">
+    <header data-page-node-id="oCHeKFvD1R02dxS3KHZtDS"><b data-page-node-id="PiZZrhHSVl5HzGsz2okLBT">③ IBM Plex Sans</b><span data-page-node-id="nAtaQvBVAeNCM9rYGJCki6"></span><em data-page-node-id="Y7weLvSlmRVT8SJEvgrmlw"></em></header>
+    <div class="panel dark" style="font-family: 'IBM Plex Sans', system-ui, sans-serif;" data-page-node-id="rNgQE14tySdFHsf6R4BYG7">
+      <div class="surface" data-page-node-id="WXPqJNQ5mFDWQ2ZA2uA5ee">
+        <div class="row" data-page-node-id="VNHccj5AhmxkmHecWMylOy"><span class="chip" data-page-node-id="joOAUwZmcC5NxDQF4wCf2P">NORMAL</span><span class="title" data-page-node-id="HAxtclE9u1pqfInzWtFYyb">JTAG 连不上的排查</span><span class="meta" data-page-node-id="qo3p5dXqW7HMfd2FDtN6vk">22:15</span></div>
+        <p class="prose" data-page-node-id="vYWCv8WMI7xcfgOfiVEVWI">Describe what you want done. The agent reads and writes inside this project.</p>
+        <p class="path mono" data-page-node-id="Wn8pN0HxH8bRLdmTlUNPdv">D:\OldStudy66\Firment\crates\firment-core</p>
+        <p class="nums" data-page-node-id="UkXueoBQkstcH8mu3rhp52">+22 <span class="add" data-page-node-id="h3HAbkEifLQrR0aUMr9PZD">−10</span> · 605 passed · 48 files</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-page-node-id="lBMWASdNWAbGmhdOSEEeBw">
+    <header data-page-node-id="6TXvD3xQcbKaNkc5FKLYXZ"><b data-page-node-id="BOrZ76aDW7js6wNsSCRGv2">④ Geist Sans</b><span data-page-node-id="vEHUYp593vTaSXSSHFGH6q"></span><em data-page-node-id="HcQNoHQga9rAWMtMxAiDnA"></em></header>
+    <div class="panel dark" style="font-family: 'Geist', system-ui, sans-serif;" data-page-node-id="gF3QCOMTyu3tScca70q5t1">
+      <div class="surface" data-page-node-id="s2XMe8Jisxd1YTRuaqvJuh">
+        <div class="row" data-page-node-id="52yfdpyGhcMO43cHLFEV00"><span class="chip" data-page-node-id="pyrujNF52LPNGTOffGH3wt">NORMAL</span><span class="title" data-page-node-id="s0GaViQp2gxnLbSwRxx5Mp">JTAG 连不上的排查</span><span class="meta" data-page-node-id="ziU1x3KNKNbD1ZCzb1j3Dr">22:15</span></div>
+        <p class="prose" data-page-node-id="XfBtUslAAGUmuE3Mg0404H">Describe what you want done. The agent reads and writes inside this project.</p>
+        <p class="path mono" data-page-node-id="OhAu8TvIcwDtp3qeQU1Vzd">D:\OldStudy66\Firment\crates\firment-core</p>
+        <p class="nums" data-page-node-id="3239AS8MyEpz3Y6axUmgB9">+22 <span class="add" data-page-node-id="bgRvQOYDlQHEei8MHnJ8XS">−10</span> · 605 passed · 48 files</p>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<p class="rule" data-page-node-id="PLLEzqu6i5eovq3ILNydB6">Mono —— 路径 / 模型名 / 日志(下面这几行才换了 mono,其余同 ①)</p>
+<div class="grid" data-page-node-id="TYOdB2Gt6ypHIQN89Krn2k">
+
+  <div class="card" data-page-node-id="jkBimFK7EcrdUOcbCsDpda">
+    <header data-page-node-id="aBDx4rvD0QYCxVPmRgCxE2"><b data-page-node-id="uCm2v9zvsIOdj03aTYy1tE">① 现状</b><span data-page-node-id="MRHImXdbIuD2GWDCjbzAzh">Cascadia Code(你已装)</span><em data-page-node-id="Gb3sZxGgzmReIYwiVWxsuJ">基线</em></header>
+    <div class="panel light" style="font-family: system-ui, 'Segoe UI', sans-serif;" data-page-node-id="NABvxXE1yfDqIJhDEQjpNu">
+      <div class="surface" data-page-node-id="AMbyN7aAh8NvAxDnKAK3jn">
+        <p class="path" style="font-family: 'Cascadia Code', monospace; color: var(--ink); font-size: 13px;" data-page-node-id="3nqlnc3AlNQrMW89xa4J4D">crates/firment-core/src/journal.rs:412</p>
+        <p class="path" style="font-family: 'Cascadia Code', monospace; color: var(--ink); font-size: 13px;" data-page-node-id="AMBf3n4ZAsWlSmzO6FjWlb">glm-5.3-flash&nbsp;&nbsp;+22 −10&nbsp;&nbsp;115200&nbsp;&nbsp;0x1FFF7000</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-page-node-id="TkfGCKHKOAyPVchuuDSbGX">
+    <header data-page-node-id="aNOfqtZNBz2bcEMuAGkH1N"><b data-page-node-id="1SNjA7JH2RDfhhtPkaETUB">② JetBrains Mono</b><span data-page-node-id="K3Bf3323hapKJAfaZp3yn2">现在声明着的那一个</span><em data-page-node-id="Oi7DAQ44YoAhqJr8Uh9LiJ">开发者最熟</em></header>
+    <div class="panel light" style="font-family: system-ui, 'Segoe UI', sans-serif;" data-page-node-id="2SCxaxnYEqAzGPlr8ttJMy">
+      <div class="surface" data-page-node-id="CsxL5naSHtUhj4ER5LfMr5">
+        <p class="path" style="font-family: 'JetBrains Mono', monospace; color: var(--ink); font-size: 13px;" data-page-node-id="1MONBLZSA8qVZA3JvXJ3BI">crates/firment-core/src/journal.rs:412</p>
+        <p class="path" style="font-family: 'JetBrains Mono', monospace; color: var(--ink); font-size: 13px;" data-page-node-id="RHpd5E1RM4voNH6hbkOHvU">glm-5.3-flash&nbsp;&nbsp;+22 −10&nbsp;&nbsp;115200&nbsp;&nbsp;0x1FFF7000</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-page-node-id="osdzXCv7pe9F3HJttC7eXw">
+    <header data-page-node-id="VMprdHjXwBjXTMddXneAZ9"><b data-page-node-id="KyHFqIri4DtWQ5NlbIria1">③ Geist Mono</b><span data-page-node-id="AxZ7pYRGf2jkHgFBb9Lj52"></span><em data-page-node-id="YvEC5dWoMQ5DSkDCdWCV4Q">收敛、安静</em></header>
+    <div class="panel light" style="font-family: system-ui, 'Segoe UI', sans-serif;" data-page-node-id="UID8jHaGsAUnRsQZEcFULD">
+      <div class="surface" data-page-node-id="01l7VrKuSrjhGwn5YSoDp7">
+        <p class="path" style="font-family: 'Geist Mono', monospace; color: var(--ink); font-size: 13px;" data-page-node-id="glApy9w4iTIivbpED6PDXb">crates/firment-core/src/journal.rs:412</p>
+        <p class="path" style="font-family: 'Geist Mono', monospace; color: var(--ink); font-size: 13px;" data-page-node-id="gcNz4rWWdduC1ckygA3by4">glm-5.3-flash&nbsp;&nbsp;+22 −10&nbsp;&nbsp;115200&nbsp;&nbsp;0x1FFF7000</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-page-node-id="CRANwZf3jTEs5R2yX6CelY">
+    <header data-page-node-id="4O8VHR1hQcrJ0pjjHTJADh"><b data-page-node-id="O9KOP8mMmxRm2GVBHXpVuB">④ IBM Plex Mono</b><span data-page-node-id="xULkUFfhnGK8lD75Z9SnL4"></span><em data-page-node-id="zDpe9HiqDHsaLkKGwj1nC1">和 ③ 那个 sans 同族</em></header>
+    <div class="panel light" style="font-family: system-ui, 'Segoe UI', sans-serif;" data-page-node-id="i6qZWVhT5N7xwEsm8D8VFp">
+      <div class="surface" data-page-node-id="8aGfKejmLyDBk8FNjZpZSK">
+        <p class="path" style="font-family: 'IBM Plex Mono', monospace; color: var(--ink); font-size: 13px;" data-page-node-id="1z7gsQKfDGCEkAAdZFUHyd">crates/firment-core/src/journal.rs:412</p>
+        <p class="path" style="font-family: 'IBM Plex Mono', monospace; color: var(--ink); font-size: 13px;" data-page-node-id="lyiVGh1Jd6zRVKu3ElWMAd">glm-5.3-flash&nbsp;&nbsp;+22 −10&nbsp;&nbsp;115200&nbsp;&nbsp;0x1FFF7000</p>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div style="margin-top:26px; padding:16px 18px; background:#fff; border:1px solid #E4E4E7; border-radius:10px;" data-page-node-id="MA7lFIroY7WxZjioKdBgmi">
+  <h3 style="margin:0 0 8px; font-size:14px;" data-page-node-id="GZ2bCHGXHmjNPdAqaUxhSl">选定之后要做的两件事(不是换个名字就完)</h3>
+  <ul style="margin:0; padding-left:20px;" data-page-node-id="oBR3AbBfGyOACjdrwqwfA9">
+    <li data-page-node-id="dGlSoyIu0MksUvtqthl6vI"><b data-page-node-id="Xa9t8GLpFJ89Awe5XIwoKF">字体文件要随应用打包。</b>现在的 <code data-page-node-id="loSE7aCw5PXNdW2GGFXdjQ">--ff-sans</code> 里写着 Inter,但仓库里没有 woff2、<code data-page-node-id="edp19H1yomSntlcXXWdbP1">index.html</code> 也没有预加载 —— 所以它一直没生效,你看到的是兜底。
+      正式做法是把 woff2 放进 <code data-page-node-id="ItZTBtGaEJjFkyLGi3BRvg">gui/src/assets/</code>,用 <code data-page-node-id="p3hcyWAmHpr2bwCqfuXKdB">@font-face</code>(<code data-page-node-id="nLnSYTGwDCzcCcMToaNNty">font-display: swap</code>)引入,并且<b data-page-node-id="oi6knz3GTH3lzgXSayLZTv">做子集化</b>(只取拉丁 + 常用标点),否则一个 CJK 字体动辄几 MB。</li>
+    <li data-page-node-id="GZxb0X2htwkXU0GuDk0Drq"><b data-page-node-id="A7KkWWui8wCD2pfz8oBKRj">中文字体不能只靠 sans 兜底。</b>我们的界面里中文占一半,而 Inter / Geist / Plex 都没有汉字 ✗ —— 所以栈里必须留一个中文回退(现在写的是 <code data-page-node-id="fvqfYrH8Ppe6I382A8bww4">Noto Sans SC</code>,同样没随应用打包)。
+      最省事的做法:西文用选定字体,中文交给系统(<code data-page-node-id="tsaXTPYr7NMutREXuINAMl">system-ui</code> 在 Windows 上就是微软雅黑),<b data-page-node-id="zUG8HJVqU1sA93GwX7BHat">不必打包中文字体</b> —— 代价是中文的字形随系统而异。</li>
+  </ul>
+</div>
+
+</body>
+</html>
