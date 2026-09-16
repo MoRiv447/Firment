@@ -173,18 +173,18 @@
  * argues against, and it made the cut read as a shape *inside* a button rather
  * than as the button's edge.
  *
- * The radius is 8px. The scale currently reads chip 4 / control 6 / panel 12, and
- * `docs/design/tokens.md` describes the ladder as 徽章 2 / 控件 4 / 卡片 8 -- so the
- * two do not agree, and neither has an 8 for a button. This is the value the
- * slanted button is supposed to wear; which of the two sources wins is a decision
- * above this file. The radius sits on the root with `overflow: hidden`, so the
- * fill rounds with it, and the `clip-path` cuts the diagonal on top of that.
+ * The radius sits on the root, and the *fill* rounds itself with `border-radius:
+ * inherit` rather than the root clipping it with `overflow: hidden`. That is not a
+ * style preference -- `overflow: hidden` sets a flex item's automatic minimum size
+ * to zero, and the composer's row is a flex row with a growing field beside this
+ * button. Clipping here made the button shrinkable, and "Send" came out as "S…".
+ * `clip-path` still cuts the diagonal on the subtree either way.
+ *
  * Anything much past 8px starts to fight the cut: two curves on one corner is what
  * makes a slant look soft.
  */
 .root[data-edge] {
   border-radius: 8px;
-  overflow: hidden;
   padding: 0;
   background: none;
 }
@@ -204,6 +204,8 @@
 
 .root[data-edge] .fill {
   background: var(--brand-acid);
+  /* Inherits the 8px rather than being clipped to it -- see the note above. */
+  border-radius: inherit;
 }
 
 .root[data-edge='left'] .fill {

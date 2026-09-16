@@ -181,3 +181,10 @@
 .inputRow > :first-child {
   flex: 1 1 auto;
 }
+
+/* The field takes the slack; the action does not. A button that is allowed to
+   shrink is a button whose label gets ellipsised, and this one says "Send" --
+   which came out as "S…" the moment the button became compressible. */
+.inputRow > :last-child {
+  flex: none;
+}
