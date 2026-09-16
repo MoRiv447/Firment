@@ -129,6 +129,14 @@
 /* Composer. */
 /* ------------------------------------------------------------------ */
 
+/* An empty transcript sits in the middle of the pane it is standing in for.
+   `auto` block margins do that when the parent is a flex column, and, when it
+   is not, they are just zero -- so this cannot break the layout it lands in. */
+.emptyTranscript {
+  display: flex;
+  margin-block: auto;
+}
+
 .composer {
   flex: 0 0 auto;
   display: flex;

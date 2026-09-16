@@ -108,7 +108,11 @@ export function ChangesPane({ changes }: { changes: FileChange[] }) {
       <EmptyState
         icon={Diff}
         title="No files changed"
-        hint="Edits and writes land here as they finish, each with the diff the tool printed. A change made through the shell tool — a generator, `sed -i`, a checkout — is not one of them, and a call still running has no result to show yet."
+        /* Two lines, not seven. The paragraph was accurate and nobody read it:
+           in a 210px column it was a wall, and the only part that changes what
+           you expect is the shell-tool caveat. "A call still running has no
+           result yet" is what the pane says by merely being empty. */
+        hint="Edits and writes land here as they finish. A change made through the shell tool is not one of them."
       />
     );
   }

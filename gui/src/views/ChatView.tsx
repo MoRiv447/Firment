@@ -138,6 +138,21 @@ export function ChatView({
         {session ? (
           <>
             <MessageList messages={session.messages} onAction={onSend} />
+            {/*
+              * An empty state for the case that actually happens: a session with
+              * nothing said yet. It carries no action because the action is the
+              * field directly below it -- a button that focused the composer would
+              * be a second way to do the thing that is already on screen.
+              */}
+            {!running && session.messages.length === 0 && (
+              <div className={styles.emptyTranscript}>
+                <EmptyState
+                  icon={Bot}
+                  title="Nothing said yet"
+                  hint="Describe what you want done. The agent reads and writes inside this project, and shows every change it makes."
+                />
+              </div>
+            )}
             {running && (
               <div className={styles.phase}>
                 <Spinner size="sm" label="Working" />
