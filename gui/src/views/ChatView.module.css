@@ -134,6 +134,11 @@
    is not, they are just zero -- so this cannot break the layout it lands in. */
 .emptyTranscript {
   display: flex;
+  /* `margin-block: auto` centres it down the pane; `justify-content` centres it
+     across. Without the second one the flex container laid its item out from the
+     start edge, so the block sat left of centre with its text centred inside it --
+     which reads as "the text is not centred" and was. */
+  justify-content: center;
   margin-block: auto;
 }
 

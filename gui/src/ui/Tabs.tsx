@@ -1,4 +1,5 @@
 import { useRef } from 'react';
+import { Tooltip, useTooltip } from './Tooltip';
 import type { KeyboardEvent, ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -73,32 +74,79 @@ export function Tabs({
         else if (event.key === 'ArrowLeft') step(event, -1);
       }}
     >
-      {items.map((item, index) => {
-        const selected = item.key === active;
-        return (
-          <button
-            key={item.key}
-            ref={(node) => {
-              nodes.current[index] = node;
-            }}
-            id={idPrefix ? `${idPrefix}-tab-${item.key}` : undefined}
-            type="button"
-            role="tab"
-            data-ui="tab"
-            data-active={selected || undefined}
-            aria-selected={selected}
-            aria-controls={idPrefix ? `${idPrefix}-panel-${item.key}` : undefined}
-            disabled={item.disabled}
-            tabIndex={selected ? 0 : -1}
-            className={styles.tab}
-            onClick={() => onChange(item.key)}
-          >
-            {item.icon ? <Icon src={item.icon} /> : null}
-            <span className={styles.label}>{item.label}</span>
-            {item.meta ? <span className={styles.meta}>{item.meta}</span> : null}
-          </button>
-        );
-      })}
+      {items.map((item, index) => (
+        <TabButton
+          key={item.key}
+          item={item}
+          selected={item.key === active}
+          id={idPrefix ? `${idPrefix}-tab-${item.key}` : undefined}
+          controls={idPrefix ? `${idPrefix}-panel-${item.key}` : undefined}
+          register={(node) => {
+            nodes.current[index] = node;
+          }}
+          onSelect={() => onChange(item.key)}
+        />
+      ))}
     </div>
+  );
+}
+
+/**
+ * One tab.
+ *
+ * A tab that has an icon renders **only** the icon, and its name lives in a
+ * tooltip and in `aria-label`. Four labels do not fit a 210px inspector, and the
+ * alternatives are worse than this: truncated to `Cha… Subag… To… Hard…` they are
+ * unreadable, and left to overflow the strip grows a scrollbar that is louder than
+ * the tabs are.
+ *
+ * `aria-label` is the part that is not cosmetic. An icon-only control with no name
+ * does not exist for a screen reader, and the tooltip is not announced by default.
+ */
+function TabButton({
+  item,
+  selected,
+  id,
+  controls,
+  register,
+  onSelect,
+}: {
+  item: TabItem;
+  selected: boolean;
+  id?: string;
+  controls?: string;
+  register: (node: HTMLButtonElement | null) => void;
+  onSelect: () => void;
+}) {
+  const tip = useTooltip<HTMLButtonElement>();
+  const named = item.icon !== undefined;
+
+  return (
+    <>
+      <button
+        ref={(node) => {
+          register(node);
+          tip.anchorRef.current = node;
+        }}
+        id={id}
+        type="button"
+        role="tab"
+        data-ui="tab"
+        data-active={selected || undefined}
+        data-icon-only={named || undefined}
+        aria-selected={selected}
+        aria-controls={controls}
+        aria-label={typeof item.label === 'string' ? item.label : undefined}
+        disabled={item.disabled}
+        tabIndex={selected ? 0 : -1}
+        className={styles.tab}
+        onClick={onSelect}
+        {...tip.triggerProps}
+      >
+        {item.icon ? <Icon src={item.icon} /> : <span className={styles.label}>{item.label}</span>}
+        {item.meta ? <span className={styles.meta}>{item.meta}</span> : null}
+      </button>
+      {named && typeof item.label === 'string' ? <Tooltip tip={tip} text={item.label} /> : null}
+    </>
   );
 }
