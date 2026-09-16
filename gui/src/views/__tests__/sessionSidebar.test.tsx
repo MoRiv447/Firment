@@ -180,9 +180,12 @@ describe('header', () => {
     expect(handlers.onNew.mock.calls).toEqual([['agent'], ['plan']]);
   });
 
-  it('names the working directory, since the rail has no visible label for it', () => {
+  it('names the working directory in a visible label, and stays controlled', () => {
+    // The label is the accessible name now: `Field` wires `htmlFor` to the
+    // control, so an `aria-label` beside it would only be a second name to
+    // disagree with.
     const { handlers } = renderRail();
-    const field = screen.getByRole('textbox', { name: 'Working directory for new sessions' });
+    const field = screen.getByRole('textbox', { name: 'new sessions in' });
     fireEvent.change(field, { target: { value: 'D:\\old\\proj' } });
     expect(handlers.onWorkCwd).toHaveBeenCalledWith('D:\\old\\proj');
     // Controlled: what the rail shows is the caller's value, not what was typed.

@@ -6,6 +6,7 @@ import pkg from '../../package.json';
 import { formatStamp } from '../lib/format';
 import type { SessionSummaryDto } from '../types';
 import {
+  Field,
   Button,
   Chip,
   EmptyState,
@@ -183,14 +184,22 @@ export function SessionSidebar({
         />
       </div>
 
-      <TextInput
-        mono
-        aria-label="Working directory for new sessions"
-        placeholder="C:\"
-        spellCheck={false}
-        value={workCwd}
-        onChange={(e) => onWorkCwd(e.target.value)}
-      />
+      {/*
+        * Labelled, because it was the one control in this rail that read as a
+        * mistake: a bare box holding `C:\` and nothing to say what it was for.
+        * It is not the open session's path -- that one is in the title bar and in
+        * the composer -- it is where the next session will start, which is why it
+        * stays a field rather than becoming a read-out.
+        */}
+      <Field label="new sessions in">
+        <TextInput
+          mono
+          placeholder="C:\"
+          spellCheck={false}
+          value={workCwd}
+          onChange={(e) => onWorkCwd(e.target.value)}
+        />
+      </Field>
 
       {rows.length === 0 ? (
         <div className={styles.empty}>

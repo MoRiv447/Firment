@@ -45,9 +45,11 @@ export function TitleBar({
       <span aria-hidden className={styles.divider} />
 
       {/*
-        The project path is the one piece of context worth pinning to the top:
-        every tool call, every session and the rail are all relative to it, and it
-        used to be a 165px-wide text input in the sidebar with no label.
+        The open session's project path: every tool call and every session is
+        relative to it, so it is the one piece of context worth pinning to the top.
+        The rail still has a field of its own, and it is a different value -- where
+        the *next* session starts -- which is why it kept a field rather than
+        becoming a read-out like this one.
       */}
       <span title={project} className={styles.project}>
         {project}
