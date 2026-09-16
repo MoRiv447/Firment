@@ -160,7 +160,13 @@
 }
 
 /* ------------------------------------------------------------------ */
-/* The cut corner. Primary only -- see `ButtonProps.edge`.             */
+/* The cut corner. Primary only -- see `ButtonProps.edge`.
+ *
+ * Every rule here is scoped to `[data-tier="primary"]`, which is what the prop
+ * said all along and the CSS did not enforce: a secondary button with `edge`
+ * kept its 1px outline while the cut took a corner off the box, so the border
+ * and the diagonal disagreed. A constraint in a doc comment is not a constraint.
+ */
 /* ------------------------------------------------------------------ */
 
 /*
@@ -183,17 +189,17 @@
  * Anything much past 8px starts to fight the cut: two curves on one corner is what
  * makes a slant look soft.
  */
-.root[data-edge] {
+.root[data-tier='primary'][data-edge] {
   border-radius: 8px;
   padding: 0;
   background: none;
 }
 
-.root[data-edge='left'] {
+.root[data-tier='primary'][data-edge='left'] {
   clip-path: polygon(0 0, 100% 0, 100% 100%, var(--slant-cut) 100%);
 }
 
-.root[data-edge='both'] {
+.root[data-tier='primary'][data-edge='both'] {
   clip-path: polygon(
     var(--slant-cut) 0,
     100% 0,
@@ -202,13 +208,13 @@
   );
 }
 
-.root[data-edge] .fill {
+.root[data-tier='primary'][data-edge] .fill {
   background: var(--brand-acid);
   /* Inherits the 8px rather than being clipped to it -- see the note above. */
   border-radius: inherit;
 }
 
-.root[data-edge='left'] .fill {
+.root[data-tier='primary'][data-edge='left'] .fill {
   /* `--slant-optic` is the compensation the cut makes necessary: the triangle is
      gone from the left, so the remaining shape's centre of mass has to be pushed
      back or the label reads off-centre. */
@@ -216,7 +222,7 @@
   padding-right: var(--pad-x, var(--sp-4));
 }
 
-.root[data-edge='both'] .fill {
+.root[data-tier='primary'][data-edge='both'] .fill {
   /* The diagonal is at its widest halfway up the box, which is where the text
      is, so half the cut is the clearance it needs. */
   padding-inline: calc(var(--pad-x, var(--sp-4)) + var(--slant-cut) / 2);

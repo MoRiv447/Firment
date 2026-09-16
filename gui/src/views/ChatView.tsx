@@ -211,18 +211,6 @@ export function ChatView({
         )}
       </div>
       <div className={styles.composer}>
-        {session && (
-          <div className={styles.meta}>
-            <span className={styles.provider}>{session.provider}</span>
-            <span className={styles.model}>{session.model}</span>
-            <Chip status={session.mode === 'plan' ? 'attention' : 'ok'} size="sm">
-              {session.mode}
-            </Chip>
-            <span className={styles.cwd} title={session.cwd}>
-              {session.cwd}
-            </span>
-          </div>
-        )}
         <div className={styles.inputRow}>
           <TextArea
             aria-label="Ask the agent"
@@ -255,6 +243,23 @@ export function ChatView({
             </Button>
           )}
         </div>
+        {session && (
+          /* Under the field rather than over it: what you are about to send is
+             the field, and the settings for it are the fine print. Both
+             references put mode and model at the foot, next to the action. */
+          <div className={styles.meta}>
+            <span className={styles.cwd} title={session.cwd}>
+              {session.cwd}
+            </span>
+            <span className={styles.setting}>
+              <span className={styles.provider}>{session.provider}</span>
+              <span className={styles.model}>{session.model}</span>
+              <Chip status={session.mode === 'plan' ? 'attention' : 'ok'} size="sm">
+                {session.mode}
+              </Chip>
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );

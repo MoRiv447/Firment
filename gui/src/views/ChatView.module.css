@@ -144,8 +144,20 @@
   align-items: center;
   gap: var(--sp-2);
   min-width: 0;
+  /* It sits under the field now, so the space is above it. */
+  margin-top: var(--sp-2);
   font-size: var(--fs-meta);
   color: var(--muted);
+}
+
+/* The settings cluster: pushed to the far end, so the row reads
+   `where … what-with` with the gap between them. */
+.setting {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  margin-inline-start: auto;
 }
 
 .provider {
@@ -162,10 +174,10 @@
 
 .cwd {
   /* The path is the least important thing in the row and the longest, so it is
-     the one that gives way; the full value stays in the `title`. */
+     the one that gives way; the full value stays in the `title`. The settings
+     cluster takes the slack now, so this no longer pushes itself right. */
   flex: 0 1 auto;
   min-width: 0;
-  margin-inline-start: auto;
   font-family: var(--ff-mono);
   overflow: hidden;
   text-overflow: ellipsis;

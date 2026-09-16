@@ -163,10 +163,12 @@ export function SessionSidebar({
   return (
     <div data-ui="session-rail" className={styles.root}>
       <div className={styles.head}>
+        {/* Not `primary`: the acid and the cut both mean "the action this
+            screen is for", and on a session that is Send. Two of them is how
+            neither reads as the one. */}
         <TipButton
           tipText="New agent session, in the working directory below"
-          tier="primary"
-          edge="left"
+          tier="secondary"
           icon={Zap}
           onClick={() => onNew('agent')}
         >
