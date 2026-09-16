@@ -7,11 +7,43 @@
  * hand-copied -- the old block duplicated four colours and invented two more
  * (`#52525b` and `#a1a1aa` scrollbar thumbs) that existed in no token layer.
  *
- * Deliberately minimal: box-sizing, a reset and typography defaults belong to
- * the component pass, not to the pass that moves the pre-paint styles. Adding
- * `* { box-sizing: border-box }` here would silently reflow every hand-rolled
- * div while antd still owns half the tree.
+ * Not minimal any more, and the reason is recorded rather than assumed: this file
+ * used to defer the reset with "adding `* { box-sizing: border-box }` here would
+ * silently reflow every hand-rolled div **while antd still owns half the tree**".
+ * antd owns none of it now, so the reset lives here -- see the first section.
  */
+
+/*
+ * The reset antd used to provide, inherited rather than re-invented.
+ *
+ * `border-box` because a `width: 100%` with padding overflows without it, and
+ * the margins because every `<p>` in the layer would otherwise carry the
+ * browser's `1em` above and below -- which is what the spacing in the card hints
+ * and the empty states was doing the moment the old reset was removed.
+ *
+ * Lists are deliberately absent: antd also zeroed their padding and their markers,
+ * and the transcript renders markdown lists. A list without bullets is not a
+ * style choice, it is a bug that looks like one.
+ */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p,
+figure,
+blockquote,
+dl,
+dd {
+  margin: 0;
+}
 
 html,
 body,
