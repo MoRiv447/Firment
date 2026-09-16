@@ -87,7 +87,11 @@
 
 .root[data-tier='secondary'] {
   border: 1px solid var(--outline);
-  background: var(--surface);
+  /* A fill, not a ghost. `--surface` made it a white rectangle with a grey ring,
+     which next to another white rectangle is two buttons and no hierarchy. The
+     wash is the same one a hovered row uses, so it reads as "a control" without
+     competing with the filled tier. */
+  background: var(--hover);
 }
 
 .root[data-tier='ghost'] {
@@ -105,13 +109,17 @@
 .root[data-tier='primary'] {
   background: var(--brand-acid);
   color: var(--on-acid);
+  /* The one tier that gets shadow *and* fill. It is the action the region it sits
+     in is for, and on a light ground a flat acid rectangle reads as a swatch
+     rather than as the thing to press. */
+  box-shadow: var(--shadow-sm);
 }
 
 /* Each tier darkens toward its own ink rather than toward an invented grey:
    `--hover` is a white wash on dark and a warm neutral on light, and a single
    shared hover fill is what made the two schemes read as two products. */
 .root[data-tier='secondary']:not(:disabled):hover {
-  background: color-mix(in srgb, var(--ink) 6%, var(--surface));
+  background: color-mix(in srgb, var(--ink) 11%, var(--surface));
   border-color: var(--ink);
 }
 

@@ -164,12 +164,18 @@ export function SessionSidebar({
   return (
     <div data-ui="session-rail" className={styles.root}>
       <div className={styles.head}>
-        {/* Not `primary`: the acid and the cut both mean "the action this
-            screen is for", and on a session that is Send. Two of them is how
-            neither reads as the one. */}
+        {/*
+          * `primary`, and the rule it follows is per region rather than per screen:
+          * this is the action the rail is for, and Send is the action the composer
+          * is for. They never compete -- demoting this one to secondary left two
+          * white buttons with grey rings, which is no hierarchy at all.
+          *
+          * It keeps no `edge`: the cut is the composer's primary action wearing the
+          * signature, and one of those is enough.
+          */}
         <TipButton
           tipText="New agent session, in the working directory below"
-          tier="secondary"
+          tier="primary"
           icon={Zap}
           onClick={() => onNew('agent')}
         >
