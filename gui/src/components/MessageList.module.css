@@ -18,25 +18,23 @@
 }
 
 /*
- * The user's own message: the one bubble on the acid fill.
+ * The user's own message. It used to be the one bubble drawn on the acid fill.
  *
- * `--on-acid` and `--brand-acid` are a measured pair (13.28:1). The bubble used
- * to take `--ink` for its text, and `ink` is near-white in the dark scheme, so
- * the message you had just typed was the least legible thing on screen. The pair
- * now sits in a single rule, which is the only reason it cannot come apart again
- * in one scheme and not the other.
+ * Two references settled it: neither Zed nor Linear puts a filled, saturated block
+ * behind what the user typed. And the fill was costing more than it paid -- it
+ * took the acid, which then had to compete with the composer's primary action, and
+ * the pair it needed (`--brand-acid` / `--on-acid`) existed only because the fill
+ * did. What is left is weight: the user's row is set in the label weight and the
+ * assistant's is not. That survives both schemes and cannot come apart the way a
+ * fill and its ink could.
  *
- * No border and no shadow: the fill separates it from the transcript already,
- * and a grey ring around a green block is what made every filled control in the
- * old app look like a mistake.
+ * `data-ui` still says `user-bubble` because it names the row, and renaming it
+ * would touch the conventions gate's closed set for a word. Worth doing the next
+ * time this file is opened for something else.
  */
 .bubble {
-  align-self: flex-end;
-  max-width: 80%;
-  padding: var(--sp-2) var(--sp-4);
-  border-radius: var(--r-panel);
-  background: var(--brand-acid);
-  color: var(--on-acid);
+  max-width: 88%;
+  min-width: 0;
   font-weight: var(--fw-label);
   line-height: var(--lh-body);
   white-space: pre-wrap;
