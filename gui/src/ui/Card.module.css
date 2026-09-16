@@ -17,6 +17,12 @@
   min-width: 0;
   border: 1px solid var(--outline);
   border-radius: var(--r-panel);
+  /* The hairline separates first and the shadow only lifts, which is why `sm` is
+     soft: a screen of cards each throwing a hard shadow is the loudest thing on
+     it. In the light scheme this one line is the whole of the elevation -- there
+     is no "whiter white" above `--surface` (`--surface-raised` is the same value
+     there, which is what made a selected session row invisible). */
+  box-shadow: var(--shadow-sm);
   background: var(--surface);
   color: var(--ink);
   font-family: var(--ff-sans);

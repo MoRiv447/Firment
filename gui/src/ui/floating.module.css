@@ -29,7 +29,9 @@
   background: var(--surface-raised);
   border: 1px solid var(--outline);
   border-radius: var(--r-panel);
-  box-shadow: var(--shadow-lg);
+  /* `md`, not `lg`: a menu is a transient overlay like a tooltip or a toast, and
+     those two take `md`. `lg` is for what dims the page behind it. */
+  box-shadow: var(--shadow-md);
   color: var(--ink);
   font-family: var(--ff-sans);
   font-size: var(--fs-body);
