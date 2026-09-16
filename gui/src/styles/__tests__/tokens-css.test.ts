@@ -58,7 +58,15 @@ const canon = (value: string): string =>
  * yet. Anything else added to CSS without a twin is a decision, not a typo, so
  * this list is asserted to be exact rather than consulted as a skip.
  */
-const CSS_ONLY = ['--scroll-thumb', '--scroll-thumb-hover'];
+const CSS_ONLY = [
+  '--scroll-thumb',
+  '--scroll-thumb-hover',
+  // The grain: a texture and its strength, neither of which has a job in the JS
+  // palette -- nothing computes with noise. It belongs to the stylesheet the same
+  // way the scrollbar does.
+  '--grain',
+  '--grain-opacity',
+];
 
 const withoutComments = () => css.replace(/\/\*[\s\S]*?\*\//g, '');
 
@@ -96,10 +104,13 @@ describe('tokens.css mirrors tokens.ts', () => {
 
   it('carries one shared key set in both schemes', () => {
     expect(customProps(dark).sort()).toEqual(customProps(light).sort());
-    // 37 mirrored + the two scrollbar tokens. A number, on purpose: adding a
-    // colour to one scheme and forgetting the other is the bug this whole file
-    // exists to catch, and `tokens.ts` catches it with the type system.
-    expect(customProps(dark).length).toBe(39);
+    // 37 mirrored + the two scrollbar tokens + the grain strength. A number, on
+    // purpose: adding a colour to one scheme and forgetting the other is the bug
+    // this whole file exists to catch, and `tokens.ts` catches it with the type
+    // system. Counted rather than derived, so that going up has to be a decision:
+    // the texture itself lives outside both scheme blocks, because it is the same
+    // in both -- only how strong it is differs, and that is the half declared here.
+    expect(customProps(dark).length).toBe(40);
   });
 
   it('declares every palette key in both schemes, and nothing extra', () => {

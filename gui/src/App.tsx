@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { Bot, Diff, ListChecks, Usb } from 'lucide-react';
+import { Usb } from 'lucide-react';
 import {
   api,
   notifySessionsChanged,
@@ -789,21 +789,18 @@ export default function App() {
                 {
                   key: 'changes',
                   label: 'Changes',
-                  icon: Diff,
                   badge: changes.length || undefined,
                   content: <ChangesPane changes={changes} />,
                 },
                 {
                   key: 'agents',
                   label: 'Subagents',
-                  icon: Bot,
                   badge: subagents.length || undefined,
                   content: <AgentsPane subagents={subagents} />,
                 },
                 {
                   key: 'todos',
                   label: 'Todos',
-                  icon: ListChecks,
                   badge: todos.length || undefined,
                   content: <TodosPane todos={todos} loading={todosLoading} />,
                 },

@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="0LZF9ZMsMA0kwig7C6qWsE">
+<head data-page-node-id="8MKGwBX4AbUidmSDQVl0hy">
+<meta charset="utf-8" data-page-node-id="8Dw5QItZhPMezX9Q0jhCjZ">
+<title>Firment 质感探针 — 四种处理,两套配色</title>
+<style>
+  /* 值直接取自 gui/src/styles/tokens.css,不是另造一套。 */
+  :root {
+    --bg-d: #0F0F12; --surface-d: #18181B; --raised-d: #1F1F23; --line-d: #2A2A2F;
+    --ink-d: #F4F4F5; --muted-d: #A1A1AA; --acid: #B4F779; --on-acid: #15200D;
+    --ok-d: #86EFAC; --warn-d: #FDA4AF;
+    --bg-l: #F7F7F5; --surface-l: #FFFFFF; --line-l: #E4E4E7;
+    --ink-l: #18181B; --muted-l: #6B6B73;
+    --ok-l: #15803D; --warn-l: #9F1239;
+    --add: #16A34A; --del: #DC2626;
+    --shadow-1: 0 1px 2px rgba(16,24,40,.06);
+    --shadow-2: 0 1px 2px rgba(16,24,40,.06), 0 8px 24px rgba(16,24,40,.07);
+    --shadow-3: 0 1px 2px rgba(16,24,40,.08), 0 12px 32px rgba(16,24,40,.12);
+    /* 3% 的颗粒,做成 data-URI 的 SVG turbulence —— 一次定义,统一铺一层。 */
+    --grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3'/><feColorMatrix type='saturate' values='0'/></filter><rect width='120' height='120' filter='url(%23n)' opacity='.5'/></svg>");
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 28px; font: 14px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif;
+    background: #EDEDEA; color: #18181B;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .lede { margin: 0 0 22px; color: #55555C; max-width: 74ch; }
+  .lede b { color: #18181B; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; align-items: start; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  .col > h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: #6B6B73; margin: 0 0 10px; font-weight: 600; }
+
+  /* 每张卡片是一个变体;变量在 .v* 上换。 */
+  .probe {
+    --bg: var(--bg-d); --surface: var(--surface-d); --raised: var(--raised-d);
+    --line: var(--line-d); --ink: var(--ink-d); --muted: var(--muted-d);
+    --ok: var(--ok-d); --warn: var(--warn-d);
+    background: var(--bg); color: var(--ink);
+    border-radius: 12px; padding: 16px; margin-bottom: 16px;
+    position: relative; overflow: hidden;
+  }
+  .probe.light {
+    --bg: var(--bg-l); --surface: var(--surface-l); --raised: var(--surface-l);
+    --line: var(--line-l); --ink: var(--ink-l); --muted: var(--muted-l);
+    --ok: var(--ok-l); --warn: var(--warn-l);
+  }
+  .label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--muted); margin: 0 0 10px; font-weight: 600;
+  }
+  .cost { font-size: 11.5px; color: var(--muted); margin: 10px 0 0; line-height: 1.45; }
+
+  /* 面板:标题条 + 可滚动正文。玻璃只有在这里才有意义 —— 内容从它下面过。 */
+  .panel {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+    max-height: 190px; overflow: auto; position: relative;
+  }
+  .bar {
+    position: sticky; top: 0; z-index: 2;
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; border-bottom: 1px solid var(--line);
+    background: var(--surface); font-weight: 600; font-size: 13px;
+  }
+  .chip {
+    margin-left: auto; font-size: 11px; padding: 1px 7px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted);
+  }
+  .body { padding: 10px 12px; font-family: ui-monospace, "Cascadia Mono", Menlo, monospace; font-size: 12.5px; line-height: 1.6; }
+  .body p { margin: 0 0 4px; }
+  .add { color: var(--add); } .del { color: var(--del); }
+  .dim { color: var(--muted); }
+
+  /* 字段:聚焦态的发光只在"状态"上用,不做装饰。 */
+  .field {
+    margin-top: 12px; display: flex; align-items: center; gap: 8px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+    padding: 9px 12px; font-size: 13.5px; color: var(--muted);
+  }
+  .field.focused {
+    border-color: color-mix(in srgb, var(--acid) 60%, var(--line));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--acid) 18%, transparent);
+    color: var(--ink);
+  }
+
+  /* ① 现在:全部同一个值,一根线,一层。 */
+  .v1 .panel, .v1 .field { box-shadow: none; }
+
+  /* ② 深度:三种表面值 + 阴影阶梯 + 边框分级(横线弱、外框略强)。 */
+  .v2 .panel { background: var(--raised); box-shadow: var(--shadow-1); }
+  .v2 .bar { background: var(--raised); }
+  .v2 .field { background: var(--raised); box-shadow: var(--shadow-1); }
+
+  /* ③ 深度 + 颗粒:一层覆盖全页的 3% 噪点,压在内容下方不碰文字。 */
+  .v3 .panel { background: var(--raised); box-shadow: var(--shadow-2); }
+  .v3 .bar { background: var(--raised); }
+  .v3 .field { background: var(--raised); box-shadow: var(--shadow-1); }
+  .v3::before {
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    background-image: var(--grain); opacity: .035; z-index: 3;
+  }
+
+  /* ④ 深度 + 颗粒 + 玻璃(仅标题条) + 聚焦发光。 */
+  .v4 .panel { background: var(--raised); box-shadow: var(--shadow-3); }
+  .v4 .bar {
+    background: color-mix(in srgb, var(--raised) 68%, transparent);
+    -webkit-backdrop-filter: blur(14px) saturate(150%);
+    backdrop-filter: blur(14px) saturate(150%);
+    border-bottom-color: color-mix(in srgb, var(--line) 60%, transparent);
+  }
+  .v4 .field { background: var(--raised); box-shadow: var(--shadow-1); }
+  .v4::before {
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    background-image: var(--grain); opacity: .035; z-index: 3;
+  }
+
+  .note { margin-top: 26px; padding: 16px 18px; background: #fff; border: 1px solid #E4E4E7; border-radius: 10px; }
+  .note h3 { margin: 0 0 8px; font-size: 14px; }
+  .note ul { margin: 0; padding-left: 20px; }
+  .note li { margin-bottom: 6px; max-width: 86ch; }
+  code { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; background: #F1F1EE; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body data-page-node-id="637gYzWAuiw7cKpfWTjACX">
+
+<h1 data-page-node-id="F0G4viOBzznE2gCbvpVDs9">质感探针:四种处理,明暗并排</h1>
+<p class="lede" data-page-node-id="3XliX7GGGaMhEUNl6Q7h26">
+  同一块面板(标题条 + 可滚动正文 + 一个输入框),用我们真实的 token 值。
+  左暗右亮 —— 因为<b data-page-node-id="kScn3NDkNepE5iM2R74EWB">这套配色真正的坑在两边不一致</b>:<code data-page-node-id="yJTVApmmjOmiJKUCrDxUTW">--surface</code> 与 <code data-page-node-id="xR7h4hAdFE7xYkloT4kola">--surface-raised</code>
+  在浅色里都是 <code data-page-node-id="JVU80UkcYt03MCLjA1FUmV">#FFFFFF</code>,所以"抬升一层"在浅色下等于没做(昨晚那个"选不中的会话行"就是这么来的)。
+  任何效果如果只在暗色好看,这里就会露馅。
+</p>
+
+<div class="grid" data-page-node-id="V05EvILeDpe7YasMZTALcu">
+  <div class="col" data-page-node-id="ds6LgkOM5ABEcbSZ7CWZ69">
+    <h2 data-page-node-id="NDGidknFaw3mWbU1oPybsC">暗色</h2>
+
+    <div class="probe v1" data-page-node-id="AVVUx10RXxEzJB5q5R1orn">
+      <p class="label" data-page-node-id="bnqDS2C2kdMfIuCU76HBdt">① 现在</p>
+      <div class="panel" data-page-node-id="nV8flTOeytlL8QwHLY3JqV">
+        <div class="bar" data-page-node-id="rMHGRRp7VRX3XdBNiIKlqs">Changes <span class="chip" data-page-node-id="3XGBDaImTOImFyXZJWpIzT">2 files</span></div>
+        <div class="body" data-page-node-id="BNfzbGdsKwOQfV2s3AEMTM">
+          <p class="dim" data-page-node-id="f30fb5mxIK2qRvQxD5pvl1">edit_file  crates/firment-core/src/journal.rs</p>
+          <p data-page-node-id="9lIYEv9j8M7WsDIBVhtD82"><span class="del" data-page-node-id="PCqKdMiHH8q9EY9DDzDeRY">- let truncated = false;</span></p>
+          <p data-page-node-id="WbiiF7L750nWTBRlvIAePI"><span class="add" data-page-node-id="Kx4zqt6xxlcgGtc8AZu6YJ">+ let truncated = cells &gt; MAX_CELLS;</span></p>
+          <p class="dim" data-page-node-id="BoHaBjD2X63WbdYxQxRH8I">cargo test -p firment-core  ……  605 passed</p>
+        </div>
+      </div>
+      <div class="field" data-page-node-id="Ys8qpYREXGjXTtq7LzpNk8">Ask the agent…</div>
+      <p class="cost" data-page-node-id="aAvO3vdEpLrK0unCDpHGgF">表面同值、单层线、无阴影。信息全在,重量为零。</p>
+    </div>
+
+    <div class="probe v2" data-page-node-id="rvCFSBro8nUZxCYr0W47r9">
+      <p class="label" data-page-node-id="PWz478HcLWcB7FfV4hDPFZ">② 深度</p>
+      <div class="panel" data-page-node-id="UXbY4IJNsKVMX3DCpC5Day">
+        <div class="bar" data-page-node-id="8B2ykC4HK3b0z8GCH5dZzf">Changes <span class="chip" data-page-node-id="BBLc0ut0Jf5rX1c2FzzVPB">2 files</span></div>
+        <div class="body" data-page-node-id="HisVQo0kDkxCs6Bq7KZhWI">
+          <p class="dim" data-page-node-id="UdIBmpDzPY8EylItcBzGC8">edit_file  crates/firment-core/src/journal.rs</p>
+          <p data-page-node-id="OCDiOThmQt5bw53IdMtgSH"><span class="del" data-page-node-id="Ly4zqUvYx8DTMdOpzDhYxl">- let truncated = false;</span></p>
+          <p data-page-node-id="Tdhr9VyUByuLnjgp4fIBOl"><span class="add" data-page-node-id="yzFtIFG03iyPumuR4TZuek">+ let truncated = cells &gt; MAX_CELLS;</span></p>
+          <p class="dim" data-page-node-id="jLhfQDdJCsnnGNiOzt7zLY">cargo test -p firment-core  ……  605 passed</p>
+        </div>
+      </div>
+      <div class="field" data-page-node-id="0yTm6Tbzr4MyHvW6l7Oclj">Ask the agent…</div>
+      <p class="cost" data-page-node-id="QwVyFVYkBaPiDztCqC44DK">三种表面值 + 三级阴影 + 边框分级。<b data-page-node-id="zxYUXFcAyTyiTdLUA6UZHv">零风险、零性能代价</b>,这是"质感"的大部分。</p>
+    </div>
+
+    <div class="probe v3" data-page-node-id="0lqRlQfi1eV3tpxS3uC8gl">
+      <p class="label" data-page-node-id="8vuBAjFDeIqBDBuIDPnXro">③ 深度 + 颗粒</p>
+      <div class="panel" data-page-node-id="WQZup0mEujDjhQQjr7NKzO">
+        <div class="bar" data-page-node-id="927arl9N6c1PDmMMdXweOE">Changes <span class="chip" data-page-node-id="KAvYbmCL8Mub8C7e1qvXGM">2 files</span></div>
+        <div class="body" data-page-node-id="PSTfpXJIOHAIZCZYAcyZaW">
+          <p class="dim" data-page-node-id="U7OVc3E2Nl0Pn3VnogoD5F">edit_file  crates/firment-core/src/journal.rs</p>
+          <p data-page-node-id="SAhXHTmvI2vjgS4YFsLmUP"><span class="del" data-page-node-id="DwtpIM2bG9Vedoxsn02rTj">- let truncated = false;</span></p>
+          <p data-page-node-id="XEz4v2JDM3uNaD4mq3iyhm"><span class="add" data-page-node-id="nLVDOgt3F1gDKt2EANHHxo">+ let truncated = cells &gt; MAX_CELLS;</span></p>
+          <p class="dim" data-page-node-id="a4Tuk0sIkGCrdjwcKWnn6s">cargo test -p firment-core  ……  605 passed</p>
+        </div>
+      </div>
+      <div class="field" data-page-node-id="PQ1CUkiIlvw6Kn24QGVG08">Ask the agent…</div>
+      <p class="cost" data-page-node-id="esq70HqTJZEmEi87GW3pLk">一层 3% 噪点覆盖在内容<b data-page-node-id="jkRVOqGxhzUS71LuIyVFl1">之下</b>(不碰文字)。肉眼看是"材质",放大才看得见。一次绘制,性能几乎免费。</p>
+    </div>
+
+    <div class="probe v4" data-page-node-id="QhAp0oL1ncmBGPNDvP34gR">
+      <p class="label" data-page-node-id="cHFGEVsXeI4V5xoAN7eGrR">④ + 玻璃(仅标题条) + 聚焦发光</p>
+      <div class="panel" data-page-node-id="INY4QHheKDePpX7yQumxGi">
+        <div class="bar" data-page-node-id="nq0TQEnGwN0iPSmNcoG7EK">Changes <span class="chip" data-page-node-id="PguSpqHsAtwQhGMutFachl">2 files</span></div>
+        <div class="body" data-page-node-id="47uO70P3BFnqKPhOL6SeJa">
+          <p class="dim" data-page-node-id="8jXqQCkYDxC0B6Zd6wbrbO">edit_file  crates/firment-core/src/journal.rs</p>
+          <p data-page-node-id="6yZLLB1vYU9O0mMI3ar7JW"><span class="del" data-page-node-id="aotwA4eBRNJiFU3NWDxg3V">- let truncated = false;</span></p>
+          <p data-page-node-id="qrWEAB4rPtYnadyAfZKJd4"><span class="add" data-page-node-id="0nWGCccSqBdwakA4HtuR28">+ let truncated = cells &gt; MAX_CELLS;</span></p>
+          <p class="dim" data-page-node-id="mv4SY657115ZcEemzcrBAz">cargo test -p firment-core  ……  605 passed</p>
+          <p class="dim" data-page-node-id="dU5mFOsKvUrREhDV4TClpX">滚动这一栏 → 内容从标题条下面过,玻璃才有意义</p>
+          <p class="dim" data-page-node-id="tDm3AUNx5upd7oN1sVuHej">cargo fmt --all -- --check</p>
+          <p class="dim" data-page-node-id="4TnjIhnf8FN3iVFpklMQpI">cargo clippy --workspace --all-targets</p>
+        </div>
+      </div>
+      <div class="field focused" data-page-node-id="zfFMoI5d9Zlgu6yRFjta9O">Ask the agent…<span class="dim" style="margin-left:auto" data-page-node-id="J2WEEcDR6rN9IOvWPgj1pF">聚焦态</span></div>
+      <p class="cost" data-page-node-id="nwREIlLJKRslNod44v2nH5">玻璃只给<b data-page-node-id="VEqSgElDfC09HknSWzpn1r">有东西从下面滚过</b>的地方(标题条/状态栏),不是每块面板;发光只给<b data-page-node-id="SCzWE09dOHNKiqiIeTEsJJ">状态</b>(聚焦、运行中)。这两条是"高级"和"油腻"的分界。</p>
+    </div>
+  </div>
+
+  <div class="col" data-page-node-id="NbwVoUjOcVdf1bEZFsqKiD">
+    <h2 data-page-node-id="idSUcp1nGfk0eIcHS69Vwo">浅色</h2>
+
+    <div class="probe light v1" data-page-node-id="SFiOR6CtSFgTz4uELNCm8Z">
+      <p class="label" data-page-node-id="GHSPJkEBnj4Sm09LDhIUSk">① 现在</p>
+      <div class="panel" data-page-node-id="0Fc9jV0TksW4yCkzfger9h">
+        <div class="bar" data-page-node-id="QwmRdp2wS13YOWITB02ypT">Changes <span class="chip" data-page-node-id="eKJ9GNSkSioWKr2PaFqno9">2 files</span></div>
+        <div class="body" data-page-node-id="NddWBTTiktHLcgob8ufFoJ">
+          <p class="dim" data-page-node-id="HsOjttChjZ8zAL2Sqzq9GB">edit_file  crates/firment-core/src/journal.rs</p>
+          <p data-page-node-id="VXGkmxIiNAZvdILD7b1ACx"><span class="del" data-page-node-id="VNQYKsLroIEaL0puIXfiSb">- let truncated = false;</span></p>
+          <p data-page-node-id="ihSPefNXNK6vPHJmSF2oQG"><span class="add" data-page-node-id="3F19qtwPmf5WGFVXPPi5WF">+ let truncated = cells &gt; MAX_CELLS;</span></p>
+          <p class="dim" data-page-node-id="cRClndp049aDH20uQltUFG">cargo test -p firment-core  ……  605 passed</p>
+        </div>
+      </div>
+      <div class="field" data-page-node-id="75RfiNp9CH8Vni9ZxCannt">Ask the agent…</div>
+      <p class="cost" data-page-node-id="iJghEPm0Vf5hpssMAAdqEa">同样的平。注意浅色下"抬升"本来就更容易失效。</p>
+    </div>
+
+    <div class="probe light v2" data-page-node-id="fmXETr5XsTH6iOAUXmuUVM">
+      <p class="label" data-page-node-id="0hCWOmBPwmkjOb1cEGmL3M">② 深度</p>
+      <div class="panel" data-page-node-id="zIjhetduWHIgqzaj8HKn9g">
+        <div class="bar" data-page-node-id="n9BwpBMbhosjtHuhkYP7Q9">Changes <span class="chip" data-page-node-id="hR56ZXitEuWtCBLQlhaL0u">2 files</span></div>
+        <div class="body" data-page-node-id="W7DvlPgRrWGRM0kCCIZAVS">
+          <p class="dim" data-page-node-id="NU0bGOZq9w7BV37W1gBsXv">edit_file  crates/firment-core/src/journal.rs</p>
+          <p data-page-node-id="n4HAXjKSAMHXWAhehvQxc7"><span class="del" data-page-node-id="BTjNqqqx43PVt0mXatKxwk">- let truncated = false;</span></p>
+          <p data-page-node-id="JJDdFPBVxEnBUqkHpdOWPZ"><span class="add" data-page-node-id="jW2i3EWOOeetyiyQQMaWgr">+ let truncated = cells &gt; MAX_CELLS;</span></p>
+          <p class="dim" data-page-node-id="TAhfn4T9cOQ9tgv7l96Orr">cargo test -p firment-core  ……  605 passed</p>
+        </div>
+      </div>
+      <div class="field" data-page-node-id="0thym4TJWlSe759EGrVdLy">Ask the agent…</div>
+      <p class="cost" data-page-node-id="f3sqG3ljmYoZ4RCq0sBpJL">浅色里"抬升"必须靠<b data-page-node-id="hDECnfgOCREXOm0TKNCdeC">阴影 + 边框</b>,不能靠更白的白 —— 白到头就是没有。</p>
+    </div>
+
+    <div class="probe light v3" data-page-node-id="Wdq6hwXCt1cQmx61e5KFiW">
+      <p class="label" data-page-node-id="iNL6PPHlYqZjaYRqk309LZ">③ 深度 + 颗粒</p>
+      <div class="panel" data-page-node-id="vDItWblx4YFbf7vySdGtpp">
+        <div class="bar" data-page-node-id="CULMTXa2cQbCGJNKrAQsF5">Changes <span class="chip" data-page-node-id="b4IAfGXXFNpXCW7AqkSmGN">2 files</span></div>
+        <div class="body" data-page-node-id="BRmc1A18PJA6v5uv76wris">
+          <p class="dim" data-page-node-id="YJD4dUzSIatA59xcvddMy1">edit_file  crates/firment-core/src/journal.rs</p>
+          <p data-page-node-id="BmsjxlISDgdfsDRwQoChV3"><span class="del" data-page-node-id="iwKqGkIEMK6I4EDCYEZg8n">- let truncated = false;</span></p>
+          <p data-page-node-id="rBeZbcdUg1jEaYV449mZDq"><span class="add" data-page-node-id="EfNO5mz9jSGmklgneK8Ah3">+ let truncated = cells &gt; MAX_CELLS;</span></p>
+          <p class="dim" data-page-node-id="8vfnwf9rISaGZpqCrinLQi">cargo test -p firment-core  ……  605 passed</p>
+        </div>
+      </div>
+      <div class="field" data-page-node-id="Xru3dYsp4aHK9BRuo0Yxou">Ask the agent…</div>
+      <p class="cost" data-page-node-id="3pWukJei9xGsbWK7yrFiME">浅色颗粒要更轻(2% 左右),否则白底会发灰、显脏。</p>
+    </div>
+
+    <div class="probe light v4" data-page-node-id="fRBG6VmDExQw7VKpFe9eSs">
+      <p class="label" data-page-node-id="NOYotBnSM48iB9nbL5kj1S">④ + 玻璃 + 聚焦发光</p>
+      <div class="panel" data-page-node-id="yYyac1VtvletIKpLMnCYwK">
+        <div class="bar" data-page-node-id="5UEhHI2Na3yg2ZT6HCjEFL">Changes <span class="chip" data-page-node-id="XUt81k4niXtdzX6notrDAP">2 files</span></div>
+        <div class="body" data-page-node-id="oALh8bHlGkmsQpxsaMh8fN">
+          <p class="dim" data-page-node-id="cN8Q0udCIJfDzlffWkbb9v">edit_file  crates/firment-core/src/journal.rs</p>
+          <p data-page-node-id="WNk1erjOOpQd7UstLoQaMY"><span class="del" data-page-node-id="FTA9HKIjfcASvwR6oM1WJ2">- let truncated = false;</span></p>
+          <p data-page-node-id="IvkBq76aa5MxCTag9TFkkr"><span class="add" data-page-node-id="CC66vNP8NmcFruchiQwfxC">+ let truncated = cells &gt; MAX_CELLS;</span></p>
+          <p class="dim" data-page-node-id="KMrnkndJHYffLWPza67k3Q">cargo test -p firment-core  ……  605 passed</p>
+          <p class="dim" data-page-node-id="rBxpOHvTobxIc5UH2fzbNq">滚动这一栏 → 内容从标题条下面过</p>
+          <p class="dim" data-page-node-id="rciKbcpxDVmBvT8kExEvSz">cargo fmt --all -- --check</p>
+          <p class="dim" data-page-node-id="TubuJKl3GovqvDr1EQe3OT">cargo clippy --workspace --all-targets</p>
+        </div>
+      </div>
+      <div class="field focused" data-page-node-id="yj4gTqN11iHCkXMhkfXFsv">Ask the agent…<span class="dim" style="margin-left:auto" data-page-node-id="C0ZBdyyDX8UeLHghBKS3dF">聚焦态</span></div>
+      <p class="cost" data-page-node-id="DP6C5NUiU7zFVf0t24vaw1">浅色玻璃要"带一点底色"(不然 blur 完是灰雾),这里用 68% 的表面色 + 饱和提升。</p>
+    </div>
+  </div>
+</div>
+
+<div class="note" data-page-node-id="gN9BuJJcxXQbps3QdPtreR">
+  <h3 data-page-node-id="SEhAh80WD4zo2aK3OtdtBF">读这张页面的正确方式</h3>
+  <ul data-page-node-id="2yhnuHiGtxF8vIDDXpIJMT">
+    <li data-page-node-id="fEcRifYRwH6XK05NxlOLii"><b data-page-node-id="0znkouYG0thYtRBohRjUD2">能做的部分</b>:三样全是纯 CSS,WebView2/Chromium 都原生支持,不需要任何依赖。
+      <code data-page-node-id="1i9bi4VEUFFY0AhcXANyKs">backdrop-filter</code> 做玻璃、SVG <code data-page-node-id="HAbDcsKBoffAH0p3TQCEyw">feTurbulence</code> 做颗粒(内联 data-URI,一次绘制)、
+      <code data-page-node-id="oDvFHg5Ak7rHlJWUS3E1Wi">box-shadow</code> 的 inset + 多层做内外发光。</li>
+    <li data-page-node-id="zKArN8xR1hYluirdEi7eRH"><b data-page-node-id="2emAJPsBTda5lYrEJsfF9S">顺序上的判断</b>:② 是地基,③④ 是装修。<b data-page-node-id="SJnYtc7FCJK4hdv3WPT82h">如果只能选一个,选 ②</b> ——
+      昨晚那个"会话行选不中"的 bug,根因就是缺少一套真正可用的高度阶梯(浅色里两个表面值相同)。
+      在平地上加玻璃和发光,得到的是油腻,不是质感。</li>
+    <li data-page-node-id="mOcm93Qjd0BEfkChmL6V1o"><b data-page-node-id="n1jygAVFvXbJHMbPtN2ynO">玻璃的硬限制</b>:它必须有东西可以"糊"。我们大部分面板背后是纯色,那里加玻璃 = 什么都不会发生。
+      真正有意义的位置只有三处:标题栏、状态栏、以及 rail / 检查器的标题条(内容从下面滚过的地方)。</li>
+    <li data-page-node-id="8jewEVEPWHFGjdDfSgG5Ew"><b data-page-node-id="9u1wSL7CZUq9z9qDXeti9X">发光的硬限制</b>:发光只有在<b data-page-node-id="FWViWNypdDdk27kHx5v8IA">状态</b>上才读得出来(聚焦、运行中、出错)。当装饰用会立刻变成"游戏 UI"。
+      而且我们这套设计里饱和色已经有一个明确含义(控件开着),发光不该去抢它。</li>
+    <li data-page-node-id="RqyatiMYK2ttifJtdFJQCE"><b data-page-node-id="PXYcCbBpfcUkYyVVVvJenR">关于 Stitch</b>:它出的是<b data-page-node-id="MhYlARhUv2Kxfhsn11XdXt">静态稿</b>。而这里的难点不是"长什么样",是"这套样子要在 <b data-page-node-id="ZGXQK4JKJT9OcgXXDyg0vI">500 多个 CSS module</b> 里、
+      在<b data-page-node-id="duEBgqg94ullkRnAEjmrOP">两套配色</b>下、在<b data-page-node-id="tJFFWGdoCBuxFAAdo21hLx">真实内容</b>(diff / 日志 / 表格)上一致地成立"。
+      如果你去 Stitch 做一版,我建议把它当作<b data-page-node-id="F4rE5EObuF7HY43A0BYCCF">目标稿</b>而不是灵感板 —— 我来负责把它落进 token 层并保证两种配色都对。</li>
+  </ul>
+</div>
+
+</body>
+</html>

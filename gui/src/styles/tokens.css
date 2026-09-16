@@ -63,6 +63,10 @@
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.36);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.44);
 
+  /* Grain strength. The texture itself is declared once in the shared block: it
+     is the same in both schemes, and only how strong it is differs. */
+  --grain-opacity: 0.03;
+
   /* States. Hover is neutral so that only selection is green. */
   --hover: rgba(255, 255, 255, 0.08);
   --selection: #B4F779;
@@ -122,6 +126,9 @@
 
   --hover: #EDEFE6;
   --selection: #3B6D11;              /* acid is 1.19:1 on this ground: not a highlight */
+  /* Lighter than the dark scheme: white goes grey, and reads as dirty, long
+     before black does. */
+  --grain-opacity: 0.018;
   --on-selection: #FFFFFF;           /* white, not on-acid: acid on dark green is 4.89 */
 
   --step-done-bg: #EAF3DE;
@@ -195,6 +202,12 @@
    */
   --h-min: 28px;
   --h-bar: 44px;
+  /* Grain: the texture, declared once, because it is the same in both schemes.
+     Only its strength differs, which is why `--grain-opacity` is the half that
+     lives in the scheme blocks. An inlined `feTurbulence` over the whole window
+     reads as a material rather than as flat fills, and it is drawn once. */
+  --grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3'/><feColorMatrix type='saturate' values='0'/></filter><rect width='120' height='120' filter='url(%23n)' opacity='.5'/></svg>");
+
   --h-row: 40px;
   --h-input: 36px;
 

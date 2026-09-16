@@ -10,14 +10,22 @@
   padding-inline: var(--sp-2);
   border-bottom: 1px solid var(--line);
   font-family: var(--ff-sans);
-  /* `overflow-x: auto` alone is what put a scrollbar on BOTH axes: a `visible`
-     `overflow-y` is computed as `auto` as soon as the other axis is not, so the
-     strip grew a vertical bar to scroll the height its horizontal bar had just
-     consumed. The strip does scroll sideways -- four labels do not fit a narrow
-     inspector -- but never downwards. */
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: thin;
+  /* No scrollbar, on either axis.
+   *
+   * `overflow-x: auto` was the first mistake: a `visible` `overflow-y` is computed
+   * as `auto` as soon as the other axis is not, so the strip grew a vertical bar
+   * to scroll the height its horizontal bar had just consumed.
+   *
+   * The horizontal one was the second, and it was not a bug -- the labels genuinely
+   * did not fit, by about 57px in a 210px inspector. A scrollbar under three tab
+   * labels is louder than the tabs are, so the space was found instead: the tabs
+   * lost their icons (72px, a third of the budget, to decorate three words that
+   * already say what they are) and tightened their padding. What the bar was
+   * covering up was a layout that had never been measured.
+   *
+   * The tabs shrink now rather than overflow, so a narrow window ellipsises a label
+   * instead of growing a bar back. */
+  overflow: hidden;
 }
 
 .tab {
@@ -26,10 +34,16 @@
   gap: var(--sp-2);
   box-sizing: border-box;
   min-height: var(--h-row);
+  /* Shrinkable, never growing: tabs are content-width, but they must give way
+     before the strip does. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   /* The bottom edge sits on the strip's own hairline, so the negative margin lets
      the active rule cover it instead of stacking a second line under it. */
   margin-bottom: -1px;
-  padding: 0 var(--sp-3);
+  padding: 0 var(--sp-2);
   border: 0;
   border-bottom: 2px solid transparent;
   background: transparent;
