@@ -163,8 +163,17 @@
 :root {
   /* Stacks. Prose and code are separate on purpose -- setting UI text in a
      monospace was making every label shout. */
-  --ff-sans: 'Inter', 'Noto Sans SC', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --ff-mono: 'JetBrains Mono', 'Noto Sans SC', 'Cascadia Code', Consolas, monospace;
+  --ff-sans: 'Geist Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --ff-mono: 'JetBrains Mono Variable', 'Cascadia Code', Consolas, monospace;
+  /*
+   * No CJK face in either stack, on purpose: `system-ui` resolves Chinese to the
+   * platform font (Microsoft YaHei here), which is free, and bundling one would add
+   * megabytes to an installer for glyphs the system already has. The cost is that
+   * Chinese renders slightly differently on each platform.
+   *
+   * Neither stack names Inter. That is a decision, not an oversight -- see the test
+   * in `styles/__tests__/tokens-css.test.ts`, which exists so it stays one.
+   */
 
   /*
    * Type. Six steps named by role, so nobody picks a size "between" two and

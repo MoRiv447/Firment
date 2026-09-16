@@ -2,8 +2,14 @@ import { lazy, Suspense } from 'react';
 import ReactDOM from 'react-dom/client';
 
 import App from './App';
-import 'antd/dist/reset.css';
-
+/* The two typefaces, bundled by Vite as woff2 rather than named and hoped for.
+   Both are variable, so one file each covers every weight the layer asks for.
+   `wght.css` references every subset fontsource ships and gives each one its own
+   `unicode-range`, which means the browser fetches latin and nothing else -- and
+   Chinese falls through to the system font, which is the only affordable answer:
+   a bundled CJK face is megabytes. */
+import '@fontsource-variable/geist/wght.css';
+import '@fontsource-variable/jetbrains-mono/wght.css';
 /**
  * `?showcase=1` opens the primitive gallery instead of the app.
  *

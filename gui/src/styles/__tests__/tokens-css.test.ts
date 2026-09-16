@@ -199,6 +199,17 @@ describe('tokens.css number scales', () => {
     expect(shared.get('--fs-read')).toBe('15px');
   });
 
+  it('bundles Geist and JetBrains Mono, and never names Inter', () => {
+    // Inter was declared for two redesigns and never shipped, so for a while the
+    // app rendered the system font while its tokens claimed otherwise. Naming a
+    // font is not loading one, and the answer is not a comment: it is a test that
+    // fails when someone reaches for the familiar name again.
+    expect(shared.get('--ff-sans')).toContain('Geist Variable');
+    expect(shared.get('--ff-mono')).toContain('JetBrains Mono Variable');
+    expect(shared.get('--ff-sans')).not.toMatch(/Inter/i);
+    expect(shared.get('--ff-mono')).not.toMatch(/Inter/i);
+  });
+
   it('has a 4px spacing ramp and the shared row height', () => {
     for (const step of ['--sp-05', '--sp-1', '--sp-2', '--sp-3', '--sp-4', '--sp-5', '--sp-6', '--sp-8']) {
       expect(shared.has(step), `missing ${step}`).toBe(true);
