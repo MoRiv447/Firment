@@ -3,14 +3,13 @@
  *
  * Two decisions shape everything else in this file.
  *
- * * **The row's fill is the selection.** `Tabs.module.css` keeps the active tab a
- *   rule rather than a block because "a filled tab would compete with the
- *   selected row in the sidebar" -- so this is the one place in the shell allowed
- *   to paint `--selection` as a background, and everything written on it has to
- *   switch to `--on-selection` with it (body ink is 1.01:1 on the dark scheme's
- *   acid, which is not a dimmed label, it is a missing one). The chips need no
- *   such rule, because every fill `Chip` can wear is opaque: that is the whole
- *   reason the rail used to build chip colours in JS and no longer does.
+ * * **The selected row is a surface, not a state.** It used to paint
+ *   `--selection`, which is the layer's *on* state for controls -- a checked box,
+ *   a switch, a slider fill -- and borrowing it turned the whole rail acid on a
+ *   click. It is `--surface-raised` plus a small shadow now, so the row lifts
+ *   and the ink does not have to move. `Tabs.module.css` still keeps the active
+ *   tab a rule rather than a block, for the same reason as before: a filled tab
+ *   would compete with the selected row.
  * * **Depth is padding, not a guide line.** The rail is 248px and a session
  *   title is a sentence, so a level costs one spacing token and the `↳` on the
  *   branch chip is what actually says "this one is underneath".
@@ -96,11 +95,17 @@
   background: var(--hover);
 }
 
-/* Outranks the hover rule above, so a selected row stays acid under the
-   pointer instead of flashing grey at the moment you are looking at it. */
+/* Outranks the hover rule above, so a selected row keeps its surface under the
+   pointer instead of flashing at the moment you are looking at it.
+ *
+ * It is a surface, not a state: `--selection` is what the layer paints when a
+ * control is *on* (a checked box, a switch, the filled part of a slider), and
+ * the row was borrowing it -- which is why the whole sidebar went acid when all
+ * that had happened was that you clicked a session. `--surface-raised` plus the
+ * existing shadow reads as "this one is lifted" in both schemes, and it leaves
+ * the ink alone: `--on-selection` was only needed because the ground was acid. */
 .item[data-selected='true'] .select {
-  background: var(--selection);
-  color: var(--on-selection);
+  background: var(--surface-raised);
   box-shadow: var(--shadow-sm);
 }
 
@@ -130,11 +135,8 @@
   color: var(--muted);
 }
 
-/* The chips on this line keep their own grounds; only the bare text has to move
-   with the row. */
-.item[data-selected='true'] .meta {
-  color: var(--on-selection);
-}
+/* The chips on this line keep their own grounds, and so does the bare text now:
+   with a neutral surface there is nothing for it to move to. */
 
 .model {
   flex: 0 1 auto;
