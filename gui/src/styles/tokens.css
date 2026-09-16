@@ -159,6 +159,9 @@
   --fs-meta: 11px;     /* chips, tags, tab labels, timestamps, mono paths */
   --fs-minor: 12px;    /* secondary text: tool args, session meta, status bar */
   --fs-body: 13px;     /* DEFAULT: prose, inputs, log lines, card titles */
+  --fs-read: 15px;     /* text you READ: the transcript. Deliberately larger
+                          than --fs-ui: chrome is scanned, prose is read, and
+                          those are the two sizes Zed ships (buffer 15, UI 14). */
   --fs-ui: 14px;       /* control labels, the active inspector tab */
   --fs-display: 28px;  /* the wordmark, and nothing else */
 

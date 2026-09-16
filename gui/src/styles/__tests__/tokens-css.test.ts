@@ -170,6 +170,11 @@ describe('tokens.css number scales', () => {
     const steps = ['--fs-micro', '--fs-meta', '--fs-minor', '--fs-body', '--fs-ui', '--fs-display'];
     for (const step of steps) expect(shared.has(step), `missing ${step}`).toBe(true);
     expect(steps.map((s) => shared.get(s))).toEqual(['10px', '11px', '12px', '13px', '14px', '28px']);
+    // The one rung that is not a migration: chrome is scanned and prose is read,
+    // so reading text does not share a size with inputs and card titles. 15 is
+    // Zed's buffer size, and its UI is 14 -- the same two-role split, from an
+    // external ruler rather than from a preference.
+    expect(shared.get('--fs-read')).toBe('15px');
   });
 
   it('has a 4px spacing ramp and the shared row height', () => {

@@ -11,6 +11,10 @@
   flex-direction: column;
   gap: var(--sp-4);
   font-family: var(--ff-sans);
+  /* What is read, not what is scanned. The tool-call and meta lines below keep
+     their own smaller sizes, so the hierarchy is unchanged -- only the prose the
+     user actually reads moved up a rung. */
+  font-size: var(--fs-read);
 }
 
 /*
