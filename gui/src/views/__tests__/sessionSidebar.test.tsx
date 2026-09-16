@@ -192,6 +192,14 @@ describe('header', () => {
     expect(field).toHaveValue('C:\\work');
   });
 
+  it('names a session that has said nothing yet', () => {
+    // Its title slot is a preview of the conversation, so an empty session used to
+    // render a row with no name at all -- chip, model and time, which reads as a
+    // nameless thing rather than as a new one.
+    renderRail({ sessions: [session({ id: 'a', preview: '' })] });
+    expect(screen.getByText('New session')).toBeInTheDocument();
+  });
+
   it('counts the sessions it is holding', () => {
     const { again } = renderRail({ sessions: [session({ id: 'a' })] });
     expect(screen.getByText('1 session')).toBeInTheDocument();

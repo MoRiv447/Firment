@@ -134,6 +134,13 @@
   line-height: var(--lh-tight);
 }
 
+/* A session with nothing in it yet: it has a name in the slot, and the name is
+   muted, because it is a placeholder and not a summary. */
+.title[data-untitled] {
+  color: var(--muted);
+  font-weight: var(--fw-label);
+}
+
 .meta {
   display: flex;
   align-items: center;

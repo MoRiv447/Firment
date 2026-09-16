@@ -279,8 +279,19 @@ function SessionRow({
           </Chip>
           {/* The tooltip carries the whole first message, not the 30 characters
               the row has room for. */}
-          <span className={styles.title} title={session.preview}>
-            {session.preview}
+          {/*
+            * The title slot is a preview of what the conversation says, so a session
+            * that has said nothing has none -- and a row left with only its chip, its
+            * model and its time reads as a nameless thing. Saying what it is costs one
+            * string; `data-untitled` keeps it in the muted ink so an empty row does not
+            * look like a titled one.
+            */}
+          <span
+            className={styles.title}
+            data-untitled={session.preview ? undefined : true}
+            title={session.preview || undefined}
+          >
+            {session.preview || 'New session'}
           </span>
         </span>
         <span className={styles.meta}>
