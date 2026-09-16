@@ -99,13 +99,21 @@
    pointer instead of flashing at the moment you are looking at it.
  *
  * It is a surface, not a state: `--selection` is what the layer paints when a
- * control is *on* (a checked box, a switch, the filled part of a slider), and
- * the row was borrowing it -- which is why the whole sidebar went acid when all
- * that had happened was that you clicked a session. `--surface-raised` plus the
- * existing shadow reads as "this one is lifted" in both schemes, and it leaves
- * the ink alone: `--on-selection` was only needed because the ground was acid. */
+ * control is *on* (a checked box, a switch, the filled part of a slider), and the
+ * row was borrowing it -- which is why the whole sidebar went acid when all that
+ * had happened was that you clicked a session.
+ *
+ * **Not `--surface-raised`.** That was the first attempt and it was invisible: in
+ * the light scheme it is `#FFFFFF`, the same value as `--surface`, so a "raised"
+ * row on a `--surface` ground is the same colour as the thing it is raised from.
+ * It looked correct in dark, which is how it got through -- the exact failure the
+ * design doc describes as "only accidentally correct in one of the two".
+ *
+ * `--hover` is a wash in both schemes (#EDEFE6 on white, white-at-8% on the dark
+ * ground), and the two things that outrank a hover do the rest: the shadow, and
+ * the label weight the title already takes when the row is selected. */
 .item[data-selected='true'] .select {
-  background: var(--surface-raised);
+  background: var(--hover);
   box-shadow: var(--shadow-sm);
 }
 
