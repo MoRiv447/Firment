@@ -16,7 +16,7 @@
   background: var(--surface-raised);
   color: var(--muted);
   font-family: var(--ff-sans);
-  font-size: var(--fs-meta);
+  font-size: var(--fs-minor);
   font-weight: var(--fw-label);
   line-height: var(--lh-tight);
   white-space: nowrap;
@@ -39,7 +39,7 @@
 
 .chip[data-size='sm'] {
   padding: 0 var(--sp-1);
-  font-size: var(--fs-micro);
+  font-size: var(--fs-meta);
 }
 
 /* Each pair below is documented in docs/design/tokens.md against the ground it

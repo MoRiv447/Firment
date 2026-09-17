@@ -92,6 +92,16 @@
    * `transparent`, and every call site stays one rule.
    */
   --wash-resting: #ffffff1b;
+  /*
+   * Field backgrounds.
+   *
+   * The same reasoning as the wash above, and it took a screenshot to see it: an
+   * opaque grey panel on a near-black ground reads as mud in every place it is
+   * used, and a *translucent* white reads as a surface the light gets through. In
+   * the light scheme the opaque white is right and stays -- it is what a field looks
+   * like on paper.
+   */
+  --field-bg: #ffffff0f;
   --selection: #004558;
   --on-selection: #eeeeee;           /* 13.28:1 on selection; ink is 1.01:1 on acid */
 
@@ -148,6 +158,7 @@
 
   --hover: #e8e8e8;
   --wash-resting: transparent;
+  --field-bg: var(--surface);
   --selection: #b5e9f0;              /* acid is 1.19:1 on this ground: not a highlight */
   /* Lighter than the dark scheme: white goes grey, and reads as dirty, long
      before black does. */

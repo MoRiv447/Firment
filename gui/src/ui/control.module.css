@@ -18,7 +18,7 @@
   width: 100%;
   min-height: var(--h-input);
   padding: 0 var(--sp-3);
-  background: var(--surface);
+  background: var(--field-bg);
   border: 1px solid var(--outline);
   border-radius: var(--r-control);
   color: var(--ink);
