@@ -196,70 +196,27 @@ tracked as its own state, so it cannot disagree with the tool cards next to it. 
 turn that never built anything shows no row at all, and a later attempt
 supersedes an earlier one: a build that failed and then passed reads as `done`.
 
-## Slant — the brand mark on the primary CTA
+## Button weight — three tiers
 
-The cut is the brand's structural mark. The logo carries it as three slanted
-bars, drawn into the artwork; on a control it is drawn with **`clip-path`, never
-a `transform: skewX`**, because a transform shears the type with the shape and
-Latin text leaning is a decal rather than a design.
-
-Geometry, all from `slant` in `tokens.ts`:
-
-| Value | Purpose |
-|---|---|
-| cut `12px` | horizontal run of the cut |
-| gap `8px` | between adjacent slanted edges |
-| `opticalPadLeft 5px` | extra left padding, see below |
-| `controlHeight 40px` | every control on a row |
-
-**The optical centre.** Cutting the bottom-left triangle removes area from the
-left, which shifts the remaining shape's centre of mass about 2.5px the other
-way. The label is then geometrically centred and still reads as off-centre, so it
-gets 5px more padding on the left than on the right.
-
-**The cut is on the fill, not the button.** `clip-path` clips whatever it is
-applied to, so clipping the button would take the label and the focus ring with
-it. The fill is its own layer behind the label, and the edge is a second clipped
-layer with the fill inset 1px inside it — a `border` on a clipped element exists
-only on the four box edges, so the diagonal comes out with no edge at all.
-
-**The edge is `brandEdge`, and that is not a detail.** It used to be
-`color.outline`, which was pure black while the whole interface was framed in
-black, so borrowing it was invisible. When `outline` became an ordinary border
-grey, the edge layer turned the primary button into an acid fill inside a grey
-ring — the one defect this document cannot catch by reading tokens, because both
-values were legitimate. `brandEdge` is the same in both schemes, exactly as
-`brandAcid` is, and `designSystem.test.tsx` asserts that the edge layer is
-`brandEdge` and explicitly *not* `outline`.
-
-**Rounded corners never meet the cut.** A radius rounds over a 12px diagonal and
-eats it; a clipped control keeps `border-radius: 0`.
-
-**Scope: one cut per screen.** The primary tier is the only cut control;
-`secondary` and `tertiary` are square-cornered and uncut, and the logo is the
-only other place the angle appears.
-
-### Button weight — three tiers
-
-Weight is carried by **colour and fill, never by size**: all three tiers are
-`controlHeight` tall and sit level on a row.
+Weight is carried by **colour and fill, never by size**: all three tiers are the
+same height and sit level on a row.
 
 | Tier | Treatment |
 |---|---|
-| primary | `brandAcid` fill, `brandEdge` frame, `onAcid` label, slanted, hand-drawn |
-| secondary | antd `default`: `surface` fill, `lineStrong` hairline |
-| tertiary | antd `text`: no chrome, a `muted` label and a chevron |
+| primary | `brandAcid` fill, `onAcid` label |
+| secondary | `surface` fill, `lineStrong` hairline |
+| tertiary | no chrome, a `muted` label and a chevron |
 
-`secondary` and `tertiary` are antd `Button`s and carry no chrome of their own,
-so their hover, active, disabled and loading states come from the theme. Only
-`primary` is built by hand, and only because the cut cannot be a `border`.
+All three tiers are the layer's own `Button`, so their hover, active, disabled
+and loading states come from `Button.module.css` and nothing else.
 
-The fill and its label are not chosen per call site. `antdTheme` maps
-`colorPrimary` to `brandAcid` and `Button.primaryColor` to `onAcid`, and the
-hand-drawn tier reads `brandAcid`/`brandEdge`/`onAcid` from `tokens.ts`. A fill
-and an ink measured against different grounds is what put near-white text on the
-acid user bubble (about 1.3:1, in the dark scheme only); that pairing is asserted
-in `userBubble.test.tsx` for both schemes.
+The fill and its label are not chosen per call site: the tier rules read
+`brandAcid` and `onAcid` from `tokens.css`, and the pair is asserted there.
+A fill and an ink taken from different tokens is what once put near-white text
+on the acid user bubble (about 1.3:1, in the dark scheme only). The bubble is
+text now, so that assertion moved with the fill -- but the lesson is the one
+this file is for: a fill and its ink have to be a measured pair, or they are
+accidentally correct in one scheme and wrong in the other.
 
 ## Type
 

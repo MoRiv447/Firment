@@ -104,13 +104,13 @@ describe('tokens.css mirrors tokens.ts', () => {
 
   it('carries one shared key set in both schemes', () => {
     expect(customProps(dark).sort()).toEqual(customProps(light).sort());
-    // 37 mirrored + the two scrollbar tokens + the grain strength. A number, on
+    // 37 mirrored + the two scrollbar tokens + the grain strength, less the one the
     // purpose: adding a colour to one scheme and forgetting the other is the bug
     // this whole file exists to catch, and `tokens.ts` catches it with the type
     // system. Counted rather than derived, so that going up has to be a decision:
     // the texture itself lives outside both scheme blocks, because it is the same
     // in both -- only how strong it is differs, and that is the half declared here.
-    expect(customProps(dark).length).toBe(40);
+    expect(customProps(dark).length).toBe(39);
   });
 
   it('declares every palette key in both schemes, and nothing extra', () => {

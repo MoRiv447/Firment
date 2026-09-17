@@ -13,15 +13,6 @@ export interface ButtonProps extends NativeButton {
   /** How much the button announces itself. See `Tier` in `types.ts`. */
   tier?: Tier;
   size?: Size;
-  /**
-   * The brand's cut corner, on the primary CTA. `'left'` removes the bottom-left
-   * triangle; `'both'` leans the whole control forward.
-   *
-   * Only honoured on `tier="primary"`, because the cut needs a fill of its own to
-   * sit on: a hairline box already has an edge, and a second one on top of it is
-   * the grey-ring-around-green mistake this token exists to prevent.
-   */
-  edge?: 'left' | 'both';
   icon?: LucideIcon;
   iconSide?: 'start' | 'end';
   /** Spins in place of the icon and sets `aria-busy`. Not a disabled state. */
@@ -39,14 +30,13 @@ export interface ButtonProps extends NativeButton {
  * focus in React state, so every hover over a tool card re-rendered the card, and
  * it painted its own edge colour by reading `color.outline` -- which is how the
  * CTA's cut corner ended up ringed in grey once `outline` became an ordinary
- * border. Both halves are CSS here (`:hover`, `[data-edge]`), so the component is
+ * border. Both halves are CSS here (`:hover`, the tier rules), so the component is
  * the markup and the props, and a row of them costs nothing to move the mouse
  * across.
  */
 export function Button({
   tier = 'secondary',
   size = 'md',
-  edge,
   icon: Leading,
   iconSide = 'start',
   loading = false,
@@ -58,7 +48,6 @@ export function Button({
   ref,
   ...rest
 }: ButtonProps) {
-  const cut = tier === 'primary' ? edge : undefined;
   const glyph = loading ? (
     <Icon src={LoaderCircle} spin />
   ) : Leading ? (
@@ -75,7 +64,6 @@ export function Button({
       data-ui="button"
       data-tier={tier}
       data-size={size}
-      data-edge={cut}
       data-full={full || undefined}
       data-icon-only={!children && !!Leading ? 'true' : undefined}
       className={cx(styles.root, className)}

@@ -167,12 +167,9 @@ export function Showcase() {
             <Button tier="danger">Delete</Button>
           </Row>
           <Row>
-            <Button tier="primary" edge="left">
-              Run agent
-            </Button>
-            <Button tier="primary" edge="both">
-              Flash
-            </Button>
+            {/* Two slanted primaries sat here. They were the same button
+                twice once the cut went, so the gallery shows one. */}
+            <Button tier="primary">Run agent</Button>
             <Button tier="primary" loading>
               Building
             </Button>

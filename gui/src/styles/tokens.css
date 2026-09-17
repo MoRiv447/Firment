@@ -40,7 +40,6 @@
   --brand-acid: #B4F779;
   --on-acid: #15200D;                /* 13.28:1 on brand-acid */
   --brand-ink: #3B6D11;              /* green that is readable AS text */
-  --brand-edge: #15200D;             /* the CTA's own edge; NOT outline (see tokens.ts:71-83) */
 
   /* Status green: a different hue from the brand on purpose (145deg vs 85deg). */
   --success-bg: #14532D;
@@ -113,7 +112,6 @@
   --brand-acid: #B4F779;             /* 1.27:1 here: a fill, never text */
   --on-acid: #15200D;
   --brand-ink: #3B6D11;              /* 6.21:1 on surface: green text uses this */
-  --brand-edge: #15200D;
 
   --success-bg: #DCFCE7;
   --success-ink: #15803D;            /* 4.57:1 on success-bg */
@@ -237,10 +235,6 @@
   --r-panel: 12px;
   --r-round: 999px;
 
-  /* The slant: the brand's structural mark, on the primary CTA and nothing else. */
-  --slant-cut: 12px;
-  --slant-optic: 5px;
-  --slant-gap: 8px;
 
   /* Motion. This group had five keys and zero call sites; it is now load-bearing. */
   --t-in: 160ms;

@@ -2,41 +2,7 @@
  * The button.
  *
  * Three tiers and three heights, all of them a token. The mechanism worth
- * reading twice is `data-edge`: a `border` cannot draw a diagonal on a clipped
- * element, so the brand edge is not a border at all -- it is the outer box,
- * painted `--brand-edge`, and the fill is a second box inset by 1px inside it
- * with a slightly smaller cut. That is also why the edge has its own token: when
- * this borrowed the generic border grey, the CTA became a grey ring around a
- * green fill, which reads as a mistake rather than as a mark.
- */
 
-.root {
-  box-sizing: border-box;
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  /* `--h-min` / `--h-input` / `--h-row`. Default is `md`. */
-  height: var(--h-input);
-  padding: 0 var(--pad-x, var(--sp-4));
-  border: 0;
-  border-radius: var(--r-control);
-  background: transparent;
-  color: var(--ink);
-  font-family: var(--ff-sans);
-  font-size: var(--fs-ui);
-  font-weight: var(--fw-label);
-  line-height: var(--lh-tight);
-  letter-spacing: 0;
-  white-space: nowrap;
-  cursor: pointer;
-  user-select: none;
-  -webkit-tap-highlight-color: transparent;
-  transition:
-    background-color var(--t-out) var(--ease),
-    border-color var(--t-out) var(--ease),
-    color var(--t-out) var(--ease);
-}
 
 /* One line so a size change moves the height and the padding together, and
    nobody has to remember which of the two a tier was tuned against. */
@@ -168,91 +134,5 @@
 }
 
 /* ------------------------------------------------------------------ */
-/* The cut corner. Primary only -- see `ButtonProps.edge`.
- *
- * Every rule here is scoped to `[data-tier="primary"]`, which is what the prop
- * said all along and the CSS did not enforce: a secondary button with `edge`
- * kept its 1px outline while the cut took a corner off the box, so the border
- * and the diagonal disagreed. A constraint in a doc comment is not a constraint.
- */
-/* ------------------------------------------------------------------ */
 
-/*
- * No edge layer.
- *
- * This used to be a 1px outer box in `--brand-edge` with the acid fill inset
- * inside it, because a `border` cannot follow a `clip-path`'s diagonal. It
- * worked, and it was still the wrong answer: a grey-green hairline around a
- * green block is the "ring around the CTA" that the primary tier's own comment
- * argues against, and it made the cut read as a shape *inside* a button rather
- * than as the button's edge.
- *
- * The radius sits on the root, and the *fill* rounds itself with `border-radius:
- * inherit` rather than the root clipping it with `overflow: hidden`. That is not a
- * style preference -- `overflow: hidden` sets a flex item's automatic minimum size
- * to zero, and the composer's row is a flex row with a growing field beside this
- * button. Clipping here made the button shrinkable, and "Send" came out as "S…".
- * `clip-path` still cuts the diagonal on the subtree either way.
- *
- * Anything much past 8px starts to fight the cut: two curves on one corner is what
- * makes a slant look soft.
- */
-.root[data-tier='primary'][data-edge] {
-  border-radius: 8px;
-  padding: 0;
-  background: none;
-}
 
-.root[data-tier='primary'][data-edge='left'] {
-  clip-path: polygon(0 0, 100% 0, 100% 100%, var(--slant-cut) 100%);
-}
-
-.root[data-tier='primary'][data-edge='both'] {
-  clip-path: polygon(
-    var(--slant-cut) 0,
-    100% 0,
-    calc(100% - var(--slant-cut)) 100%,
-    0 100%
-  );
-}
-
-.root[data-tier='primary'][data-edge] .fill {
-  background: var(--brand-acid);
-  /* Inherits the 8px rather than being clipped to it -- see the note above. */
-  border-radius: inherit;
-}
-
-.root[data-tier='primary'][data-edge='left'] .fill {
-  /* `--slant-optic` is the compensation the cut makes necessary: the triangle is
-     gone from the left, so the remaining shape's centre of mass has to be pushed
-     back or the label reads off-centre. */
-  padding-left: calc(var(--pad-x, var(--sp-4)) + var(--slant-optic));
-  padding-right: var(--pad-x, var(--sp-4));
-}
-
-.root[data-tier='primary'][data-edge='both'] .fill {
-  /* The diagonal is at its widest halfway up the box, which is where the text
-     is, so half the cut is the clearance it needs. */
-  padding-inline: calc(var(--pad-x, var(--sp-4)) + var(--slant-cut) / 2);
-}
-
-.root[data-tier='primary'][data-edge]:not(:disabled):hover {
-  background: var(--brand-edge);
-}
-
-.root[data-tier='primary'][data-edge]:not(:disabled):hover .fill {
-  background: color-mix(in srgb, var(--brand-acid) 90%, var(--on-acid));
-}
-
-.root[data-tier='primary'][data-edge]:not(:disabled):active .fill {
-  background: color-mix(in srgb, var(--brand-acid) 80%, var(--on-acid));
-}
-
-.root[data-edge]:disabled {
-  background: var(--line);
-}
-
-.root[data-tier='primary'][data-edge]:disabled .fill {
-  background: color-mix(in srgb, var(--brand-acid) 24%, var(--bg));
-  color: var(--muted);
-}

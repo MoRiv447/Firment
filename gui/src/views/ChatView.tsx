@@ -249,7 +249,6 @@ export function ChatView({
           ) : (
             <Button
               tier="primary"
-              edge="left"
               icon={Send}
               onClick={send}
               disabled={!session || !input.trim()}
