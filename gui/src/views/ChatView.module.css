@@ -215,4 +215,9 @@
    which came out as "S…" the moment the button became compressible. */
 .inputRow > :last-child {
   flex: none;
+  /* Matched to a one-line row rather than to `--h-input`: a 36px button beside a
+     40px field is a two-pixel step that reads as a mistake, and `--h-row` is the
+     height the app already uses for exactly one line of anything. It stays that
+     height when the field grows to eight rows, and the row centres it. */
+  height: var(--h-row);
 }

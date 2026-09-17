@@ -47,16 +47,20 @@
  * this is so that nothing can.
  */
 .root.root[data-icon-only='true'] {
-  /* Sized explicitly rather than derived. `aspect-ratio` needs a definite height to
-     work from, and if the height token ever fails to resolve the box collapses to
-     whatever its content and padding say -- which is a rectangle, and the glyph
-     stops being centred in it. */
-  width: var(--h-input);
-  height: var(--h-input);
+  /* `--h-min`, not `--h-input`: an icon button in a toolbar is a *small* control,
+     and 36px squares across a 44px bar read as four blocks rather than four quiet
+     actions. Sized explicitly rather than derived, because `aspect-ratio` needs a
+     definite height -- if the height token fails to resolve, the box collapses to
+     its content plus padding, which is a rectangle with off-centre glyph in it. */
+  width: var(--h-min);
+  height: var(--h-min);
   flex: none;
   aspect-ratio: 1;
   padding: 0;
   justify-content: center;
+  /* One step up from the chrome size: the glyph is a 1em icon, so this is what
+     makes it 15px rather than 13px inside a 28px box. */
+  font-size: var(--fs-read);
 }
 
 /*
