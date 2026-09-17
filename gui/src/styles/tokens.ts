@@ -45,56 +45,56 @@ import type { ThemeMode } from '../lib/theme';
  */
 const dark = {
   /** Page background. */
-  bg: '#0F0F12',
+  bg: '#111111',
   /** Cards, panels. */
-  surface: '#18181B',
+  surface: '#191919',
   /** Raised surfaces: popovers, the elevated card. */
-  surfaceRaised: '#1F1F23',
+  surfaceRaised: '#222222',
   /** Body text. 15.08:1 on `bg`. */
-  ink: '#E4E4E7',
+  ink: '#eeeeee',
   /** Secondary text. Never olive-green: it reads as disabled. 7.47:1 on `bg`. */
-  muted: '#A1A1AA',
+  muted: '#b4b4b4',
   /** Hairline dividers and borders. */
-  line: '#2A2A2F',
+  line: '#3a3a3a',
   /** Stronger borders: secondary button outlines. */
-  lineStrong: '#3F3F46',
+  lineStrong: '#484848',
 
   /**
    * Brand. ONLY for: the logo, the primary CTA fill, progress, the current
    * step. It is ~1.8:1 on a light ground, so it is a highlighter, never a text
    * or icon colour; on a dark ground the text that sits ON it is `onAcid`.
    */
-  brandAcid: '#B4F779',
+  brandAcid: '#00a2c7',
   /** Text/icon colour for content sitting on `brandAcid`. 13.28:1 on it. */
-  onAcid: '#15200D',
+  onAcid: '#0b161a',
   /** Brand green dark enough to be readable AS text on a light ground. */
-  brandInk: '#3B6D11',
+  brandInk: '#4ccce6',
 
   /**
    * Status green: a different hue from the brand green on purpose (145 deg vs
    * 85 deg). The brand colour is identity, the status colour is feedback; using
    * one for both made "this is Firment" and "this passed" look identical.
    */
-  successBg: '#14532D',
+  successBg: '#132d21',
   /** 6.49:1 on `successBg`. */
-  successInk: '#86EFAC',
-  successBorder: '#166534',
+  successInk: '#b1f1cb',
+  successBorder: '#28684a',
 
   /** Informational accent (branches, links). */
-  infoBg: '#1A1E26',
-  infoInk: '#7DD3FC',
+  infoBg: '#0d2847',
+  infoInk: '#c2e6ff',
 
   /** Warnings and alerts. */
-  warnInk: '#EAB308',
-  warnBg: '#3F2E06',
+  warnInk: '#ffe7b3',
+  warnBg: '#302008',
 
   /** Added/removed diff lines. */
-  diffAddedBg: '#14311C',
-  diffAddedInk: '#86EFAC',
-  diffRemovedBg: '#3B1218',
-  diffRemovedInk: '#FDA4AF',
+  diffAddedBg: '#113b29',
+  diffAddedInk: '#b1f1cb',
+  diffRemovedBg: '#500f1c',
+  diffRemovedInk: '#ffd1d9',
   /** Diff hunk headers and context lines. */
-  diffMetaInk: '#A1A1AA',
+  diffMetaInk: '#b4b4b4',
 
   /**
    * The border around a card, a chip or a control.
@@ -106,7 +106,7 @@ const dark = {
    * and "the border on this thing" is what they all mean; it no longer carries
    * any brand meaning.
    */
-  outline: '#3F3F46',
+  outline: '#484848',
 
   /**
    * Elevation. Low and soft, and the shadow is the SECOND separator: two
@@ -120,7 +120,7 @@ const dark = {
   /**
    * Hover wash for rows and menu items. Unchanged from the value that shipped.
    */
-  hover: 'rgba(255,255,255,0.08)',
+  hover: '#2a2a2a',
 
   /**
    * The selected row: the sidebar item, the live conversation.
@@ -135,9 +135,9 @@ const dark = {
    * Anything inside a selected row reads its text and icon colour from
    * `onSelection`, never from `ink`: on dark `ink` is 1.01:1 on acid.
    */
-  selection: '#B4F779',
+  selection: '#004558',
   /** 13.28:1 on `selection`. */
-  onSelection: '#15200D',
+  onSelection: '#eeeeee',
 
   /**
    * The three states of a progress step (build / flash / monitor). Derived from
@@ -145,26 +145,26 @@ const dark = {
    * green: done borrows the success pair, "current" is body ink plus the brand
    * rule, pending is muted. Ratios on `bg`: 6.49 / 15.08 / 7.47.
    */
-  stepDoneBg: '#14532D',
-  stepDoneInk: '#86EFAC',
-  stepCurrentInk: '#E4E4E7',
+  stepDoneBg: '#113b29',
+  stepDoneInk: '#b1f1cb',
+  stepCurrentInk: '#4ccce6',
   /** The 2px rule under the current step. Brand colour, so a shape not text. */
-  stepRule: '#B4F779',
-  stepPendingInk: '#A1A1AA',
+  stepRule: '#00a2c7',
+  stepPendingInk: '#eeeeee',
   /**
    * A step that actually failed. The one place a step may be red: tokens.md
    * reserves red for a real error, and an unknown outcome is not one. Same
    * family as a removed diff line, because "this broke" and "this was taken
    * out" are the same message at different sizes.
    */
-  stepFailedBg: '#3B1218',
-  stepFailedInk: '#FDA4AF',
+  stepFailedBg: '#3b1219',
+  stepFailedInk: '#ffd1d9',
 
   /**
    * Keyboard focus ring. Acid on a dark ground is 15.06:1, so the brand colour
    * can be its own focus ring here; the light palette cannot do that (1.27:1).
    */
-  focusRing: '#B4F779',
+  focusRing: '#11809c',
 } as const;
 
 /**
@@ -187,13 +187,13 @@ export type Palette = { [K in keyof typeof dark]: string };
  *    keyboard user. The dark palette can afford the acid ring; this one cannot.
  */
 const light: Palette = {
-  bg: '#F7F7F5',
+  bg: '#fcfcfc',
   /** 1.07:1 against `bg` -- separation comes from the hairline, not the fill. */
-  surface: '#FFFFFF',
+  surface: '#f9f9f9',
   /** Distinguished by border and shadow, not by a lighter fill. */
-  surfaceRaised: '#FFFFFF',
+  surfaceRaised: '#f0f0f0',
   /** 17.72:1 on `surface`, 16.52:1 on `bg`. */
-  ink: '#18181B',
+  ink: '#202020',
   /**
    * 5.28:1 on `surface`, 4.92:1 on `bg`, 4.55:1 on `hover`.
    *
@@ -202,43 +202,43 @@ const light: Palette = {
    * acid tint (see `hover`) put a second, darker ground under it, so the ink
    * moved down with it rather than leaving a label that only passes on paper.
    */
-  muted: '#6B6B73',
+  muted: '#646464',
   /** Hairline. 1.18:1 on `bg`: a line, not the 3:1 non-text threshold. */
-  line: '#E4E4E7',
+  line: '#d9d9d9',
   /** Secondary button outline. 1.48:1 on `surface`. */
-  lineStrong: '#D4D4D8',
+  lineStrong: '#cecece',
 
-  brandAcid: '#B4F779',
+  brandAcid: '#107d98',
   /** 13.28:1 on `brandAcid`. */
-  onAcid: '#15200D',
+  onAcid: '#ffffff',
   /** 6.21:1 on `surface`, 5.79:1 on `bg`. Green text on light uses this. */
-  brandInk: '#3B6D11',
+  brandInk: '#107d98',
 
-  successBg: '#DCFCE7',
+  successBg: '#e6f6eb',
   /** 5.02:1 on `surface`, 4.57:1 on `successBg`. */
-  successInk: '#15803D',
-  successBorder: '#BBF7D0',
+  successInk: '#193b2d',
+  successBorder: '#8eceaa',
 
   /**
    * Derived, not given: the table specified the inks but no grounds for them.
    * Chosen to sit in the same family as the status colours, and both pairs were
    * measured -- 5.17:1 and 4.51:1 respectively on their own fills.
    */
-  infoBg: '#E0F2FE',
+  infoBg: '#e6f4fe',
   /** 5.93:1 on `surface`. The dark theme's #7DD3FC is ~2:1 here. */
-  infoInk: '#0369A1',
-  warnBg: '#FEF3C7',
+  infoInk: '#113264',
+  warnBg: '#fff7c2',
   /** 5.02:1 on `surface`; the dark theme's #EAB308 is 1.9:1 here. */
-  warnInk: '#B45309',
+  warnInk: '#4f3422',
 
-  diffAddedBg: '#DCFCE7',
+  diffAddedBg: '#d6f1df',
   /** 4.57:1 on `diffAddedBg`. */
-  diffAddedInk: '#15803D',
-  diffRemovedBg: '#FEE2E2',
+  diffAddedInk: '#193b2d',
+  diffRemovedBg: '#ffdbdc',
   /** 6.56:1 on `diffRemovedBg`. */
-  diffRemovedInk: '#9F1239',
+  diffRemovedInk: '#641723',
   /** 4.51:1 on `bg`. */
-  diffMetaInk: '#71717A',
+  diffMetaInk: '#646464',
 
   /**
    * Matches the dark scheme's role, not its value: the neutral system separates
@@ -246,7 +246,7 @@ const light: Palette = {
    * stay black in both schemes -- a thick black frame on a light ground reads as
    * heavy rather than deliberate, which is exactly why this changed.
    */
-  outline: '#D4D4D8',
+  outline: '#cecece',
 
   /**
    * Softer and wider than the dark scheme's: a black shadow on a white ground
@@ -269,7 +269,7 @@ const light: Palette = {
    * two would read as two degrees of "selected". Hover is neutral, selection is
    * green, and only one of them means "this one".
    */
-  hover: '#EDEFE6',
+  hover: '#e8e8e8',
 
   /**
    * `brandInk` as a fill: 5.79:1 against `bg`, 6.21:1 against `surface`, so the
@@ -280,14 +280,14 @@ const light: Palette = {
    * it put white-or-ink text on a pastel fill: the reported "I cannot read the
    * selected chat in light mode" is exactly this token and nothing else.
    */
-  selection: '#3B6D11',
+  selection: '#b5e9f0',
   /** 6.21:1 on `selection`. White, not `onAcid`: on a dark green the acid is 4.89. */
-  onSelection: '#FFFFFF',
+  onSelection: '#202020',
 
   /** 6.19:1 (done) / 16.52:1 (current) / 4.51:1 (pending) on `bg`. */
-  stepDoneBg: '#EAF3DE',
-  stepDoneInk: '#3F6212',
-  stepCurrentInk: '#18181B',
+  stepDoneBg: '#d6f1df',
+  stepDoneInk: '#193b2d',
+  stepCurrentInk: '#107d98',
   /**
    * `brandInk`, not the acid.
    *
@@ -297,14 +297,14 @@ const light: Palette = {
    * selected" in light mode. The dark scheme keeps the acid because on #0F0F12
    * it is 15:1.
    */
-  stepRule: '#3B6D11',
-  stepPendingInk: '#6B7280',
+  stepRule: '#0797b9',
+  stepPendingInk: '#202020',
   /** 6.56:1 on `stepFailedBg`, mirrored from the removed-diff pair above. */
-  stepFailedBg: '#FEE2E2',
-  stepFailedInk: '#9F1239',
+  stepFailedBg: '#feebec',
+  stepFailedInk: '#641723',
 
   /** 6.21:1. NOT the acid: that is 1.27:1 and a keyboard user cannot see it. */
-  focusRing: '#3B6D11',
+  focusRing: '#0797b9',
 };
 
 const palettes: Record<ThemeMode, Palette> = { dark, light };

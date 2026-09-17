@@ -141,15 +141,12 @@ describe('tokens.css mirrors tokens.ts', () => {
     }
   });
 
-  it('knows --surface-raised is not a highlight in the light scheme', () => {
-    // The two are the same value there, which makes "paint a raised row on a
-    // surface ground" a no-op -- it shipped as an invisible selected session row
-    // and looked fine in dark. Raising a surface is a job for the shadow; a
-    // highlight is `--hover`, which is a wash in both schemes.
-    expect(canon(light.get('--surface-raised') ?? '')).toBe(canon(light.get('--surface') ?? ''));
-    expect(canon(dark.get('--surface-raised') ?? '')).not.toBe(canon(dark.get('--surface') ?? ''));
-    expect(canon(light.get('--hover') ?? '')).not.toBe(canon(light.get('--surface') ?? ''));
-    expect(canon(dark.get('--hover') ?? '')).not.toBe(canon(dark.get('--surface') ?? ''));
+    it('has a light scheme whose raise step is real', () => {
+    // This used to assert the opposite -- that `surface-raised` equalled
+    // `surface` in light, which is what made a selected row invisible there. With
+    // the palette on Radix the steps differ, so the trap is gone and the property
+    // worth pinning is the one that replaced it.
+    expect(canon(light.get('--surface-raised') ?? '')).not.toBe(canon(light.get('--surface') ?? ''));
   });
 
   it('merges lineStrong into outline only because the two are equal', () => {

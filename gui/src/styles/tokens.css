@@ -28,34 +28,34 @@
 
 :root[data-scheme="dark"] {
   /* Grounds and text. */
-  --bg: #0F0F12;
-  --surface: #18181B;
-  --surface-raised: #1F1F23;
-  --ink: #E4E4E7;                    /* 15.08:1 on bg */
-  --muted: #A1A1AA;                  /* 7.47:1 on bg. Never olive: reads as disabled. */
-  --line: #2A2A2F;                   /* a hairline, not a 3:1 non-text line */
-  --outline: #3F3F46;                /* control edges; also lineStrong */
+  --bg: #111111;
+  --surface: #191919;
+  --surface-raised: #222222;
+  --ink: #eeeeee;                    /* 15.08:1 on bg */
+  --muted: #b4b4b4;                  /* 7.47:1 on bg. Never olive: reads as disabled. */
+  --line: #3a3a3a;                   /* a hairline, not a 3:1 non-text line */
+  --outline: #484848;                /* control edges; also lineStrong */
 
   /* Brand. Acid is a highlighter, never text: ~1.8:1 on a light ground. */
-  --brand-acid: #B4F779;
-  --on-acid: #15200D;                /* 13.28:1 on brand-acid */
-  --brand-ink: #3B6D11;              /* green that is readable AS text */
+  --brand-acid: #00a2c7;
+  --on-acid: #0b161a;                /* 13.28:1 on brand-acid */
+  --brand-ink: #4ccce6;              /* green that is readable AS text */
 
   /* Status green: a different hue from the brand on purpose (145deg vs 85deg). */
-  --success-bg: #14532D;
-  --success-ink: #86EFAC;            /* 6.49:1 on success-bg */
-  --success-border: #166534;
-  --info-bg: #1A1E26;
-  --info-ink: #7DD3FC;
-  --warn-bg: #3F2E06;
-  --warn-ink: #EAB308;
+  --success-bg: #132d21;
+  --success-ink: #b1f1cb;            /* 6.49:1 on success-bg */
+  --success-border: #28684a;
+  --info-bg: #0d2847;
+  --info-ink: #c2e6ff;
+  --warn-bg: #302008;
+  --warn-ink: #ffe7b3;
 
   /* Diff. */
-  --diff-added-bg: #14311C;
-  --diff-added-ink: #86EFAC;
-  --diff-removed-bg: #3B1218;
-  --diff-removed-ink: #FDA4AF;
-  --diff-meta-ink: #A1A1AA;
+  --diff-added-bg: #113b29;
+  --diff-added-ink: #b1f1cb;
+  --diff-removed-bg: #500f1c;
+  --diff-removed-ink: #ffd1d9;
+  --diff-meta-ink: #b4b4b4;
 
   /* Elevation. The SECOND separator: a hairline separates first, so these stay soft.
    *
@@ -76,80 +76,80 @@
   --grain-opacity: 0.03;
 
   /* States. Hover is neutral so that only selection is green. */
-  --hover: rgba(255, 255, 255, 0.08);
-  --selection: #B4F779;
-  --on-selection: #15200D;           /* 13.28:1 on selection; ink is 1.01:1 on acid */
+  --hover: #2a2a2a;
+  --selection: #004558;
+  --on-selection: #eeeeee;           /* 13.28:1 on selection; ink is 1.01:1 on acid */
 
   /* The three step states, derived so a step never invents a fourth green. */
-  --step-done-bg: #14532D;
-  --step-done-ink: #86EFAC;
-  --step-current-ink: #E4E4E7;
-  --step-rule: #B4F779;              /* a shape, not text */
-  --step-pending-ink: #A1A1AA;
-  --step-failed-bg: #3B1218;         /* the removed-diff family: same message, other size */
-  --step-failed-ink: #FDA4AF;
+  --step-done-bg: #113b29;
+  --step-done-ink: #b1f1cb;
+  --step-current-ink: #4ccce6;
+  --step-rule: #00a2c7;              /* a shape, not text */
+  --step-pending-ink: #eeeeee;
+  --step-failed-bg: #3b1219;         /* the removed-diff family: same message, other size */
+  --step-failed-ink: #ffd1d9;
 
   /* Keyboard focus. Dark can afford the acid ring (15.06:1); light cannot. */
-  --focus-ring: #B4F779;
+  --focus-ring: #11809c;
 
   /* Scrollbar. The thumb is `outline`; the hover shade exists nowhere else
      and is kept at the value that shipped. */
-  --scroll-thumb: var(--outline);
-  --scroll-thumb-hover: #52525B;
+  --scroll-thumb: #484848;
+  --scroll-thumb-hover: #6e6e6e;
 
   color-scheme: dark;
 }
 
 :root[data-scheme="light"] {
-  --bg: #F7F7F5;
-  --surface: #FFFFFF;                /* 1.07:1 vs bg: separation is the hairline, not the fill */
-  --surface-raised: #FFFFFF;         /* told apart by border and shadow */
-  --ink: #18181B;                    /* 17.72:1 on surface, 16.52:1 on bg */
-  --muted: #6B6B73;                  /* 5.28 / 4.92 / 4.55 on surface / bg / hover */
-  --line: #E4E4E7;
-  --outline: #D4D4D8;
+  --bg: #fcfcfc;
+  --surface: #f9f9f9;                /* 1.07:1 vs bg: separation is the hairline, not the fill */
+  --surface-raised: #f0f0f0;         /* told apart by border and shadow */
+  --ink: #202020;                    /* 17.72:1 on surface, 16.52:1 on bg */
+  --muted: #646464;                  /* 5.28 / 4.92 / 4.55 on surface / bg / hover */
+  --line: #d9d9d9;
+  --outline: #cecece;
 
-  --brand-acid: #B4F779;             /* 1.27:1 here: a fill, never text */
-  --on-acid: #15200D;
-  --brand-ink: #3B6D11;              /* 6.21:1 on surface: green text uses this */
+  --brand-acid: #107d98;             /* 1.27:1 here: a fill, never text */
+  --on-acid: #ffffff;
+  --brand-ink: #107d98;              /* 6.21:1 on surface: green text uses this */
 
-  --success-bg: #DCFCE7;
-  --success-ink: #15803D;            /* 4.57:1 on success-bg */
-  --success-border: #BBF7D0;
-  --info-bg: #E0F2FE;
-  --info-ink: #0369A1;               /* 5.17:1 on its own fill */
-  --warn-bg: #FEF3C7;
-  --warn-ink: #B45309;               /* 4.51:1 on its own fill */
+  --success-bg: #e6f6eb;
+  --success-ink: #193b2d;            /* 4.57:1 on success-bg */
+  --success-border: #8eceaa;
+  --info-bg: #e6f4fe;
+  --info-ink: #113264;               /* 5.17:1 on its own fill */
+  --warn-bg: #fff7c2;
+  --warn-ink: #4f3422;               /* 4.51:1 on its own fill */
 
-  --diff-added-bg: #DCFCE7;
-  --diff-added-ink: #15803D;
-  --diff-removed-bg: #FEE2E2;
-  --diff-removed-ink: #9F1239;       /* 6.56:1 on diff-removed-bg */
-  --diff-meta-ink: #71717A;
+  --diff-added-bg: #d6f1df;
+  --diff-added-ink: #193b2d;
+  --diff-removed-bg: #ffdbdc;
+  --diff-removed-ink: #641723;       /* 6.56:1 on diff-removed-bg */
+  --diff-meta-ink: #646464;
 
   --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06);
   --shadow-md: 0 4px 12px rgba(16, 24, 40, 0.08);
   --shadow-lg: 0 12px 32px rgba(16, 24, 40, 0.12);
 
-  --hover: #EDEFE6;
-  --selection: #3B6D11;              /* acid is 1.19:1 on this ground: not a highlight */
+  --hover: #e8e8e8;
+  --selection: #b5e9f0;              /* acid is 1.19:1 on this ground: not a highlight */
   /* Lighter than the dark scheme: white goes grey, and reads as dirty, long
      before black does. */
   --grain-opacity: 0.018;
-  --on-selection: #FFFFFF;           /* white, not on-acid: acid on dark green is 4.89 */
+  --on-selection: #202020;           /* white, not on-acid: acid on dark green is 4.89 */
 
-  --step-done-bg: #EAF3DE;
-  --step-done-ink: #3F6212;
-  --step-current-ink: #18181B;
-  --step-rule: #3B6D11;              /* a 2px rule needs 3:1; acid here is 1.19 */
-  --step-pending-ink: #6B7280;
-  --step-failed-bg: #FEE2E2;
-  --step-failed-ink: #9F1239;
+  --step-done-bg: #d6f1df;
+  --step-done-ink: #193b2d;
+  --step-current-ink: #107d98;
+  --step-rule: #0797b9;              /* a 2px rule needs 3:1; acid here is 1.19 */
+  --step-pending-ink: #202020;
+  --step-failed-bg: #feebec;
+  --step-failed-ink: #641723;
 
-  --focus-ring: #3B6D11;             /* NOT the acid: 1.27:1 is invisible to a keyboard user */
+  --focus-ring: #0797b9;             /* NOT the acid: 1.27:1 is invisible to a keyboard user */
 
-  --scroll-thumb: var(--outline);
-  --scroll-thumb-hover: #A1A1AA;
+  --scroll-thumb: #cecece;
+  --scroll-thumb-hover: #8d8d8d;
 
   color-scheme: light;
 }
