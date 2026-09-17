@@ -81,17 +81,18 @@ ratio below names the ground it was measured against, and
 
 ### Grounds and text
 
-| Token | Dark | Light | Light ratio |
-|---|---|---|---|
-| `bg` | `#0F0F12` | `#F7F7F5` | — |
-| `surface` | `#18181B` | `#FFFFFF` | 1.07:1 vs `bg` — separation comes from the hairline, not the fill |
-| `surfaceRaised` | **gray-3** | **gray-3** | a real step above `surface` in both schemes |
-| `ink` | `#E4E4E7` | `#18181B` | 17.72:1 on `surface`, 16.52:1 on `bg` |
-| `muted` | `#A1A1AA` | `#6B6B73` | 5.28:1 on `surface`, **4.92:1 on `bg`**, 4.55:1 on `hover` |
-| `line` | `#2A2A2F` | `#E4E4E7` | 1.18:1 — a hairline, not the 3:1 non-text threshold |
-| `lineStrong` | `#3F3F46` | `#D4D4D8` | 1.48:1 on `surface`; secondary button outlines |
+| Token | Step | What it is |
+|---|---|---|
+| `bg` | gray-1 | the app ground |
+| `surface` | gray-2 | panels and bars. One step above the ground, and the hairline is the *second* separator |
+| `surface-raised` | gray-3 | a real step above `surface` in both schemes. It used to equal `surface` in light, which is what made a selected row invisible there |
+| `ink` | gray-12 | the text you read |
+| `muted` | gray-11 | the second rank: timestamps, model names, paths |
+| `line` | gray-6 | a hairline and nothing more, not the 3:1 non-text threshold |
+| `outline` | gray-7 | control borders, one step stronger than `line` |
 
-Dark reads: `ink` 15.08:1 on `bg`, `muted` 7.47:1.
+Ratios are asserted in `gui/src/styles/__tests__/tokens.test.ts` -- the pair list is
+there, with the numbers, next to the code that fails when one of them moves.
 
 `muted` is a **neutral grey, never olive** — olive reads as disabled. It is
 `#6B6B73` here rather than the `#71717A` that shipped: that value was 4.51:1 on
@@ -132,15 +133,11 @@ here, so that a value cannot move without a test failing.
 
 ### Status
 
-| Token | Dark | Light | Light ratio |
-|---|---|---|---|
-| `successBg` | `#14532D` | `#DCFCE7` | — |
-| `successInk` | `#86EFAC` | `#15803D` | 5.02:1 on `surface`, 4.57:1 on `successBg` |
-| `successBorder` | `#166534` | `#BBF7D0` | — |
-| `infoBg` | `#1A1E26` | `#E0F2FE` | — |
-| `infoInk` | `#7DD3FC` | `#0369A1` | 5.93:1 on `surface`, 5.17:1 on `infoBg` |
-| `warnBg` | `#3F2E06` | `#FEF3C7` | — |
-| `warnInk` | `#EAB308` | `#B45309` | 5.02:1 on `surface`, 4.51:1 on `warnBg` |
+| Token | Step | What it is |
+|---|---|---|
+| `successBg` / `successInk` / `successBorder` | green **3 / 12 / 7** | a positive result |
+| `infoBg` / `infoInk` | blue **3 / 12** | a neutral fact. Blue rather than cyan, because cyan is the brand |
+| `warnBg` / `warnInk` | amber **3 / 12** | a caution |
 
 Status colours are their own scales -- green, amber, blue, red -- and each is used by
 role rather than by hue proximity: `successInk` is the green text step, `warnInk` the
@@ -153,11 +150,11 @@ not usable as *text* on light — the readable green there is `#15803D`.
 
 ### Diff
 
-| Token | Dark | Light | Light ratio |
-|---|---|---|---|
-| `diffAddedBg` / `diffAddedInk` | `#14311C` / `#86EFAC` | `#DCFCE7` / `#15803D` | 4.57:1 |
-| `diffRemovedBg` / `diffRemovedInk` | `#3B1218` / `#FDA4AF` | `#FEE2E2` / `#9F1239` | 6.56:1 |
-| `diffMetaInk` | `#A1A1AA` | `#71717A` | 4.51:1 (hunk headers, context) |
+| Token | Step | What it is |
+|---|---|---|
+| `diffAddedBg` / `diffAddedInk` | green **4 / 12** | an added line |
+| `diffRemovedBg` / `diffRemovedInk` | red **4 / 12** | a removed line |
+| `diffMetaInk` | gray **11** | hunk headers and context |
 
 Diff colours are their own family rather than reusing the status colours: an added
 line and a passed check are not the same message.
