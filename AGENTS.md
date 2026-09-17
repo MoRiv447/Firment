@@ -93,48 +93,54 @@ machine — read the "why" so you don't re-create the problem.
   do NOT `cargo clean` (it will hit the same wall and wastes the whole build
   cache).
 
-### What was measured on 2026-09-17: `--lib` links, one integration target does not
+### What was measured on 2026-09-17: a fresh link of `firment-core` fails on a BOM
 
-**This entry first said "nothing that needs a link can be run". That was wrong**, and
-the correction matters more than the symptom:
+**Two causes were checked and are not it**, so nobody re-derives them:
 
-```
-cargo check -p firment-core --tests     ->  Finished in 27.52s          (works)
-cargo test  -p firment-core --lib       ->  95 passed; 0 failed; 0.70s  (works)
-cargo test  -p firment-core session     ->  linking with `link.exe` failed
-                                            link: missing operand after '\377\376'
-```
-
-The failure is not "linking is broken". It is **one integration test target whose link
-command line is long enough that rustc has to pass the arguments in a response file**
--- `config_and_deepseek` links 257 objects -- and `link.exe` reads that file as a
-command line that begins with a UTF-16 byte-order mark (`\377\376`), so it reports a
-missing operand. Targets that fit on a command line link normally, which is why the
-library target passes.
-
-**And the pass I first called evidence was a cached binary.** `cargo test --lib`
-reported 95 passed in 0.70s *because that binary was already linked* from an earlier
-session; the moment a source change forces a re-link, it fails the same way. So the
-rule is not "small targets are fine" -- it is **any fresh link of this crate fails**,
-and a test run only works while nothing has changed. Check `target/debug/deps/*.exe`
-timestamps if a run looks suspicious: a passing test suite with a stale binary proves
-nothing.
-
-Two things were also checked and are *not* the cause, so nobody re-derives them:
-
-* **It is not a general file-write problem.** Four files written tonight and six
-  objects under `target/debug` all begin with normal bytes; there is no BOM anywhere
-  on disk. The BOM exists only inside the transient response file.
+* **It is not a general file-write problem.** Four source files written that evening
+  and six objects under `target/debug` all begin with normal bytes; there is no BOM
+  anywhere on disk. The BOM exists only inside the transient response file.
 * **It is not the sandbox running commands twice.** A probe that appends a timestamp
   to one file, run as an ordinary Bash command, appended exactly one line, and
-  `git reflog` has one entry per commit. A command that appears to have run twice
-  (a `git commit` reporting "nothing to commit" for a commit that exists) is a
+  `git reflog` has one entry per commit. A command that appears to have run twice --
+  a `git commit` reporting "nothing to commit" for a commit that exists -- is a
   second invocation of an idempotent command, not a lost one.
 
-**In practice**: `cargo test -p <crate> --lib` works and is the right scope while
-iterating. Prefer it, and prefer `--test <name>` for a specific integration target.
-The one limitation left is the handful of very large integration targets; everything
-else about Rust work, including running its tests, is available in this environment.
+**Two attempts to write this entry were wrong, and both are worth naming** because
+each looks like a conclusion:
+
+* **first**: "nothing that needs a link can be run". Too broad -- the 2026-09-10
+  entry below records a full workspace rebuild that passed with `jobs=1`.
+* **second**: "small targets are fine, only the very large ones need a response
+  file". Wrong too, and this one arrived dressed as evidence: `cargo test -p
+  firment-core --lib` reported 95 passed in 0.70s. **That binary was already
+  linked.** The moment a source edit forced a re-link, the same command failed the
+  same way.
+
+What is actually measured, on this date, for this crate:
+
+```
+cargo fmt --all -- --check                 ->  clean
+cargo clippy -p firment-core --lib --tests ->  clean        (checks; does not link)
+cargo check  -p firment-core --tests       ->  Finished     (type-checks the tests)
+cargo test   -p firment-core --lib         ->  link.exe failed
+                                               link: missing operand after '\377\376'
+CARGO_BUILD_JOBS=1 cargo test ... --lib    ->  the same failure
+```
+
+`\377\376` is a UTF-16 byte-order mark, and it reaches the linker at the front of the
+response file rustc writes when the argument list is long -- the test binaries here
+link 257 objects. **`jobs=1` is the workaround for the 2026-09-10 failure, which was
+a concurrency one; it does not touch this one.**
+
+**So on this date: work can be written, formatted, linted and type-checked here, and
+it cannot be tested.** `check --tests` is the strongest verification available, and it
+is weaker than a run -- do not call a change verified on the strength of it.
+
+**The trap both wrong versions fell into is already written above**, in the
+2026-09-10 section: *a cached green run is no evidence about the environment either
+way.* A suite that passes against a stale binary proves nothing. Compare
+`target/debug/deps/*.exe` timestamps before believing a run.
 
 ### What was measured on 2026-09-10 (this narrows the cause)
 
