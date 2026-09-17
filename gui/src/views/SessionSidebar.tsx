@@ -88,9 +88,9 @@ function buildRows(sessions: SessionSummaryDto[]): RailRow[] {
 
 /** The row's one judgement-free label: what kind of session this is. */
 function kindOf(session: SessionSummaryDto, depth: number): { status: ChipStatus; text: string } {
-  if (session.kind === 'mainline') return { status: 'ok', text: 'MAINLINE' };
+  if (session.kind === 'mainline') return { status: 'ok', text: 'mainline' };
   if (session.kind === 'branch' || depth > 0) return { status: 'neutral', text: '↳ BRANCH' };
-  return { status: 'neutral', text: 'NORMAL' };
+  return { status: 'neutral', text: 'normal' };
 }
 
 /**
@@ -272,7 +272,7 @@ function SessionRow({
         onClick={onSelect}
       >
         <span className={styles.top}>
-          <Chip status={kind.status} size="sm">
+          <Chip status={kind.status} size="sm" upper>
             {kind.text}
           </Chip>
           {/* The tooltip carries the whole first message, not the 30 characters
@@ -294,7 +294,7 @@ function SessionRow({
         </span>
         <span className={styles.meta}>
           {running ? (
-            <Chip status="running" size="sm" icon={Zap}>
+            <Chip status="running" size="sm" icon={Zap} upper>
               running
             </Chip>
           ) : null}

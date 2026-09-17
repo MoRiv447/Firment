@@ -80,11 +80,15 @@ describe('SessionTree', () => {
 
   it('labels the mainline as such whatever its kind field says', () => {
     setup();
-    // 'MAINLINE' is also a filter label, so this asks the row, not the page.
+    // 'mainline' is also a filter label, so this asks the row, not the page. The
+    // capitals are a CSS rule now (`data-upper`), and jsdom does not apply
+    // `text-transform` -- so the text asserted here is the source text, and the
+    // attribute is what proves the rule is on.
     const mainline = screen.getByText('sensor drift hunt').closest('[data-kind]');
-    expect(mainline).toHaveTextContent('MAINLINE');
+    expect(mainline).toHaveTextContent('mainline');
+    expect(mainline!.querySelector('[data-upper]')).not.toBeNull();
     const branch = screen.getByText('pwm breathing').closest('[data-kind]');
-    expect(branch).toHaveTextContent('BRANCH');
+    expect(branch).toHaveTextContent('branch');
   });
 
   it('falls back to the id when a session has no preview yet', () => {

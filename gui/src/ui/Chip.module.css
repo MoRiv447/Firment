@@ -27,6 +27,12 @@
   text-overflow: ellipsis;
 }
 
+/* A label: the capitals are a rule here, not something a caller typed. */
+.chip[data-upper] {
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+}
+
 .chip[data-mono='true'] {
   font-family: var(--ff-mono);
 }

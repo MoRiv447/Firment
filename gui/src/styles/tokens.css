@@ -185,6 +185,11 @@
    * each. `--fs-body` is the default: an element that sets nothing is body.
    */
   --fs-micro: 10px;    /* uppercase micro-labels, counters */
+  /* Tracking. A label is tracked OUT and the wordmark is tracked IN -- two
+     decisions, not one value used twice. 0.12em is Supabase's micro-label
+     spacing, which is where the "instrument panel" reading comes from. */
+  --tracking-label: 0.12em;
+  --tracking-display: -0.02em;
   --fs-meta: 11px;     /* chips, tags, tab labels, timestamps, mono paths */
   --fs-minor: 12px;    /* secondary text: tool args, session meta, status bar */
   --fs-body: 13px;     /* DEFAULT: prose, inputs, log lines, card titles */

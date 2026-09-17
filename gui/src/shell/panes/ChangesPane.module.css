@@ -113,6 +113,7 @@
   font-size: var(--fs-meta);
   font-weight: var(--fw-label);
   text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
   white-space: nowrap;
 }
 

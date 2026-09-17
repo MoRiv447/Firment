@@ -104,9 +104,10 @@ export function SessionTree({
           <div key={s.id} className={styles.row} data-current={s.id === currentId} data-kind={s.kind}>
             <Chip
               size="sm"
+              upper
               status={s.kind === 'mainline' ? 'attention' : s.kind === 'branch' ? 'running' : 'ok'}
             >
-              {s.isMainline ? 'MAINLINE' : s.kind.toUpperCase()}
+              {s.isMainline ? 'mainline' : s.kind}
             </Chip>
             <span className={styles.preview}>{s.preview || s.id.slice(0, 8)}</span>
             {s.parent_session && (

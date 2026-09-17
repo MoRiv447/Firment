@@ -32,6 +32,7 @@ export function Chip({
   icon,
   mono = false,
   size = 'md',
+  upper = false,
   children,
   title,
 }: {
@@ -40,6 +41,12 @@ export function Chip({
   /** Monospace: a chip holding a path, a branch, a commit sha. */
   mono?: boolean;
   size?: 'sm' | 'md';
+  /**
+   * A label rather than a token: uppercase, with the tracking that makes caps
+   * readable at 10px. Not automatic for `sm` -- a small chip is just as likely to
+   * hold a path, and uppercasing a path is a spelling mistake.
+   */
+  upper?: boolean;
   children: ReactNode;
   title?: string;
 }) {
@@ -49,6 +56,7 @@ export function Chip({
       data-status={status}
       data-size={size === 'sm' ? 'sm' : undefined}
       data-mono={mono || undefined}
+      data-upper={upper || undefined}
       title={title}
       className={styles.chip}
     >

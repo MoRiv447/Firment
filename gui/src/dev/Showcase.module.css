@@ -99,7 +99,7 @@
 .t28 {
   font-size: var(--fs-display);
   font-weight: var(--fw-hero);
-  letter-spacing: -0.02em;
+  letter-spacing: var(--tracking-display);
 }
 .t14 {
   font-size: var(--fs-ui);

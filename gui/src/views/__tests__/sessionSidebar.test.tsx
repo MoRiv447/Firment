@@ -124,10 +124,10 @@ describe('session tree', () => {
       1, 1, 1, 1,
     ]);
     expect(rows.map(kindOf)).toEqual([
-      { text: 'MAINLINE', status: 'ok' },
+      { text: 'mainline', status: 'ok' },
       { text: '↳ BRANCH', status: 'neutral' },
-      { text: 'NORMAL', status: 'neutral' },
-      { text: 'NORMAL', status: 'neutral' },
+      { text: 'normal', status: 'neutral' },
+      { text: 'normal', status: 'neutral' },
     ]);
   });
 });
