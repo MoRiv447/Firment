@@ -31,6 +31,44 @@ config file would fight the thing that already knows the answer.
 
 ## Colour
 
+### The palette is Radix's
+
+Every value below comes from [`@radix-ui/colors`](https://www.radix-ui.com/colors)
+— the same scales Supabase builds on. Each hue has 12 steps with a documented role,
+and the dark variant of each step is designed rather than derived, which is why the
+two schemes are genuinely two decisions instead of one inverted.
+
+| Step | Role | Our token |
+|---|---|---|
+| 1 | app background | `--bg` |
+| 2 | subtle background | `--surface` |
+| 3 | UI element background | `--surface-raised`, `*-bg` for a badge |
+| 4 | hovered element | `--hover`, a diff line |
+| 5 | **active / selected** | `--selection` |
+| 6 | subtle borders | `--line` |
+| 7 | control borders | `--outline`, `--success-border` |
+| 8 | hovered border, focus ring | `--focus-ring`, the dark brand fill |
+| 9 | solid fill (highest chroma) | `--brand-acid` in light |
+| 10 | hovered solid | button hover |
+| 11 | low-contrast text | `--muted`, `--brand-ink` |
+| 12 | high-contrast text | `--ink`, the state inks |
+
+Three consequences worth knowing before reading the rest of this file:
+
+* **A state ink sits on step 12, not 11.** Radix guarantees step 11 on step *2* of
+  the same scale; our state inks sit on steps 3 and 4, where 11 measured below the
+  4.5 floor (success 4.21, diff-added 3.93).
+* **The dark brand fill is step 8, and its label is white.** Step 9 is the scale's
+  brightest and glows as a large fill on a near-black ground; step 8 with white
+  measures 4.57:1. Nothing clears 4.5 on step 9 — white is 3.00 there.
+* **Only the light scheme casts shadows.** In dark the whole ladder is `none`, and
+  separation is the hairline plus the surface step: a black shadow on a near-black
+  ground is invisible and still costs a composited layer.
+
+Values are lifted out of the package by a script rather than retyped — the scales
+live under `.dark`/`.light` and this app switches on `:root[data-scheme]`, so they
+cannot be imported as they are.
+
 Neutral grounds and neutral text, with the brand green in exactly four places:
 the logo, the primary CTA, progress, and the current step. An interface tinted
 green makes the diff's own red and green harder to read, and Firment's screens
@@ -47,7 +85,7 @@ ratio below names the ground it was measured against, and
 |---|---|---|---|
 | `bg` | `#0F0F12` | `#F7F7F5` | — |
 | `surface` | `#18181B` | `#FFFFFF` | 1.07:1 vs `bg` — separation comes from the hairline, not the fill |
-| `surfaceRaised` | `#1F1F23` | `#FFFFFF` | distinguished by border and shadow |
+| `surfaceRaised` | **gray-3** | **gray-3** | a real step above `surface` in both schemes |
 | `ink` | `#E4E4E7` | `#18181B` | 17.72:1 on `surface`, 16.52:1 on `bg` |
 | `muted` | `#A1A1AA` | `#6B6B73` | 5.28:1 on `surface`, **4.92:1 on `bg`**, 4.55:1 on `hover` |
 | `line` | `#2A2A2F` | `#E4E4E7` | 1.18:1 — a hairline, not the 3:1 non-text threshold |
@@ -62,12 +100,12 @@ put a muted label under the line). One point of headroom is what lets `muted` si
 on a neutral wash and still pass, and "4.51:1 on the page background" is not a
 value anyone should have to reason about twice.
 
-### Brand vs status green — two different colours on purpose
+### Brand vs states — separate scales, not a separation rule
 
 | Token | Dark | Light | Light ratio |
 |---|---|---|---|
-| `brandAcid` | `#B4F779` | `#B4F779` | **1.27:1** — fill only |
-| `onAcid` | `#15200D` | `#15200D` | 13.28:1 **on `brandAcid`** |
+| `brandAcid` | **cyan-8** | **cyan-11** | the fill; its ink is white |
+| `onAcid` | `#FFFFFF` | `#FFFFFF` | 4.57:1 (dark) / 4.76:1 (light) |
 | `brandInk` | `#3B6D11` | `#3B6D11` | 6.21:1 on `surface`, 5.79:1 on `bg`; also the light scheme's `selection` fill |
 
 `brandAcid` is 85° (acid lime); the success green is 145° (true green). They are
@@ -124,9 +162,9 @@ header. They are counted the same way the TUI counts them
 | `onSelection` | `#15200D` | `#FFFFFF` | text and icons **inside** a selected row: 13.28:1 / 6.21:1 |
 | `focusRing` | `#B4F779` | `#3B6D11` | keyboard focus |
 | `outline` | `#3F3F46` | `#D4D4D8` | the border on a card, chip or control |
-| `shadowSm` | `0 1px 2px rgba(0,0,0,.32)` | `0 1px 2px rgba(16,24,40,.06)` | raised rows, the selected session |
-| `shadowMd` | `0 4px 12px rgba(0,0,0,.36)` | `0 4px 12px rgba(16,24,40,.08)` | cards that need to lift |
-| `shadowLg` | `0 12px 32px rgba(0,0,0,.44)` | `0 12px 32px rgba(16,24,40,.12)` | popovers, dropdowns, modals |
+| `shadowSm` | `none` | `0 1px 2px rgba(16,24,40,.06)` | a control that means "press me" |
+| `shadowMd` | `none` | `0 4px 12px rgba(16,24,40,.08)` | transient overlays |
+| `shadowLg` | `none` | `0 12px 32px rgba(16,24,40,.12)` | what dims the page behind it |
 
 **The selected row is a pair, not the brand colour.** The dark scheme can select
 with the acid because `onAcid` on it is 13.28:1; the light scheme cannot, because
@@ -219,6 +257,15 @@ this file is for: a fill and its ink have to be a measured pair, or they are
 accidentally correct in one scheme and wrong in the other.
 
 ## Type
+
+Two tracking tokens, because they are two decisions: `--tracking-label` (0.12em,
+positive) for uppercase micro-labels — a session kind, a pin, a status — and
+`--tracking-display` (-0.02em, negative) for the wordmark. One value used for both
+would have been a coincidence wearing a system's clothes.
+
+Uppercase is a rule rather than a typed string: `Chip` takes `upper`, which sets
+`text-transform` and the label tracking in CSS. It is scoped to labels — a small
+chip is just as likely to hold a path, and `PA5` is a token before it is a word.
 
 | Token | Stack |
 |---|---|
