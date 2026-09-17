@@ -37,8 +37,16 @@
   text-overflow: ellipsis;
 }
 
-/* An icon-only button is a square, whatever the icon is. */
-.root[data-icon-only='true'] {
+/*
+ * An icon-only button is a square, whatever the icon is.
+ *
+ * The selector is doubled on purpose. `.root[data-icon-only]` and every
+ * `.root[data-tier=...]` rule below it have the same specificity, so a tier that
+ * sets `padding` would beat this one by source order alone -- and the button would
+ * stop being square and stop centring its glyph, silently. Nothing does that today;
+ * this is so that nothing can.
+ */
+.root.root[data-icon-only='true'] {
   aspect-ratio: 1;
   padding: 0;
 }

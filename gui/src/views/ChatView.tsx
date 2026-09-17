@@ -227,11 +227,16 @@ export function ChatView({
       </div>
       <div className={styles.composer}>
         <div className={styles.inputRow}>
+          {/* One row by default: a two-row field beside a 36px button reads as a
+              step, and the field grows as you type anyway. The shortcuts moved to
+              the `title` -- a placeholder that wraps onto a second line is a
+              paragraph inside a text field. */}
           <TextArea
             aria-label="Ask the agent"
-            placeholder="Ask the agent… (Enter to send, Shift+Enter for newline)"
+            placeholder="Ask the agent…"
+            title="Enter to send, Shift+Enter for a newline"
             value={input}
-            rows={2}
+            rows={1}
             maxRows={8}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
