@@ -93,18 +93,11 @@ machine — read the "why" so you don't re-create the problem.
   do NOT `cargo clean` (it will hit the same wall and wastes the whole build
   cache).
 
-### What was measured on 2026-09-17: a fresh link of `firment-core` fails on a BOM
+### And on 2026-09-17: a fresh link of `firment-core` fails on a BOM
 
-**Two causes were checked and are not it**, so nobody re-derives them:
-
-* **It is not a general file-write problem.** Four source files written that evening
-  and six objects under `target/debug` all begin with normal bytes; there is no BOM
-  anywhere on disk. The BOM exists only inside the transient response file.
-* **It is not the sandbox running commands twice.** A probe that appends a timestamp
-  to one file, run as an ordinary Bash command, appended exactly one line, and
-  `git reflog` has one entry per commit. A command that appears to have run twice --
-  a `git commit` reporting "nothing to commit" for a commit that exists -- is a
-  second invocation of an idempotent command, not a lost one.
+Same family as the entry below -- the environment, not the code -- and it belongs
+under the same heading rather than beside it, because the *cause* and the *fixes* are
+already written there and would only be repeated here.
 
 **Two attempts to write this entry were wrong, and both are worth naming** because
 each looks like a conclusion:
@@ -137,9 +130,19 @@ a concurrency one; it does not touch this one.**
 it cannot be tested.** `check --tests` is the strongest verification available, and it
 is weaker than a run -- do not call a change verified on the strength of it.
 
-**The trap both wrong versions fell into is already written above**, in the
-2026-09-10 section: *a cached green run is no evidence about the environment either
-way.* A suite that passes against a stale binary proves nothing. Compare
+Two causes were checked and are *not* it, so nobody re-derives them:
+
+* **Not a general file-write problem.** Four source files written that evening and six
+  objects under `target/debug` all begin with normal bytes; there is no BOM anywhere on
+  disk. The BOM exists only inside the transient response file.
+* **Not the sandbox running commands twice.** A probe appending one timestamp per
+  execution appended exactly one line, and `git reflog` has one entry per commit. A
+  command that *looks* like it ran twice -- a `git commit` reporting "nothing to
+  commit" for a commit that exists -- is a second invocation of an idempotent command,
+  not a lost one.
+
+Both wrong versions above walked into the trap named in the previous entry: **a cached
+green run is no evidence about the environment either way.** Compare
 `target/debug/deps/*.exe` timestamps before believing a run.
 
 ### What was measured on 2026-09-10 (this narrows the cause)
