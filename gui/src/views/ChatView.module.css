@@ -199,7 +199,10 @@
 
 .inputRow {
   display: flex;
-  align-items: flex-end;
+  /* Centred, not bottom-aligned. With a one-row field the two are nearly the same
+     height, so centring is what makes them read as one row instead of a small
+     control parked in one corner of a taller box. */
+  align-items: center;
   gap: var(--sp-2);
 }
 

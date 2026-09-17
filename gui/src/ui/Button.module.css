@@ -47,8 +47,28 @@
  * this is so that nothing can.
  */
 .root.root[data-icon-only='true'] {
+  /* Sized explicitly rather than derived. `aspect-ratio` needs a definite height to
+     work from, and if the height token ever fails to resolve the box collapses to
+     whatever its content and padding say -- which is a rectangle, and the glyph
+     stops being centred in it. */
+  width: var(--h-input);
+  height: var(--h-input);
+  flex: none;
   aspect-ratio: 1;
   padding: 0;
+  justify-content: center;
+}
+
+/*
+ * An icon takes a stronger ink than text does.
+ *
+ * `--muted` clears 9:1 on the dark ground, which is comfortable by any contrast
+ * measure -- but those measures are written for text, and a 1.5px stroke at 16px is
+ * not text: it reads faint next to a filled box, whatever its ratio. Icons take the
+ * body ink, and the hover wash is what marks the pointer.
+ */
+.root.root[data-icon-only='true'][data-tier='ghost'] {
+  color: var(--ink);
 }
 
 .root[data-full='true'] {
