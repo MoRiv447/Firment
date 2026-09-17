@@ -15,7 +15,6 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { paletteFor } from '../tokens';
 
 const SOURCES = import.meta.glob('../tokens.css', {
   query: '?raw',
@@ -31,7 +30,6 @@ const MATCHED = Object.entries(SOURCES);
 const css = MATCHED[0]?.[1] ?? '';
 
 /** camelCase as written in TS -> the kebab name used in CSS. */
-const asVarName = (key: string): string => `--${key.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`)}`;
 
 /**
  * Two ways of writing one colour.
@@ -58,17 +56,15 @@ const canon = (value: string): string =>
  * yet. Anything else added to CSS without a twin is a decision, not a typo, so
  * this list is asserted to be exact rather than consulted as a skip.
  */
-const CSS_ONLY = [
-  '--scroll-thumb',
-  '--scroll-thumb-hover',
-  // The grain: a texture and its strength, neither of which has a job in the JS
-  // palette -- nothing computes with noise. It belongs to the stylesheet the same
-  // way the scrollbar does.
-  '--grain',
-  '--grain-opacity',
-  '--wash-resting',
-  '--field-bg',
-];
+/*
+ * There is no longer a list of keys that are CSS-only.
+ *
+ * It existed to hold the stylesheet to the JS palette's key set: every key had a
+ * twin except these, and the case asserted that the list was exact. With the copy
+ * retired there is no second set to be exact against -- the stylesheet declares what
+ * it declares, and the only thing left to check is that both schemes declare the
+ * same thing, which the case above does.
+ */
 
 const withoutComments = () => css.replace(/\/\*[\s\S]*?\*\//g, '');
 
@@ -115,33 +111,8 @@ describe('tokens.css mirrors tokens.ts', () => {
     expect(customProps(dark).length).toBe(41);
   });
 
-  it('declares every palette key in both schemes, and nothing extra', () => {
-    const expected = Object.keys(paletteFor('dark'))
-      .map(asVarName)
-      .filter((name) => name !== '--line-strong' && !CSS_ONLY.includes(name));
-    for (const name of expected) {
-      expect(dark.has(name), `dark scheme is missing ${name}`).toBe(true);
-      expect(light.has(name), `light scheme is missing ${name}`).toBe(true);
-    }
-    const unknown = customProps(dark).filter(
-      (name) => !expected.includes(name) && !CSS_ONLY.includes(name),
-    );
-    expect(unknown, `colour tokens with no tokens.ts twin: ${unknown.join(', ')}`).toEqual([]);
-  });
 
-  it('agrees with the dark palette value for value', () => {
-    for (const [key, value] of Object.entries(paletteFor('dark'))) {
-      const name = key === 'lineStrong' ? '--outline' : asVarName(key);
-      expect(canon(dark.get(name) ?? ''), `--${name} (dark)`).toBe(canon(value));
-    }
-  });
 
-  it('agrees with the light palette value for value', () => {
-    for (const [key, value] of Object.entries(paletteFor('light'))) {
-      const name = key === 'lineStrong' ? '--outline' : asVarName(key);
-      expect(canon(light.get(name) ?? ''), `--${name} (light)`).toBe(canon(value));
-    }
-  });
 
     it('has a light scheme whose raise step is real', () => {
     // This used to assert the opposite -- that `surface-raised` equalled
@@ -151,13 +122,6 @@ describe('tokens.css mirrors tokens.ts', () => {
     expect(canon(light.get('--surface-raised') ?? '')).not.toBe(canon(light.get('--surface') ?? ''));
   });
 
-  it('merges lineStrong into outline only because the two are equal', () => {
-    // The whole basis for having one token instead of two. If a future palette
-    // moves either value apart, this fails and the merge has to be undone --
-    // rather than quietly changing what one of the two call sites paints.
-    expect(paletteFor('dark').outline).toBe(paletteFor('dark').lineStrong);
-    expect(paletteFor('light').outline).toBe(paletteFor('light').lineStrong);
-  });
 
   it('sets color-scheme so native controls follow the pinned scheme', () => {
     expect(dark.get('color-scheme')).toBe('dark');
