@@ -93,6 +93,34 @@ machine — read the "why" so you don't re-create the problem.
   do NOT `cargo clean` (it will hit the same wall and wastes the whole build
   cache).
 
+### What was measured on 2026-09-17: `check` works, `test` does not
+
+Different failure, same family, and worth knowing because it changes what an agent
+can usefully do in a session:
+
+```
+cargo check -p firment-core --tests     ->  Finished in 27.52s      (works)
+cargo test  -p firment-core session     ->  linking with `link.exe` failed
+                                            link: missing operand after '\377\376'
+```
+
+`\377\376` is a UTF-16 LE byte-order mark, and it reaches `link.exe` at the front of
+the response file it is handed -- so the *linker* chokes on an argument list that was
+written with a BOM. Nothing about the source is wrong: `check` type-checks the whole
+crate **including the tests** and passes, and the same `target/` directory accepted
+every write that check needed.
+
+**What this means in practice**, so nobody re-derives it:
+
+* **`cargo check` is usable**, and `cargo check --tests` type-checks test code too.
+  Rust work can be written and validated to that level.
+* **Anything needing a link is not** — `cargo test`, `cargo build`, and anything the
+  GUI's Tauri build shells out to. A feature that must be *run* cannot be landed in
+  such a session, because "it compiles" is not the gate this repo uses.
+* Do not read it as a code break, and do not go looking for it in the diff. If a
+  session needs tests to pass, the environment has to be restarted or the BOM source
+  found; retrying cargo, deleting locks and rebuilding from clean all miss the point.
+
 ### What was measured on 2026-09-10 (this narrows the cause)
 
 The mechanism is WorkBuddy's file-operation shims, injected into the *shell
