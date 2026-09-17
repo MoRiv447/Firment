@@ -52,7 +52,11 @@
 /* ------------------------------------------------------------------ */
 
 .root[data-tier='secondary'] {
+  /* Outline, with no fill of its own. The wash went in when nothing else on the
+     screen was solid and a white rectangle read as no button at all; with one
+     real solid on the page, an outline is what "second" looks like. */
   border: 1px solid var(--outline);
+  background: transparent;
   /* A fill, not a ghost. `--surface` made it a white rectangle with a grey ring,
      which next to another white rectangle is two buttons and no hierarchy. The
      wash is the same one a hovered row uses, so it reads as "a control" without

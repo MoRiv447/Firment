@@ -12,8 +12,12 @@
   flex-direction: column;
   box-sizing: border-box;
   width: 100%;
-  border: 1px solid var(--outline);
-  border-radius: var(--r-panel);
+  /* No border and no radius: a rounded outlined box the height of an input reads
+     as a field, and the transcript is not a form. A tool call is a line of
+     machinery in a column of prose, so it gets a surface and nothing else -- the
+     reference for this is Zed, where tool calls are quiet one-liners. */
+  border: 0;
+  border-radius: 0;
   background: var(--surface);
   color: var(--ink);
   font-family: var(--ff-sans);

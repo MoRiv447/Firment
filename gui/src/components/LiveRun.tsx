@@ -82,7 +82,7 @@ export function LiveRun({
           // worth a permanent line.
           <span className={styles.current}>{current.name}</span>
         ) : (
-          <span className={styles.steps}>{sorted.length} steps</span>
+          <span className={styles.steps}>{sorted.length} step{sorted.length === 1 ? '' : 's'}</span>
         )}
         {seconds !== null && <span className={styles.steps}>{seconds}s</span>}
         {sorted.length > 1 && (

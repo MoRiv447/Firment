@@ -64,9 +64,9 @@ const dark = {
    * step. It is ~1.8:1 on a light ground, so it is a highlighter, never a text
    * or icon colour; on a dark ground the text that sits ON it is `onAcid`.
    */
-  brandAcid: '#00a2c7',
+  brandAcid: '#11809c',
   /** Text/icon colour for content sitting on `brandAcid`. 13.28:1 on it. */
-  onAcid: '#0b161a',
+  onAcid: '#ffffff',
   /** Brand green dark enough to be readable AS text on a light ground. */
   brandInk: '#4ccce6',
 

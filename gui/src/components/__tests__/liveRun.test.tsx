@@ -39,7 +39,7 @@ describe('LiveRun', () => {
     // The card body is not in the DOM until the row is opened: the point of the
     // fold is that a forty-step turn costs one row.
     expect(container.textContent).not.toContain('contents of the file');
-    expect(screen.getByText('1 steps')).toBeInTheDocument();
+    expect(screen.getByText('1 step')).toBeInTheDocument();
   });
 
   it('opens to the same cards it hid', () => {
@@ -50,7 +50,7 @@ describe('LiveRun', () => {
         ]}
       />,
     );
-    fireEvent.click(screen.getByText('1 steps'));
+    fireEvent.click(screen.getByText('1 step'));
     expect(container.textContent).toContain('contents of the file');
   });
 

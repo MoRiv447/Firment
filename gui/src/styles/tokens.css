@@ -37,8 +37,8 @@
   --outline: #484848;                /* control edges; also lineStrong */
 
   /* Brand. Acid is a highlighter, never text: ~1.8:1 on a light ground. */
-  --brand-acid: #00a2c7;
-  --on-acid: #0b161a;                /* 13.28:1 on brand-acid */
+  --brand-acid: #11809c;
+  --on-acid: #ffffff;                /* 4.57:1 on cyan-8; white on cyan-9 is 3.00 */
   --brand-ink: #4ccce6;              /* green that is readable AS text */
 
   /* Status green: a different hue from the brand on purpose (145deg vs 85deg). */

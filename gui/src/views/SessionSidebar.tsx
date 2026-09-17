@@ -165,17 +165,15 @@ export function SessionSidebar({
     <div data-ui="session-rail" className={styles.root}>
       <div className={styles.head}>
         {/*
-          * `primary`, and the rule it follows is per region rather than per screen:
-          * this is the action the rail is for, and Send is the action the composer
-          * is for. They never compete -- demoting this one to secondary left two
-          * white buttons with grey rings, which is no hierarchy at all.
-          *
-          * It keeps no `edge`: the cut is the composer's primary action wearing the
-          * signature, and one of those is enough.
+          * Outline again, and this one is a reversal of my own call: the rule is not
+          * "one solid per region", it is "one solid per *context*, and it is the action
+          * the context is for". A session is for sending; New is pressed once and
+          * then not again, so a solid button on it pulls the eye to the least-used
+          * corner of the screen.
           */}
         <TipButton
           tipText="New agent session, in the working directory below"
-          tier="primary"
+          tier="secondary"
           icon={Zap}
           onClick={() => onNew('agent')}
         >

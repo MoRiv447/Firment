@@ -85,7 +85,7 @@ describe('text is readable on every ground it is used on', () => {
     ['dark muted on bg', dark.muted, dark.bg, 9.11],
     ['dark successInk on successBg', dark.successInk, dark.successBg, 11.45],
     ['onAcid on brandAcid light', light.onAcid, light.brandAcid, 4.76],
-    ['onAcid on brandAcid dark', dark.onAcid, dark.brandAcid, 6.11],
+    ['onAcid on brandAcid dark', dark.onAcid, dark.brandAcid, 4.57],
     ['selection ink on selection light', light.onSelection, light.selection, 12.32],
     ['selection ink on selection dark', dark.onSelection, dark.selection, 9.09],
   ];

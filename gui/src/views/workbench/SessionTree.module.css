@@ -55,7 +55,7 @@
   border-radius: var(--r-control);
 }
 
-/* The selection pair, not the brand: a 1px acid border on a light ground is
+/* The selection pair, not the brand: a 1px brand border on a light ground is
    1.27:1, so the selected card and its neighbours were the same colour. */
 .row[data-current='true'] {
   border-color: var(--selection);
