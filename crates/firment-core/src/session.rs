@@ -56,6 +56,13 @@ pub struct Session {
     pub created_at: u64,
     pub updated_at: u64,
     pub messages: Vec<ChatMessage>,
+    /// What the user called this session, if they called it anything.
+    ///
+    /// `None` is the normal state: the name shown is derived from the first
+    /// message, so a session is never nameless and is never named by whoever
+    /// happened to render it. `Some` is an explicit rename, and clearing it
+    /// (setting whitespace) hands the row back to the derived name.
+    pub title: Option<String>,
 }
 
 impl Session {
@@ -74,6 +81,7 @@ impl Session {
             created_at: now,
             updated_at: now,
             messages: Vec::new(),
+            title: None,
         }
     }
 
@@ -98,6 +106,38 @@ impl Session {
                 }
             })
             .unwrap_or_else(|| "(empty)".to_string())
+    }
+
+    /// The name to show: what the user called it, else what it says, else that
+    /// it is new.
+    ///
+    /// The last case is the one that was being answered four different ways --
+    /// the rail fell back to an id, the CLI to nothing, the GUI to a literal.
+    /// A session with nothing in it is a new session, and that is a fact about
+    /// the session rather than about the client.
+    pub fn display_name(&self) -> String {
+        if let Some(title) = self
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+        {
+            return title.to_string();
+        }
+        let derived = self.title();
+        if self.messages.is_empty() || derived == "(empty)" {
+            "New session".to_string()
+        } else {
+            derived
+        }
+    }
+
+    /// Rename, or clear the name with an empty one.
+    pub fn set_title(&mut self, title: Option<String>) {
+        self.title = title
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty());
+        self.updated_at = now_secs();
     }
 }
 
@@ -148,6 +188,15 @@ struct MetaLine {
     parent_session: Option<String>,
     #[serde(default)]
     session_kind: SessionKind,
+    /// An explicit rename. Absent in every file written before this existed,
+    /// which is what `default` is for.
+    #[serde(default)]
+    title: Option<String>,
+    /// The name derived from the first message at write time, so `list()` can
+    /// show a row without opening the session. Kept separate from `title` so a
+    /// rename does not bake itself into the derivation.
+    #[serde(default)]
+    preview: String,
     created_at: u64,
     updated_at: u64,
 }
@@ -305,6 +354,7 @@ impl SessionStore {
             created_at: meta.created_at,
             updated_at: meta.updated_at,
             messages,
+            title: meta.title,
         };
         if model != meta.model {
             // deepseek-chat / deepseek-reasoner were deprecated on 2026-07-24;
@@ -335,7 +385,20 @@ impl SessionStore {
                 updated_at: meta.updated_at,
                 model: migrate_legacy_model(&meta.model),
                 cwd: meta.cwd,
-                preview: String::new(),
+                // What the row shows: the rename if there is one, else the name
+                // derived when the file was written, else that it is new. The
+                // core answers this so that the three clients cannot answer it
+                // three ways.
+                preview: meta
+                    .title
+                    .filter(|t| !t.trim().is_empty())
+                    .unwrap_or_else(|| {
+                        if meta.preview.is_empty() {
+                            "New session".to_string()
+                        } else {
+                            meta.preview.clone()
+                        }
+                    }),
                 kind: meta.session_kind,
                 parent_session: meta.parent_session,
             });
@@ -538,6 +601,8 @@ pub(crate) fn normalize_role_alternation(messages: &mut Vec<ChatMessage>) {
 fn serialize_session(session: &Session) -> Result<String, SessionError> {
     let meta = MetaLine {
         kind: "meta".to_string(),
+        title: session.title.clone(),
+        preview: session.title(),
         id: session.id.clone(),
         cwd: session.cwd.clone(),
         provider: session.provider.clone(),
@@ -899,5 +964,97 @@ mod tests {
             |m| matches!(m, ChatMessage::User { content } if content.contains("传感器总线选")),
         );
         assert!(has_cjk_inherit, "CJK decision inheritance failed");
+    }
+
+    /// The name is decided here, so three clients cannot decide it three ways.
+    #[test]
+    fn a_session_with_nothing_said_in_it_is_a_new_session() {
+        let s = Session::new(PathBuf::from("C:/work"), "p", "m");
+        assert_eq!(s.title, None);
+        assert_eq!(s.display_name(), "New session");
+    }
+
+    #[test]
+    fn the_name_comes_from_the_first_user_message() {
+        let mut s = Session::new(PathBuf::from("C:/work"), "p", "m");
+        s.push(ChatMessage::User {
+            content: "  flash the board and tell me what happens  ".to_string(),
+        });
+        assert_eq!(s.display_name(), "flash the board and tell me what happens");
+    }
+
+    /// A rename wins, and clearing it hands the row back rather than blanking it.
+    #[test]
+    fn a_rename_wins_and_a_blank_one_gives_the_name_back() {
+        let mut s = Session::new(PathBuf::from("C:/work"), "p", "m");
+        s.push(ChatMessage::User {
+            content: "first".to_string(),
+        });
+        s.set_title(Some("  JTAG bring-up  ".to_string()));
+        assert_eq!(s.display_name(), "JTAG bring-up");
+        s.set_title(Some("   ".to_string()));
+        assert_eq!(s.display_name(), "first");
+        assert_eq!(s.title, None, "whitespace is not a name");
+    }
+
+    /// The row reads it without opening the session, so it has to be on the meta
+    /// line -- and a load has to bring the rename back with it.
+    #[test]
+    fn the_name_survives_a_save_and_a_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().join("sessions"));
+        let mut s = Session::new(PathBuf::from("C:/work"), "p", "m");
+        s.push(ChatMessage::User {
+            content: "first".to_string(),
+        });
+        s.set_title(Some("JTAG bring-up".to_string()));
+        store.save(&s).unwrap();
+
+        let listed = store.list().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].preview, "JTAG bring-up");
+
+        let reloaded = store.load(&s.id).unwrap();
+        assert_eq!(reloaded.title.as_deref(), Some("JTAG bring-up"));
+        assert_eq!(reloaded.display_name(), "JTAG bring-up");
+    }
+
+    /// An old file has neither field, and must still name itself from its content.
+    #[test]
+    fn a_file_written_before_the_fields_existed_still_names_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().join("sessions"));
+        let mut s = Session::new(PathBuf::from("C:/work"), "p", "m");
+        s.push(ChatMessage::User {
+            content: "an older session".to_string(),
+        });
+        store.save(&s).unwrap();
+
+        // strip the two new keys, as a file from before them would be
+        let file = store.path_for(&s.id);
+        let text = fs::read_to_string(&file).unwrap();
+        let stripped: String = text
+            .lines()
+            .map(|line| {
+                if line.starts_with("{\"type\":\"meta\"") {
+                    let mut value: serde_json::Value = serde_json::from_str(line).unwrap();
+                    if let Some(obj) = value.as_object_mut() {
+                        obj.remove("title");
+                        obj.remove("preview");
+                    }
+                    serde_json::to_string(&value).unwrap()
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&file, stripped).unwrap();
+
+        assert_eq!(store.list().unwrap()[0].preview, "New session");
+        assert_eq!(
+            store.load(&s.id).unwrap().display_name(),
+            "an older session"
+        );
     }
 }

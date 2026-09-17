@@ -112,6 +112,14 @@ command line that begins with a UTF-16 byte-order mark (`\377\376`), so it repor
 missing operand. Targets that fit on a command line link normally, which is why the
 library target passes.
 
+**And the pass I first called evidence was a cached binary.** `cargo test --lib`
+reported 95 passed in 0.70s *because that binary was already linked* from an earlier
+session; the moment a source change forces a re-link, it fails the same way. So the
+rule is not "small targets are fine" -- it is **any fresh link of this crate fails**,
+and a test run only works while nothing has changed. Check `target/debug/deps/*.exe`
+timestamps if a run looks suspicious: a passing test suite with a stale binary proves
+nothing.
+
 Two things were also checked and are *not* the cause, so nobody re-derives them:
 
 * **It is not a general file-write problem.** Four files written tonight and six
