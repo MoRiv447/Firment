@@ -93,33 +93,40 @@ machine — read the "why" so you don't re-create the problem.
   do NOT `cargo clean` (it will hit the same wall and wastes the whole build
   cache).
 
-### What was measured on 2026-09-17: `check` works, `test` does not
+### What was measured on 2026-09-17: `--lib` links, one integration target does not
 
-Different failure, same family, and worth knowing because it changes what an agent
-can usefully do in a session:
+**This entry first said "nothing that needs a link can be run". That was wrong**, and
+the correction matters more than the symptom:
 
 ```
-cargo check -p firment-core --tests     ->  Finished in 27.52s      (works)
+cargo check -p firment-core --tests     ->  Finished in 27.52s          (works)
+cargo test  -p firment-core --lib       ->  95 passed; 0 failed; 0.70s  (works)
 cargo test  -p firment-core session     ->  linking with `link.exe` failed
                                             link: missing operand after '\377\376'
 ```
 
-`\377\376` is a UTF-16 LE byte-order mark, and it reaches `link.exe` at the front of
-the response file it is handed -- so the *linker* chokes on an argument list that was
-written with a BOM. Nothing about the source is wrong: `check` type-checks the whole
-crate **including the tests** and passes, and the same `target/` directory accepted
-every write that check needed.
+The failure is not "linking is broken". It is **one integration test target whose link
+command line is long enough that rustc has to pass the arguments in a response file**
+-- `config_and_deepseek` links 257 objects -- and `link.exe` reads that file as a
+command line that begins with a UTF-16 byte-order mark (`\377\376`), so it reports a
+missing operand. Targets that fit on a command line link normally, which is why the
+library target passes.
 
-**What this means in practice**, so nobody re-derives it:
+Two things were also checked and are *not* the cause, so nobody re-derives them:
 
-* **`cargo check` is usable**, and `cargo check --tests` type-checks test code too.
-  Rust work can be written and validated to that level.
-* **Anything needing a link is not** — `cargo test`, `cargo build`, and anything the
-  GUI's Tauri build shells out to. A feature that must be *run* cannot be landed in
-  such a session, because "it compiles" is not the gate this repo uses.
-* Do not read it as a code break, and do not go looking for it in the diff. If a
-  session needs tests to pass, the environment has to be restarted or the BOM source
-  found; retrying cargo, deleting locks and rebuilding from clean all miss the point.
+* **It is not a general file-write problem.** Four files written tonight and six
+  objects under `target/debug` all begin with normal bytes; there is no BOM anywhere
+  on disk. The BOM exists only inside the transient response file.
+* **It is not the sandbox running commands twice.** A probe that appends a timestamp
+  to one file, run as an ordinary Bash command, appended exactly one line, and
+  `git reflog` has one entry per commit. A command that appears to have run twice
+  (a `git commit` reporting "nothing to commit" for a commit that exists) is a
+  second invocation of an idempotent command, not a lost one.
+
+**In practice**: `cargo test -p <crate> --lib` works and is the right scope while
+iterating. Prefer it, and prefer `--test <name>` for a specific integration target.
+The one limitation left is the handful of very large integration targets; everything
+else about Rust work, including running its tests, is available in this environment.
 
 ### What was measured on 2026-09-10 (this narrows the cause)
 
