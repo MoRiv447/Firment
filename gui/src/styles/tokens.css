@@ -83,6 +83,15 @@
 
   /* States. Hover is neutral so that only selection is green. */
   --hover: #ffffff1b;            /* the alpha step: a wash, not a grey */
+  /*
+   * A resting wash, for a control that has no other chrome to sit on a bar with.
+   *
+   * The dark scheme wants one -- an icon alone on near-black has nothing under it --
+   * and the light scheme does not, where the white ground and the hairline already
+   * give it an edge. That difference is a value rather than a branch: light is
+   * `transparent`, and every call site stays one rule.
+   */
+  --wash-resting: #ffffff1b;
   --selection: #004558;
   --on-selection: #eeeeee;           /* 13.28:1 on selection; ink is 1.01:1 on acid */
 
@@ -138,6 +147,7 @@
   --shadow-lg: 0 12px 32px rgba(16, 24, 40, 0.12);
 
   --hover: #e8e8e8;
+  --wash-resting: transparent;
   --selection: #b5e9f0;              /* acid is 1.19:1 on this ground: not a highlight */
   /* Lighter than the dark scheme: white goes grey, and reads as dirty, long
      before black does. */

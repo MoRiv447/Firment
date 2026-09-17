@@ -73,6 +73,11 @@
  */
 .root.root[data-icon-only='true'][data-tier='ghost'] {
   color: var(--ink);
+  /* A resting wash, so the button reads as a control rather than an icon floating
+     on the bar -- and translucent, which is what "no texture" was about: an opaque
+     grey on near-black is mud, because no light passes through it. The token is
+     `transparent` in the light scheme, where the ground already does the job. */
+  background: var(--wash-resting);
 }
 
 .root[data-full='true'] {

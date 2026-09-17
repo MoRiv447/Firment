@@ -66,6 +66,7 @@ const CSS_ONLY = [
   // way the scrollbar does.
   '--grain',
   '--grain-opacity',
+  '--wash-resting',
 ];
 
 const withoutComments = () => css.replace(/\/\*[\s\S]*?\*\//g, '');
@@ -110,7 +111,7 @@ describe('tokens.css mirrors tokens.ts', () => {
     // system. Counted rather than derived, so that going up has to be a decision:
     // the texture itself lives outside both scheme blocks, because it is the same
     // in both -- only how strong it is differs, and that is the half declared here.
-    expect(customProps(dark).length).toBe(39);
+    expect(customProps(dark).length).toBe(40);
   });
 
   it('declares every palette key in both schemes, and nothing extra', () => {
