@@ -36,17 +36,32 @@ machine — read the "why" so you don't re-create the problem.
 - `Blocking waiting for file lock` messages that resolve on their own are
   NORMAL (serial commands waiting for each other). Do not "fix" them.
 
-## os error 5 (拒绝访问 / Access denied) is an environment failure
+## `os error 5`, and the other ways this environment breaks cargo
 
-- If cargo fails with `error: failed to open ... .cargo-build-lock
-  拒绝访问。 (os error 5)` — especially after a multi-minute stall, and
-  `cargo fmt` (which never touches lock files) still works — the cause is
-  security software intercepting file operations, NOT the code and NOT a
-  cargo bug:
-  - WorkBuddy's sandbox (`modify_backup` rule) intercepts every
-    create/modify/delete and breaks cargo's lock-file open; its `rm -f`
-    shim also silently no-ops there (stderr goes to /dev/null), so "rm
-    the lock and retry" cannot work in-sandbox.
+Three failures, one family: **the environment intercepts file writes, and cargo's do
+not all survive it.** The evidence is in the dated entries below rather than repeated
+here; this is the part to read while something is broken.
+
+| What you see | What to do |
+|---|---|
+| `failed to open … .cargo-build-lock 拒绝访问 (os error 5)`, often after a multi-minute stall, while `cargo fmt` (which never touches a lock) still works | **Retry with `CARGO_BUILD_JOBS=1`.** The trigger is concurrent writes, and this is measured to work — see the 2026-09-10 entry |
+| `link: missing operand after '\377\376'` from `link.exe` | **Nothing yet.** A UTF-16 BOM reaches the linker in the response file rustc writes for a long argument list; `jobs=1` does not touch it — see the 2026-09-17 entry |
+| `[safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED]` while cleaning `web/.next` | `env -u NODE_OPTIONS npm run build` |
+
+**Do not loop retries, do not delete lock files, do not `cargo clean`.** The first two
+are covered by the rules above, and a clean hits the same wall while throwing away the
+build cache you will want the moment the wall moves.
+
+Within the family, the cause is a file-operation shim and **not** the sandbox's
+permission mode — that was once written here as verified and is refuted below by the
+logs themselves. Two further things are refuted in the dated entries so nobody
+re-derives them: for the BOM, a general write problem (there is no BOM on disk).
+
+The layers whose internals cannot be read from here:
+The mechanism, for whoever picks this up: WorkBuddy's sandbox backs a file up before
+letting a write through (`modify_backup`), and that step is what cargo's lock-file open
+does not survive. Its `rm -f` shim also silently no-ops there (stderr goes to
+/dev/null), so "rm the lock and retry" cannot work in-sandbox.
   - **The cause is NOT the sandbox permission mode.** This entry once said
     "run the session in bypass-permissions mode" and marked it verified;
     that is not what the logs show, and `dangerouslyDisableSandbox` does not
@@ -86,12 +101,6 @@ machine — read the "why" so you don't re-create the problem.
     (`EnableControlledFolderAccess = 0`), but note this is the one layer
     whose internals cannot be read from the CLI — the Huorong trust zone
     lives in its GUI — so it is the leading unverified candidate.
-- When you hit this: **first retry with `CARGO_BUILD_JOBS=1`** (see "What was
-  measured on 2026-09-10" — it is measured to work, and the failure is a
-  concurrency one). If it still fails serially, then report it once as an
-  environment problem and stop: do NOT loop retries, do NOT delete lock files,
-  do NOT `cargo clean` (it will hit the same wall and wastes the whole build
-  cache).
 
 ### And on 2026-09-17: a fresh link of `firment-core` fails on a BOM
 
