@@ -114,7 +114,6 @@
  * the label weight the title already takes when the row is selected. */
 .item[data-selected='true'] .select {
   background: var(--hover);
-  box-shadow: var(--shadow-sm);
 }
 
 .top {

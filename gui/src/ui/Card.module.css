@@ -22,7 +22,6 @@
      it. In the light scheme this one line is the whole of the elevation -- there
      is no "whiter white" above `--surface` (`--surface-raised` is the same value
      there, which is what made a selected session row invisible). */
-  box-shadow: var(--shadow-sm);
   background: var(--surface);
   color: var(--ink);
   font-family: var(--ff-sans);

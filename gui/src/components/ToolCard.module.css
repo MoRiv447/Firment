@@ -3,7 +3,8 @@
  *
  * `--r-panel` and one hairline: the transcript is a column of prose with
  * machinery in it, and a card that drew three borders, a shadow and a 16px
- * radius was the loudest thing on the page. Elevation is `--shadow-sm` --
+ * radius was the loudest thing on the page. Elevation is the hairline plus the surface step -- see the note in tokens.css
+ * about why the dark scheme has no shadow ladder at all.
  * `tokens.css` says a hairline separates first, so shadows stay soft.
  */
 .card {
@@ -14,7 +15,6 @@
   border: 1px solid var(--outline);
   border-radius: var(--r-panel);
   background: var(--surface);
-  box-shadow: var(--shadow-sm);
   color: var(--ink);
   font-family: var(--ff-sans);
   font-size: var(--fs-body);

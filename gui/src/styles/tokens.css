@@ -59,6 +59,12 @@
 
   /* Elevation. The SECOND separator: a hairline separates first, so these stay soft.
    *
+   * In the DARK scheme there is no ladder at all: these are `none`, and separation
+   * is the hairline plus the surface step. A black shadow on a near-black ground is
+   * invisible and still costs a composited layer, so it is not a subtle choice, it
+   * is a free one. The light scheme keeps real values -- there a shadow is the only
+   * thing that can say "above" when every surface is white.
+   *
    * Three levels, and each one means something rather than "bigger":
    *   sm -- a surface inside the page (cards, a selected row, a control thumb)
    *   md -- a transient overlay above the page (menu, popover, tooltip, toast)
@@ -67,9 +73,9 @@
    * In the light scheme this ladder IS the elevation: the surfaces are white and
    * `surface-raised` is white too, so a shadow plus a hairline is the only thing
    * that can say "above". */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.32);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.36);
-  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.44);
+  --shadow-sm: none;
+  --shadow-md: none;
+  --shadow-lg: none;
 
   /* Grain strength. The texture itself is declared once in the shared block: it
      is the same in both schemes, and only how strong it is differs. */
@@ -232,7 +238,9 @@
      the "five competing boxes" problem again. */
   --r-chip: 4px;
   --r-control: 6px;
-  --r-panel: 12px;
+  /* Cards and panels. 12px on a dense panel reads as loose; 8 matches the logo
+     tile, and a panel and a tile are the two shapes that share this corner. */
+  --r-panel: 8px;
   --r-round: 999px;
 
 

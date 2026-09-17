@@ -113,9 +113,9 @@ const dark = {
    * adjacent surfaces are told apart by a hairline first, so these stay subtle
    * enough that a page of cards does not become a pile of floating tiles.
    */
-  shadowSm: '0 1px 2px rgba(0,0,0,0.32)',
-  shadowMd: '0 4px 12px rgba(0,0,0,0.36)',
-  shadowLg: '0 12px 32px rgba(0,0,0,0.44)',
+  shadowSm: 'none',
+  shadowMd: 'none',
+  shadowLg: 'none',
 
   /**
    * Hover wash for rows and menu items. Unchanged from the value that shipped.
@@ -410,7 +410,7 @@ export const radius = {
   /** Inputs and buttons. */
   control: 6,
   /** Cards and panels. */
-  panel: 12,
+  panel: 8,
 } as const;
 
 
