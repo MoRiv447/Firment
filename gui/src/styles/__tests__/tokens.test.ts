@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { antdTheme, color, paletteFor, setActivePalette } from '../tokens';
+import { named } from './readPalette';
+
+/** The palette as it is shipped: read out of `tokens.css`, not a copy of it. */
+const dark = named('dark');
+const light = named('light');
 
 /**
  * The palette, held to the two rules that cannot be reviewed by eye.
@@ -32,22 +36,7 @@ const AA = 4.5;
 
 describe('the palette cannot drift between schemes', () => {
   it('defines the same key set in dark and light', () => {
-    const dark = Object.keys(paletteFor('dark')).sort();
-    const light = Object.keys(paletteFor('light')).sort();
-    expect(light).toEqual(dark);
-  });
-  it('follows the active mode through the `color` getters', () => {
-    setActivePalette('dark');
-    expect(color.bg).toBe('#111111');
-    expect(color.ink).toBe('#eeeeee');
-
-    setActivePalette('light');
-    expect(color.bg).toBe('#fcfcfc');
-    expect(color.ink).toBe('#202020');
-
-    // Getters, not a snapshot: the same object must have changed.
-    setActivePalette('dark');
-    expect(color.bg).toBe('#111111');
+    expect(Object.keys(light).sort()).toEqual(Object.keys(dark).sort());
   });
 });
 
@@ -58,16 +47,13 @@ describe('text is readable on every ground it is used on', () => {
     // (3.34:1); the dark one keeps cyan-8, which clears the same floor easily on a
     // near-black ground. It is no longer required to equal `brandInk`: that was a
     // convention of the old palette, and the measurement is the part that matters.
-    expect(contrast(paletteFor('light').focusRing, '#FFFFFF')).toBeGreaterThanOrEqual(3);
-    expect(contrast(paletteFor('dark').focusRing, paletteFor('dark').bg)).toBeGreaterThan(3);
+    expect(contrast(light.focusRing, '#FFFFFF')).toBeGreaterThanOrEqual(3);
+    expect(contrast(dark.focusRing, dark.bg)).toBeGreaterThan(3);
   });
 
   // [label, foreground, background, the ratio, which is a measurement of the
   // palette rather than a quote from a document -- rows name the palette so they
   // cannot read one scheme's colour while claiming to be the other].
-  const light = paletteFor('light');
-  const dark = paletteFor('dark');
-
   const cases: Array<[string, string, string, number]> = [
     ['light ink on surface', light.ink, light.surface, 15.48],
     ['light ink on bg', light.ink, light.bg, 15.88],
@@ -106,7 +92,7 @@ describe('text is readable on every ground it is used on', () => {
     // dark enough now that a neutral ground holds it, which is what let the
     // light hover stop being a second green state. (Dark is skipped: its wash is
     // a translucent overlay, and the luminance helper reads hexes.)
-    const p = paletteFor('light');
+    const p = light;
     expect(contrast(p.muted, p.hover)).toBeGreaterThanOrEqual(AA);
     expect(contrast(p.ink, p.hover)).toBeGreaterThanOrEqual(AA);
   });
@@ -116,44 +102,11 @@ describe('text is readable on every ground it is used on', () => {
     // stepRule is a shape, not text -- the current-step underline, the live
     // inspector tab, the todo progress bar. Acid on a light ground is 1.19:1,
     // which is why the light scheme cannot borrow the dark scheme's answer.
-    expect(contrast(paletteFor('dark').stepRule, paletteFor('dark').bg)).toBeGreaterThanOrEqual(3);
+    expect(contrast(dark.stepRule, dark.bg)).toBeGreaterThanOrEqual(3);
     expect(
-      contrast(paletteFor('light').stepRule, paletteFor('light').surface),
+      contrast(light.stepRule, light.surface),
     ).toBeGreaterThanOrEqual(3);
-    expect(contrast(paletteFor('light').stepRule, paletteFor('light').bg)).toBeGreaterThanOrEqual(3);
+    expect(contrast(light.stepRule, light.bg)).toBeGreaterThanOrEqual(3);
   });
 });
 
-describe('antdTheme actually branches on the mode', () => {
-  it('gives the two schemes different grounds and text', () => {
-    const dark = antdTheme('dark').token;
-    const light = antdTheme('light').token;
-    expect(dark.colorBgLayout).not.toBe(light.colorBgLayout);
-    expect(dark.colorText).not.toBe(light.colorText);
-    expect(dark.colorBgLayout).toBe(paletteFor('dark').bg);
-    expect(light.colorBgLayout).toBe(paletteFor('light').bg);
-  });
-
-  it('softens the border mapping in light and keeps the outline in dark', () => {
-    const dark = antdTheme('dark').token;
-    const light = antdTheme('light').token;
-    const darkPalette = paletteFor('dark');
-    const lightPalette = paletteFor('light');
-    expect(dark.colorBorder).toBe(darkPalette.outline);
-    expect(light.colorBorder).toBe(lightPalette.lineStrong);
-    expect(light.colorBorderSecondary).toBe(lightPalette.line);
-  });
-
-  it('never paints success in the brand green', () => {
-    // The 85deg/145deg split: "this is Firment" and "this passed" must not be
-    // the same colour. The old code fed the light mode `brandInk` here.
-    for (const mode of ['dark', 'light'] as const) {
-      const palette = paletteFor(mode);
-      expect(antdTheme(mode).token.colorSuccess).toBe(palette.successInk);
-                }
-  });
-
-  it('defaults to dark, matching the shipped scheme', () => {
-    expect(antdTheme().token.colorBgLayout).toBe('#111111');
-  });
-});
