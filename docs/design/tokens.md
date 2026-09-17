@@ -144,9 +144,10 @@ role rather than by hue proximity: `successInk` is the green text step, `warnInk
 amber one, and the pairs are asserted in `styles/__tests__/tokens.test.ts` rather than
 quoted here.
 
-**The dark status inks do not transfer to light.** `#7DD3FC` and `#EAB308` are
-~2:1 on a white ground; both need the light value above. Likewise `#16A34A` is
-not usable as *text* on light — the readable green there is `#15803D`.
+**A dark status ink does not transfer to light, which is why the ink is a step and
+not a value.** An amber bright enough to read on near-black is about 2:1 on white;
+the light scheme takes a different step of the same scale. This is what "the dark
+scales are designed rather than inverted" means in practice.
 
 ### Diff
 
