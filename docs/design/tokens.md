@@ -102,19 +102,33 @@ value anyone should have to reason about twice.
 
 ### Brand vs states — separate scales, not a separation rule
 
-| Token | Dark | Light | Light ratio |
+| Token | Dark | Light | What it is |
 |---|---|---|---|
-| `brandAcid` | **cyan-8** | **cyan-11** | the fill; its ink is white |
-| `onAcid` | `#FFFFFF` | `#FFFFFF` | 4.57:1 (dark) / 4.76:1 (light) |
-| `brandInk` | `#3B6D11` | `#3B6D11` | 6.21:1 on `surface`, 5.79:1 on `bg`; also the light scheme's `selection` fill |
+| `brandAcid` | cyan **8** | cyan **11** | the solid fill. The step differs by scheme because a bright fill glows as a large shape on near-black, and a bright one is unreadable as a white label |
+| `onAcid` | white | white | the label. Measured against the fill it sits on, in both schemes |
+| `brandInk` | cyan **11** | cyan **11** | the brand as text. In the light scheme this is a *readable* cyan, so the same hue can be a fill and a label |
+| `selection` | cyan **5** | cyan **5** | the selected row, on its own step rather than borrowed from the brand |
 
-`brandAcid` is 85° (acid lime); the success green is 145° (true green). They are
-60° apart, so they read as different things: the brand colour is *identity*, the
-status colour is *feedback*. Using one for both made "this is Firment" and "this
-passed" look identical.
+The brand and the states are separate **scales**, not separate rules. Radix builds
+every step of every hue against the same contrast model, so a brand cyan and a
+status green coexist by construction -- there is no hue-distance rule to enforce,
+and the one this file used to state (85° vs 145°, "60° apart") went with the palette
+it was written for.
 
-**`brandAcid` is ~1.8:1 on a light ground.** It is a highlighter, never a text or
-icon colour. Anything readable that is green-on-light uses `brandInk`.
+**The brand is no longer fill-only.** The acid lime was ~1.8:1 on a light ground, so
+it could never be a label there; cyan-11 on the page is 4.52:1 and can. That is the
+concrete difference the palette change bought, and it is why `brandInk` is now the
+same hue as the fill rather than a darker green chosen to be legible.
+
+The brand colour is *identity*; the status colours are *feedback*. They are separate
+scales of the same system, which is what keeps "this is Firment" and "this passed"
+from looking like the same statement.
+
+**The light fill is deep enough to be a label; the dark one is not.** Which is why
+`brandAcid` is cyan-11 in light and cyan-8 in dark, and why the label is white in
+the light scheme and white in the dark one for a different reason -- see the table
+above. Ratios are asserted in `styles/__tests__/tokens.test.ts` rather than quoted
+here, so that a value cannot move without a test failing.
 
 ### Status
 
@@ -128,10 +142,10 @@ icon colour. Anything readable that is green-on-light uses `brandInk`.
 | `warnBg` | `#3F2E06` | `#FEF3C7` | — |
 | `warnInk` | `#EAB308` | `#B45309` | 5.02:1 on `surface`, 4.51:1 on `warnBg` |
 
-`antdTheme()` maps `colorSuccess` to `successInk` in **both** schemes. Feeding the
-light scheme `brandInk` — as the first draft did — would paint "this passed" in
-the brand green, which is the exact confusion the 85°/145° split exists to
-prevent.
+Status colours are their own scales -- green, amber, blue, red -- and each is used by
+role rather than by hue proximity: `successInk` is the green text step, `warnInk` the
+amber one, and the pairs are asserted in `styles/__tests__/tokens.test.ts` rather than
+quoted here.
 
 **The dark status inks do not transfer to light.** `#7DD3FC` and `#EAB308` are
 ~2:1 on a white ground; both need the light value above. Likewise `#16A34A` is
@@ -157,39 +171,40 @@ header. They are counted the same way the TUI counts them
 
 | Token | Dark | Light | Notes |
 |---|---|---|---|
-| `hover` | `rgba(255,255,255,0.08)` | `#EDEFE6` | row hover wash |
-| `selection` | `#B4F779` | `#3B6D11` | the chosen row: 5.79:1 on `bg` / 6.21:1 on `surface` in light |
-| `onSelection` | `#15200D` | `#FFFFFF` | text and icons **inside** a selected row: 13.28:1 / 6.21:1 |
-| `focusRing` | `#B4F779` | `#3B6D11` | keyboard focus |
-| `outline` | `#3F3F46` | `#D4D4D8` | the border on a card, chip or control |
+| `hover` | gray-alpha **4** (a translucent white) | gray **4** | the hover and pressed wash. It is a *wash*, not a grey: an opaque step on near-black reads as mud because no light passes through it |
+| `selection` | cyan **5** | cyan **5** | the chosen row -- the step Radix documents for exactly this |
+| `onSelection` | gray **12** | gray **12** | text and icons inside it |
+| `focusRing` | cyan **8** | cyan **10** | keyboard focus. Step 8 is the documented ring, but cyan-8 on white is 2.32:1 -- under the 3:1 a ring needs -- so the light scheme uses a deeper step |
+| `outline` | gray **7** | gray **7** | the border on a card, chip or control. `line` is gray **6**, one step quieter, and they are distinct values now rather than one merged in |
+| `wash-resting` | a translucent white | `transparent` | an icon-only control on a bar. A value, not a branch: the dark scheme wants something under it, the light one does not |
+| `field-bg` | a translucent white | `var(--surface)` | the same reasoning, for field backgrounds |
 | `shadowSm` | `none` | `0 1px 2px rgba(16,24,40,.06)` | a control that means "press me" |
 | `shadowMd` | `none` | `0 4px 12px rgba(16,24,40,.08)` | transient overlays |
 | `shadowLg` | `none` | `0 12px 32px rgba(16,24,40,.12)` | what dims the page behind it |
 
-**The selected row is a pair, not the brand colour.** The dark scheme can select
-with the acid because `onAcid` on it is 13.28:1; the light scheme cannot, because
-the same fill is 1.19:1 against `#F7F7F5` — the row stopped being a highlight and
-became a smear, and everything written on it with `ink` was at 1.27:1. Light
-selects with `brandInk` and writes white on it. Two rules follow from the pair and
-are enforced by `styles/__tests__/tokens.test.ts`:
+**The selected row has its own step.** It used to be the brand fill, and the pair
+that fill needed (`onAcid` on `brandAcid`) had to be re-derived per scheme, because
+a fill that reads well on near-black is a smear on cream. Radix gives selection a
+step of its own, so this is no longer a pair that has to hold together -- it is a
+background, with the ordinary ink on top. One rule survives from that arrangement
+and is enforced by `styles/__tests__/tokens.test.ts`:
 
 - text and icons inside a selected row read `onSelection`, **never** `ink`;
 - a chip that lands on a selected row inverts to the pair, because every status
   pair in the table is measured against `bg`/`surface` and neither of those is the
   ground under it.
 
-The light hover is a **warm neutral, not a second green**. It used to be an acid
-tint on the argument that `muted` sat on the AA floor and any grey wash would
-push it under; `muted` moved to `#6B6B73` (4.55:1 on the wash) and the reason
-expired. It also has a job to not do: with the selection now a solid green fill, a
-green hover would read as a weaker degree of the same signal, and only one of them
-is allowed to mean "this one".
+The dark hover is **translucent, and that is the whole point of it.** It was
+briefly an opaque grey step after the palette moved, and it read as a flat panel
+laid on the row rather than a change in the row: nothing passes through an opaque
+wash on a near-black ground. Radix ships alpha scales for exactly this, and the
+difference between `#ffffff1b` and `#2a2a2a` is the difference between "lit" and
+"painted on".
 
-The focus ring is **not** the acid in the light scheme: acid on a light ground is
-1.27:1 and a keyboard user cannot see it. The dark scheme can afford the acid ring
-(15.06:1); the light scheme uses `brandInk`. That token reaches antd's own inputs
-through `antdTheme()`'s `Input`/`Select` overrides, because both default their
-focused border to `colorPrimary` — which here is the acid.
+The focus ring is **step 8 in dark and step 10 in light**. Step 8 is the step Radix
+documents for a ring, and cyan-8 on white measures 2.32:1 -- under the 3:1 a ring
+needs, which is the one contrast floor that is about a *graphic* rather than text.
+The light scheme takes a deeper step and clears it.
 
 **`outline` is a grey in both schemes, and the shadow is the second separator.**
 It used to be `#000000` in both, carrying the neo-brutalist frame: 2px and 3px
@@ -211,11 +226,11 @@ A progress row that looks pressable becomes a control that does nothing.
 
 | State | Dark | Light | Light ratio on `bg` |
 |---|---|---|---|
-| done | `#14532D` fill, `#86EFAC` ink | `#EAF3DE` fill, `#3F6212` ink | 6.19:1 |
-| failed | `#3B1218` fill, `#FDA4AF` ink | `#FEE2E2` fill, `#9F1239` ink | 6.56:1 |
-| current | no fill, `#E4E4E7` ink, 2px `#B4F779` rule | no fill, `#18181B` ink, 2px `#3B6D11` rule | 16.52:1 ink; the rule is 6.21:1 |
-| pending | transparent, `#A1A1AA` ink | transparent, `#6B7280` ink | 4.51:1 |
-| unknown | transparent, muted ink, `○` | same | — |
+| done | green **4** fill, green **11** ink | green **4** fill, green **11** ink | measured |
+| failed | red **3** fill, red **11** ink | red **3** fill, red **11** ink | measured |
+| current | no fill, `ink`, a 2px brand rule | no fill, `ink`, a 2px brand rule | the rule is the brand fill in each scheme |
+| pending | transparent, gray **12** ink | transparent, gray **12** ink | measured |
+| unknown | transparent, `muted` ink, `○` | same | — |
 
 Two rules matter more than the values:
 
@@ -251,7 +266,7 @@ and loading states come from `Button.module.css` and nothing else.
 The fill and its label are not chosen per call site: the tier rules read
 `brandAcid` and `onAcid` from `tokens.css`, and the pair is asserted there.
 A fill and an ink taken from different tokens is what once put near-white text
-on the acid user bubble (about 1.3:1, in the dark scheme only). The bubble is
+on the filled user bubble (about 1.3:1, in the dark scheme only). The bubble is
 text now, so that assertion moved with the fill -- but the lesson is the one
 this file is for: a fill and its ink have to be a measured pair, or they are
 accidentally correct in one scheme and wrong in the other.
