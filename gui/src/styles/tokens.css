@@ -82,7 +82,7 @@
   --grain-opacity: 0.03;
 
   /* States. Hover is neutral so that only selection is green. */
-  --hover: #2a2a2a;
+  --hover: #ffffff1b;            /* the alpha step: a wash, not a grey */
   --selection: #004558;
   --on-selection: #eeeeee;           /* 13.28:1 on selection; ink is 1.01:1 on acid */
 

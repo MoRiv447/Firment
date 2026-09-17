@@ -120,7 +120,7 @@ const dark = {
   /**
    * Hover wash for rows and menu items. Unchanged from the value that shipped.
    */
-  hover: '#2a2a2a',
+  hover: '#ffffff1b',
 
   /**
    * The selected row: the sidebar item, the live conversation.
