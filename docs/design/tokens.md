@@ -1,7 +1,8 @@
 # Design tokens
 
 The single source of truth for colour, type, radius and motion across the three
-surfaces. Implementation mirrors:
+surfaces. Column widths and the shell's geometry are [layout.md](layout.md) — this file
+is about what things look like, not about where they sit. Implementation mirrors:
 
 | Surface | Lives in | Consumed by |
 |---|---|---|
