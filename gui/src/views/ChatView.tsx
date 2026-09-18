@@ -131,10 +131,13 @@ export function ChatView({
 
   const toolList = turn ? Object.values(turn.tools) : [];
   // Every finished run feeds the estimate the step row may show, and the record is
-  // idempotent by `seq`, so it can run on each render instead of needing a diff of
-  // the tools list against the previous one.
+  // idempotent per (session, seq), so it can run on each render instead of needing a
+  // diff of the tools list against the previous one.
   useEffect(() => {
-    recordCompleted(toolList);
+    // Scoped by session: `seq` restarts with every agent, so without the id the second
+    // session's runs would look like ones already counted -- the estimate would go
+    // quiet after the first session, which is the one thing the ledger is for.
+    recordCompleted(toolList, session?.id ?? 'unsaved');
   });
   // Where the embedded workflow got to, computed from those same tools rather
   // than tracked separately -- see `lib/steps.ts`. Null for a chat that never

@@ -35,7 +35,7 @@ beforeEach(() => {
 
 describe('the run ledger', () => {
   it('counts a finished run', () => {
-    recordCompleted([ran(1, 'build', 4_000)]);
+    recordCompleted([ran(1, 'build', 4_000)], 's');
     // One sample is not a median, so there is still no estimate to give.
     expect(estimateFor('build')).toBeNull();
   });
@@ -44,9 +44,9 @@ describe('the run ledger', () => {
     // The caller records on every render, so this is the property that keeps a
     // re-render from counting as evidence.
     const tools = [ran(1, 'build', 4_000), ran(2, 'build', 6_000)];
-    recordCompleted(tools);
-    recordCompleted(tools);
-    recordCompleted(tools);
+    recordCompleted(tools, 's');
+    recordCompleted(tools, 's');
+    recordCompleted(tools, 's');
     // Two distinct runs, not six: the median of 4000/6000 is 5000 either way, but a
     // ledger that inflated would eventually push real samples out of the window.
     expect(estimateFor('build')).toBe(5_000);
@@ -57,24 +57,24 @@ describe('the run ledger', () => {
       { seq: 1, name: 'build', args: {}, status: 'running', startedAt: 1_000 },
       // A card reopened from a transcript: the tool was called, nobody timed it.
       { seq: 2, name: 'flash', args: {}, status: 'unknown' },
-    ]);
+    ], 's');
     expect(estimateFor('build')).toBeNull();
     expect(estimateFor('flash')).toBeNull();
   });
 
   it('takes the median, so one cold build does not speak for the tool', () => {
-    for (const ms of [4_000, 90_000, 4_200]) recordCompleted([ran(ms, 'build', ms)]);
+    for (const ms of [4_000, 90_000, 4_200]) recordCompleted([ran(ms, 'build', ms)], 's');
     // A mean would be 32.7s here, which is a number no build in this session took.
     expect(estimateFor('build')).toBe(4_200);
   });
 
   it('averages the middle pair when the count is even', () => {
-    for (const ms of [4_000, 5_000]) recordCompleted([ran(ms, 'build', ms)]);
+    for (const ms of [4_000, 5_000]) recordCompleted([ran(ms, 'build', ms)], 's');
     expect(estimateFor('build')).toBe(4_500);
   });
 
   it('keeps the recent runs and forgets the old ones', () => {
-    for (let i = 0; i < 10; i++) recordCompleted([ran(i, 'build', (i + 1) * 1_000)]);
+    for (let i = 0; i < 10; i++) recordCompleted([ran(i, 'build', (i + 1) * 1_000)], 's');
     // Ten offered, eight kept, and it is the *oldest* two that fall out: the median
     // of the window (3s..10s) is 6.5s, where all ten would have given 5.5s. Pinning
     // the number rather than "roughly" is what makes the direction of the window a
@@ -82,9 +82,20 @@ describe('the run ledger', () => {
     expect(estimateFor('build')).toBe(6_500);
   });
 
+  it('counts a new session\u2019s runs even though its seqs start over', () => {
+    // `seq` is the agent's own counter and restarts at 1 with every agent. Deduping on
+    // the number alone made a whole session's run look like repeats of the first
+    // session's -- the ledger stopped learning and the estimate never appeared again,
+    // which is the failure the scope argument exists to prevent.
+    recordCompleted([ran(1, 'build', 4_000), ran(2, 'build', 6_000)], 'session-a');
+    recordCompleted([ran(1, 'build', 3_000), ran(2, 'build', 5_000)], 'session-b');
+    // Four runs, not two: 3000/4000/5000/6000.
+    expect(estimateFor('build')).toBe(4_500);
+  });
+
   it('keeps the tools apart', () => {
-    for (const ms of [1_000, 3_000]) recordCompleted([ran(ms, 'build', ms)]);
-    for (const ms of [20_000, 30_000]) recordCompleted([ran(ms, 'flash', ms)]);
+    for (const ms of [1_000, 3_000]) recordCompleted([ran(ms, 'build', ms)], 's');
+    for (const ms of [20_000, 30_000]) recordCompleted([ran(ms, 'flash', ms)], 's');
     expect(estimateFor('build')).toBe(2_000);
     expect(estimateFor('flash')).toBe(25_000);
   });
@@ -116,7 +127,7 @@ describe('timingFor', () => {
   });
 
   it('offers an estimate only to a running step with history behind it', () => {
-    for (const ms of [4_000, 6_000]) recordCompleted([ran(ms, 'build', ms)]);
+    for (const ms of [4_000, 6_000]) recordCompleted([ran(ms, 'build', ms)], 's');
     const running: ToolCardState = {
       seq: 99,
       name: 'build',

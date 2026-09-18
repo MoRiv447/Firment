@@ -17,10 +17,24 @@ import { formatDuration } from './format';
  * defect here, not a nicety.
  */
 
-/** Completed runs per tool name, oldest first. */
+/** Completed runs per tool name, oldest first -- NOT per session: how long `flash` takes
+ * is a property of the tool and the board, and a session boundary does not change it. */
 const runs = new Map<string, number[]>();
-/** The `seq` values already counted, so re-renders cannot inflate the samples. */
-const counted = new Set<number>();
+/**
+ * The `seq` values already counted, per session.
+ *
+ * Per session, because `seq` is the agent's own counter and restarts at 1 with every
+ * agent: one flat set of numbers would mark a new session's whole run as already
+ * counted, and the estimate would go quiet after the first session -- the one thing this
+ * ledger exists to avoid.
+ *
+ * A set rather than a high-water mark, because `seq` is per tool *start* and concurrent
+ * tool calls finish out of order: with a mark, a card that started earlier but finished
+ * later is skipped for good, which is a silently missing sample rather than a late one.
+ * The cost is one entry per completed call and one set per session visited in a run --
+ * tens of KB over a long day, and the price of being exact.
+ */
+const counted = new Map<string, Set<number>>();
 
 /**
  * How many runs a median is drawn from. Eight keeps it responsive to a project whose
@@ -41,17 +55,23 @@ const TENTHS_CEILING_MS = 9_950;
 /**
  * Count every finished run in `tools` that has not been counted yet.
  *
- * Idempotent by `seq`, which is what lets a caller run it on every render instead of
- * diffing the tool list against the previous one -- the double-render a test or a
- * strict-mode mount would otherwise turn into double the samples.
+ * Idempotent per `(scope, seq)`, which is what lets a caller run it on every render
+ * instead of diffing the tool list against the previous one -- the double-render a test
+ * or a strict-mode mount would otherwise turn into double the samples. `scope` is the
+ * session id, because `seq` is only unique within one session.
  */
-export function recordCompleted(tools: readonly ToolCardState[]): void {
+export function recordCompleted(tools: readonly ToolCardState[], scope: string): void {
+  let seen = counted.get(scope);
+  if (!seen) {
+    seen = new Set<number>();
+    counted.set(scope, seen);
+  }
   for (const tool of tools) {
     const { startedAt, endedAt } = tool;
     // A reopened transcript card has neither, and a running one has no end yet.
     if (startedAt === undefined || endedAt === undefined) continue;
-    if (counted.has(tool.seq)) continue;
-    counted.add(tool.seq);
+    if (seen.has(tool.seq)) continue;
+    seen.add(tool.seq);
 
     const list = runs.get(tool.name) ?? [];
     list.push(Math.max(0, endedAt - startedAt));

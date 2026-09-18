@@ -158,6 +158,16 @@ fn capture_with_reconnect(
                     Capture::Lost { captured, reason } => {
                         // Keep the lines FIRST, then decide whether to try again: the
                         // capture is the deliverable, and the reconnect is a courtesy.
+                        //
+                        // A stretch that delivered lines is evidence the port works, so
+                        // the outage ending it is a NEW outage: without this, a cable
+                        // replugged four times over one capture loses the fourth to a
+                        // budget the first three spent. A stretch that delivered nothing
+                        // is the opposite signal -- a port that opens and dies instantly
+                        // -- which is the case the budget is for.
+                        if !captured.trim().is_empty() {
+                            attempts = 0;
+                        }
                         text.push_str(&captured);
                         lost_at = Some(Instant::now());
                         if budget_spent(&mut attempts) {
@@ -849,6 +859,80 @@ mod tests {
         // What arrived before the cable moved is still the answer, and the reason it
         // stops there is in the text rather than in a returned error.
         assert!(text.contains("only line"), "got: {text:?}");
+        assert!(
+            text.contains("lost after 3 reopen attempt(s)"),
+            "got: {text:?}"
+        );
+        assert_eq!(
+            opens,
+            1 + RECONNECT_ATTEMPTS as usize,
+            "the budget is the budget"
+        );
+    }
+
+    #[test]
+    fn a_port_that_keeps_working_gets_a_fresh_budget_each_time() {
+        // Five replugs over one capture, each followed by real output. Every stretch
+        // that delivered lines is evidence the port works, so each new outage starts
+        // from a full budget -- otherwise the fourth replug is lost to a budget the
+        // first three spent, which is the capture failing at the thing it is for.
+        let mut opens = 0;
+        let mut open = || {
+            opens += 1;
+            Ok(if opens <= 5 {
+                let line = format!("line {opens}\n");
+                Box::new(dropping(line.as_bytes())) as Box<dyn Read>
+            } else {
+                Box::new(fake(b"")) as Box<dyn Read>
+            })
+        };
+        let start = Instant::now();
+        let text = capture_with_reconnect(
+            &mut open,
+            start,
+            start + Duration::from_millis(300),
+            None,
+            false,
+            None,
+            Duration::ZERO,
+        )
+        .unwrap();
+
+        for n in 1..=5 {
+            assert!(
+                text.contains(&format!("line {n}")),
+                "line {n} missing: {text:?}"
+            );
+        }
+        assert!(
+            !text.contains("lost after"),
+            "the port kept working: {text:?}"
+        );
+        assert_eq!(opens, 6, "five replugs plus the final quiet read");
+    }
+
+    #[test]
+    fn a_port_that_never_delivers_still_runs_out_of_budget() {
+        // The counter-example to the test above: the budget has to survive a port that
+        // opens successfully and dies before a single line arrives, or a wedged adapter
+        // would be reopened every 300ms until the capture's deadline.
+        let mut opens = 0;
+        let mut open = || {
+            opens += 1;
+            Ok(Box::new(dropping(b"")) as Box<dyn Read>)
+        };
+        let start = Instant::now();
+        let text = capture_with_reconnect(
+            &mut open,
+            start,
+            start + Duration::from_millis(300),
+            None,
+            false,
+            None,
+            Duration::ZERO,
+        )
+        .unwrap();
+
         assert!(
             text.contains("lost after 3 reopen attempt(s)"),
             "got: {text:?}"

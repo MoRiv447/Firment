@@ -134,7 +134,7 @@ describe('workflowSteps timings', () => {
     recordCompleted([
       timed(1, 'build', 'ok', 0, 4_000),
       timed(2, 'build', 'ok', 0, 6_000),
-    ]);
+    ], 's');
     const steps = workflowSteps([timed(3, 'build', 'running', 1_000)], 3_000);
     expect(steps?.[0]).toMatchObject({ state: 'current', elapsedMs: 2_000, estimateMs: 5_000 });
   });
