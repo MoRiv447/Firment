@@ -5,19 +5,18 @@
  * blocks and one scheme-independent `:root`. Anything that draws something
  * lives in base.css or in a component's .module.css.
  *
- * Source of truth: docs/design/tokens.md. `styles/tokens.ts` is the mirror the
- * antd layer still reads, and `styles/__tests__/tokens-css.test.ts` fails if
- * the two disagree on any colour. That bridge is temporary -- when antd goes,
- * `tokens.ts` goes with it and this file is the only source.
+ * Source of truth: docs/design/tokens.md. This file is the only implementation of
+ * it -- the JS mirror (`styles/tokens.ts`) and the antd layer that read it are both
+ * gone, and `styles/__tests__/tokens-css.test.ts` now holds the structure that has
+ * to survive instead: one key set in both schemes, a raise step that is real in
+ * light, `color-scheme` set, and the number scales.
  *
  * Naming is kebab-case, matching web/src/styles/tokens.css so the two files
- * can be compared line by line. `tokens.ts`'s camelCase keys map mechanically:
- * `surfaceRaised` -> `--surface-raised`, `diffMetaInk` -> `--diff-meta-ink`.
+ * can be compared line by line.
  *
- * One deliberate merge: `lineStrong` and `outline` hold identical values in
- * BOTH schemes (`#3F3F46` dark, `#D4D4D8` light), so there is one token here.
- * `tokens.ts` keeps both names only because ~60 existing call sites read them;
- * the bridge test asserts all three are equal rather than trusting it.
+ * One deliberate merge outlived the JS era: `lineStrong` and `outline` held
+ * identical values in BOTH schemes, so there is one token here, and the name that
+ * survived is `--outline` -- it is what the call sites meant by it.
  */
 
 /* ------------------------------------------------------------------ */

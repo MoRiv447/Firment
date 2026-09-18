@@ -1,17 +1,15 @@
 /**
- * The bridge between the two token layers.
+ * The structure `tokens.css` has to keep.
  *
- * `styles/tokens.ts` is what antd reads and `styles/tokens.css` is what every
- * `.module.css` will read once antd is gone. For the duration of the rewrite
- * both exist, and two sources for the same grey is exactly how
- * `web/src/styles/tokens.css` ended up five values out of date while still
- * claiming to mirror this one.
+ * This file used to be the bridge between two token layers: `styles/tokens.ts`,
+ * which antd read, and `styles/tokens.css`, which every `.module.css` reads. Two
+ * sources for the same grey is how `web/src/styles/tokens.css` once ended up five
+ * values out of date while still claiming to mirror this one, so the bridge
+ * compared them by value at test time rather than by eye.
  *
- * So this test compares them by VALUE, at test time, by importing the real
- * palette rather than re-declaring the numbers. A test that pasted the hexes in
- * here would be a third source and would drift in the same way.
- *
- * Delete this file together with `tokens.ts`, in the stage that removes antd.
+ * The JS copy and the antd layer are both gone, which leaves the half that was
+ * never about the copy: one key set in both schemes, a raise step that is real in
+ * light, `color-scheme` set for native controls, and the number scales below.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -29,16 +27,11 @@ const SOURCES = import.meta.glob('../tokens.css', {
 const MATCHED = Object.entries(SOURCES);
 const css = MATCHED[0]?.[1] ?? '';
 
-/** camelCase as written in TS -> the kebab name used in CSS. */
-
 /**
- * Two ways of writing one colour.
- *
- * `tokens.ts` spells its alphas compact (`rgba(0,0,0,0.32)`) because that is
- * how the inline styles were born; the stylesheet is written with spaces so it
- * stays readable at 3am. Both are correct CSS, so the comparison has to be
- * blind to the difference -- and only to that difference, which is why this
- * normalises whitespace and nothing else.
+ * Values are compared after whitespace is normalised, because the two sides of a
+ * comparison are written for different readers: a hex in a scheme block, and a
+ * `var()` or an `rgba()` a call site would keep readable at 3am. Both are the same
+ * colour, and only that difference is being ignored here.
  */
 const canon = (value: string): string =>
   value
@@ -49,23 +42,14 @@ const canon = (value: string): string =>
     .trim();
 
 /**
- * `--scroll-thumb` and `--scroll-thumb-hover` are the only colour tokens with no
- * `tokens.ts` twin. The first is a `var(--outline)` reference; the second is the
- * scrollbar hover shade that `index.html` used to invent inline (`#52525b` and
- * `#a1a1aa`, in no token layer at all) and which has no component of its own
- * yet. Anything else added to CSS without a twin is a decision, not a typo, so
- * this list is asserted to be exact rather than consulted as a skip.
- */
-/*
  * There is no longer a list of keys that are CSS-only.
  *
  * It existed to hold the stylesheet to the JS palette's key set: every key had a
- * twin except these, and the case asserted that the list was exact. With the copy
- * retired there is no second set to be exact against -- the stylesheet declares what
- * it declares, and the only thing left to check is that both schemes declare the
- * same thing, which the case above does.
+ * twin except `--scroll-thumb`/`--scroll-thumb-hover`, and the case asserted that
+ * the list was exact. With the copy retired there is no second set to be exact
+ * against -- the stylesheet declares what it declares, and what is left to check
+ * is that both schemes declare the same thing, which the first case does.
  */
-
 const withoutComments = () => css.replace(/\/\*[\s\S]*?\*\//g, '');
 
 /** Read one `{...}` block into a name -> value map. */
@@ -92,7 +76,7 @@ const dark = schemeBlock('dark');
 const light = schemeBlock('light');
 const customProps = (m: Map<string, string>) => [...m.keys()].filter((k) => k.startsWith('--'));
 
-describe('tokens.css mirrors tokens.ts', () => {
+describe('tokens.css structure', () => {
   it('actually reads the stylesheet', () => {
     // The same self-check the other gate carries: a glob that silently matches
     // nothing would make every assertion below vacuously true.
@@ -102,26 +86,21 @@ describe('tokens.css mirrors tokens.ts', () => {
 
   it('carries one shared key set in both schemes', () => {
     expect(customProps(dark).sort()).toEqual(customProps(light).sort());
-    // 37 mirrored + the two scrollbar tokens + the grain strength, less the one the
-    // purpose: adding a colour to one scheme and forgetting the other is the bug
-    // this whole file exists to catch, and `tokens.ts` catches it with the type
-    // system. Counted rather than derived, so that going up has to be a decision:
-    // the texture itself lives outside both scheme blocks, because it is the same
-    // in both -- only how strong it is differs, and that is the half declared here.
+    // Counted rather than derived: adding a colour to one scheme and forgetting the
+    // other is the bug this case exists to catch, and a count that has to be edited
+    // makes adding one a decision instead of a slip. The texture is not part of the
+    // count -- it lives outside both blocks, because it is the same in both schemes
+    // and only its strength is declared per scheme.
     expect(customProps(dark).length).toBe(41);
   });
 
-
-
-
-    it('has a light scheme whose raise step is real', () => {
-    // This used to assert the opposite -- that `surface-raised` equalled
-    // `surface` in light, which is what made a selected row invisible there. With
+  it('has a light scheme whose raise step is real', () => {
+    // This used to assert the opposite -- that `--surface-raised` equalled
+    // `--surface` in light, which is what made a selected row invisible there. With
     // the palette on Radix the steps differ, so the trap is gone and the property
     // worth pinning is the one that replaced it.
     expect(canon(light.get('--surface-raised') ?? '')).not.toBe(canon(light.get('--surface') ?? ''));
   });
-
 
   it('sets color-scheme so native controls follow the pinned scheme', () => {
     expect(dark.get('color-scheme')).toBe('dark');

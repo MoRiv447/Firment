@@ -104,14 +104,19 @@
  * had happened was that you clicked a session.
  *
  * **Not `--surface-raised`.** That was the first attempt and it was invisible: in
- * the light scheme it is `#FFFFFF`, the same value as `--surface`, so a "raised"
+ * the light scheme it *was* white, the same value as `--surface`, so a "raised"
  * row on a `--surface` ground is the same colour as the thing it is raised from.
  * It looked correct in dark, which is how it got through -- the exact failure the
- * design doc describes as "only accidentally correct in one of the two".
+ * design doc describes as "only accidentally correct in one of the two". The
+ * Radix palette gave the two steps different values and
+ * `styles/__tests__/tokens-css.test.ts` now pins that they differ, so the trap is
+ * gone -- the rule below is still the right one, because a selected row is a
+ * surface and not a state.
  *
- * `--hover` is a wash in both schemes (#EDEFE6 on white, white-at-8% on the dark
- * ground), and the two things that outrank a hover do the rest: the shadow, and
- * the label weight the title already takes when the row is selected. */
+ * `--hover` is a wash in both schemes (`#e8e8e8` on the light ground, a
+ * translucent white on the dark one), and the two things that outrank a hover do
+ * the rest: the shadow, and the label weight the title already takes when the row
+ * is selected. */
 .item[data-selected='true'] .select {
   background: var(--hover);
 }
