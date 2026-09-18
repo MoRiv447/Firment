@@ -2209,6 +2209,19 @@ mod tests {
     }
 
     #[test]
+    fn review_last_is_refused_while_a_turn_is_running() {
+        // A review of a change that is still being written is a review of half a change,
+        // and the agent lock it takes is the one the running turn holds.
+        let mut app = test_app();
+        app.busy = true;
+
+        app.run_command("review-last");
+
+        assert_eq!(app.items.len(), 1);
+        assert!(matches!(app.items[0], Item::System(ref t) if t.contains("busy")));
+    }
+
+    #[test]
     fn retry_last_refuses_while_a_turn_is_running() {
         let mut app = test_app();
         app.items

@@ -120,6 +120,25 @@ impl Session {
         Some(prompt)
     }
 
+    /// The newest tool output that carries a unified diff, with the tool's name.
+    ///
+    /// What `firm review last` and the TUI's `/review-last` review: the change as it was
+    /// actually written, taken from the transcript rather than reconstructed from the
+    /// journal or the working tree (which may have moved on since).
+    pub fn last_change(&self) -> Option<(String, String)> {
+        self.messages
+            .iter()
+            .rev()
+            .find_map(|message| match message {
+                ChatMessage::Tool { name, content, .. }
+                    if crate::review::self_review::looks_like_diff(content) =>
+                {
+                    Some((name.clone(), content.clone()))
+                }
+                _ => None,
+            })
+    }
+
     pub fn title(&self) -> String {
         self.messages
             .iter()
@@ -899,6 +918,44 @@ mod tests {
         assert_eq!(s.retry_last(), None);
         s.push(assistant_msg("a greeting nobody asked for"));
         assert_eq!(s.retry_last(), None);
+    }
+
+    #[test]
+    fn the_last_change_is_the_newest_tool_output_that_carries_a_diff() {
+        let mut s = Session::new(PathBuf::from("."), "p", "m");
+        s.push(user_msg("edit it"));
+        // A tool call whose output is not a diff is not a change to review — its text is
+        // a summary, and reviewing a summary reviews nothing.
+        s.push(ChatMessage::Tool {
+            tool_call_id: "c1".to_string(),
+            name: "read_file".to_string(),
+            content: "fn main() {}\n".to_string(),
+        });
+        s.push(ChatMessage::Tool {
+            tool_call_id: "c2".to_string(),
+            name: "edit_file".to_string(),
+            content: "Edited main.c (1 lines -> 2 lines)\n@@ -1 +1,2 @@\n-old\n+new\n".to_string(),
+        });
+
+        let (tool, diff) = s.last_change().expect("the edit is a change");
+        assert_eq!(tool, "edit_file");
+        assert!(diff.contains("@@ -1 +1,2 @@"));
+        assert_eq!(
+            s.last_change().map(|(_, d)| d.contains("main.c")),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn a_session_that_only_read_files_has_no_change_to_review() {
+        let mut s = Session::new(PathBuf::from("."), "p", "m");
+        s.push(user_msg("look at it"));
+        s.push(ChatMessage::Tool {
+            tool_call_id: "c1".to_string(),
+            name: "read_file".to_string(),
+            content: "fn main() {}\n".to_string(),
+        });
+        assert!(s.last_change().is_none());
     }
 
     /// A session id is used in a path, so it must not be able to escape the

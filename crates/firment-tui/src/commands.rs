@@ -117,6 +117,56 @@ pub(crate) fn spawn_agent_task(
                 AgentCmd::User(text) => {
                     spawn_turn(Some(text));
                 }
+                // Spawned rather than awaited: §16.2-1 makes this the manual path of a
+                // capability whose whole point is not to add waiting, and this loop has to
+                // keep servicing `Cancel` while a model call is in flight. The agent lock
+                // is taken briefly three times -- read the diff, announce, report -- and
+                // never held across the call.
+                AgentCmd::ReviewLast => {
+                    let agent = agent.clone();
+                    let config = task_config.clone();
+                    tokio::spawn(async move {
+                        use firment_core::review::self_review;
+                        let (change, provider) = {
+                            let agent = agent.lock().await;
+                            let session = agent.session();
+                            (session.last_change(), session.provider.clone())
+                        };
+                        let Some((tool, diff)) = change else {
+                            let agent = agent.lock().await;
+                            agent
+                                .emit(AgentEvent::Info(
+                                    "No edit with a diff in this session yet - nothing to review."
+                                        .to_string(),
+                                ))
+                                .await;
+                            return;
+                        };
+                        let path = self_review::path_from_diff(&diff).unwrap_or(tool);
+                        {
+                            let agent = agent.lock().await;
+                            agent
+                                .emit(AgentEvent::Info(format!(
+                                    "Reviewing the last change to {path}..."
+                                )))
+                                .await;
+                        }
+                        let lines =
+                            match self_review::review_diff(&config, &provider, &path, &diff, None)
+                                .await
+                            {
+                                Ok(report) => review_lines(&report),
+                                // A review that could not run is a failure of the command,
+                                // and saying so is the point: the alternative is silence
+                                // that reads like "nothing wrong with your change".
+                                Err(e) => vec![format!("Review failed: {e}")],
+                            };
+                        let agent = agent.lock().await;
+                        for line in lines {
+                            agent.emit(AgentEvent::Info(line)).await;
+                        }
+                    });
+                }
                 AgentCmd::RetryLast => {
                     spawn_turn(None);
                 }
@@ -612,12 +662,38 @@ pub(crate) fn spawn_agent_task(
         }
     })
 }
+
+/// The review report as transcript lines.
+///
+/// One `Info` per line rather than one multi-line `Info`: the TUI renders an `Info` as a
+/// single row, so a multi-line string would arrive as one row with newlines inside it.
+fn review_lines(report: &firment_core::review::ReviewReport) -> Vec<String> {
+    let mut lines = vec![report.summary()];
+    for finding in report.ordered() {
+        lines.push(format!(
+            "{} {} — {}",
+            finding.severity.mark(),
+            finding.title,
+            finding.description
+        ));
+        if let Some(fix) = &finding.fix {
+            lines.push(format!("   fix: {fix}"));
+        }
+    }
+    for note in &report.notes {
+        lines.push(format!("Not checked: {note}"));
+    }
+    lines
+}
+
 #[derive(Debug)]
 pub(crate) enum AgentCmd {
     User(String),
     /// Re-send the last request, discarding what the turn recorded after it. Resolves
     /// inside the loop into a `User` with the recovered prompt.
     RetryLast,
+    /// Review the newest change in this session (plan §4-A's `/review-last`).
+    ReviewLast,
     Cancel,
     SetModel(String),
     SetThinking(ThinkingLevel),

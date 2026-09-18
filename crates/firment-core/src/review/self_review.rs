@@ -18,6 +18,40 @@ use super::{Finding, ReviewReport, Severity};
 use crate::config::Config;
 use crate::types::{ChatMessage, ChatRequest, ThinkingLevel};
 
+/// When an edit triggers a self-review (plan §4-A).
+///
+/// Lives in `config` next to the rest of the policy, but the *decision* is here so that
+/// the threshold has one implementation:
+///
+/// * `Off` — the default, and a requirement rather than a taste: §16.2-1 forbids the
+///   alternative because an extra model call per edit doubles both the wait and the bill
+///   for the user whose complaint was the waiting. What makes `Off` usable rather than a
+///   feature nobody can reach is the manual path (`/review-last`, `firm review last`).
+/// * `OnLarge` — only edits big enough to be worth a second opinion.
+/// * `On` — every edit. For a demonstration, or for someone who has decided the wait is
+///   worth it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AfterEdit {
+    #[default]
+    Off,
+    OnLarge,
+    On,
+}
+
+/// Whether this edit is worth a review under `policy`.
+///
+/// `OnLarge` is "more than `min_lines` changed, **or** more than one hunk": separate
+/// places in one edit are harder to read as a single change than the same number of lines
+/// in one place, so a small edit that touched three regions is large for this purpose.
+pub fn should_review(policy: AfterEdit, size: DiffSize, min_lines: usize) -> bool {
+    match policy {
+        AfterEdit::Off => false,
+        AfterEdit::On => true,
+        AfterEdit::OnLarge => size.total() > min_lines || size.hunks > 1,
+    }
+}
+
 /// Whether a tool's output carries a unified diff.
 ///
 /// The edit tools prepend a one-line "Edited …" header, so an `@@ ` hunk header is the
@@ -302,6 +336,51 @@ mod tests {
     use super::*;
 
     const DIFF: &str = "--- a/a.c\n+++ b/a.c\n@@ -1,3 +1,4 @@\n int main(void) {\n-    boot();\n+    boot();\n+    loop_forever();\n }\n";
+
+    #[test]
+    fn the_default_policy_reviews_nothing() {
+        // §16.2-1 as an assertion: if someone flips the default, this fails and the
+        // commit that does it has to say why.
+        assert_eq!(AfterEdit::default(), AfterEdit::Off);
+        let size = DiffSize {
+            added: 900,
+            removed: 900,
+            hunks: 9,
+        };
+        assert!(!should_review(AfterEdit::Off, size, 20));
+    }
+
+    #[test]
+    fn on_large_uses_both_the_size_and_the_number_of_places() {
+        let small = DiffSize {
+            added: 3,
+            removed: 1,
+            hunks: 1,
+        };
+        assert!(!should_review(AfterEdit::OnLarge, small, 20));
+        // A small edit in three separate places is large for this purpose.
+        let scattered = DiffSize {
+            added: 3,
+            removed: 1,
+            hunks: 3,
+        };
+        assert!(should_review(AfterEdit::OnLarge, scattered, 20));
+        let big = DiffSize {
+            added: 21,
+            removed: 0,
+            hunks: 1,
+        };
+        assert!(should_review(AfterEdit::OnLarge, big, 20));
+        // The threshold is exclusive: exactly twenty lines is not "more than twenty".
+        let exactly = DiffSize {
+            added: 20,
+            removed: 0,
+            hunks: 1,
+        };
+        assert!(!should_review(AfterEdit::OnLarge, exactly, 20));
+        // `On` does not consult either number.
+        assert!(should_review(AfterEdit::On, small, 20));
+    }
 
     #[test]
     fn a_diff_is_recognised_by_its_hunk_header() {

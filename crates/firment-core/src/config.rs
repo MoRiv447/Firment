@@ -54,6 +54,9 @@ pub struct Config {
     /// Display-only preferences. Never merged from a project config file.
     #[serde(default)]
     pub ui: UiConfig,
+    /// Self-review policy (plan §4-A). `off` by default; see [`AfterEdit`].
+    #[serde(default)]
+    pub review: ReviewConfig,
     /// Which command-bearing tool settings came from a project-local config
     /// file. Derived by `merged_for`, never persisted — `save` would otherwise
     /// write a repo-controlled fact into the user's own config.toml.
@@ -174,6 +177,33 @@ impl UiTheme {
 /// how verbose and how bright the UI is belongs to the person reading it, and a
 /// cloned repo should not be able to change what someone sees. Only the user's
 /// own config.toml and the CLI flags can set this.
+/// Self-review policy (plan §4-A). Not merged from a project config file, for the same
+/// reason as [`UiConfig`]: a cloned repository must not be able to make every edit of
+/// yours cost an extra model call.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewConfig {
+    /// When an edit triggers a self-review. See [`AfterEdit`].
+    #[serde(default)]
+    pub after_edit: crate::review::self_review::AfterEdit,
+    /// `on_large`'s threshold, in changed lines (added + removed).
+    #[serde(default = "default_review_min_lines")]
+    pub min_lines: usize,
+}
+
+impl Default for ReviewConfig {
+    fn default() -> Self {
+        Self {
+            // The plan's requirement, in one place.
+            after_edit: crate::review::self_review::AfterEdit::Off,
+            min_lines: default_review_min_lines(),
+        }
+    }
+}
+
+fn default_review_min_lines() -> usize {
+    20
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UiConfig {
     #[serde(default)]
@@ -644,6 +674,7 @@ impl Config {
             tool_wave_timeout_secs: default_tool_wave_timeout(),
             tool_cancel_grace_secs: default_tool_cancel_grace(),
             ui: UiConfig::default(),
+            review: ReviewConfig::default(),
             commands_from_project: CommandProvenance::default(),
         }
     }

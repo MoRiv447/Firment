@@ -1234,8 +1234,6 @@ async fn run_review_last(
     json: bool,
     markdown: bool,
 ) -> anyhow::Result<i32> {
-    use firment_core::ChatMessage;
-
     let config = load_config(cli)?;
     let store = SessionStore::default();
     let session = match session_arg {
@@ -1248,24 +1246,12 @@ async fn run_review_last(
         }
     };
 
-    let (tool, diff) = session
-        .messages
-        .iter()
-        .rev()
-        .find_map(|message| match message {
-            ChatMessage::Tool { name, content, .. }
-                if firment_core::review::self_review::looks_like_diff(content) =>
-            {
-                Some((name.clone(), content.clone()))
-            }
-            _ => None,
-        })
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "no edit with a diff in session {} yet — nothing to review",
-                session.id
-            )
-        })?;
+    let (tool, diff) = session.last_change().ok_or_else(|| {
+        anyhow::anyhow!(
+            "no edit with a diff in session {} yet — nothing to review",
+            session.id
+        )
+    })?;
 
     // The path is in the diff's own header; the tool name is the fallback label, so a
     // deleted file still gets a title that is true.
