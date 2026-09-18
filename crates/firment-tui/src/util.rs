@@ -72,7 +72,10 @@ pub(crate) fn truncate_chars(text: &str, max: usize) -> String {
 /// signal). Non-diff bodies are not worth a card body — the summary already
 /// says what happened.
 pub(crate) fn is_diff_body(detail: &str) -> bool {
-    detail.lines().any(|l| l.starts_with("@@ "))
+    // The rule lives in core: the CLI's `firm review last` and the self-review prompt
+    // ask the same question, and a heuristic copied per surface is a heuristic that
+    // drifts (2026-09-18).
+    firment_core::review::self_review::looks_like_diff(detail)
 }
 
 /// A diff small enough to show without being asked (the breathing-LED case in

@@ -18,6 +18,7 @@
 //!   a release; `Medium` is a thing to look at. Red is reserved for the first of those.
 
 pub mod deps;
+pub mod self_review;
 
 use serde::{Deserialize, Serialize};
 

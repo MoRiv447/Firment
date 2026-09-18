@@ -200,12 +200,15 @@ enum Command {
         #[arg(long)]
         show: bool,
     },
-    /// Review something and report findings. `firm review deps` audits the dependency
-    /// graph: licences always (offline, from the resolved metadata), advisories when
-    /// `cargo-audit` is installed.
+    /// Review something and report findings. `deps` audits the dependency graph
+    /// (licences always, advisories when `cargo-audit` is installed); `last` reviews the
+    /// newest change in a session with your own provider (plan §4-A, `/review-last`).
     Review {
-        /// What to review: `deps` for the dependency graph.
+        /// What to review: `deps` (dependency graph) or `last` (the newest change).
         target: Option<String>,
+        /// Session to review for `last` (id, or "latest" — the default).
+        #[arg(long)]
+        session: Option<String>,
         /// Machine-readable report on stdout.
         #[arg(long)]
         json: bool,
@@ -386,6 +389,7 @@ async fn main() -> anyhow::Result<()> {
             }
             Command::Review {
                 target,
+                session,
                 json,
                 markdown,
             } => {
@@ -393,7 +397,15 @@ async fn main() -> anyhow::Result<()> {
                     .cwd
                     .clone()
                     .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-                let code = run_review(target.as_deref().unwrap_or("deps"), &cwd, *json, *markdown)?;
+                let code = match target.as_deref().unwrap_or("deps") {
+                    "deps" | "dependencies" => run_review(&cwd, *json, *markdown)?,
+                    "last" => run_review_last(&cli, session.as_deref(), *json, *markdown).await?,
+                    other => anyhow::bail!(
+                        "review target '{other}' is not implemented yet - the static code \
+                         review (plan section 4-C) is the next capability; `firm review \
+                         deps` and `firm review last` work today"
+                    ),
+                };
                 if code != 0 {
                     std::process::exit(code);
                 }
@@ -1206,20 +1218,87 @@ fn show_config(config: &Config, path: &Path, out: &mut impl std::io::Write) -> s
     Ok(())
 }
 
+/// `firm review last` — the newest change in a session, reviewed by the user's own
+/// provider.
+///
+/// This is the manual half of plan §4-A, and §16.2-1 makes it the *primary* half: the
+/// automatic trigger defaults to off, because an extra model call per edit doubles the
+/// wait for the user whose complaint was the waiting. The command is therefore the way
+/// the capability is reached until someone opts in.
+///
+/// The diff comes from the transcript, which stores each tool's full output — so this
+/// reviews what was actually written, not a reconstruction of it.
+async fn run_review_last(
+    cli: &Cli,
+    session_arg: Option<&str>,
+    json: bool,
+    markdown: bool,
+) -> anyhow::Result<i32> {
+    use firment_core::ChatMessage;
+
+    let config = load_config(cli)?;
+    let store = SessionStore::default();
+    let session = match session_arg {
+        Some(id) if id != "latest" => store.load(id)?,
+        _ => {
+            let latest = store
+                .latest()?
+                .ok_or_else(|| anyhow::anyhow!("no session to review"))?;
+            store.load(&latest.id)?
+        }
+    };
+
+    let (tool, diff) = session
+        .messages
+        .iter()
+        .rev()
+        .find_map(|message| match message {
+            ChatMessage::Tool { name, content, .. }
+                if firment_core::review::self_review::looks_like_diff(content) =>
+            {
+                Some((name.clone(), content.clone()))
+            }
+            _ => None,
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no edit with a diff in session {} yet — nothing to review",
+                session.id
+            )
+        })?;
+
+    // The path is in the diff's own header; the tool name is the fallback label, so a
+    // deleted file still gets a title that is true.
+    let label =
+        firment_core::review::self_review::path_from_diff(&diff).unwrap_or_else(|| tool.clone());
+    let report = firment_core::review::self_review::review_diff(
+        &config,
+        &config.default_provider,
+        &label,
+        &diff,
+        None,
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!(e))?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else if markdown {
+        print!("{}", report.to_markdown());
+    } else {
+        print!("{}", render_review(&report));
+    }
+    let (high, _) = report.counts();
+    Ok(if high > 0 { 2 } else { 0 })
+}
+
 /// `firm review <target>`.
 ///
 /// Returns the exit code rather than exiting directly, so the caller owns that decision:
 /// 0 for a report with nothing high, 2 when something should stop a release. The CI
 /// action (plan section 5, item 6) needs exactly that signal, and an interactive run
 /// gets the same number.
-fn run_review(target: &str, cwd: &Path, json: bool, markdown: bool) -> anyhow::Result<i32> {
-    if target != "deps" && target != "dependencies" {
-        anyhow::bail!(
-            "review target '{target}' is not implemented yet - the static code review \
-             (plan section 4-C) is the next capability; `firm review deps` works today"
-        );
-    }
-
+fn run_review(cwd: &Path, json: bool, markdown: bool) -> anyhow::Result<i32> {
     // Metadata comes from the local cache (`--offline`): this machine has no network,
     // and a review that needs one is a review nobody runs.
     let mut report = match std::process::Command::new("cargo")
