@@ -1249,12 +1249,13 @@ fn run_monitor(
     elf: Option<PathBuf>,
     timeout_secs: u64,
 ) -> anyhow::Result<()> {
+    use firment_tools::tools::monitor::{
+        RECONNECT_ATTEMPTS, RECONNECT_DELAY, budget_spent, open_port,
+    };
     use std::io::Read;
     use std::time::{Duration, Instant};
-    let mut reader = serialport::new(port, baud)
-        .timeout(Duration::from_millis(500))
-        .open()
-        .map_err(|e| anyhow::anyhow!("failed to open serial port {port}: {e}"))?;
+    let mut reader = open_port(port, baud).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let mut reopen_attempts: u32 = 0;
     let elf = elf.as_deref();
     let symbol_index = elf.and_then(firment_tools::decode::SymbolIndex::from_path);
     let mut buf = [0u8; 4096];
@@ -1282,8 +1283,33 @@ fn run_monitor(
             // Decode per line, not per read: a character split across two
             // reads would otherwise print as U+FFFD.
             Ok(n) => splitter.feed(&buf[..n], &mut print_line),
+            // Silence is an idle port, not a fault.
             Err(e) if e.kind() == std::io::ErrorKind::TimedOut => continue,
-            Err(e) => return Err(anyhow::anyhow!("serial read failed: {e}")),
+            Err(e) => {
+                // A cable that moves mid-capture must not end the command. What has
+                // been printed is already on stdout, and the interesting lines -- a
+                // crash, or the reset the replug itself caused -- are usually just
+                // after the gap, which is exactly what stopping would throw away.
+                //
+                // Notices go to stderr so that `firm monitor > capture.log` stays the
+                // target's own output, byte for byte.
+                eprintln!("(serial port dropped: {e})");
+                if budget_spent(&mut reopen_attempts) {
+                    return Err(anyhow::anyhow!(
+                        "serial port {port} lost after {reopen_attempts} reopen attempt(s)"
+                    ));
+                }
+                std::thread::sleep(RECONNECT_DELAY);
+                match open_port(port, baud) {
+                    Ok(reopened) => {
+                        reader = reopened;
+                        eprintln!(
+                            "(serial port {port} back after {reopen_attempts} of {RECONNECT_ATTEMPTS} reopen attempt(s))"
+                        );
+                    }
+                    Err(e) => eprintln!("(reopen failed: {e})"),
+                }
+            }
         }
     }
     if let Some(tail) = splitter.take_tail() {
