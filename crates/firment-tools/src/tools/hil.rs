@@ -1952,6 +1952,7 @@ fn read_serial_with_expect(
     expect_regex: Option<&regex::Regex>,
     expect_count: usize,
 ) -> Result<String, String> {
+    use crate::tools::monitor::{RECONNECT_ATTEMPTS, RECONNECT_DELAY, budget_spent, open_port};
     use std::io::Read;
 
     // autodetect baud if requested
@@ -1968,10 +1969,11 @@ fn read_serial_with_expect(
         baud
     };
 
-    let mut reader = serialport::new(port, resolved_baud)
-        .timeout(Duration::from_millis(500))
-        .open()
-        .map_err(|e| format!("failed to open serial port {port}: {e}"))?;
+    let mut reader = open_port(port, resolved_baud)?;
+    let mut reopen_attempts: u32 = 0;
+    // The line count at the moment of the last drop: a capture that grew since then is
+    // evidence the port works, and the next drop is a new outage with a fresh budget.
+    let mut lines_at_loss: usize = 0;
 
     let start = Instant::now();
     let deadline = start + Duration::from_millis(timeout_ms);
@@ -2035,13 +2037,41 @@ fn read_serial_with_expect(
             Ok(n) => splitter.feed(&buf[..n], &mut |line| {
                 handle_line(line, &mut lines, &mut matched)
             }),
+            // Silence is an idle port, not a fault.
             Err(e)
                 if e.kind() == std::io::ErrorKind::TimedOut
                     || e.kind() == std::io::ErrorKind::WouldBlock =>
             {
                 continue;
             }
-            Err(e) => return Err(format!("serial read failed: {e}")),
+            Err(e) => {
+                // A cable that moves mid-capture must not fail the run and throw the
+                // capture away: the expect assertions are the point, and the lines the
+                // device already printed are the evidence for why they were or were not
+                // met. Same policy and budget as `monitor`'s capture, including the
+                // reset on a delivering stretch.
+                if lines.len() > lines_at_loss {
+                    reopen_attempts = 0;
+                }
+                lines_at_loss = lines.len();
+                lines.push(format!("(serial port dropped: {e})"));
+                if budget_spent(&mut reopen_attempts) {
+                    lines.push(format!(
+                        "(serial port lost after {reopen_attempts} reopen attempt(s): {e})"
+                    ));
+                    break;
+                }
+                std::thread::sleep(RECONNECT_DELAY);
+                match open_port(port, resolved_baud) {
+                    Ok(reopened) => {
+                        reader = reopened;
+                        lines.push(format!(
+                            "(serial port back after {reopen_attempts} of {RECONNECT_ATTEMPTS} reopen attempt(s))"
+                        ));
+                    }
+                    Err(e) => lines.push(format!("(reopen failed: {e})")),
+                }
+            }
         }
         if matched >= expect_count
             && (expect_contains.is_some() || expect_regex.is_some())
