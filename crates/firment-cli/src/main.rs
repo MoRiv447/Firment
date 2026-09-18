@@ -200,6 +200,19 @@ enum Command {
         #[arg(long)]
         show: bool,
     },
+    /// Review something and report findings. `firm review deps` audits the dependency
+    /// graph: licences always (offline, from the resolved metadata), advisories when
+    /// `cargo-audit` is installed.
+    Review {
+        /// What to review: `deps` for the dependency graph.
+        target: Option<String>,
+        /// Machine-readable report on stdout.
+        #[arg(long)]
+        json: bool,
+        /// Markdown report, for a PR comment or a file.
+        #[arg(long)]
+        markdown: bool,
+    },
     /// Environment self-check: config + providers, install state, toolchain
     /// on PATH, serial ports and [tools] semantics — so flash/build/monitor
     /// fail at setup time with a fix hint, not mid-task.
@@ -369,6 +382,20 @@ async fn main() -> anyhow::Result<()> {
                     show_config(&config, &path, &mut std::io::stdout())?;
                 } else {
                     run_config(&path)?;
+                }
+            }
+            Command::Review {
+                target,
+                json,
+                markdown,
+            } => {
+                let cwd = cli
+                    .cwd
+                    .clone()
+                    .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let code = run_review(target.as_deref().unwrap_or("deps"), &cwd, *json, *markdown)?;
+                if code != 0 {
+                    std::process::exit(code);
                 }
             }
             Command::Doctor { sbc, json } => {
@@ -1179,6 +1206,164 @@ fn show_config(config: &Config, path: &Path, out: &mut impl std::io::Write) -> s
     Ok(())
 }
 
+/// `firm review <target>`.
+///
+/// Returns the exit code rather than exiting directly, so the caller owns that decision:
+/// 0 for a report with nothing high, 2 when something should stop a release. The CI
+/// action (plan section 5, item 6) needs exactly that signal, and an interactive run
+/// gets the same number.
+fn run_review(target: &str, cwd: &Path, json: bool, markdown: bool) -> anyhow::Result<i32> {
+    if target != "deps" && target != "dependencies" {
+        anyhow::bail!(
+            "review target '{target}' is not implemented yet - the static code review \
+             (plan section 4-C) is the next capability; `firm review deps` works today"
+        );
+    }
+
+    // Metadata comes from the local cache (`--offline`): this machine has no network,
+    // and a review that needs one is a review nobody runs.
+    let mut report = match std::process::Command::new("cargo")
+        .args(["metadata", "--offline", "--format-version", "1"])
+        .current_dir(cwd)
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            firment_core::review::deps::review_metadata(&String::from_utf8_lossy(&output.stdout))
+                .map_err(|e| anyhow::anyhow!(e))?
+        }
+        // An incomplete cache is enough to make that fail — measured on this workspace:
+        // one crate the lockfile names and nobody ever downloaded, with `--offline` and
+        // no network to fetch it. Cargo.lock still lists every package, so the review
+        // continues from it and the licences come from whichever manifests the cache
+        // does hold. The reason goes into the notes: a report that cannot say why it
+        // knows less than usual is a report nobody can act on.
+        Ok(output) => {
+            let lock = std::fs::read_to_string(cwd.join("Cargo.lock"))
+                .map_err(|e| anyhow::anyhow!("Cargo.lock: {e}"))?;
+            let mut resolver = |name: &str, version: &str| {
+                firment_core::review::deps::cached_license_of(name, version)
+            };
+            let mut report = firment_core::review::deps::review_lockfile(&lock, &mut resolver)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let reason = stderr
+                .lines()
+                .find(|line| line.contains("failed to download"))
+                .or_else(|| {
+                    stderr
+                        .lines()
+                        .find(|line| line.trim_start().starts_with("error"))
+                })
+                .unwrap_or("`cargo metadata` could not resolve the graph")
+                .trim()
+                .trim_start_matches("error: ")
+                .to_string();
+            report.note(format!(
+                "{reason} — the review read Cargo.lock and the cached manifests instead, \
+                 so a licence it could not find is reported as unknown rather than fine"
+            ));
+            report
+        }
+        Err(e) => anyhow::bail!("could not run `cargo metadata`: {e}"),
+    };
+
+    // The advisory half is optional by design (plan section 4-D). A missing tool or an
+    // unreachable database is a NOTE, never a finding: "I could not look" is not "this
+    // is broken" (section 16.4), and a red report for an uninstalled tool teaches the
+    // reader to ignore the red.
+    match std::process::Command::new("cargo")
+        .args(["audit", "--json"])
+        .current_dir(cwd)
+        .output()
+    {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // `cargo audit` exits non-zero when it HAS findings, so the JSON decides -
+            // not the status.
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // cargo with the subcommand missing fails with "no such command" and an
+            // empty stdout, so the not-installed case lands here rather than at the spawn
+            // error. Both mean the same thing to a reader, and neither is a finding.
+            if stdout.trim().is_empty() && stderr.contains("no such command") {
+                report.note(
+                    "advisory check skipped: `cargo-audit` is not installed (`cargo install cargo-audit`)",
+                );
+            } else if stdout.trim().is_empty() {
+                report.note(format!(
+                    "advisory check produced no JSON: {}",
+                    stderr.trim()
+                ));
+            } else {
+                match firment_core::review::deps::review_advisories(&stdout) {
+                    Ok(findings) => {
+                        let count = findings.len();
+                        for finding in findings {
+                            report.push(finding);
+                        }
+                        report.detail(format!("{count} advisories from cargo-audit"));
+                    }
+                    Err(e) => report.note(format!("advisory check could not be parsed: {e}")),
+                }
+            }
+        }
+        Err(_) => report.note(
+            "advisory check skipped: `cargo-audit` is not installed (`cargo install \
+             cargo-audit` - it fetches the advisory database, so it wants a network the \
+             first time)",
+        ),
+    }
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else if markdown {
+        print!("{}", report.to_markdown());
+    } else {
+        print!("{}", render_review(&report));
+    }
+
+    let (high, _) = report.counts();
+    Ok(if high > 0 { 2 } else { 0 })
+}
+
+/// The compact terminal rendering: the same facts the Markdown export carries, without
+/// the ceremony. Separate from `to_markdown` because a terminal is not a file - the
+/// export lands in a PR comment, read by someone who did not run it.
+fn render_review(report: &firment_core::review::ReviewReport) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(out, "{}", report.summary());
+    for line in &report.details {
+        let _ = writeln!(out, "  {line}");
+    }
+    if !report.findings.is_empty() {
+        let _ = writeln!(out);
+    }
+    for finding in report.ordered() {
+        let _ = writeln!(
+            out,
+            "{} {} [{}]{}",
+            finding.severity.mark(),
+            finding.title,
+            finding.category,
+            finding
+                .file
+                .as_deref()
+                .map(|f| format!(" ({f})"))
+                .unwrap_or_default()
+        );
+        if let Some(fix) = &finding.fix {
+            let _ = writeln!(out, "    fix: {fix}");
+        }
+    }
+    if !report.notes.is_empty() {
+        let _ = writeln!(out, "\nNot checked:");
+        for note in &report.notes {
+            let _ = writeln!(out, "  - {note}");
+        }
+    }
+    out
+}
+
 fn run_config(config_path: &Path) -> anyhow::Result<()> {
     use firment_core::{CATALOG, ProviderConfig};
 
@@ -1426,6 +1611,45 @@ fn format_ts(secs: u64) -> String {
 mod tests {
     use super::*;
     use firment_core::config::CommandProvenance;
+
+    #[test]
+    fn the_terminal_rendering_leads_with_the_summary_and_keeps_the_notes() {
+        // What the user actually reads. The summary first (the answer), then the
+        // findings worst-first with their fix, then — and this is the part a prettier
+        // renderer would drop — what the review could not check.
+        use firment_core::review::{Finding, ReviewReport, Severity};
+
+        let mut report = ReviewReport::new("dependencies");
+        report.detail("120 third-party packages");
+        report.push(
+            Finding::new(
+                "i",
+                "weak copyleft dependency: mpl-thing 1.0",
+                Severity::Medium,
+                "dependency",
+                "d",
+            )
+            .with_fix("check what the licence asks for"),
+        );
+        report.note("advisory check skipped: `cargo-audit` is not installed");
+
+        let text = render_review(&report);
+        assert!(
+            text.starts_with("dependencies: 0 high, 1 medium\n"),
+            "got: {text}"
+        );
+        assert!(text.contains("  120 third-party packages"), "got: {text}");
+        assert!(text.contains("□ weak copyleft dependency"), "got: {text}");
+        assert!(
+            text.contains("    fix: check what the licence asks for"),
+            "got: {text}"
+        );
+        assert!(text.contains("Not checked:"), "got: {text}");
+        assert!(
+            text.contains("cargo-audit` is not installed"),
+            "got: {text}"
+        );
+    }
 
     #[test]
     fn show_never_prints_the_api_key_value() {

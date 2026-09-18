@@ -10,6 +10,7 @@ pub mod kb;
 pub mod permission;
 pub mod provider;
 pub mod providers;
+pub mod review;
 pub mod schema;
 pub mod session;
 pub mod subagent;
