@@ -172,6 +172,9 @@ export function turnReducer(state: TurnState, e: FrontendEvent): TurnState {
         status: e.ok ? 'ok' : 'failed',
         summary: e.summary,
         detail: e.detail,
+        // Same update as the status, so the duration a card reports and the outcome
+        // it reports are one fact instead of two that could drift.
+        endedAt: Date.now(),
       });
       const subagents = routeToSubagent(state, (steps) =>
         steps.map((t) => (t.seq === e.seq ? patch(t) : t)),

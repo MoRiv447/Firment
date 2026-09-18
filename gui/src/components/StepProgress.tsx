@@ -1,3 +1,4 @@
+import { formatStepDuration } from '../lib/timing';
 import styles from './StepProgress.module.css';
 
 /**
@@ -31,6 +32,12 @@ import styles from './StepProgress.module.css';
  * `styles/tokens.ts` in JS, so a step row kept the colours of whichever scheme the
  * token cache had resolved when it first rendered, and switching the OS to light
  * mid-session left the progress row behind in the dark.
+ *
+ * The numbers follow one rule (`lib/timing.ts`): **measured, or absent.** A finished
+ * step reports what it took, a running one counts up, and `~4.0s` sits beside the
+ * running step only when this session has already watched the same tool finish at
+ * least twice. A step that has not started gets no number -- the row reports, it does
+ * not forecast.
  */
 
 export type StepState = 'done' | 'current' | 'pending' | 'unknown' | 'failed';
@@ -40,6 +47,14 @@ export interface StepProgressItem {
   key: string;
   label?: string;
   state: StepState;
+  /** Measured: the whole run for a finished step, so far for a running one. */
+  elapsedMs?: number;
+  /**
+   * What this step is likely to take, from this session's completed runs of the
+   * same tool. `null` or absent when there is no such history — the row shows the
+   * elapsed time alone rather than a made-up number.
+   */
+  estimateMs?: number | null;
 }
 
 /** The glyph for a state. `unknown` is `o`, never `x` -- unknown is not failed. */
@@ -67,6 +82,24 @@ const STATE_WORDS: Record<StepState, string> = {
   failed: 'failed',
 };
 
+/**
+ * The whole row, spoken.
+ *
+ * The numbers are as invisible to a screen reader as the glyph is, so they are said
+ * out loud here -- and said for what they are: a finished step *took* its duration,
+ * a running one has been going that long, and an estimate is prefixed `about` rather
+ * than stated.
+ */
+function spoken(item: StepProgressItem): string {
+  const name = `${item.label ?? item.key}: ${STATE_WORDS[item.state]}`;
+  if (item.elapsedMs === undefined) return name;
+
+  const elapsed = formatStepDuration(item.elapsedMs);
+  if (item.state !== 'current') return `${name}, took ${elapsed}`;
+  if (item.estimateMs == null) return `${name} for ${elapsed}`;
+  return `${name} for ${elapsed}, about ${formatStepDuration(item.estimateMs)} expected`;
+}
+
 export function StepProgress({ steps }: { steps: StepProgressItem[] }) {
   return (
     <div data-ui="step-progress" role="list" className={styles.root}>
@@ -77,13 +110,26 @@ export function StepProgress({ steps }: { steps: StepProgressItem[] }) {
           data-state={step.state}
           role="listitem"
           aria-current={step.state === 'current' ? 'step' : undefined}
-          aria-label={`${step.label ?? step.key}: ${STATE_WORDS[step.state]}`}
+          aria-label={spoken(step)}
           className={styles.step}
         >
           <span aria-hidden className={styles.mark}>
             {glyph(step.state)}
           </span>
           <span>{step.label ?? step.key}</span>
+          {/*
+            * A duration only where one was measured, and an estimate only beside a
+            * running step. A step that has not started carries neither: the row
+            * reports, it does not forecast.
+            */}
+          {step.elapsedMs !== undefined && (
+            <span className={styles.time} aria-hidden>
+              {formatStepDuration(step.elapsedMs)}
+              {step.state === 'current' &&
+                step.estimateMs != null &&
+                ` · ~${formatStepDuration(step.estimateMs)}`}
+            </span>
+          )}
         </span>
       ))}
     </div>

@@ -302,6 +302,15 @@ export interface ToolCardState {
   detail?: string | null;
   /** Wall-clock start for the per-tool elapsed label. */
   startedAt?: number;
+  /**
+   * Wall-clock end, set the moment the status becomes final.
+   *
+   * Recorded here rather than derived later so a card's duration and its outcome
+   * are written in the same update: a duration that arrived separately could
+   * disagree with the check mark next to it, which is the failure `lib/steps.ts`
+   * exists to avoid at the row level.
+   */
+  endedAt?: number;
 }
 
 export interface RunningTurn {

@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { WORKFLOW, workflowSteps } from '../steps';
+import { recordCompleted, resetRuns } from '../timing';
 import type { ToolCardState } from '../../types';
 
 /**
@@ -92,5 +93,57 @@ describe('workflowSteps', () => {
     ]);
     // A failed edit is not a failed build, and the row says nothing about it.
     expect(states).toEqual(['done', 'pending', 'pending']);
+  });
+});
+
+/**
+ * The other half of the row: what it is allowed to say about time.
+ *
+ * `steps.ts` passes the tools' clocks through and adds nothing of its own, so the
+ * cases worth pinning are the ones where a card has no clock at all -- a step that
+ * has not started, and one reopened from a transcript.
+ */
+describe('workflowSteps timings', () => {
+  beforeEach(() => {
+    resetRuns();
+  });
+
+  const timed = (
+    seq: number,
+    name: string,
+    status: ToolCardState['status'],
+    startedAt?: number,
+    endedAt?: number,
+  ): ToolCardState => ({ seq, name, args: {}, status, startedAt, endedAt });
+
+  it('carries the measured duration of a finished step', () => {
+    const steps = workflowSteps([timed(1, 'build', 'ok', 1_000, 5_234)], 99_999);
+    expect(steps?.[0]).toMatchObject({ key: 'build', state: 'done', elapsedMs: 4_234 });
+    // A finished step is not predicted: what is left to estimate is nothing.
+    expect(steps?.[0].estimateMs).toBeNull();
+  });
+
+  it('counts a running step up to the caller\u2019s clock', () => {
+    const steps = workflowSteps([timed(1, 'flash', 'running', 10_000)], 13_500);
+    expect(steps?.[1]).toMatchObject({ key: 'flash', state: 'current', elapsedMs: 3_500 });
+    // No history for `flash` in this session, so no estimate is offered.
+    expect(steps?.[1].estimateMs).toBeNull();
+  });
+
+  it('offers an estimate once the same tool has been watched finish twice', () => {
+    recordCompleted([
+      timed(1, 'build', 'ok', 0, 4_000),
+      timed(2, 'build', 'ok', 0, 6_000),
+    ]);
+    const steps = workflowSteps([timed(3, 'build', 'running', 1_000)], 3_000);
+    expect(steps?.[0]).toMatchObject({ state: 'current', elapsedMs: 2_000, estimateMs: 5_000 });
+  });
+
+  it('says nothing about a step nobody timed', () => {
+    // A reopened transcript card: the tool was called, but the card has neither a
+    // start nor an end, so there is no duration to show and none to invent.
+    const steps = workflowSteps([timed(1, 'build', 'unknown')], 99_999);
+    expect(steps?.[0]).toMatchObject({ key: 'build', state: 'pending' });
+    expect(steps?.[0].elapsedMs).toBeUndefined();
   });
 });

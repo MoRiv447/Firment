@@ -1,5 +1,6 @@
 import type { ToolCardState } from '../types';
 import type { StepProgressItem, StepState } from '../components/StepProgress';
+import { timingFor } from './timing';
 
 /**
  * The embedded workflow, derived from the tools a turn actually ran.
@@ -42,8 +43,17 @@ function stateFor(status: ToolCardState['status']): StepState {
  * `null` rather than three pending steps: a chat that never builds anything
  * should not carry an empty build/flash/monitor row. That is the "unconfigured
  * -> hidden entirely" rule in docs/design/tokens.md, applied to a turn.
+ *
+ * `now` is passed in rather than read here so the row re-renders on the caller's
+ * clock: the elapsed label of a running step has to move, and a component that
+ * called `Date.now()` during render would only move when something else caused a
+ * render. It defaults to the real clock, which is what a test that does not care
+ * about timing wants.
  */
-export function workflowSteps(tools: ToolCardState[]): StepProgressItem[] | null {
+export function workflowSteps(
+  tools: ToolCardState[],
+  now: number = Date.now(),
+): StepProgressItem[] | null {
   const byName = new Map<string, ToolCardState>();
   for (const tool of [...tools].sort((a, b) => a.seq - b.seq)) {
     // Last wins: a second build after a failure is the attempt that counts.
@@ -53,10 +63,14 @@ export function workflowSteps(tools: ToolCardState[]): StepProgressItem[] | null
 
   return WORKFLOW.map((step) => {
     const tool = byName.get(step.name);
+    const timing = tool ? timingFor(tool, now) : null;
     return {
       key: step.name,
       label: step.label,
       state: tool ? stateFor(tool.status) : 'pending',
+      // Only a step with a clock carries one: a reopened card has no `startedAt`,
+      // and a step nobody timed prints nothing rather than `0.0s`.
+      ...(timing ? { elapsedMs: timing.elapsedMs, estimateMs: timing.estimateMs } : {}),
     };
   });
 }

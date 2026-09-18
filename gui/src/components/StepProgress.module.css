@@ -55,3 +55,17 @@
 .step[data-state='pending'] .mark {
   opacity: 0.7;
 }
+
+/*
+ * The measured duration, and the estimate beside it when there is real history.
+ *
+ * It is set apart by **size and digits, not by colour**: a filled step's ink is one
+ * half of a measured pair (`--step-done-ink` on `--step-done-bg`), and dimming it to
+ * `--muted` would put an unmeasured colour on that fill, which is the failure this
+ * file's header describes. Tabular numerals keep the counter from jittering as it
+ * counts, since a proportional `1` is narrower than the `8` it replaces.
+ */
+.time {
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+}

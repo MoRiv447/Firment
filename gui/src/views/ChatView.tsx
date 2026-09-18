@@ -8,6 +8,7 @@ import { StepProgress } from '../components/StepProgress';
 import { formatDuration } from '../lib/format';
 import { shouldShowStallNotice, stallNotice } from '../lib/stallHint';
 import { workflowSteps } from '../lib/steps';
+import { recordCompleted } from '../lib/timing';
 import type { RunningTurn, SessionDto } from '../types';
 import { Button, Callout, Chip, EmptyState, Icon, Spinner, TextArea } from '../ui';
 import styles from './ChatView.module.css';
@@ -49,6 +50,10 @@ export function ChatView({
   // Seconds since the last visible event, ticking every second while running —
   // the user can watch this climb to tell a slow model from a wedged turn.
   const [idleSecs, setIdleSecs] = useState(0);
+  // The step row's clock. It rides the interval below rather than opening a second
+  // one: two tickers a second apart would let the row's counter and `idleSecs`
+  // disagree, and the view only needs to re-render at one rate.
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   // Detect a stuck agent: running is on but nothing has changed in the
   // visible turn (text delta, new tool, or a tool finishing) for too long.
@@ -76,6 +81,7 @@ export function ChatView({
     const tick = setInterval(() => {
       const idle = Math.floor((Date.now() - lastChangeRef.current) / 1000);
       setIdleSecs(idle);
+      setNowMs(Date.now());
       if (shouldShowStallNotice(idle)) setStuck(true);
     }, 1000);
     return () => clearInterval(tick);
@@ -124,10 +130,17 @@ export function ChatView({
   };
 
   const toolList = turn ? Object.values(turn.tools) : [];
+  // Every finished run feeds the estimate the step row may show, and the record is
+  // idempotent by `seq`, so it can run on each render instead of needing a diff of
+  // the tools list against the previous one.
+  useEffect(() => {
+    recordCompleted(toolList);
+  });
   // Where the embedded workflow got to, computed from those same tools rather
   // than tracked separately -- see `lib/steps.ts`. Null for a chat that never
-  // builds anything, so the row does not appear as empty furniture.
-  const steps = workflowSteps(toolList);
+  // builds anything, so the row does not appear as empty furniture. `nowMs` is what
+  // makes a running step's elapsed count up.
+  const steps = workflowSteps(toolList, nowMs);
   const runningTools = toolList.filter((t) => t.status === 'running');
   const lastRunning = runningTools[runningTools.length - 1];
   const waiting = running && !lastRunning && !turn?.text;

@@ -181,3 +181,51 @@ describe('StepProgress', () => {
   });
 });
 
+/**
+ * The numbers the row is allowed to print.
+ *
+ * The rule they are held to (`lib/timing.ts`): a duration is measured or absent, and
+ * an estimate appears only with real history behind it. So the interesting cases
+ * here are the ones that must render *nothing* -- a step that has not started, and a
+ * card reopened from a transcript with no clock on it.
+ */
+describe('the numbers on a step row', () => {
+  it('reports what a finished step took', () => {
+    render(
+      <StepProgress steps={[{ key: 'build', label: 'Build', state: 'done', elapsedMs: 4_234 }]} />,
+    );
+    expect(screen.getByText('4.2s')).toBeInTheDocument();
+    expect(screen.getByRole('listitem', { name: /build/i })).toHaveAccessibleName(
+      'Build: done, took 4.2s',
+    );
+  });
+
+  it('counts a running step up, and shows the estimate beside it when there is one', () => {
+    render(
+      <StepProgress
+        steps={[{ key: 'flash', label: 'Flash', state: 'current', elapsedMs: 3_100, estimateMs: 4_000 }]}
+      />,
+    );
+    expect(screen.getByText('3.1s · ~4.0s')).toBeInTheDocument();
+    // Said out loud it is an estimate, not a promise.
+    expect(screen.getByRole('listitem')).toHaveAccessibleName(
+      'Flash: in progress for 3.1s, about 4.0s expected',
+    );
+  });
+
+  it('shows the elapsed count alone when the tool has no history', () => {
+    render(
+      <StepProgress
+        steps={[{ key: 'flash', label: 'Flash', state: 'current', elapsedMs: 3_100, estimateMs: null }]}
+      />,
+    );
+    expect(screen.getByText('3.1s')).toBeInTheDocument();
+  });
+
+  it('prints no number at all for a step that has not started', () => {
+    render(<StepProgress steps={[{ key: 'monitor', label: 'Monitor', state: 'pending' }]} />);
+    // Not `0.0s`, not a forecast: the row reports, and there is nothing to report.
+    expect(screen.getByRole('listitem').textContent).not.toMatch(/\d/);
+  });
+});
+
