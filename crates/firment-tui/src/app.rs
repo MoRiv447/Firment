@@ -45,6 +45,9 @@ pub(crate) struct App {
     pub(crate) ai_thinking: bool,
     /// Tools currently running (raw name, activity label) for status hints.
     pub(crate) active_tools: Vec<(String, String)>,
+    /// Completed runs per tool name, for the elapsed label's estimate. The rule
+    /// is `crate::step_time`'s: the median of at least two real runs, or nothing.
+    pub(crate) tool_runs: crate::step_time::Runs,
     /// How far up the verification ladder this session has got. Fed by the same
     /// two tool events as `active_tools`, drawn by the EVIDENCE panel.
     pub(crate) evidence: Evidence,
@@ -164,6 +167,7 @@ impl App {
             busy: false,
             ai_thinking: false,
             active_tools: Vec::new(),
+            tool_runs: crate::step_time::Runs::new(),
             evidence: Evidence::default(),
             la_reading: None,
             device: Device::default(),
@@ -243,6 +247,8 @@ impl App {
                         detail: Some(content.clone()),
                         expanded,
                         summary: content.clone(),
+                        started_at: None,
+                        ended_at: None,
                     });
                 }
                 ChatMessage::System { content } => {
@@ -315,6 +321,8 @@ impl App {
                     summary,
                     detail: None,
                     expanded: false,
+                    started_at: Some(Instant::now()),
+                    ended_at: None,
                 });
             }
             AgentEvent::ToolEnd {
@@ -338,6 +346,11 @@ impl App {
                 // Decided before the loop: `should_auto_expand` borrows `self`,
                 // which the mutable item iteration below already holds.
                 let auto_expand = self.should_auto_expand(detail.as_deref());
+                // The clock is read once, here, rather than inside the loop: two
+                // cards finishing in one batch must not be timed a microsecond
+                // apart by when the loop reached them.
+                let ended_at = Instant::now();
+                let mut took = None;
                 for item in self.items.iter_mut().rev() {
                     if let Item::Tool {
                         name: n,
@@ -347,6 +360,8 @@ impl App {
                         summary: current_summary,
                         detail: current_detail,
                         expanded,
+                        started_at,
+                        ended_at: current_end,
                     } = item
                         && n == &name
                         && *item_seq == seq
@@ -356,8 +371,16 @@ impl App {
                         *current_summary = summary;
                         *expanded = auto_expand;
                         *current_detail = detail;
+                        // Written with `running`, not after it: a card whose
+                        // duration arrived in a later update could disagree with
+                        // the mark next to it.
+                        *current_end = Some(ended_at);
+                        took = started_at.map(|s| ended_at.saturating_duration_since(s));
                         break;
                     }
+                }
+                if let Some(took) = took {
+                    crate::step_time::record(&mut self.tool_runs, &name, took);
                 }
                 // The card just stopped being `is_row_dynamic` (its spinner is
                 // gone), so the wrapped rows are now served from cache: without
@@ -2073,6 +2096,12 @@ pub(crate) enum Item {
         /// Whether this card's diff body is open. Per card, and always reset
         /// to the small-diff default when the card is (re)built.
         expanded: bool,
+        /// Wall-clock start, for the card's elapsed label. `None` for a card
+        /// restored from a stored transcript: the tool ran, but nobody timed it.
+        started_at: Option<Instant>,
+        /// Wall-clock end, set in the same update that clears `running`, so the
+        /// duration a card shows and the mark beside it are one fact.
+        ended_at: Option<Instant>,
     },
     /// Permission confirmations render as inline cards in the transcript
     /// instead of popups covering the context.

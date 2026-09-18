@@ -29,6 +29,7 @@ mod motion;
 mod paste;
 mod pickers;
 mod rail;
+mod step_time;
 mod theme;
 mod util;
 mod view;
@@ -1306,6 +1307,78 @@ mod tests {
     }
 
     #[test]
+    fn a_card_is_timed_from_its_own_start_and_end() {
+        let mut app = test_app();
+        app.on_agent(AgentEvent::ToolStart {
+            name: "build".to_string(),
+            args: serde_json::json!({}),
+            seq: 1,
+        });
+        // A running card has a start and no end: that is what makes its label count
+        // up instead of printing a total it does not have yet.
+        let Some(Item::Tool {
+            started_at,
+            ended_at,
+            ..
+        }) = app.items.last()
+        else {
+            panic!("the start should have opened a card");
+        };
+        assert!(started_at.is_some());
+        assert!(ended_at.is_none());
+
+        app.on_agent(AgentEvent::ToolEnd {
+            name: "build".to_string(),
+            ok: true,
+            summary: "built".to_string(),
+            detail: None,
+            seq: 1,
+        });
+        let Some(Item::Tool {
+            running,
+            started_at,
+            ended_at,
+            ..
+        }) = app.items.last()
+        else {
+            panic!("the card should still be there");
+        };
+        // The end is written with the outcome, in the same update, so the duration
+        // and the mark beside it cannot come from two different moments.
+        assert!(!running);
+        assert!(started_at.is_some());
+        assert!(ended_at.is_some());
+        assert_eq!(app.tool_runs.get("build").map(Vec::len), Some(1));
+        assert!(
+            crate::step_time::estimate(&app.tool_runs, "build").is_none(),
+            "one run is not a median"
+        );
+    }
+
+    #[test]
+    fn the_estimate_needs_two_real_runs() {
+        let mut app = test_app();
+        for seq in 1..=2u64 {
+            app.on_agent(AgentEvent::ToolStart {
+                name: "flash".to_string(),
+                args: serde_json::json!({}),
+                seq,
+            });
+            app.on_agent(AgentEvent::ToolEnd {
+                name: "flash".to_string(),
+                ok: true,
+                summary: String::new(),
+                detail: None,
+                seq,
+            });
+        }
+        assert_eq!(app.tool_runs["flash"].len(), 2);
+        // The value comes off the clock, so the assertion is that it *exists*: two
+        // runs of the same tool are what makes a third one predictable at all.
+        assert!(crate::step_time::estimate(&app.tool_runs, "flash").is_some());
+    }
+
+    #[test]
     fn a_measurement_from_the_analyzer_reaches_the_la_block() {
         let mut app = test_app();
         app.on_agent(AgentEvent::ToolEnd {
@@ -1759,6 +1832,11 @@ mod tests {
             summary: "Edited a.c".to_string(),
             detail: Some(diff),
             expanded: true,
+            // Hand-built, so there is no clock on it -- the same shape a card
+            // restored from a stored transcript has, which is what the elapsed
+            // label has to render as nothing rather than `0.0s`.
+            started_at: None,
+            ended_at: None,
         });
 
         app.run_command("verbosity summary");

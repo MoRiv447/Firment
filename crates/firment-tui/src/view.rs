@@ -2,6 +2,8 @@
 //! `app.rs` so state transitions and drawing evolve independently; this impl
 //! block only reads state (plus the selection highlighter used by the rows).
 
+use std::time::Instant;
+
 use crate::MAX_INPUT_HEIGHT;
 use crate::app::{App, Item};
 use crate::util::{
@@ -282,6 +284,8 @@ impl App {
                 summary,
                 detail,
                 expanded,
+                started_at,
+                ended_at,
             } => {
                 // Finished cards dim into the background: the eye should go
                 // to what is RUNNING, not to a wall of bright history.
@@ -309,8 +313,27 @@ impl App {
                 } else {
                     " "
                 };
+                // Measured, or absent (`crate::step_time`). A card with no clock --
+                // and every card restored from a stored transcript is one -- prints
+                // nothing rather than `0.0s`, and only a RUNNING card may carry an
+                // estimate, because a finished one has nothing left to predict.
+                let elapsed = crate::step_time::measured(*started_at, *ended_at, Instant::now())
+                    .map(|took| {
+                        let mut text = format!(" {}", crate::step_time::format_step_duration(took));
+                        if *running
+                            && let Some(expected) =
+                                crate::step_time::estimate(&self.tool_runs, name)
+                        {
+                            text.push_str(&format!(
+                                " ~{}",
+                                crate::step_time::format_step_duration(expected)
+                            ));
+                        }
+                        text
+                    })
+                    .unwrap_or_default();
                 let line = format!(
-                    "{symbol} {name} {marker} {}{}",
+                    "{symbol} {name}{elapsed} {marker} {}{}",
                     truncate_chars(summary, 120),
                     counts.unwrap_or_default()
                 );
