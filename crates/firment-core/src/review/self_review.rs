@@ -52,6 +52,73 @@ pub fn should_review(policy: AfterEdit, size: DiffSize, min_lines: usize) -> boo
     }
 }
 
+/// The change in one tool result that the policy says to review, if any.
+///
+/// This is the whole of the automatic trigger's decision, kept pure so it can be tested
+/// without an agent, a provider or a clock:
+///
+/// * only the two tools that *write* a file (`edit_file`, `write_file`) — a `read_file`
+///   result has no diff to review, and a `shell` command's output that happens to contain
+///   `@@ ` lines is not a change anyone made;
+/// * only when the policy says so (§16.2-1: `off` by default);
+/// * and only when the size clears `on_large`'s bar.
+///
+/// The caller gets the path the diff names, falling back to the tool's name when it names
+/// none — a deleted file still gets a title that is true.
+pub fn reviewable_change(
+    tool: &str,
+    path: Option<&str>,
+    output: &str,
+    policy: AfterEdit,
+    min_lines: usize,
+) -> Option<(String, String)> {
+    if policy == AfterEdit::Off {
+        return None;
+    }
+    if !matches!(tool, "edit_file" | "write_file") || !looks_like_diff(output) {
+        return None;
+    }
+    if !should_review(policy, diff_size(output), min_lines) {
+        return None;
+    }
+    // The tool call's own `path` argument is what the model asked to change, and it is
+    // the only source that is always right: the output's header is a human-readable
+    // summary ("Edited a.c (1 lines -> 3 lines)") and `edit_file` does *not* emit
+    // `---`/`+++` lines, so a diff-header lookup mostly does not apply here. Falling back
+    // to the tool's name is the last resort, and it is honest: a review titled
+    // "edit_file" says exactly how much the caller knew.
+    let label = path
+        .filter(|p| !p.trim().is_empty())
+        .map(|p| p.to_string())
+        .or_else(|| path_from_diff(output))
+        .unwrap_or_else(|| tool.to_string());
+    Some((label, output.to_string()))
+}
+
+/// A report as transcript lines.
+///
+/// One line per fact, and the TUI prints each as its own row: a multi-line string would
+/// arrive as one row with newlines inside it. Shared by the manual command and the
+/// automatic trigger so the two report the same way.
+pub fn report_lines(report: &ReviewReport) -> Vec<String> {
+    let mut lines = vec![report.summary()];
+    for finding in report.ordered() {
+        lines.push(format!(
+            "{} {} — {}",
+            finding.severity.mark(),
+            finding.title,
+            finding.description
+        ));
+        if let Some(fix) = &finding.fix {
+            lines.push(format!("   fix: {fix}"));
+        }
+    }
+    for note in &report.notes {
+        lines.push(format!("Not checked: {note}"));
+    }
+    lines
+}
+
 /// Whether a tool's output carries a unified diff.
 ///
 /// The edit tools prepend a one-line "Edited …" header, so an `@@ ` hunk header is the
@@ -336,6 +403,80 @@ mod tests {
     use super::*;
 
     const DIFF: &str = "--- a/a.c\n+++ b/a.c\n@@ -1,3 +1,4 @@\n int main(void) {\n-    boot();\n+    boot();\n+    loop_forever();\n }\n";
+
+    const EDIT_OUTPUT: &str = "Edited a.c (1 lines -> 3 lines)\n@@ -1 +1,3 @@\n-old\n+new\n+more\n";
+
+    #[test]
+    fn the_trigger_only_fires_on_writes_the_policy_wants() {
+        // `off` is the default and means what it says.
+        assert!(
+            reviewable_change("edit_file", Some("a.c"), EDIT_OUTPUT, AfterEdit::Off, 20).is_none()
+        );
+        // `on` reviews even a one-line edit, and the label comes from the call.
+        let (path, diff) =
+            reviewable_change("edit_file", Some("src/a.c"), EDIT_OUTPUT, AfterEdit::On, 20)
+                .unwrap();
+        assert_eq!(path, "src/a.c");
+        assert!(diff.contains("@@ -1 +1,3 @@"));
+        // `on_large` does not: three changed lines in one hunk is not a large edit.
+        assert!(
+            reviewable_change(
+                "edit_file",
+                Some("a.c"),
+                EDIT_OUTPUT,
+                AfterEdit::OnLarge,
+                20
+            )
+            .is_none()
+        );
+        // A bigger one does.
+        let big = format!("Edited a.c\n@@ -1 +1,30 @@\n{}", "+x\n".repeat(25));
+        assert!(
+            reviewable_change("edit_file", Some("a.c"), &big, AfterEdit::OnLarge, 20).is_some()
+        );
+    }
+
+    #[test]
+    fn a_read_or_a_shell_result_is_never_reviewed() {
+        // The narrowness is the point: a `read_file` output has no diff, and a tool that
+        // merely printed something diff-shaped did not change a file.
+        assert!(
+            reviewable_change("read_file", Some("a.c"), EDIT_OUTPUT, AfterEdit::On, 20).is_none()
+        );
+        assert!(reviewable_change("shell", None, EDIT_OUTPUT, AfterEdit::On, 20).is_none());
+        // A write whose output is not a diff (a refusal, an error) has nothing to review.
+        assert!(
+            reviewable_change(
+                "edit_file",
+                Some("a.c"),
+                "old_text matched 3 times",
+                AfterEdit::On,
+                20
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn the_label_falls_back_in_the_order_that_stays_true() {
+        let deletion = "Edited gone.c\n@@ -1 +0,0 @@\n-old\n";
+
+        // No path argument, but a diff header naming the file that was removed.
+        let with_header = format!("--- a/gone.c\n+++ /dev/null\n{deletion}");
+        let (path, _) =
+            reviewable_change("edit_file", None, &with_header, AfterEdit::On, 20).unwrap();
+        assert_eq!(path, "gone.c");
+
+        // Neither: the tool's name, rather than a guess. `edit_file` does not emit
+        // `---`/`+++` headers, so this is the common case when a caller forgets the path.
+        let (path, _) = reviewable_change("write_file", None, deletion, AfterEdit::On, 20).unwrap();
+        assert_eq!(path, "write_file");
+
+        // An empty path argument is not a name.
+        let (path, _) =
+            reviewable_change("write_file", Some("   "), deletion, AfterEdit::On, 20).unwrap();
+        assert_eq!(path, "write_file");
+    }
 
     #[test]
     fn the_default_policy_reviews_nothing() {

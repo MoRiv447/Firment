@@ -1,5 +1,5 @@
 use crate::cancel::Cancellable;
-use crate::config::{CompactionStrategy, ElfConfig, LaConfig};
+use crate::config::{CompactionStrategy, Config, ElfConfig, LaConfig};
 use crate::journal::{EditJournal, Ledger};
 use crate::provider::{Provider, ProviderError, ProviderEvent, StopReason};
 use crate::session::{SessionStore, SessionSummary};
@@ -207,6 +207,10 @@ pub struct Agent {
     max_iterations: usize,
     allow_dangerous: bool,
     verify_command: Option<String>,
+    /// The policy for reviewing an edit as soon as it lands (plan §4-A), with the config
+    /// a review needs to build its provider. `None` means off — the default, and the
+    /// reason the automatic path costs nothing until someone asks for it.
+    self_review: Option<Config>,
     context_budget_chars: usize,
     /// Configured (name, model) pairs for the system prompt's delegation
     /// guidance — the model may dispatch mechanical subtasks to a cheaper
@@ -331,7 +335,26 @@ impl Agent {
             stream_timeout: STREAM_TIMEOUT,
             tool_wave_timeout: TOOL_WAVE_TIMEOUT,
             tool_cancel_grace: TOOL_CANCEL_GRACE,
+            self_review: None,
         }
+    }
+
+    /// Enable the per-edit self-review (plan §4-A).
+    ///
+    /// The whole config is taken because a review is a model call: it needs the provider
+    /// definitions and the output-token cap, and the assembly is where both are in hand.
+    /// The policy inside it decides whether anything actually fires (`off` by default).
+    pub fn with_self_review(mut self, config: Config) -> Self {
+        self.self_review = Some(config);
+        self
+    }
+
+    /// The self-review policy in force, if a surface handed one over.
+    ///
+    /// `None` is off — not "unknown": a surface that never called
+    /// [`Agent::with_self_review`] has the default policy, and a status bar can say so.
+    pub fn self_review_policy(&self) -> Option<crate::review::self_review::AfterEdit> {
+        self.self_review.as_ref().map(|c| c.review.after_edit)
     }
 
     pub fn session(&self) -> &Session {
@@ -1641,6 +1664,54 @@ fn is_broad_tool(name: &str) -> bool {
     matches!(name, "shell" | "verify" | "grep" | "glob" | "list_dir")
 }
 
+/// Spawn a review of the edit that just landed, if the policy asks for one.
+///
+/// Nothing here blocks: the caller has already emitted the tool's result, and the review
+/// reports through the same sink the turn uses, so its lines land in the transcript
+/// whether or not the turn is still running.
+fn spawn_self_review(
+    config: Option<Config>,
+    provider_name: String,
+    sink: Arc<dyn EventSink>,
+    tool: &str,
+    path: Option<&str>,
+    output: &str,
+) {
+    let Some(config) = config else {
+        return;
+    };
+    let Some((path, diff)) = crate::review::self_review::reviewable_change(
+        tool,
+        path,
+        output,
+        config.review.after_edit,
+        config.review.min_lines,
+    ) else {
+        return;
+    };
+    tokio::spawn(async move {
+        let lines = match crate::review::self_review::review_diff(
+            &config,
+            &provider_name,
+            &path,
+            &diff,
+            None,
+        )
+        .await
+        {
+            // A clean automatic review says nothing. A line after every edit announcing
+            // that there was nothing to fix is noise the user cannot turn off, and it is
+            // the fastest way to teach someone to stop reading these lines.
+            Ok(report) if report.is_clean() && report.notes.is_empty() => return,
+            Ok(report) => crate::review::self_review::report_lines(&report),
+            Err(e) => vec![format!("Self-review failed: {e}")],
+        };
+        for line in lines {
+            sink.event(AgentEvent::Info(line)).await;
+        }
+    });
+}
+
 /// Tools whose output text carries a unified diff, which is the only thing
 /// worth shipping past `summary`'s 120-char first line (that line is the
 /// "Edited <path> (N lines -> M lines)" header — the diff IS the body).
@@ -1955,6 +2026,17 @@ async fn execute_tool_calls(
                 name: call.name.clone(),
                 content: agent.spill_text(&content),
             });
+            // Plan §4-A's automatic trigger. Spawned, so the turn does not wait: §16.2-1
+            // defaults this to `off` precisely because a per-edit model call doubles the
+            // wait, and a blocking version would be worse than the manual path.
+            spawn_self_review(
+                agent.self_review.clone(),
+                agent.session.provider.clone(),
+                agent.sink.clone(),
+                &call.name,
+                tool_path(call).map(|p| p.display().to_string()).as_deref(),
+                &content,
+            );
             done[i] = true;
             remaining -= 1;
         }
@@ -2348,6 +2430,40 @@ mod tests {
         fn model(&self) -> &str {
             "stall"
         }
+    }
+
+    #[test]
+    fn the_self_review_policy_starts_off_and_arrives_whole() {
+        // The default has to be off: an agent nobody configured — every test in this
+        // file, and every surface that has not opted in — must not start making model
+        // calls after edits. Asserted through the accessor the trigger reads, so this
+        // covers the wiring rather than the field.
+        let dir = tempfile::tempdir().unwrap();
+        let build = |policy: Option<crate::review::self_review::AfterEdit>| {
+            let agent = Agent::new(
+                None,
+                Arc::new(ToolRegistry::new()),
+                Session::new(dir.path().to_path_buf(), "p", "m"),
+                SessionStore::new(dir.path().join("s")),
+                Arc::new(AutoApprove::everything()),
+                Arc::new(CollectingSink(Arc::new(Mutex::new(Vec::new())))),
+                4,
+            );
+            match policy {
+                None => agent,
+                Some(policy) => {
+                    let mut config = Config::default_config();
+                    config.review.after_edit = policy;
+                    agent.with_self_review(config)
+                }
+            }
+        };
+
+        assert_eq!(build(None).self_review_policy(), None);
+        assert_eq!(
+            build(Some(crate::review::self_review::AfterEdit::OnLarge)).self_review_policy(),
+            Some(crate::review::self_review::AfterEdit::OnLarge)
+        );
     }
 
     #[tokio::test]

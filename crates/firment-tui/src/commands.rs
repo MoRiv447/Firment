@@ -665,25 +665,10 @@ pub(crate) fn spawn_agent_task(
 
 /// The review report as transcript lines.
 ///
-/// One `Info` per line rather than one multi-line `Info`: the TUI renders an `Info` as a
-/// single row, so a multi-line string would arrive as one row with newlines inside it.
+/// The rule lives in core (`review::self_review::report_lines`) because the automatic
+/// trigger reports through the same shape; this is the TUI's name for it.
 fn review_lines(report: &firment_core::review::ReviewReport) -> Vec<String> {
-    let mut lines = vec![report.summary()];
-    for finding in report.ordered() {
-        lines.push(format!(
-            "{} {} — {}",
-            finding.severity.mark(),
-            finding.title,
-            finding.description
-        ));
-        if let Some(fix) = &finding.fix {
-            lines.push(format!("   fix: {fix}"));
-        }
-    }
-    for note in &report.notes {
-        lines.push(format!("Not checked: {note}"));
-    }
-    lines
+    firment_core::review::self_review::report_lines(report)
 }
 
 #[derive(Debug)]

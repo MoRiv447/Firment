@@ -89,6 +89,9 @@ pub fn assemble_agent(
         sink,
         merged.max_iterations,
     );
+    // Plan §4-A: the self-review policy travels with the config that can build a
+    // provider for it. `off` inside means this costs nothing until it is turned on.
+    agent = agent.with_self_review(merged.clone());
 
     agent.set_allow_dangerous(allow_dangerous);
     agent.set_verify_command(merged.tools.verify_command.clone());
