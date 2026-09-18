@@ -36,9 +36,24 @@ machine — read the "why" so you don't re-create the problem.
   two processes can write the build directory concurrently, corrupting
   incremental state.
 - If cargo hangs on a lock: first check whether a real holder exists —
-  `tasklist //FO CSV | grep -iE "cargo|rustc"`. If one is stuck for an
-  unreasonable time, kill THAT PID (`taskkill /PID <pid>`). No live
-  process + still failing ⇒ it is an environment problem (see below).
+  `MSYS_NO_PATHCONV=1 tasklist /FO CSV | grep -iE "cargo|rustc|firment_"`.
+  If one is stuck for an unreasonable time, kill THAT PID
+  (`MSYS_NO_PATHCONV=1 taskkill /PID <pid> /F`). No live process + still
+  failing ⇒ it is an environment problem (see below).
+  - **The `//FO` spelling that used to be written here does not work.** Git
+    Bash passes it through literally and tasklist answers
+    `ERROR: Invalid argument/option - '//FO'`, so the check this file told you
+    to run returned nothing while looking like it had. Same for `/PID`.
+  - **Read the list with `tasklist`, not `/proc`.** On 2026-09-18 MSYS `/proc`
+    listed one of the two live `cargo.exe` processes and neither test binary —
+    exactly the wrong answer to "is anything holding this?".
+- **A killed command can leave its children running.** When a foreground cargo
+  is interrupted (a tool timeout killing the shell, for instance), `cargo.exe`
+  and the test binary it started can both survive as orphans and keep the build
+  lock. Every later cargo then looks like a hang with no output, because the
+  "Blocking waiting for file lock" line sits in a pipe buffer that nothing
+  flushes until the command exits. On 2026-09-18 an orphaned `firment_tui-*.exe`
+  held the suite for eight minutes and killing it ended the stall immediately.
 - `Blocking waiting for file lock` messages that resolve on their own are
   NORMAL (serial commands waiting for each other). Do not "fix" them.
 
@@ -56,6 +71,8 @@ entries below; this is the part to read while something is broken.
 | `failed to open … .cargo-build-lock 拒绝访问 (os error 5)`, often after a multi-minute stall, while `cargo fmt` (which never touches a lock) still works | **Retry with `CARGO_BUILD_JOBS=1`.** The trigger is concurrent writes, and this is measured to work — see the 2026-09-10 entry |
 | `link: missing operand after '\377\376'` from `link.exe` | **Wrong linker, not an interception.** Git Bash resolves `link.exe` to MSYS coreutils' `link`; the MSVC linker is on no PATH and `LIB` is empty. Fix is in "The MSVC toolchain is not on PATH in Git Bash" at the end of this file, and it was measured to work on 2026-09-17. This cell said "Nothing yet" for a day while the fix sat in that section |
 | `[safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED]` while cleaning `web/.next` | `env -u NODE_OPTIONS npm run build` |
+| Cargo sits for minutes with no output at all, and even `cargo fmt` looks slow | **Look for an orphaned `cargo.exe` / test binary before blaming the environment.** An interrupted run leaves its children holding the build lock, and the "Blocking waiting for file lock" line is invisible behind a pipe until the command exits. See the lock-file section for the two commands |
+| `error copying object file … to incremental directory … 拒绝访问 (os error 5)`, occasionally followed by a rustc ICE | The interception reached the incremental cache. `CARGO_INCREMENTAL=0` takes that path out of the run — observed 2026-09-18, and it does **not** explain the ICE, which happened once and has not been reproduced |
 
 **Do not loop retries, do not delete lock files, do not `cargo clean`.** The first two
 are covered by the rules above, and a clean hits the same wall while throwing away the
