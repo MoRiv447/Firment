@@ -20,6 +20,12 @@ machine — read the "why" so you don't re-create the problem.
   directory:
   `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo check`
   (CI runs exactly this via `gui-check`.)
+- **On this machine the linker is configured globally**, so a link needs no
+  environment variable: `~/.cargo/config.toml` names the MSVC `link.exe` and
+  sets `LIB` (see the end of this file for why, and for the version numbers that
+  expire on a VS upgrade). What a *full* rebuild still wants is
+  `CARGO_BUILD_JOBS=1`, for the write family in the table below — a scoped
+  rebuild of one crate has gone through without it (2026-09-17).
 
 ## Lock files: never delete, never force
 
@@ -38,30 +44,34 @@ machine — read the "why" so you don't re-create the problem.
 
 ## `os error 5`, and the other ways this environment breaks cargo
 
-Three failures, one family: **the environment intercepts file writes, and cargo's do
-not all survive it.** The evidence is in the dated entries below rather than repeated
-here; this is the part to read while something is broken.
+**Two families, not one, and the second is not the sandbox at all.** One is the
+environment intercepting file writes; the other is the wrong `link.exe` being picked up
+in the first place, which no sandbox setting could have moved. They need different
+fixes, so the first thing to do is tell them apart: the write family reports `os error
+5`, the other family is `link.exe` complaining. Fixes and full evidence are in the dated
+entries below; this is the part to read while something is broken.
 
 | What you see | What to do |
 |---|---|
 | `failed to open … .cargo-build-lock 拒绝访问 (os error 5)`, often after a multi-minute stall, while `cargo fmt` (which never touches a lock) still works | **Retry with `CARGO_BUILD_JOBS=1`.** The trigger is concurrent writes, and this is measured to work — see the 2026-09-10 entry |
-| `link: missing operand after '\377\376'` from `link.exe` | **Nothing yet.** A UTF-16 BOM reaches the linker in the response file rustc writes for a long argument list; `jobs=1` does not touch it — see the 2026-09-17 entry |
+| `link: missing operand after '\377\376'` from `link.exe` | **Wrong linker, not an interception.** Git Bash resolves `link.exe` to MSYS coreutils' `link`; the MSVC linker is on no PATH and `LIB` is empty. Fix is in "The MSVC toolchain is not on PATH in Git Bash" at the end of this file, and it was measured to work on 2026-09-17. This cell said "Nothing yet" for a day while the fix sat in that section |
 | `[safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED]` while cleaning `web/.next` | `env -u NODE_OPTIONS npm run build` |
 
 **Do not loop retries, do not delete lock files, do not `cargo clean`.** The first two
 are covered by the rules above, and a clean hits the same wall while throwing away the
 build cache you will want the moment the wall moves.
 
-Within the family, the cause is a file-operation shim and **not** the sandbox's
+Within the write family, the cause is a file-operation shim and **not** the sandbox's
 permission mode — that was once written here as verified and is refuted below by the
-logs themselves. Two further things are refuted in the dated entries so nobody
-re-derives them: for the BOM, a general write problem (there is no BOM on disk).
+logs themselves. The BOM never belonged here: for it, a general write problem is ruled
+out separately (there is no BOM on disk).
 
-The layers whose internals cannot be read from here:
-The mechanism, for whoever picks this up: WorkBuddy's sandbox backs a file up before
+The mechanism, for whoever picks this up: **WorkBuddy's sandbox backs a file up before
 letting a write through (`modify_backup`), and that step is what cargo's lock-file open
-does not survive. Its `rm -f` shim also silently no-ops there (stderr goes to
-/dev/null), so "rm the lock and retry" cannot work in-sandbox.
+does not survive.** Its `rm -f` shim also silently no-ops there (stderr goes to
+/dev/null), so "rm the lock and retry" cannot work in-sandbox. The bullets below are
+what has been narrowed down since, including the one layer whose internals cannot be
+read from here at all:
   - **The cause is NOT the sandbox permission mode.** This entry once said
     "run the session in bypass-permissions mode" and marked it verified;
     that is not what the logs show, and `dangerouslyDisableSandbox` does not
@@ -104,9 +114,12 @@ does not survive. Its `rm -f` shim also silently no-ops there (stderr goes to
 
 ### And on 2026-09-17: a fresh link of `firment-core` fails on a BOM
 
-Same family as the entry below -- the environment, not the code -- and it belongs
-under the same heading rather than beside it, because the *cause* and the *fixes* are
-already written there and would only be repeated here.
+**This was filed under the wrong heading, and that mis-filing is why it cost the rest of
+the day.** It was written as a member of the write family above on the strength of one
+observation — that it survived `dangerouslyDisableSandbox` — which is weak evidence,
+because the cause turned out to be a `PATH` problem that no sandbox setting could ever
+have moved. **Read "The MSVC toolchain is not on PATH in Git Bash" (end of this file)
+before this section: the cause and the fix are there, not here.**
 
 **Two attempts to write this entry were wrong, and both are worth naming** because
 each looks like a conclusion:
@@ -133,17 +146,26 @@ CARGO_BUILD_JOBS=1 cargo test ... --lib    ->  the same failure
 `\377\376` is a UTF-16 byte-order mark, and it reaches the linker at the front of the
 response file rustc writes when the argument list is long -- the test binaries here
 link 257 objects. **`jobs=1` is the workaround for the 2026-09-10 failure, which was
-a concurrency one; it does not touch this one.**
+a concurrency one; it does not touch this one.** Why a response file reaches a linker
+that cannot read one is answered in the section at the end of this file: the program
+that received it was coreutils' `link`.
 
 **So on this date: work can be written, formatted, linted and type-checked here, and
 it cannot be tested.** `check --tests` is the strongest verification available, and it
 is weaker than a run -- do not call a change verified on the strength of it.
 
+**That bold sentence was wrong in exactly the way the two attempts above were: a claim
+about the machine drawn from a failure whose cause was `PATH`.** With the MSVC linker
+named and `LIB` set (that section again), the same session ran `cargo test --workspace`
+straight through: **671 passed, 0 failed, 1 ignored, 15m21s**, with `jobs=1` for the
+other family. The link that had been failing all day was the first thing in it.
+
 Two causes were checked and are *not* it, so nobody re-derives them:
 
 * **Not a general file-write problem.** Four source files written that evening and six
   objects under `target/debug` all begin with normal bytes; there is no BOM anywhere on
-  disk. The BOM exists only inside the transient response file.
+  disk. The BOM exists only inside the transient response file -- which is where it
+  belongs: rustc writes that file in UTF-16 *for MSVC's linker*.
 * **Not the sandbox running commands twice.** A probe appending one timestamp per
   execution appended exactly one line, and `git reflog` has one entry per commit. A
   command that *looks* like it ran twice -- a `git commit` reporting "nothing to
@@ -234,28 +256,57 @@ environment* rather than into the sandbox mode — which is why
 
 ## The MSVC toolchain is not on PATH in Git Bash
 
-Two separate faults, both fatal to linking, both fixed by a shell shim
-(`~/.cargo/config.toml` is deliberately untouched so a VS upgrade cannot leave a
-stale hardcoded path in the user's global config):
+**This is the section that explains the `link.exe` / `\377\376` failure in the symptom
+table, and it existed the whole time that table said "Nothing yet".** If you arrived
+from a link error, nothing above this heading needs reading.
+
+Two separate faults, both fatal to linking, and neither of them is the sandbox:
 
 1. **`link.exe` resolves to MSYS coreutils.** Git Bash ships
    `/usr/bin/link.exe` (the hardlink tool) and it sorts before the MSVC
    toolchain, so rustc links with it and dies on
    `link: missing operand after '\377\376'` — a UTF-16 BOM read by the wrong
-   program. `which -a link link.exe` shows it immediately.
+   program. `which -a link link.exe` shows it immediately. Measured 2026-09-17:
+   `D:\Git\usr\bin\link.exe` is the *only* `link.exe` on PATH here, and
+   `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER`, `LIB` and `INCLUDE` were all empty.
 2. **`LIB`/`INCLUDE` are unset** outside a VS Developer Command Prompt, so even
    the real linker fails with `LNK1181: cannot open input file 'kernel32.lib'`.
+   (`INCLUDE` only bites a build script that runs `cl.exe`.)
 
-Fix (re-derive the two version numbers after a VS update):
+The failure was then reproduced deliberately, which is what identifies it: a *native*
+Windows parent — python, not bash — running `link.exe @<UTF-16LE response file with a
+BOM>` prints `link: missing operand after '\377\376o'`: same message, same bytes. The
+same command run from bash instead says `missing operand after '@rsp.txt'`, because only
+a native parent triggers the `@file` expansion. That is why hand-testing from the shell
+does not reproduce it, and why this looked like an interception for a day.
+
+**Current fix on this machine: `C:\Users\18978\.cargo\config.toml`**, written
+2026-09-17 after the earlier "shell shim" turned out to be session-local state that had
+already vanished — no `.bashrc`, no `.profile`, no cargo config existed:
+
+```toml
+[target.x86_64-pc-windows-msvc]
+linker = 'C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe'
+
+[env]
+LIB = 'C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Tools\MSVC\14.44.35207\lib\x64;C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\ucrt\x64;C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x64'
+```
+
+The same two values by hand, for another machine or if that config is ever removed:
 
 ```bash
 export CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER='C:/Program Files/Microsoft Visual Studio/2022/Professional/VC/Tools/MSVC/<ver>/bin/Hostx64/x64/link.exe'
 export LIB='<msvc>/lib/x64;C:/Program Files (x86)/Windows Kits/10/Lib/<ver>/ucrt/x64;C:/Program Files (x86)/Windows Kits/10/Lib/<ver>/um/x64'
 ```
 
+Re-derive both version numbers after a VS or SDK update (`ls` the two directories they
+come from). Cargo's `[env]` wins over an already-exported `LIB` — measured, not assumed
+— so the pinned list overrides a Developer Command Prompt's rather than merging with it;
+that is one more thing to keep current after an upgrade.
+
 `cmd.exe` cannot be used to source `vcvars64.bat` from here (invoking `cmd`
 from Bash is blocked), and PowerShell must go through its own tool, so the
-three variables above are the whole available route.
+two variables above are the whole available route.
 
 
 ## Repo conventions agents must keep
