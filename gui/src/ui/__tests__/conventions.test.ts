@@ -43,44 +43,29 @@ const SOURCES = import.meta.glob(
     '../../shell/*.css',
     '../../shell/panes/*.tsx',
     '../../shell/panes/*.css',
+    // The app root. It was the last antd holdout, so it stayed outside the gate
+    // until stage 8 removed `ConfigProvider` from it.
+    '../../App.tsx',
+    '../../App.module.css',
     // Stage 3 moved the transcript onto the layer and stage 5 moved the session
     // rail and the two kernel dialogs, so all three are gated like the layer.
-    // Named one file at a time rather than `../../components/*.tsx`: the one
-    // missing from the list -- `ActionButton.tsx` -- is an antd leftover that
-    // stage 7 deletes, and a wildcard would fail the suite over code that is
-    // already scheduled to die.
-    '../../components/Dialogs.tsx',
-    '../../components/Dialogs.module.css',
-    '../../components/LiveRun.tsx',
-    '../../components/LiveRun.module.css',
-    '../../components/Markdown.tsx',
-    '../../components/Markdown.module.css',
-    '../../components/MessageList.tsx',
-    '../../components/MessageList.module.css',
-    '../../components/StepProgress.tsx',
-    '../../components/StepProgress.module.css',
-    '../../components/ToolCard.tsx',
-    '../../components/ToolCard.module.css',
-    '../../views/ChatView.tsx',
-    '../../views/ChatView.module.css',
-    // Stage 6f emptied the workbench's shell: the last antd in the view went
-    // with it, so the file is gated like the layer it is now written against.
-    // Until this line existed, "no antd in WorkbenchView" was a promise in a
-    // handoff document rather than something that could fail.
-    '../../views/WorkbenchView.tsx',
-    '../../views/WorkbenchView.module.css',
-    // Stage 7: the last three views, one at a time as each left antd behind.
-    '../../views/SettingsView.tsx',
-    '../../views/SettingsView.module.css',
-    '../../views/SerialView.tsx',
-    '../../views/SerialView.module.css',
-    '../../views/FlashView.tsx',
-    '../../views/FlashView.module.css',
-    '../../views/SessionSidebar.tsx',
-    '../../views/SessionSidebar.module.css',
+    // These were named one file at a time while an antd leftover (`ActionButton`)
+    // sat in the directory, because a wildcard would have failed the suite over
+    // code already scheduled to die. That file is gone, and a wildcard cannot go
+    // stale -- which is how this list stayed pointing at a deleted file.
+    '../../components/*.tsx',
+    '../../components/*.module.css',
+    '../../views/*.tsx',
+    '../../views/*.module.css',
+    // The two subdirectories the stage 7 and 6 splits left behind: the settings
+    // view became two cards, and the serial view's decoder is a plain module.
+    // `*` does not cross `/`, so each directory's `__tests__` is left to the
+    // suite that runs it.
+    '../../views/settings/*.tsx',
+    '../../views/settings/*.module.css',
+    '../../views/serial/*.ts',
     // Stage 6 split the workbench into panes under `views/workbench/`, and every
-    // file in that directory is on the layer, so it is gated as a directory. `*`
-    // does not cross `/`, which leaves its `__tests__` to the suite that runs them.
+    // file in that directory is on the layer, so it is gated as a directory.
     '../../views/workbench/*.tsx',
     '../../views/workbench/*.ts',
     '../../views/workbench/*.css',
@@ -153,6 +138,16 @@ const GLOBAL_SELECTORS = new Set([
 ]);
 
 describe('Primitive layer and shell conventions', () => {
+  it('actually reads the files it is gating', () => {
+    // A glob that matched nothing would make every case below vacuously true. The
+    // floor is not a target: it only has to survive files moving around.
+    expect(paths.length).toBeGreaterThan(20);
+    // And the newest member of the list is named, so that dropping `App.tsx` back
+    // out of `SOURCES` -- the state it was in for a whole stage -- fails here
+    // rather than quietly reducing the gate.
+    expect(codeFiles.filter((path) => path.endsWith('/App.tsx'))).toHaveLength(1);
+  });
+
   it('imports nothing from antd, which is the point of the layer', () => {
     expect(codeFiles.filter((path) => /from ['"](antd|@ant-design)/.test(read(path)))).toEqual([]);
   });
