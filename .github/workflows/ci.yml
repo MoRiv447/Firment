@@ -93,3 +93,22 @@ jobs:
           # this independent workspace (AGENTS.md requires it locally).
           cargo fmt --check
           cargo check
+
+  # Security advisories (v1.0 plan, item 6): the one gate that needs the network on
+  # purpose -- the advisory database is a live feed, so caching it locally would be
+  # caching the answer. Both lockfiles are audited, because `gui/src-tauri` is an
+  # independent workspace with its own (AGENTS.md).
+  audit:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        # Compiled here rather than pulled from a prebuilt-binaries action, so this
+        # job depends on crates.io and the two actions above and nothing else.
+        run: cargo install cargo-audit --locked
+      - name: Audit the root lockfile
+        run: cargo audit
+      - name: Audit the Tauri lockfile
+        working-directory: gui/src-tauri
+        run: cargo audit
