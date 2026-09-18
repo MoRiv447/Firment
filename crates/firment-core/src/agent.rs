@@ -817,6 +817,18 @@ impl Agent {
         self.store.save(&self.session)
     }
 
+    /// Rewind to just before the last request and hand it back, saving the trimmed
+    /// transcript before anyone can act on it.
+    ///
+    /// The save is deliberate and best-effort: the retry itself saves again when the
+    /// turn ends, but a rewind that only ever lived in memory would leave the failed
+    /// tail on disk for the next process to load.
+    pub fn retry_last(&mut self) -> Option<String> {
+        let prompt = self.session.retry_last()?;
+        let _ = self.save_session();
+        Some(prompt)
+    }
+
     pub async fn emit(&self, event: AgentEvent) {
         self.sink.event(event).await;
     }

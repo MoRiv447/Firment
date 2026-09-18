@@ -1771,6 +1771,49 @@ impl App {
         self.send_cmd(AgentCmd::User(text));
     }
 
+    /// `/retry-last`: rewind to the last question and run it again.
+    ///
+    /// The rewind happens here as well as in the kernel, and neither one is enough on
+    /// its own: the kernel trims what the model will be shown, this trims what the
+    /// user is looking at, and the two drop the same thing -- the last question plus
+    /// everything the answer recorded after it. A retry that rewound only one of them
+    /// would leave the screen and the session describing different conversations.
+    ///
+    /// Refused while busy rather than queued: the thing being retried is the turn that
+    /// is still running, so there is no answer yet to replace.
+    pub(crate) fn retry_last(&mut self) {
+        if self.busy {
+            self.items.push(Item::System(
+                "Agent is busy; wait for it to finish.".to_string(),
+            ));
+            return;
+        }
+        let Some((at, text)) =
+            self.items
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(i, item)| match item {
+                    Item::User(text) => Some((i, text.clone())),
+                    _ => None,
+                })
+        else {
+            self.items
+                .push(Item::System("Nothing to retry yet.".to_string()));
+            return;
+        };
+        // The question goes back on the end of the trimmed transcript, exactly where a
+        // typed one would land -- so the screen after a retry is the screen the user
+        // would have had if they had asked again by hand.
+        self.items.truncate(at);
+        self.items.push(Item::User(text));
+        self.follow = true;
+        self.scroll = 0;
+        self.busy = true;
+        self.ai_thinking = true;
+        self.send_cmd(AgentCmd::RetryLast);
+    }
+
     pub(crate) fn run_command(&mut self, command: &str) {
         let (name, arg) = command
             .split_once(char::is_whitespace)
@@ -1778,9 +1821,10 @@ impl App {
             .unwrap_or((command, ""));
         match name {
             "help" => self.items.push(Item::System(
-                "Commands: /new  /plan [on|off]  /agent  /models  /model <id>  /sessions (use ↑/↓ to select)  /session <id>  /delete <id>  /undo  /ledger  /pin <path>  /unpin <path>  /copy  /provider <name>  /add-provider <name> <openai|anthropic> <base_url> <model>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /budget <chars>  /output <tokens>  /verbosity [summary|normal|expanded]  /context  /config  /clear  /help  /quit\nKeys: ↑/↓ browse history when input is empty, move the input cursor on multi-line input, scroll the transcript on single-line input · Shift+Enter manual newline · PgUp/PgDn/wheel scroll · Ctrl+P model picker · Ctrl+O expand/collapse the diff on the selected tool card (the newest one when nothing is selected) · Ctrl+T collapse/expand every diff at once · inside /sessions: c copies the selected id to clipboard, d deletes it (drag-select and right-click are disabled because the TUI captures mouse events; press Esc to dismiss the picker, then your terminal's native selection works in the scrollback) · Ctrl+C copies the selection (copies the last reply when there is none) · Ctrl+V paste · Ctrl+Shift+C copy last reply · ←/→ move the input cursor · y/n/a permission answers · Esc interrupts AI output (Esc twice while working; clears input when idle) · Ctrl+Q quit\nInput box: auto-wraps and grows to up to 5 lines; taller content scrolls, large pastes collapse into 【line x-y】, and the title shows hidden/collapsed line counts before sending"
+                "Commands: /new  /plan [on|off]  /agent  /models  /model <id>  /sessions (use ↑/↓ to select)  /session <id>  /delete <id>  /undo  /ledger  /retry-last  /pin <path>  /unpin <path>  /copy  /provider <name>  /add-provider <name> <openai|anthropic> <base_url> <model>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /budget <chars>  /output <tokens>  /verbosity [summary|normal|expanded]  /context  /config  /clear  /help  /quit\nKeys: ↑/↓ browse history when input is empty, move the input cursor on multi-line input, scroll the transcript on single-line input · Shift+Enter manual newline · PgUp/PgDn/wheel scroll · Ctrl+P model picker · Ctrl+O expand/collapse the diff on the selected tool card (the newest one when nothing is selected) · Ctrl+T collapse/expand every diff at once · inside /sessions: c copies the selected id to clipboard, d deletes it (drag-select and right-click are disabled because the TUI captures mouse events; press Esc to dismiss the picker, then your terminal's native selection works in the scrollback) · Ctrl+C copies the selection (copies the last reply when there is none) · Ctrl+V paste · Ctrl+Shift+C copy last reply · ←/→ move the input cursor · y/n/a permission answers · Esc interrupts AI output (Esc twice while working; clears input when idle) · Ctrl+Q quit\nInput box: auto-wraps and grows to up to 5 lines; taller content scrolls, large pastes collapse into 【line x-y】, and the title shows hidden/collapsed line counts before sending"
                     .to_string(),
             )),
+            "retry-last" => self.retry_last(),
             "new" => {
                 self.paste_burst.clear();
                 self.apply_burst_outputs();

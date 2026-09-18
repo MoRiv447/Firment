@@ -90,6 +90,36 @@ impl Session {
         self.messages.push(message);
     }
 
+    /// Rewind to just before the last request, and hand that request back to be sent
+    /// again.
+    ///
+    /// Everything the turn recorded after the last user message goes with it. A retry
+    /// that kept the failed assistant tail would send the model its own error output
+    /// and then the question a second time -- a different, and worse, prompt than the
+    /// one that failed. The user message goes too, because the caller re-sends it
+    /// through the ordinary path: keeping it here would mean either two copies of the
+    /// question or a merge nobody asked for.
+    ///
+    /// `None` when there is no user message to repeat.
+    pub fn retry_last(&mut self) -> Option<String> {
+        let at = self
+            .messages
+            .iter()
+            .rposition(|m| matches!(m, ChatMessage::User { .. }))?;
+        let mut tail = self.messages.split_off(at).into_iter();
+        let prompt = match tail.next() {
+            // `at` is the index of a user message, so this arm is unreachable. `None`
+            // rather than a panic: a mistake here must not be able to take the process
+            // down in the middle of a retry.
+            Some(ChatMessage::User { content }) => content,
+            _ => return None,
+        };
+        // `tail` drops here. The marked time moves with the transcript, or the stored
+        // file would keep a timestamp from the turn that was thrown away.
+        self.updated_at = now_secs();
+        Some(prompt)
+    }
+
     pub fn title(&self) -> String {
         self.messages
             .iter()
@@ -793,6 +823,82 @@ mod tests {
             a.starts_with(&store.dir),
             "scratch lives beside the transcript"
         );
+    }
+
+    fn user_msg(text: &str) -> ChatMessage {
+        ChatMessage::User {
+            content: text.to_string(),
+        }
+    }
+
+    fn assistant_msg(text: &str) -> ChatMessage {
+        ChatMessage::Assistant {
+            content: text.to_string(),
+            tool_calls: Vec::new(),
+            thinking_blocks: Vec::new(),
+        }
+    }
+
+    /// The rewind behind `/retry-last`, which is the whole substance of the command.
+    #[test]
+    fn retry_last_drops_the_failed_tail_and_hands_the_request_back() {
+        let mut s = Session::new(PathBuf::from("."), "p", "m");
+        s.push(user_msg("first"));
+        s.push(assistant_msg("answered"));
+        s.push(user_msg("second"));
+        s.push(assistant_msg("boom"));
+
+        assert_eq!(s.retry_last().as_deref(), Some("second"));
+        // The earlier exchange is untouched, and the failed one is gone rather than
+        // left in the transcript for the model to read back at itself.
+        assert_eq!(s.messages.len(), 2);
+        assert!(
+            matches!(&s.messages[1], ChatMessage::Assistant { content, .. } if content == "answered")
+        );
+    }
+
+    /// A turn that failed before it said anything, and a turn that never ran: both
+    /// rewind to the same place, and the request still comes back.
+    #[test]
+    fn retry_last_works_when_nothing_was_recorded_after_the_request() {
+        let mut s = Session::new(PathBuf::from("."), "p", "m");
+        s.push(user_msg("only question"));
+        assert_eq!(s.retry_last().as_deref(), Some("only question"));
+        assert!(s.messages.is_empty(), "the caller re-sends it");
+    }
+
+    /// A tool call whose result never arrived -- an interrupted turn -- is part of the
+    /// tail, and it has to go too: a `Tool` message with no matching `tool_call_id` in
+    /// the request is rejected outright by both provider APIs.
+    #[test]
+    fn retry_last_takes_the_dangling_tool_call_with_it() {
+        let mut s = Session::new(PathBuf::from("."), "p", "m");
+        s.push(user_msg("flash it"));
+        s.push(ChatMessage::Assistant {
+            content: String::new(),
+            tool_calls: vec![ToolCall {
+                id: "c1".to_string(),
+                name: "flash".to_string(),
+                arguments: serde_json::json!({}),
+            }],
+            thinking_blocks: Vec::new(),
+        });
+        s.push(ChatMessage::Tool {
+            tool_call_id: "c1".to_string(),
+            name: "flash".to_string(),
+            content: "cancelled".to_string(),
+        });
+
+        assert_eq!(s.retry_last().as_deref(), Some("flash it"));
+        assert!(s.messages.is_empty());
+    }
+
+    #[test]
+    fn retry_last_has_nothing_to_repeat_in_a_fresh_session() {
+        let mut s = Session::new(PathBuf::from("."), "p", "m");
+        assert_eq!(s.retry_last(), None);
+        s.push(assistant_msg("a greeting nobody asked for"));
+        assert_eq!(s.retry_last(), None);
     }
 
     /// A session id is used in a path, so it must not be able to escape the

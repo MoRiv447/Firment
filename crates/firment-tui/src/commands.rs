@@ -26,59 +26,99 @@ pub(crate) fn spawn_agent_task(
     plan_permission: Arc<dyn PermissionChecker>,
     tui_permission: Arc<dyn PermissionChecker>,
 ) -> tokio::task::JoinHandle<()> {
+    // One turn body, shared by a fresh prompt and by a retry: the two differ only in
+    // where the text comes from. A retry resolves its prompt INSIDE the turn task,
+    // under the same lock that runs it, so the rewind and the re-run cannot be
+    // reordered by anything else that arrives on the channel -- and the loop needs no
+    // sender of its own, which is what keeps a dropped command channel meaning "the UI
+    // is gone" rather than "one task still holds a clone".
+    let spawn_turn = {
+        let agent = agent.clone();
+        let turn_lock = turn_lock.clone();
+        move |prompt: Option<String>| {
+            // Cloned per call: the closure has to stay callable for the next command,
+            // so the turn takes its own handles rather than the closure's.
+            let agent = agent.clone();
+            let turn_lock = turn_lock.clone();
+            // Run the turn on its own task so the command loop stays
+            // responsive and Cancel can interrupt mid-turn.
+            tokio::spawn(async move {
+                let _turn = turn_lock.lock().await;
+                let mut agent = agent.lock().await;
+                let text = match prompt {
+                    Some(text) => text,
+                    None => match agent.retry_last() {
+                        Some(text) => text,
+                        None => {
+                            // Nothing to repeat. The turn that would have carried
+                            // `TurnEnd` never starts, so it is emitted here: a UI left
+                            // busy with no turn coming is the failure this loop exists
+                            // to prevent.
+                            agent
+                                .emit(AgentEvent::Info("Nothing to retry yet.".to_string()))
+                                .await;
+                            agent
+                                .emit(AgentEvent::TurnEnd {
+                                    text: String::new(),
+                                })
+                                .await;
+                            return;
+                        }
+                    },
+                };
+                agent.reset_cancel();
+                // A panic inside run_turn (provider serde, a tool bug,
+                // ...) would unwind the spawned task silently: no
+                // TurnEnd ever fires and the TUI stays busy forever.
+                // Catch it, close the turn, keep the app alive.
+                let result = std::panic::AssertUnwindSafe(agent.run_turn(&text))
+                    .catch_unwind()
+                    .await;
+                match result {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => {
+                        agent.emit(AgentEvent::Error(e.to_string())).await;
+                        // Error paths of run_turn (max iterations, provider
+                        // failure, ...) emit no TurnEnd, so the TUI would
+                        // stay busy forever; close the turn explicitly.
+                        agent
+                            .emit(AgentEvent::TurnEnd {
+                                text: String::new(),
+                            })
+                            .await;
+                        let _ = agent.save_session();
+                    }
+                    Err(panic_payload) => {
+                        let detail = panic_payload
+                            .downcast_ref::<&str>()
+                            .map(|s| s.to_string())
+                            .or_else(|| panic_payload.downcast_ref::<String>().cloned())
+                            .unwrap_or_else(|| "unknown panic".to_string());
+                        agent
+                            .emit(AgentEvent::Error(format!(
+                                "internal error (turn panicked): {detail}"
+                            )))
+                            .await;
+                        agent
+                            .emit(AgentEvent::TurnEnd {
+                                text: String::new(),
+                            })
+                            .await;
+                        let _ = agent.save_session();
+                    }
+                }
+            });
+        }
+    };
+
     tokio::spawn(async move {
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
                 AgentCmd::User(text) => {
-                    // Run the turn on its own task so the command loop stays
-                    // responsive and Cancel can interrupt mid-turn.
-                    let agent = agent.clone();
-                    let turn_lock = turn_lock.clone();
-                    tokio::spawn(async move {
-                        let _turn = turn_lock.lock().await;
-                        let mut agent = agent.lock().await;
-                        agent.reset_cancel();
-                        // A panic inside run_turn (provider serde, a tool bug,
-                        // ...) would unwind the spawned task silently: no
-                        // TurnEnd ever fires and the TUI stays busy forever.
-                        // Catch it, close the turn, keep the app alive.
-                        let result = std::panic::AssertUnwindSafe(agent.run_turn(&text))
-                            .catch_unwind()
-                            .await;
-                        match result {
-                            Ok(Ok(_)) => {}
-                            Ok(Err(e)) => {
-                                agent.emit(AgentEvent::Error(e.to_string())).await;
-                                // Error paths of run_turn (max iterations, provider
-                                // failure, ...) emit no TurnEnd, so the TUI would
-                                // stay busy forever; close the turn explicitly.
-                                agent
-                                    .emit(AgentEvent::TurnEnd {
-                                        text: String::new(),
-                                    })
-                                    .await;
-                                let _ = agent.save_session();
-                            }
-                            Err(panic_payload) => {
-                                let detail = panic_payload
-                                    .downcast_ref::<&str>()
-                                    .map(|s| s.to_string())
-                                    .or_else(|| panic_payload.downcast_ref::<String>().cloned())
-                                    .unwrap_or_else(|| "unknown panic".to_string());
-                                agent
-                                    .emit(AgentEvent::Error(format!(
-                                        "internal error (turn panicked): {detail}"
-                                    )))
-                                    .await;
-                                agent
-                                    .emit(AgentEvent::TurnEnd {
-                                        text: String::new(),
-                                    })
-                                    .await;
-                                let _ = agent.save_session();
-                            }
-                        }
-                    });
+                    spawn_turn(Some(text));
+                }
+                AgentCmd::RetryLast => {
+                    spawn_turn(None);
                 }
                 AgentCmd::Cancel => {
                     let _ = cancel_tx.send(true);
@@ -575,6 +615,9 @@ pub(crate) fn spawn_agent_task(
 #[derive(Debug)]
 pub(crate) enum AgentCmd {
     User(String),
+    /// Re-send the last request, discarding what the turn recorded after it. Resolves
+    /// inside the loop into a `User` with the recovered prompt.
+    RetryLast,
     Cancel,
     SetModel(String),
     SetThinking(ThinkingLevel),

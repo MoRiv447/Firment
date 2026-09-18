@@ -2184,6 +2184,87 @@ mod tests {
         }
     }
 
+    /// `/retry-last` from the UI's side: the screen has to end up looking like the user
+    /// had typed the question again, or the retry has rewound two different things.
+    #[test]
+    fn retry_last_rewinds_the_transcript_to_the_last_question() {
+        let mut app = test_app();
+        app.items.push(Item::User("first".to_string()));
+        app.items.push(Item::Assistant("answered".to_string()));
+        app.items.push(Item::User("second".to_string()));
+        app.items.push(Item::Assistant("boom".to_string()));
+
+        app.run_command("retry-last");
+
+        // The failed answer is gone and the question is back at the bottom, which is
+        // what a typed re-ask looks like -- and the earlier exchange is untouched.
+        assert_eq!(app.items.len(), 3);
+        assert!(matches!(app.items[0], Item::User(ref t) if t == "first"));
+        assert!(matches!(app.items[1], Item::Assistant(_)));
+        assert!(matches!(app.items[2], Item::User(ref t) if t == "second"));
+        assert!(
+            app.busy,
+            "a retry is a turn, and the input line must say so"
+        );
+    }
+
+    #[test]
+    fn retry_last_refuses_while_a_turn_is_running() {
+        let mut app = test_app();
+        app.items
+            .push(Item::User("still being answered".to_string()));
+        app.busy = true;
+
+        app.run_command("retry-last");
+
+        // Refused, not queued: the answer being replaced is the one still arriving, so
+        // there is nothing to rewind to yet, and the transcript must not lose the card
+        // the user is watching.
+        assert_eq!(app.items.len(), 2);
+        assert!(matches!(app.items[1], Item::System(ref t) if t.contains("busy")));
+    }
+
+    #[test]
+    fn retry_last_says_so_when_there_is_nothing_to_repeat() {
+        let mut app = test_app();
+
+        app.run_command("retry-last");
+
+        assert_eq!(app.items.len(), 1);
+        assert!(matches!(app.items[0], Item::System(ref t) if t.contains("Nothing to retry")));
+        assert!(!app.busy, "nothing was sent, so nothing is running");
+    }
+
+    /// The kernel's half of the same command: with nothing to rewind it must still close
+    /// the turn it never started, because the UI went busy the moment it sent the retry.
+    #[tokio::test]
+    async fn a_retry_with_nothing_to_repeat_still_closes_the_turn() {
+        let (cmd_tx, mut event_rx, _task) = spawn_agent_task_harness(Box::new(ErrorProvider));
+        cmd_tx.send(AgentCmd::RetryLast).await.unwrap();
+
+        let mut saw_info = false;
+        let mut saw_turn_end = false;
+        for _ in 0..4 {
+            if saw_info && saw_turn_end {
+                break;
+            }
+            match tokio::time::timeout(Duration::from_secs(5), event_rx.recv()).await {
+                Ok(Some(AgentEvent::Info(text))) => {
+                    assert!(text.contains("Nothing to retry"), "got {text:?}");
+                    saw_info = true;
+                }
+                Ok(Some(AgentEvent::TurnEnd { .. })) => saw_turn_end = true,
+                Ok(Some(_)) => {}
+                _ => break,
+            }
+        }
+        assert!(saw_info, "the loop must say why nothing happened");
+        assert!(
+            saw_turn_end,
+            "a busy UI with no turn coming is the failure this loop prevents"
+        );
+    }
+
     #[tokio::test]
     async fn turn_error_still_closes_the_turn() {
         let (cmd_tx, mut event_rx, task) = spawn_agent_task_harness(Box::new(ErrorProvider));
