@@ -192,8 +192,14 @@ enum Command {
     },
     Tools,
     /// Interactively add a provider from the built-in neutral catalog
-    /// (`firm config` → pick a preset → key → done).
-    Config,
+    /// (`firm config` → pick a preset → key → done). `onboard` is an alias:
+    /// the first thing a fresh install is told to run.
+    #[command(alias = "onboard")]
+    Config {
+        /// Print the effective configuration with keys masked, and exit.
+        #[arg(long)]
+        show: bool,
+    },
     /// Environment self-check: config + providers, install state, toolchain
     /// on PATH, serial ports and [tools] semantics — so flash/build/monitor
     /// fail at setup time with a fix hint, not mid-task.
@@ -356,9 +362,14 @@ async fn main() -> anyhow::Result<()> {
                 let registry = firment_tools::default_registry();
                 println!("{}", serde_json::to_string_pretty(&registry.specs())?);
             }
-            Command::Config => {
+            Command::Config { show } => {
                 let path = cli.config.clone().unwrap_or_else(config_path);
-                run_config(&path)?;
+                if *show {
+                    let config = Config::load_or_create(&path)?;
+                    show_config(&config, &path, &mut std::io::stdout())?;
+                } else {
+                    run_config(&path)?;
+                }
             }
             Command::Doctor { sbc, json } => {
                 let cwd = cli
@@ -491,7 +502,21 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let config_path = cli.config.clone().unwrap_or_else(config_path);
+    // `load_or_create` writes a default config the first time firm runs. That silent
+    // write is where onboarding has to start: with no provider configured, the first
+    // turn dies on a missing API key, and the fix (`firm config`) only helps if it is
+    // named before that. To stderr, so a one-shot capture keeps its stdout clean.
+    let config_created = !config_path.exists();
     let mut config = Config::load_or_create(&config_path)?;
+    if config_created {
+        eprintln!(
+            "[firm] created a default config at {} — no provider is configured yet.",
+            config_path.display()
+        );
+        eprintln!(
+            "[firm] run `firm config` to add one from the neutral catalog, or `firm doctor` to check what else is missing."
+        );
+    }
     // CLI overrides win over config values (and apply to both TUI and
     // one-shot paths, since both build from this config).
     if let Some(length) = cli.context_length {
@@ -668,7 +693,12 @@ async fn run_once(
         allow_dangerous,
     );
     if let Some(error) = assembly.provider_error {
-        anyhow::bail!(error);
+        // The kernel's message points at `/apikey`, which is a TUI command. A one-shot
+        // has no chat loop, so the fix it names has to be the one that works here.
+        anyhow::bail!(
+            "{error}\n  (non-interactive: run `firm config` to add a provider, or \
+             `firm --set-key <provider>=<key>`)"
+        );
     }
     let text = assembly.agent.run_turn(prompt).await?;
     println!("{text}");
@@ -1085,6 +1115,70 @@ fn list_sessions() -> anyhow::Result<()> {
 /// `firm config`: pick a preset from the neutral catalog, optionally supply a
 /// key, and write the provider into config.toml. Nothing becomes the default
 /// unless the user asks, and the catalog itself endorses no vendor.
+/// The last four characters of a key, or "set" when it is too short to mask safely.
+///
+/// The whole value is never printed — that is the one rule this file's `--show` cannot
+/// break, and the test for it asserts the key string is absent from the output.
+fn masked_key(key: &str) -> String {
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() > 8 {
+        format!(
+            "ends \"…{}\"",
+            chars[chars.len() - 4..].iter().collect::<String>()
+        )
+    } else {
+        "set".to_string()
+    }
+}
+
+/// Where a provider's key comes from, in the same order `Config::api_key_for`
+/// resolves it (inline, then auth.json, then the environment). Display only: the
+/// usability verdict below comes from the kernel, so the two cannot disagree about
+/// *whether* a key exists — only this line can name the wrong place.
+fn describe_key_source(provider: &firment_core::ProviderConfig) -> &'static str {
+    if provider.api_key.as_deref().is_some_and(|k| !k.is_empty()) {
+        "inline (config.toml)"
+    } else {
+        // auth.json and the environment are indistinguishable here without reading
+        // the store twice; `usable` below is the line that is allowed to decide.
+        "auth.json or the environment"
+    }
+}
+
+/// `firm config --show`: the effective configuration, with every secret masked.
+fn show_config(config: &Config, path: &Path, out: &mut impl std::io::Write) -> std::io::Result<()> {
+    writeln!(out, "config file: {}", path.display())?;
+    let default = &config.default_provider;
+    writeln!(out, "default provider: {default}")?;
+    let mut names: Vec<&String> = config.providers.keys().collect();
+    names.sort();
+    for name in names {
+        let provider = &config.providers[name];
+        writeln!(out, "\n[providers.{name}]")?;
+        writeln!(out, "  type    : {}", provider.r#type)?;
+        if let Some(url) = &provider.base_url {
+            writeln!(out, "  base_url: {url}")?;
+        }
+        writeln!(out, "  model   : {}", provider.model)?;
+        writeln!(out, "  key     : {}", describe_key_source(provider))?;
+    }
+    // The usability verdict is the kernel's own resolution — inline, then auth.json,
+    // then the environment — so this view cannot call a provider usable when a turn
+    // would disagree.
+    let usable = config
+        .provider(Some(default))
+        .ok()
+        .and_then(|provider| config.api_key_for(provider, default));
+    match usable {
+        Some(key) => writeln!(out, "\n✓ '{default}' can run a turn ({})", masked_key(&key))?,
+        None => writeln!(
+            out,
+            "\n✗ '{default}' has no usable API key.\n  run `firm config` to add a provider from the catalog, or `firm --set-key {default}=<key>`."
+        )?,
+    }
+    Ok(())
+}
+
 fn run_config(config_path: &Path) -> anyhow::Result<()> {
     use firment_core::{CATALOG, ProviderConfig};
 
@@ -1332,6 +1426,54 @@ fn format_ts(secs: u64) -> String {
 mod tests {
     use super::*;
     use firment_core::config::CommandProvenance;
+
+    #[test]
+    fn show_never_prints_the_api_key_value() {
+        // The one rule `--show` cannot break: a key that landed in config.toml is
+        // masked to its last four characters, and the value itself is absent from the
+        // output — including from the "usable" line, which reads the same key back.
+        let key = "sk-super-secret-value-9876543210";
+        let mut config = Config::default_config();
+        config.default_provider = "show-test-provider-8f3a".to_string();
+        config.providers.insert(
+            "show-test-provider-8f3a".to_string(),
+            firment_core::ProviderConfig {
+                r#type: "openai".to_string(),
+                base_url: Some("https://example.test/v1".to_string()),
+                api_key_env: None,
+                api_key: Some(key.to_string()),
+                model: "test-model".to_string(),
+                max_tokens: None,
+                temperature: None,
+            },
+        );
+        let mut out: Vec<u8> = Vec::new();
+        show_config(&config, std::path::Path::new("config.toml"), &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(!text.contains(key), "the key leaked: {text}");
+        assert!(text.contains("ends \"…3210\""), "got: {text}");
+        assert!(text.contains("can run a turn"), "got: {text}");
+    }
+
+    #[test]
+    fn masked_key_hides_short_keys_behind_a_word() {
+        // A four-character key is exactly the case last-four masking would print in
+        // full, so short keys get a word instead of characters.
+        assert_eq!(masked_key("short"), "set");
+    }
+
+    #[test]
+    fn show_states_the_fix_when_no_key_is_usable() {
+        // A fresh default config: the verdict must be the ✗ with the command that
+        // fixes it, not a silent "no data".
+        let mut config = Config::default_config();
+        config.default_provider = "show-empty-provider-8f3a".to_string();
+        let mut out: Vec<u8> = Vec::new();
+        show_config(&config, std::path::Path::new("config.toml"), &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("has no usable API key"), "got: {text}");
+        assert!(text.contains("`firm config`"), "got: {text}");
+    }
 
     fn config(auto: &[&str], from_project: CommandProvenance) -> Config {
         let mut config = Config::default_config();
