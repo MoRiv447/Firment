@@ -1786,6 +1786,19 @@ impl App {
         self.send_cmd(AgentCmd::ReviewLast);
     }
 
+    /// `/review <path>`: the built-in rules over a file or directory (plan §4-C).
+    ///
+    /// No provider and no agent lock: this is the half of the review that costs nothing,
+    /// so it runs whether or not anything is configured.
+    pub(crate) fn review_path(&mut self, path: &str) {
+        self.items.push(Item::System(format!(
+            "Reviewing {path} with the built-in rules…"
+        )));
+        self.send_cmd(AgentCmd::ReviewPath {
+            path: path.to_string(),
+        });
+    }
+
     /// `/retry-last`: rewind to the last question and run it again.
     ///
     /// The rewind happens here as well as in the kernel, and neither one is enough on
@@ -1836,11 +1849,18 @@ impl App {
             .unwrap_or((command, ""));
         match name {
             "help" => self.items.push(Item::System(
-                "Commands: /new  /plan [on|off]  /agent  /models  /model <id>  /sessions (use ↑/↓ to select)  /session <id>  /delete <id>  /undo  /ledger  /retry-last  /review-last  /pin <path>  /unpin <path>  /copy  /provider <name>  /add-provider <name> <openai|anthropic> <base_url> <model>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /budget <chars>  /output <tokens>  /verbosity [summary|normal|expanded]  /context  /config  /clear  /help  /quit\nKeys: ↑/↓ browse history when input is empty, move the input cursor on multi-line input, scroll the transcript on single-line input · Shift+Enter manual newline · PgUp/PgDn/wheel scroll · Ctrl+P model picker · Ctrl+O expand/collapse the diff on the selected tool card (the newest one when nothing is selected) · Ctrl+T collapse/expand every diff at once · inside /sessions: c copies the selected id to clipboard, d deletes it (drag-select and right-click are disabled because the TUI captures mouse events; press Esc to dismiss the picker, then your terminal's native selection works in the scrollback) · Ctrl+C copies the selection (copies the last reply when there is none) · Ctrl+V paste · Ctrl+Shift+C copy last reply · ←/→ move the input cursor · y/n/a permission answers · Esc interrupts AI output (Esc twice while working; clears input when idle) · Ctrl+Q quit\nInput box: auto-wraps and grows to up to 5 lines; taller content scrolls, large pastes collapse into 【line x-y】, and the title shows hidden/collapsed line counts before sending"
+                "Commands: /new  /plan [on|off]  /agent  /models  /model <id>  /sessions (use ↑/↓ to select)  /session <id>  /delete <id>  /undo  /ledger  /retry-last  /review-last  /review <path>  /pin <path>  /unpin <path>  /copy  /provider <name>  /add-provider <name> <openai|anthropic> <base_url> <model>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /budget <chars>  /output <tokens>  /verbosity [summary|normal|expanded]  /context  /config  /clear  /help  /quit\nKeys: ↑/↓ browse history when input is empty, move the input cursor on multi-line input, scroll the transcript on single-line input · Shift+Enter manual newline · PgUp/PgDn/wheel scroll · Ctrl+P model picker · Ctrl+O expand/collapse the diff on the selected tool card (the newest one when nothing is selected) · Ctrl+T collapse/expand every diff at once · inside /sessions: c copies the selected id to clipboard, d deletes it (drag-select and right-click are disabled because the TUI captures mouse events; press Esc to dismiss the picker, then your terminal's native selection works in the scrollback) · Ctrl+C copies the selection (copies the last reply when there is none) · Ctrl+V paste · Ctrl+Shift+C copy last reply · ←/→ move the input cursor · y/n/a permission answers · Esc interrupts AI output (Esc twice while working; clears input when idle) · Ctrl+Q quit\nInput box: auto-wraps and grows to up to 5 lines; taller content scrolls, large pastes collapse into 【line x-y】, and the title shows hidden/collapsed line counts before sending"
                     .to_string(),
             )),
             "retry-last" => self.retry_last(),
             "review-last" => self.review_last(),
+            // The guarded arm comes first: with no path there is nothing to review, and
+            // saying so beats falling through to "unknown command".
+            "review" if arg.is_empty() => self.items.push(Item::System(
+                "Usage: /review <path> (runs the built-in rules over a file or directory)"
+                    .to_string(),
+            )),
+            "review" => self.review_path(arg),
             "new" => {
                 self.paste_burst.clear();
                 self.apply_burst_outputs();

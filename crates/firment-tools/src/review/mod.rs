@@ -6,3 +6,5 @@
 //! (§4-C) will read the source tree.
 
 pub mod evidence;
+pub mod rules;
+pub mod walk;

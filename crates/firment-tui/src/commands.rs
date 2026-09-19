@@ -167,6 +167,17 @@ pub(crate) fn spawn_agent_task(
                         }
                     });
                 }
+                // The rules are pure and read files, so this runs off the UI thread but
+                // needs neither the agent nor a provider — no lock is taken at all.
+                AgentCmd::ReviewPath { path } => {
+                    let sink = agent.lock().await.sink_handle();
+                    tokio::spawn(async move {
+                        let lines = review_path_lines(&path);
+                        for line in lines {
+                            sink.event(AgentEvent::Info(line)).await;
+                        }
+                    });
+                }
                 AgentCmd::RetryLast => {
                     spawn_turn(None);
                 }
@@ -663,6 +674,43 @@ pub(crate) fn spawn_agent_task(
     })
 }
 
+/// The deterministic rules over a path, as transcript lines.
+///
+/// Synchronous file reads inside a spawn: bounded by the file limit the rules module
+/// applies, and a rules pass over this repository's own `crates/` takes milliseconds —
+/// unlike the model-backed commands, there is nothing here to wait for.
+fn review_path_lines(path: &str) -> Vec<String> {
+    use firment_tools::review::rules;
+    let root = std::path::Path::new(path);
+    if !root.exists() {
+        return vec![format!("Nothing at {path}.")];
+    }
+    // The walk is the shared one (which files count as source is one decision, not one
+    // per surface) and its limit is already applied; this only takes the list.
+    let mut files = firment_tools::review::walk::collect(root).files;
+    files.truncate(firment_tools::review::walk::FILE_LIMIT);
+
+    let mut report = firment_core::review::ReviewReport::new(format!("static: {path}"));
+    report.detail(format!("{} file(s) read", files.len()));
+    let mut skipped_tests = 0usize;
+    for file in &files {
+        let Ok(text) = std::fs::read_to_string(file) else {
+            continue;
+        };
+        let label = firment_tools::review::walk::label_for(root, file);
+        let reviewed = rules::review_source(&label, &text);
+        skipped_tests += reviewed.skipped_test_lines;
+        for finding in reviewed.findings {
+            report.push(finding);
+        }
+    }
+    if skipped_tests > 0 {
+        report.detail(format!("{skipped_tests} test-module line(s) skipped"));
+    }
+    report.note("rules only — this pass has not asked a model to look");
+    review_lines(&report)
+}
+
 /// The review report as transcript lines.
 ///
 /// The rule lives in core (`review::self_review::report_lines`) because the automatic
@@ -679,6 +727,11 @@ pub(crate) enum AgentCmd {
     RetryLast,
     /// Review the newest change in this session (plan §4-A's `/review-last`).
     ReviewLast,
+    /// Review a path with the built-in rules (plan §4-C's `/review [path]`). No provider:
+    /// this half costs nothing and works with nothing configured.
+    ReviewPath {
+        path: String,
+    },
     Cancel,
     SetModel(String),
     SetThinking(ThinkingLevel),

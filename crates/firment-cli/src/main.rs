@@ -205,7 +205,8 @@ enum Command {
     /// change in a session with your own provider (plan §4-A); `evidence` reviews what a
     /// HIL run proved about the hardware (plan §4-B).
     Review {
-        /// What to review: `deps`, `last`, or `evidence`.
+        /// What to review: `deps`, `last`, `evidence`, or a path to review statically
+        /// with the built-in rules (plan §4-C).
         target: Option<String>,
         /// Session to review for `last` (id, or "latest" — the default).
         #[arg(long)]
@@ -406,10 +407,15 @@ async fn main() -> anyhow::Result<()> {
                     "deps" | "dependencies" => run_review(&cwd, *json, *markdown)?,
                     "last" => run_review_last(&cli, session.as_deref(), *json, *markdown).await?,
                     "evidence" => run_review_evidence(&cwd, replay.as_deref(), *json, *markdown)?,
+                    // A path is the static review (plan §4-C). The named targets are
+                    // matched first, so a file called `deps` cannot shadow the dependency
+                    // review — and a name that is neither gets a message that lists both.
+                    other if Path::new(other).exists() => {
+                        run_review_path(Path::new(other), *json, *markdown)?
+                    }
                     other => anyhow::bail!(
-                        "review target '{other}' is not implemented yet - the static code \
-                         review (plan section 4-C) is the next capability; `firm review \
-                         deps` and `firm review last` work today"
+                        "review target '{other}' is neither a known target (deps, last, \
+                         evidence) nor an existing path"
                     ),
                 };
                 if code != 0 {
@@ -1222,6 +1228,67 @@ fn show_config(config: &Config, path: &Path, out: &mut impl std::io::Write) -> s
         )?,
     }
     Ok(())
+}
+
+/// `firm review <path>` — the deterministic rules (plan §4-C).
+///
+/// Rules first, and the model only where rules cannot see: this half costs nothing, can be
+/// run on every commit, and does not depend on a provider being configured. The LLM pass
+/// the plan also asks for supplements this — it does not replace it.
+fn run_review_path(path: &Path, json: bool, markdown: bool) -> anyhow::Result<i32> {
+    use firment_tools::review::{rules, walk};
+
+    let files = walk::collect(path);
+    if files.files.is_empty() {
+        anyhow::bail!("nothing reviewable under {}", path.display());
+    }
+
+    let mut report = firment_core::review::ReviewReport::new(format!("static: {}", path.display()));
+    report.detail(format!("{} file(s) read", files.files.len()));
+    let mut findings = 0usize;
+    let mut skipped_tests = 0usize;
+    for file in &files.files {
+        let Ok(text) = std::fs::read_to_string(file) else {
+            report.note(format!("{} could not be read as text", file.display()));
+            continue;
+        };
+        // The label has to keep the file's own name when `path` *is* the file: an empty
+        // label silently disabled every path-dependent rule (measured — one file reported
+        // nothing while its directory reported two findings in it).
+        let label = walk::label_for(path, file);
+        let reviewed = rules::review_source(&label, &text);
+        findings += reviewed.findings.len();
+        skipped_tests += reviewed.skipped_test_lines;
+        for finding in reviewed.findings {
+            report.push(finding);
+        }
+    }
+    report.detail(format!("{findings} finding(s) from the built-in rules"));
+    if skipped_tests > 0 {
+        report.detail(format!(
+            "{skipped_tests} test-module line(s) skipped — a test that demonstrates a pattern is not a defect"
+        ));
+    }
+    if files.skipped > 0 {
+        report.note(format!(
+            "{} more file(s) were left unread (the run stops at {})",
+            files.skipped,
+            walk::FILE_LIMIT
+        ));
+    }
+    report.note(
+        "rules only: this run has not asked a model to look — that pass is what `/review --deep` adds",
+    );
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else if markdown {
+        print!("{}", report.to_markdown());
+    } else {
+        print!("{}", render_review(&report));
+    }
+    let (high, _) = report.counts();
+    Ok(if high > 0 { 2 } else { 0 })
 }
 
 /// The newest HIL replay log in a directory.

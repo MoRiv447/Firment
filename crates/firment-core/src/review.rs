@@ -121,6 +121,19 @@ impl Finding {
         self
     }
 
+    /// The offending text, when there is one and it is short. A finding that quotes the
+    /// line it is about saves the reader from looking it up.
+    pub fn with_code(mut self, code: impl Into<String>) -> Self {
+        self.code = Some(code.into());
+        self
+    }
+
+    /// How to check it by hand.
+    pub fn with_steps(mut self, steps: Vec<String>) -> Self {
+        self.steps = steps;
+        self
+    }
+
     pub fn with_tags(mut self, tags: &[&str]) -> Self {
         self.tags = tags.iter().map(|t| t.to_string()).collect();
         self

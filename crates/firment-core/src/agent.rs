@@ -357,6 +357,15 @@ impl Agent {
         self.self_review.as_ref().map(|c| c.review.after_edit)
     }
 
+    /// A handle to the event sink, for work that reports without touching the agent.
+    ///
+    /// A spawned review needs to *say* something and nothing else; making it lock the
+    /// agent to reach `sink` would put it in the way of the turn that is running, which is
+    /// the one thing §16.2-1 asks the review not to do.
+    pub fn sink_handle(&self) -> Arc<dyn EventSink> {
+        self.sink.clone()
+    }
+
     pub fn session(&self) -> &Session {
         &self.session
     }

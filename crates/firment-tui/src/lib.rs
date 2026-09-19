@@ -2209,6 +2209,16 @@ mod tests {
     }
 
     #[test]
+    fn review_without_a_path_says_how_to_use_it() {
+        // `/review` with no argument must not silently do nothing, and it must not fall
+        // through to some other command's branch.
+        let mut app = test_app();
+        app.run_command("review");
+        assert_eq!(app.items.len(), 1);
+        assert!(matches!(app.items[0], Item::System(ref t) if t.contains("Usage: /review <path>")));
+    }
+
+    #[test]
     fn review_last_is_refused_while_a_turn_is_running() {
         // A review of a change that is still being written is a review of half a change,
         // and the agent lock it takes is the one the running turn holds.
