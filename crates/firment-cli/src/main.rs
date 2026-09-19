@@ -399,7 +399,7 @@ async fn main() -> anyhow::Result<()> {
                     let config = Config::load_or_create(&path)?;
                     show_config(&config, &path, &mut std::io::stdout())?;
                 } else {
-                    run_config(&path)?;
+                    run_config(&path).await?;
                 }
             }
             Command::Review {
@@ -451,6 +451,8 @@ async fn main() -> anyhow::Result<()> {
                 } else {
                     doctor::doctor(&config, &path).await?;
                     doctor::doctor_install();
+                    doctor::doctor_local(&config).await;
+                    doctor::doctor_local(&config).await;
                     let checks = doctor::doctor_tools(&cwd, &config.tools, false);
                     if *sbc {
                         doctor::doctor_sbc(&config).await;
@@ -623,6 +625,7 @@ async fn main() -> anyhow::Result<()> {
         if cli.doctor {
             doctor::doctor(&config, &config_path).await?;
             doctor::doctor_install();
+            doctor::doctor_local(&config).await;
             let checks = doctor::doctor_tools(&cwd, &config.tools, false);
             if let Some(missing) = doctor::first_required_missing(&checks) {
                 eprintln!("\n✗ required tool missing: {missing}");
@@ -1663,10 +1666,79 @@ fn render_review(report: &firment_core::review::ReviewReport) -> String {
     out
 }
 
-fn run_config(config_path: &Path) -> anyhow::Result<()> {
+async fn run_config(config_path: &Path) -> anyhow::Result<()> {
+    use firment_core::local;
     use firment_core::{CATALOG, ProviderConfig};
 
     let mut config = Config::load_or_create(config_path)?;
+
+    // §16.2-6: `firm config` is one of only two places allowed to probe for local models
+    // (doctor is the other), it uses a 200 ms timeout, and it caches the answer.
+    //
+    // The local server comes first because it is the answer that needs no key and no
+    // account: offering it after a catalog of cloud providers would be offering the harder
+    // option first.
+    let now = local::now_secs();
+    let endpoints = match local::cached(now) {
+        Some(endpoints) => endpoints,
+        None => {
+            // The endpoints this machine already knows about, if they are not cloud: a
+            // configured LAN Ollama is a local model like any other.
+            let extra: Vec<String> = config
+                .providers
+                .values()
+                .filter_map(|provider| provider.base_url.clone())
+                .filter(|url| local::is_private_url(url))
+                .collect();
+            let probed = local::probe_with(&extra).await;
+            local::store(&probed, now);
+            probed
+        }
+    };
+    if endpoints.is_empty() {
+        let ports: Vec<String> = local::KNOWN_ENDPOINTS
+            .iter()
+            .map(|(_, _, port)| port.to_string())
+            .collect();
+        println!(
+            "no local model server detected (checked 127.0.0.1:{})\n",
+            ports.join(", ")
+        );
+    } else {
+        println!("local model servers detected:");
+        for endpoint in &endpoints {
+            println!(
+                "  {} at {} ({} model(s))",
+                endpoint.kind,
+                endpoint.base_url,
+                endpoint.models.len()
+            );
+        }
+        print!("\nuse the first one as a provider? [y/N] ");
+        std::io::stdout().flush()?;
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if answer.trim().eq_ignore_ascii_case("y") {
+            let endpoint = &endpoints[0];
+            let name = local::provider_name(&endpoint.kind, &config);
+            config
+                .providers
+                .insert(name.clone(), endpoint.as_provider());
+            config.default_provider = name.clone();
+            config.save(config_path)?;
+            println!(
+                "added [providers.{name}] at {} and made it the default{}",
+                endpoint.base_url,
+                match config.local.vram_gb {
+                    Some(_) => "",
+                    None => " — set [local] vram_gb to get model recommendations in `firm doctor`",
+                }
+            );
+            return Ok(());
+        }
+        println!("nothing changed.\n");
+    }
+
     println!("provider presets (neutral catalog — no endorsement, nothing becomes default):\n");
     for (i, p) in CATALOG.iter().enumerate() {
         let key = p

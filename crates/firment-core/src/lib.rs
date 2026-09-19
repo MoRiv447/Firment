@@ -8,6 +8,7 @@ pub mod hash;
 pub mod http;
 pub mod journal;
 pub mod kb;
+pub mod local;
 pub mod permission;
 pub mod provider;
 pub mod providers;

@@ -534,6 +534,78 @@ pub(crate) fn toolchain_checks(
     checks
 }
 
+/// Local model servers (plan §5, item 5) — probed **here and in `firm config`, nowhere
+/// else** (§16.2-6), with a 200 ms timeout and a 15-minute cache.
+///
+/// The cache is why a second `firm doctor` in the same session costs nothing, and the
+/// expiry is why starting Ollama and asking again works without anyone knowing a cache
+/// exists.
+pub(crate) async fn doctor_local(config: &Config) {
+    use firment_core::local;
+
+    println!("\nlocal model servers:");
+    let now = local::now_secs();
+    let (endpoints, from_cache) = match local::cached(now) {
+        Some(endpoints) => (endpoints, true),
+        None => {
+            let extra: Vec<String> = config
+                .providers
+                .values()
+                .filter_map(|p| p.base_url.clone())
+                .filter(|url| local::is_private_url(url))
+                .collect();
+            let probed = local::probe_with(&extra).await;
+            local::store(&probed, now);
+            (probed, false)
+        }
+    };
+
+    if endpoints.is_empty() {
+        let ports: Vec<String> = local::KNOWN_ENDPOINTS
+            .iter()
+            .map(|(_, display, port)| format!("{display} on {port}"))
+            .collect();
+        println!("  none listening ({})", ports.join(", "));
+        return;
+    }
+    println!(
+        "  (from {})",
+        if from_cache { "cache" } else { "a fresh probe" }
+    );
+
+    for endpoint in &endpoints {
+        println!("  {} at {}", endpoint.kind, endpoint.base_url);
+        if endpoint.models.is_empty() {
+            println!("    reachable, but it listed no models");
+            continue;
+        }
+        for model in local::fits(&endpoint.models) {
+            match model.needs_gb {
+                Some(needs) => println!("    {} (~{needs:.1} GB)", model.name),
+                None => println!("    {} (size unknown)", model.name),
+            }
+        }
+        match config.local.vram_gb {
+            Some(vram) => {
+                let ranked = local::recommend(&endpoint.models, Some(vram));
+                if ranked.is_empty() {
+                    println!("    nothing here fits {vram:.0} GB of VRAM");
+                } else {
+                    println!(
+                        "    best fit for {vram:.0} GB: {} (set [local] vram_gb to change this)",
+                        ranked[0].name
+                    );
+                }
+            }
+            // No number, no recommendation: a "fits" verdict computed from an assumed card
+            // is worse than silence.
+            None => println!(
+                "    set [local] vram_gb in config.toml to get a recommendation for this machine"
+            ),
+        }
+    }
+}
+
 /// The first check that must be installed for `firm` to do its job, if any.
 ///
 /// Drives the exit code: `doctor` is a setup gate, so it has to be able to say

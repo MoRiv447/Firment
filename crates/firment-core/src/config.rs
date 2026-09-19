@@ -61,6 +61,9 @@ pub struct Config {
     /// together with the `[tools]` defaults that already take effect today.
     #[serde(default)]
     pub board: BoardConfig,
+    /// What this machine can run locally (plan §5, item 5).
+    #[serde(default)]
+    pub local: LocalConfig,
     /// Which command-bearing tool settings came from a project-local config
     /// file. Derived by `merged_for`, never persisted — `save` would otherwise
     /// write a repo-controlled fact into the user's own config.toml.
@@ -181,6 +184,18 @@ impl UiTheme {
 /// how verbose and how bright the UI is belongs to the person reading it, and a
 /// cloned repo should not be able to change what someone sees. Only the user's
 /// own config.toml and the CLI flags can set this.
+/// What this machine can run locally (plan §5, item 5).
+///
+/// `vram_gb` is the one number a model recommendation cannot be derived from a formula:
+/// parameters and quantisation give a range, and the card is the truth. Left unset, the
+/// local-model report lists what a server has and recommends nothing — which is the
+/// honest output, not a gap to be filled with a guess.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LocalConfig {
+    #[serde(default)]
+    pub vram_gb: Option<f32>,
+}
+
 /// The board on the desk (plan §5, item 3).
 ///
 /// Unlike `[ui]` and `[review]`, this one **is** merged from a project config: the board is
@@ -694,6 +709,7 @@ impl Config {
             ui: UiConfig::default(),
             review: ReviewConfig::default(),
             board: BoardConfig::default(),
+            local: LocalConfig::default(),
             commands_from_project: CommandProvenance::default(),
         }
     }
