@@ -200,15 +200,19 @@ enum Command {
         #[arg(long)]
         show: bool,
     },
-    /// Review something and report findings. `deps` audits the dependency graph
-    /// (licences always, advisories when `cargo-audit` is installed); `last` reviews the
-    /// newest change in a session with your own provider (plan §4-A, `/review-last`).
+    /// Review something and report findings. `deps` audits the dependency graph (licences
+    /// always, advisories when `cargo-audit` is installed); `last` reviews the newest
+    /// change in a session with your own provider (plan §4-A); `evidence` reviews what a
+    /// HIL run proved about the hardware (plan §4-B).
     Review {
-        /// What to review: `deps` (dependency graph) or `last` (the newest change).
+        /// What to review: `deps`, `last`, or `evidence`.
         target: Option<String>,
         /// Session to review for `last` (id, or "latest" — the default).
         #[arg(long)]
         session: Option<String>,
+        /// HIL run to review for `evidence` (id, or a path to a .jsonl log).
+        #[arg(long)]
+        replay: Option<String>,
         /// Machine-readable report on stdout.
         #[arg(long)]
         json: bool,
@@ -390,6 +394,7 @@ async fn main() -> anyhow::Result<()> {
             Command::Review {
                 target,
                 session,
+                replay,
                 json,
                 markdown,
             } => {
@@ -400,6 +405,7 @@ async fn main() -> anyhow::Result<()> {
                 let code = match target.as_deref().unwrap_or("deps") {
                     "deps" | "dependencies" => run_review(&cwd, *json, *markdown)?,
                     "last" => run_review_last(&cli, session.as_deref(), *json, *markdown).await?,
+                    "evidence" => run_review_evidence(&cwd, replay.as_deref(), *json, *markdown)?,
                     other => anyhow::bail!(
                         "review target '{other}' is not implemented yet - the static code \
                          review (plan section 4-C) is the next capability; `firm review \
@@ -1218,6 +1224,77 @@ fn show_config(config: &Config, path: &Path, out: &mut impl std::io::Write) -> s
     Ok(())
 }
 
+/// The newest HIL replay log in a directory.
+///
+/// Newest by modification time rather than by name: the ids are timestamps, but a run
+/// replayed twice would leave two files and the one the user means is the one that just
+/// finished. Returns `None` for a directory that does not exist — a project that never ran
+/// a suite has no replays, which is not an error, it is a fact to report.
+fn newest_replay(dir: &Path) -> Option<PathBuf> {
+    let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Ok(modified) = entry.metadata().and_then(|m| m.modified()) else {
+            continue;
+        };
+        if newest.as_ref().is_none_or(|(best, _)| modified > *best) {
+            newest = Some((modified, path));
+        }
+    }
+    newest.map(|(_, path)| path)
+}
+
+/// `firm review evidence` — what a HIL run proved about the hardware (plan §4-B).
+///
+/// This is the capability the plan calls Firment's own: the other review directions read
+/// code, a diff or a manifest, while this one reads what the board did.
+fn run_review_evidence(
+    cwd: &Path,
+    replay: Option<&str>,
+    json: bool,
+    markdown: bool,
+) -> anyhow::Result<i32> {
+    let dir = cwd.join(".firment").join("work").join("hil");
+    let path = match replay {
+        Some(arg) if arg.ends_with(".jsonl") => PathBuf::from(arg),
+        Some(id) => dir.join(format!("{id}.jsonl")),
+        None => newest_replay(&dir).ok_or_else(|| {
+            anyhow::anyhow!(
+                "no HIL replay in {} — run `firm hil --suite <name>` first, or pass --replay <id>",
+                dir.display()
+            )
+        })?,
+    };
+    let log =
+        std::fs::read_to_string(&path).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+    let (steps, unread) = firment_tools::review::evidence::parse_replay(&log);
+    if steps.is_empty() {
+        anyhow::bail!(
+            "{} holds no readable steps ({unread} unread line(s)) — nothing to review",
+            path.display()
+        );
+    }
+    let suite = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("run")
+        .to_string();
+    let report = firment_tools::review::evidence::review_run(&suite, &steps, unread);
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else if markdown {
+        print!("{}", report.to_markdown());
+    } else {
+        print!("{}", render_review(&report));
+    }
+    let (high, _) = report.counts();
+    Ok(if high > 0 { 2 } else { 0 })
+}
+
 /// `firm review last` — the newest change in a session, reviewed by the user's own
 /// provider.
 ///
@@ -1676,6 +1753,35 @@ fn format_ts(secs: u64) -> String {
 mod tests {
     use super::*;
     use firment_core::config::CommandProvenance;
+
+    #[test]
+    fn the_newest_replay_is_chosen_by_time_not_by_name() {
+        // The ids are timestamps, but a run replayed twice leaves two files, and the one
+        // the user means is the one that just finished — not the one that sorts last.
+        let dir = tempfile::tempdir().unwrap();
+        let by_name_later = dir.path().join("20260918T100000Z.jsonl");
+        let by_name_earlier = dir.path().join("20260918T090000Z.jsonl");
+        std::fs::write(&by_name_later, "{\"step\":1}\n").unwrap();
+        std::fs::write(&by_name_earlier, "{\"step\":1}\n").unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&by_name_earlier, "{\"step\":1}\n{\"step\":2}\n").unwrap();
+
+        assert_eq!(
+            newest_replay(dir.path()).as_deref(),
+            Some(by_name_earlier.as_path())
+        );
+
+        // A directory that is not there is not an error: a project that never ran a suite
+        // has no replays, and the caller reports that in words.
+        assert!(newest_replay(&dir.path().join("missing")).is_none());
+        let empty = tempfile::tempdir().unwrap();
+        assert!(newest_replay(empty.path()).is_none());
+
+        // Files that are not replay logs are not candidates.
+        std::fs::write(dir.path().join("notes.txt"), "hi").unwrap();
+        assert!(newest_replay(dir.path()).is_some());
+    }
 
     #[test]
     fn the_terminal_rendering_leads_with_the_summary_and_keeps_the_notes() {
