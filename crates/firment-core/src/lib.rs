@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod ask;
+pub mod board;
 pub mod cancel;
 pub mod config;
 pub mod context;

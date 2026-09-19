@@ -1,0 +1,17 @@
+display = "ESP32-S3-DevKitC"
+part = "esp32s3"
+board = "esp32s3"
+chip = "esp32s3"
+core = "xtensa-lx7"
+flash_kb = 8192
+ram_kb = 512
+baud = 115200
+probe = "usb-serial-jtag"
+notes = "Not a probe-rs target: the S3 is flashed with espflash (or idf.py), and its chip field here is a label rather than a probe-rs name. The plan lists it because RV1103-class vision work runs beside the MCU, not on it."
+
+[pins]
+led = "GPIO48"
+uart_tx = "GPIO43"
+uart_rx = "GPIO44"
+i2c_scl = "GPIO9"
+i2c_sda = "GPIO8"

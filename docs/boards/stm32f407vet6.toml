@@ -1,0 +1,20 @@
+display = "STM32F407VET6 (F4 dev board)"
+part = "stm32f407vet6"
+board = "f407vet6"
+chip = "stm32f407vetx"
+core = "cortex-m4"
+flash_kb = 512
+ram_kb = 192
+baud = 115200
+probe = "st-link"
+notes = "The usual 'F4 black board'. 192 KB of RAM is what makes it worth choosing over an F1 for anything with buffers."
+
+[pins]
+led = "PD12"
+uart_tx = "PA9"
+uart_rx = "PA10"
+i2c_scl = "PB6"
+i2c_sda = "PB7"
+spi_sck = "PA5"
+spi_miso = "PA6"
+spi_mosi = "PA7"

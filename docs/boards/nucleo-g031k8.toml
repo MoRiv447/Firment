@@ -1,0 +1,17 @@
+display = "NUCLEO-G031K8"
+part = "stm32g031k8"
+board = "nucleo-g031k8"
+chip = "stm32g031k8"
+core = "cortex-m0+"
+flash_kb = 64
+ram_kb = 8
+baud = 115200
+probe = "st-link"
+notes = "A G0 Nucleo: a real debugger on the board, and 8 KB of RAM to be honest about."
+
+[pins]
+led = "PB8"
+uart_tx = "PA9"
+uart_rx = "PA10"
+i2c_scl = "PA9"
+i2c_sda = "PA10"

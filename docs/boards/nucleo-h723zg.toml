@@ -1,0 +1,20 @@
+display = "NUCLEO-H723ZG"
+part = "stm32h723zg"
+board = "nucleo-h723zg"
+chip = "stm32h723zg"
+core = "cortex-m7"
+flash_kb = 1024
+ram_kb = 564
+baud = 115200
+probe = "st-link"
+notes = "The H7 Nucleo: 1 MB of flash and 564 KB of RAM, so the thing that runs out is your own discipline."
+
+[pins]
+led = "PB0"
+uart_tx = "PD8"
+uart_rx = "PD9"
+i2c_scl = "PB8"
+i2c_sda = "PB9"
+spi_sck = "PA5"
+spi_miso = "PA6"
+spi_mosi = "PA7"

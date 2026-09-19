@@ -1,0 +1,35 @@
+# Board profiles (plan §5, item 3).
+#
+# One file per board, read by `firm board list/show/use`. The fields exist to answer the
+# three questions a session otherwise asks the user every time:
+#
+#   * what is on the desk — `part` (the MCU part number `periph_init` takes) and `board`
+#     (the pinmap key the conflict check uses);
+#   * how to talk to it — `chip` (the probe-rs target for `flash`) and `baud`;
+#   * what fits on it — `flash_kb` / `ram_kb`, which is the difference between a suggestion
+#     and one that links.
+#
+# `chip` is a **probe-rs target name**, not a part number: the two differ (`stm32g431rb`
+# vs `STM32G431RBT6`). Check one with `probe-rs chip list | grep <name>` before trusting a
+# profile you did not write — `firm board show` says so too.
+
+display = "Blue Pill (STM32F103C8T6)"
+part = "stm32f103c8t6"
+board = "bluepill"
+chip = "stm32f103c8"
+core = "cortex-m3"
+flash_kb = 64
+ram_kb = 20
+baud = 115200
+probe = "st-link"
+notes = "The board almost every F1 example was written for. 64 KB of flash runs out faster than people expect once a HAL is linked in."
+
+[pins]
+led = "PC13"
+uart_tx = "PA9"
+uart_rx = "PA10"
+i2c_scl = "PB6"
+i2c_sda = "PB7"
+spi_sck = "PA5"
+spi_miso = "PA6"
+spi_mosi = "PA7"

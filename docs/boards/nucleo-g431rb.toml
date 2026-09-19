@@ -1,0 +1,20 @@
+display = "NUCLEO-G431RB"
+part = "stm32g431rb"
+board = "nucleo-g431rb"
+chip = "stm32g431rb"
+core = "cortex-m4"
+flash_kb = 128
+ram_kb = 32
+baud = 115200
+probe = "st-link"
+notes = "The G4 Nucleo: motor-control peripherals, an on-board ST-Link/V3, and SWO for ITM tracing without extra wiring."
+
+[pins]
+led = "PA5"
+uart_tx = "PA2"
+uart_rx = "PA3"
+i2c_scl = "PA9"
+i2c_sda = "PA10"
+spi_sck = "PA5"
+spi_miso = "PA6"
+spi_mosi = "PA7"

@@ -57,6 +57,10 @@ pub struct Config {
     /// Self-review policy (plan §4-A). `off` by default; see [`AfterEdit`].
     #[serde(default)]
     pub review: ReviewConfig,
+    /// The board the session is working with (plan §5, item 3). `firm board use` sets it
+    /// together with the `[tools]` defaults that already take effect today.
+    #[serde(default)]
+    pub board: BoardConfig,
     /// Which command-bearing tool settings came from a project-local config
     /// file. Derived by `merged_for`, never persisted — `save` would otherwise
     /// write a repo-controlled fact into the user's own config.toml.
@@ -177,6 +181,20 @@ impl UiTheme {
 /// how verbose and how bright the UI is belongs to the person reading it, and a
 /// cloned repo should not be able to change what someone sees. Only the user's
 /// own config.toml and the CLI flags can set this.
+/// The board on the desk (plan §5, item 3).
+///
+/// Unlike `[ui]` and `[review]`, this one **is** merged from a project config: the board is
+/// a property of the checkout's hardware, and a cloned firmware repository that names its
+/// own board is more useful than one that does not. `[tools] default_chip` is merged today
+/// for exactly the same reason.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BoardConfig {
+    /// Name of the active profile in `docs/boards/` (also accepted: a part number or a
+    /// probe-rs chip name — `firm_core::board::find` resolves all three).
+    #[serde(default)]
+    pub active: Option<String>,
+}
+
 /// Self-review policy (plan §4-A). Not merged from a project config file, for the same
 /// reason as [`UiConfig`]: a cloned repository must not be able to make every edit of
 /// yours cost an extra model call.
@@ -675,6 +693,7 @@ impl Config {
             tool_cancel_grace_secs: default_tool_cancel_grace(),
             ui: UiConfig::default(),
             review: ReviewConfig::default(),
+            board: BoardConfig::default(),
             commands_from_project: CommandProvenance::default(),
         }
     }
@@ -723,6 +742,10 @@ impl Config {
             config.tools.build_command = Some(value);
             config.auto_approve.retain(|t| t != "build");
             config.commands_from_project.build = true;
+        }
+        // The board is the checkout's hardware, like `default_chip` two lines down.
+        if let Some(value) = project.board.active {
+            config.board.active = Some(value);
         }
         if let Some(value) = project.tools.default_chip {
             config.tools.default_chip = Some(value);

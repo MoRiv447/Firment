@@ -177,6 +177,16 @@ enum Command {
         #[arg(long, default_value_t = 30)]
         timeout: u64,
     },
+    /// Board profiles (plan §5, item 3): what is on the desk.
+    ///
+    /// `firm board` lists them; `show <name>` prints one; `use <name>` points the config at
+    /// it, which sets the `[tools]` defaults `flash` and `monitor` already read.
+    Board {
+        /// `list` (the default), `show`, or `use`.
+        action: Option<String>,
+        /// The board, for `show` and `use`. A name, a part number, or a probe-rs chip.
+        name: Option<String>,
+    },
     /// Print the tool registry specs as JSON — the single source of truth
     /// for tool names/descriptions/schemas (consumed by web/IDE surfaces).
     /// Headless guard: subscribe to device alerts on the SBC broker and
@@ -421,6 +431,10 @@ async fn main() -> anyhow::Result<()> {
                 if code != 0 {
                     std::process::exit(code);
                 }
+            }
+            Command::Board { action, name } => {
+                let path = cli.config.clone().unwrap_or_else(config_path);
+                run_board(action.as_deref().unwrap_or("list"), name.as_deref(), &path)?;
             }
             Command::Doctor { sbc, json } => {
                 let cwd = cli
@@ -1314,6 +1328,82 @@ fn newest_replay(dir: &Path) -> Option<PathBuf> {
     newest.map(|(_, path)| path)
 }
 
+/// `firm board list|show|use` (plan §5, item 3).
+///
+/// `use` writes the **user's** config, never the merged one: the merged config contains
+/// whatever the current checkout declared, and writing that back into the user's file would
+/// copy a project's settings into their machine.
+fn run_board(action: &str, name: Option<&str>, config_path: &Path) -> anyhow::Result<()> {
+    use firment_core::board;
+
+    let config = Config::load_or_create(config_path)?;
+    let active = config.board.active.as_deref();
+
+    match action {
+        "list" | "ls" => {
+            println!("board profiles (docs/boards/):\n");
+            for profile in board::all() {
+                let mark = if Some(profile.name.as_str()) == active {
+                    "  ← active"
+                } else {
+                    ""
+                };
+                println!("  {}{mark}", profile.summary());
+            }
+            println!(
+                "\n  `firm board show <name>` for the details, `firm board use <name>` to switch\n                   (a name, a part number, or a probe-rs chip name all work)\n                   config: {}",
+                config_path.display()
+            );
+        }
+        "show" => {
+            let Some(query) = name else {
+                anyhow::bail!("firm board show <name> — see `firm board list`");
+            };
+            match board::find(query) {
+                Some(profile) => print!("{}", profile.detail()),
+                None => {
+                    let known: Vec<String> = board::all().into_iter().map(|p| p.name).collect();
+                    anyhow::bail!(
+                        "no board profile matches '{query}\n  known: {}",
+                        known.join(", ")
+                    );
+                }
+            }
+        }
+        "use" => {
+            let Some(query) = name else {
+                anyhow::bail!("firm board use <name> — see `firm board list`");
+            };
+            let profile = board::find(query).ok_or_else(|| {
+                let known: Vec<String> = board::all().into_iter().map(|p| p.name).collect();
+                anyhow::anyhow!(
+                    "no board profile matches '{query}'\n  known: {}",
+                    known.join(", ")
+                )
+            })?;
+            let mut config = Config::load_or_create(config_path)?;
+            let changes = board::apply(&profile, &mut config);
+            config.save(config_path)?;
+            for change in changes {
+                println!("{change}");
+            }
+            println!(
+                "\n{} — {} KB flash, {} KB RAM, {}\n  \
+                 flash and monitor now default to the {} settings above.",
+                profile.display, profile.flash_kb, profile.ram_kb, profile.probe, profile.name
+            );
+            if config.tools.monitor_port.is_none() {
+                println!(
+                    "  monitor_port is still unset — the port is which hole the cable is in, \
+                     not a property of the board, so `firm monitor` will ask."
+                );
+            }
+        }
+        other => anyhow::bail!("unknown board action '{other}' — try `firm board list`"),
+    }
+    Ok(())
+}
+
 /// `firm review evidence` — what a HIL run proved about the hardware (plan §4-B).
 ///
 /// This is the capability the plan calls Firment's own: the other review directions read
@@ -1820,6 +1910,35 @@ fn format_ts(secs: u64) -> String {
 mod tests {
     use super::*;
     use firment_core::config::CommandProvenance;
+
+    #[test]
+    fn board_use_writes_the_tools_defaults_and_an_unknown_board_names_the_known_ones() {
+        // Against a temp config, never the user's: this test writes a file.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        run_board("use", Some("nucleo-g431rb"), &path).unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains("active = \"nucleo-g431rb\""), "{written}");
+        assert!(
+            written.contains("default_chip = \"stm32g431rb\""),
+            "{written}"
+        );
+
+        // Switching again to the same board is a no-op rather than an error, and the file
+        // still holds one active board.
+        run_board("use", Some("STM32G431RB"), &path).unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(written.matches("nucleo-g431rb").count(), 1, "{written}");
+
+        // An unknown name fails with the list of what does exist, because the answer to
+        // "no such board" is "here are the boards".
+        let error = run_board("show", Some("arduino-uno"), &path)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("known:"), "{error}");
+        assert!(error.contains("nucleo-g431rb"), "{error}");
+    }
 
     #[test]
     fn the_newest_replay_is_chosen_by_time_not_by_name() {
