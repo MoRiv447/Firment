@@ -2210,6 +2210,25 @@ mod tests {
     }
 
     #[test]
+    fn ledger_export_defaults_to_a_named_file_and_an_unknown_flag_is_refused() {
+        // `/ledger` with something that is not `--export` must say so rather than writing
+        // a patch somewhere the user did not ask for.
+        let mut app = test_app();
+        app.run_command("ledger --wat");
+        assert!(matches!(app.items.last(), Some(Item::System(t)) if t.contains("Usage: /ledger")));
+
+        let mut app = test_app();
+        app.run_command("ledger --export");
+        // The default destination is named in the acknowledgement, so the user knows
+        // where the patch went without looking.
+        let acknowledged = matches!(
+            app.items.last(),
+            Some(Item::System(t)) if t.contains("firment-changes.patch")
+        );
+        assert!(acknowledged, "the default destination should be named");
+    }
+
+    #[test]
     fn review_without_a_path_says_how_to_use_it() {
         // `/review` with no argument must not silently do nothing, and it must not fall
         // through to some other command's branch.

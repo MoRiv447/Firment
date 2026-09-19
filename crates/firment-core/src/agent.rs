@@ -828,6 +828,17 @@ impl Agent {
         Ledger::new(self.store.ledger_path(&self.session.id)).summary(30, 6000)
     }
 
+    /// The session's changes as one unified diff, with the paths whose hunks were capped.
+    ///
+    /// `root` resolves the ledger's stored paths, which are relative to the session's own
+    /// working directory. The second value is not optional detail: a truncated patch does
+    /// not fail when applied, it applies **partially**, so whoever writes the file owes
+    /// the reader that warning.
+    pub fn export_ledger(&self, root: &Path) -> (String, Vec<PathBuf>) {
+        let ledger = Ledger::new(self.store.ledger_path(&self.session.id));
+        (ledger.export_unified_diff(root), ledger.export_truncated())
+    }
+
     /// Switch between agent and read-only plan mode. The caller supplies the
     /// matching tool registry and permission checker for the new mode.
     pub fn set_mode(

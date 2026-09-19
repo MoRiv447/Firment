@@ -485,7 +485,7 @@ pub(crate) fn spawn_agent_task(
                         }
                     }
                 }
-                AgentCmd::Ledger => {
+                AgentCmd::Ledger { export: None } => {
                     let agent = agent.lock().await;
                     let summary = agent.ledger_summary();
                     if summary.is_empty() {
@@ -500,6 +500,48 @@ pub(crate) fn spawn_agent_task(
                                 "Recent change ledger:\n{summary}"
                             )))
                             .await;
+                    }
+                }
+                AgentCmd::Ledger { export: Some(dest) } => {
+                    // The ledger's paths are relative to the session's cwd, and the export
+                    // resolves them against it. Both are read under one lock and the file
+                    // is written outside it: the write is the slow part and the agent lock
+                    // is what a cancel needs.
+                    let (diff, truncated) = {
+                        let agent = agent.lock().await;
+                        agent.export_ledger(std::path::Path::new(&agent.session().cwd))
+                    };
+                    let lines = match std::fs::write(&dest, &diff) {
+                        Ok(()) if diff.is_empty() => vec![
+                            "No committed edits in this session yet — nothing to export"
+                                .to_string(),
+                        ],
+                        Ok(()) => {
+                            let mut lines = vec![format!(
+                                "Exported {} byte(s) of changes to {}",
+                                diff.len(),
+                                dest.display()
+                            )];
+                            if !truncated.is_empty() {
+                                // The warning the core API exists to make possible: a
+                                // truncated patch applies PARTIALLY and does not fail.
+                                lines.push(format!(
+                                    "⚠ {} file(s) had their hunks capped, so applying this patch applies a PARTIAL change: {}",
+                                    truncated.len(),
+                                    truncated
+                                        .iter()
+                                        .map(|p| p.display().to_string())
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                ));
+                            }
+                            lines
+                        }
+                        Err(e) => vec![format!("Could not write {}: {e}", dest.display())],
+                    };
+                    let agent = agent.lock().await;
+                    for line in lines {
+                        agent.emit(AgentEvent::Info(line)).await;
                     }
                 }
                 AgentCmd::Pin { path } => {
@@ -746,7 +788,11 @@ pub(crate) enum AgentCmd {
     NewSession,
     LoadSession(String),
     Undo,
-    Ledger,
+    Ledger {
+        /// Where to write the changes as a unified diff (plan §8's `/ledger --export`).
+        /// `None` reads the summary instead.
+        export: Option<std::path::PathBuf>,
+    },
     Pin {
         path: String,
     },
