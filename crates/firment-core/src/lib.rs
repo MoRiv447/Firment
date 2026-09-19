@@ -4,6 +4,7 @@ pub mod board;
 pub mod cancel;
 pub mod config;
 pub mod context;
+pub mod eventlog;
 pub mod hash;
 pub mod http;
 pub mod journal;

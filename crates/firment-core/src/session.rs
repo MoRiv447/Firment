@@ -126,7 +126,21 @@ impl Session {
     /// actually written, taken from the transcript rather than reconstructed from the
     /// journal or the working tree (which may have moved on since).
     pub fn last_change(&self) -> Option<(String, String)> {
-        self.messages
+        self.last_change_at(self.messages.len())
+    }
+
+    /// The newest change **as of** a point in the transcript (plan §5, item 1).
+    ///
+    /// The transcript is the conversation's timeline: it is written in order as the session
+    /// happens, so "the change I made before that mess" is a question about message indices.
+    /// The event log is the *operations* timeline and answers the same question in its own
+    /// units; the two are deliberately separate records, and neither is derived from the
+    /// other.
+    ///
+    /// `at` is exclusive, exactly like a slice bound, so
+    /// `last_change_at(self.messages.len())` is `last_change()`.
+    pub fn last_change_at(&self, at: usize) -> Option<(String, String)> {
+        self.messages[..at.min(self.messages.len())]
             .iter()
             .rev()
             .find_map(|message| match message {
@@ -137,6 +151,50 @@ impl Session {
                 }
                 _ => None,
             })
+    }
+
+    /// Every change the session had made by `at`, oldest first, with the message index that
+    /// made it.
+    pub fn changes_at(&self, at: usize) -> Vec<(usize, String, String)> {
+        self.messages[..at.min(self.messages.len())]
+            .iter()
+            .enumerate()
+            .filter_map(|(index, message)| match message {
+                ChatMessage::Tool { name, content, .. }
+                    if crate::review::self_review::looks_like_diff(content) =>
+                {
+                    Some((index, name.clone(), content.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The session as of `at` (plan §5, item 1's time travel).
+    ///
+    /// Deliberately not a re-execution: replaying tool calls would re-flash hardware and
+    /// re-write files, which is the opposite of what someone looking back wants. What this
+    /// shows is what the session *knew* at that point.
+    pub fn replay_at(&self, at: usize) -> ReplayView {
+        let at = at.min(self.messages.len());
+        ReplayView {
+            at,
+            messages: self.messages[..at].to_vec(),
+            changes: self.changes_at(at),
+            tool_calls: self.messages[..at]
+                .iter()
+                .filter(|message| matches!(message, ChatMessage::Tool { .. }))
+                .count(),
+        }
+    }
+
+    /// One line per message, for scanning for the point to go back to.
+    pub fn timeline(&self) -> Vec<(usize, String)> {
+        self.messages
+            .iter()
+            .enumerate()
+            .map(|(index, message)| (index, timeline_label(message)))
+            .collect()
     }
 
     pub fn title(&self) -> String {
@@ -187,6 +245,60 @@ impl Session {
             .map(|t| t.trim().to_string())
             .filter(|t| !t.is_empty());
         self.updated_at = now_secs();
+    }
+}
+
+/// A session as of a point in its transcript (plan §5, item 1).
+#[derive(Debug, Clone)]
+pub struct ReplayView {
+    /// How many messages were considered (exclusive bound, like a slice).
+    pub at: usize,
+    pub messages: Vec<ChatMessage>,
+    /// `(message index, tool, diff)` for every change made by then, oldest first.
+    pub changes: Vec<(usize, String, String)>,
+    pub tool_calls: usize,
+}
+
+impl ReplayView {
+    /// The header: where this view stops and what the session had done by then.
+    pub fn summary_line(&self) -> String {
+        format!(
+            "as of message {} — {} change(s) made, {} tool call(s) run",
+            self.at,
+            self.changes.len(),
+            self.tool_calls
+        )
+    }
+}
+
+/// One line naming a message, for the timeline list.
+fn timeline_label(message: &ChatMessage) -> String {
+    let shorten = |text: &str| -> String {
+        let first = text
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("");
+        let cut: String = first.chars().take(70).collect();
+        if first.chars().count() > 70 {
+            format!("{cut}…")
+        } else {
+            cut
+        }
+    };
+    match message {
+        ChatMessage::User { content } => format!("user: {}", shorten(content)),
+        ChatMessage::Assistant { content, .. } => format!("assistant: {}", shorten(content)),
+        ChatMessage::Tool { name, content, .. } => {
+            // A tool that changed a file says so; the diff itself would drown the list.
+            if crate::review::self_review::looks_like_diff(content) {
+                let path = crate::review::self_review::path_from_diff(content)
+                    .unwrap_or_else(|| name.clone());
+                format!("{name} → changed {path}")
+            } else {
+                format!("{name}: {}", shorten(content))
+            }
+        }
+        ChatMessage::System { content } => format!("system: {}", shorten(content)),
     }
 }
 
@@ -296,6 +408,12 @@ impl SessionStore {
     /// Path of the session's change ledger (JSONL, one committed turn per line).
     pub fn ledger_path(&self, id: &str) -> PathBuf {
         self.dir.join(format!("{}.ledger.jsonl", sanitize_id(id)))
+    }
+
+    /// Path of the session's event log (plan §5, item 1): what `replay` reads, one JSON
+    /// line per significant event, capped and rotated by `core::eventlog`.
+    pub fn event_log_path(&self, id: &str) -> PathBuf {
+        self.dir.join(format!("{}.events.jsonl", sanitize_id(id)))
     }
 
     /// Path of the session's pinned-file list (JSON array of paths).

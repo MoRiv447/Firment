@@ -64,6 +64,18 @@ pub fn assemble_agent(
     } else {
         permission.clone()
     };
+    // Plan §5, item 1: the session's event log. Wrapping the sink HERE is what makes the
+    // log complete — the assembly is the single place every surface passes through, so the
+    // four dozen emit sites inside the agent do not each have to remember to log, and a
+    // surface added tomorrow gets the log without being told about it.
+    //
+    // Wrapped before `attacker_sink` is taken, so a red-team run's events are in the same
+    // record as the session that launched it.
+    let sink: Arc<dyn EventSink> = Arc::new(firment_core::eventlog::LoggingSink::new(
+        sink,
+        firment_core::eventlog::EventLog::new(store.event_log_path(&session.id)),
+    ));
+
     // Keep a handle on the sink for the attacker runner (Agent::new moves it).
     let attacker_sink = sink.clone();
     // Same for the permission: the attacker runner is built after the

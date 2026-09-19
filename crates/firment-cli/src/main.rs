@@ -177,6 +177,17 @@ enum Command {
         #[arg(long, default_value_t = 30)]
         timeout: u64,
     },
+    /// Replay a session's event log (plan §5, item 1): turns, tools, reviews, errors, in
+    /// the order they happened. `--at` stops the replay at the n-th event.
+    Replay {
+        /// Session id, or `latest` (the default).
+        session: Option<String>,
+        /// Stop after this many events.
+        #[arg(long)]
+        at: Option<usize>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Board profiles (plan §5, item 3): what is on the desk.
     ///
     /// `firm board` lists them; `show <name>` prints one; `use <name>` points the config at
@@ -221,6 +232,11 @@ enum Command {
         /// Session to review for `last` (id, or "latest" — the default).
         #[arg(long)]
         session: Option<String>,
+        /// For `last`: review the newest change *as of* this transcript message index
+        /// (plan §5, item 1 — "the change I made before that mess"). Exclusive, like a
+        /// slice bound.
+        #[arg(long)]
+        at: Option<usize>,
         /// HIL run to review for `evidence` (id, or a path to a .jsonl log).
         #[arg(long)]
         replay: Option<String>,
@@ -406,6 +422,7 @@ async fn main() -> anyhow::Result<()> {
                 target,
                 session,
                 replay,
+                at,
                 json,
                 markdown,
             } => {
@@ -415,7 +432,9 @@ async fn main() -> anyhow::Result<()> {
                     .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
                 let code = match target.as_deref().unwrap_or("deps") {
                     "deps" | "dependencies" => run_review(&cwd, *json, *markdown)?,
-                    "last" => run_review_last(&cli, session.as_deref(), *json, *markdown).await?,
+                    "last" => {
+                        run_review_last(&cli, session.as_deref(), *at, *json, *markdown).await?
+                    }
                     "evidence" => run_review_evidence(&cwd, replay.as_deref(), *json, *markdown)?,
                     // A path is the static review (plan §4-C). The named targets are
                     // matched first, so a file called `deps` cannot shadow the dependency
@@ -431,6 +450,10 @@ async fn main() -> anyhow::Result<()> {
                 if code != 0 {
                     std::process::exit(code);
                 }
+            }
+            Command::Replay { session, at, json } => {
+                let store = SessionStore::default();
+                run_replay(&store, session.as_deref(), *at, *json)?;
             }
             Command::Board { action, name } => {
                 let path = cli.config.clone().unwrap_or_else(config_path);
@@ -1331,6 +1354,71 @@ fn newest_replay(dir: &Path) -> Option<PathBuf> {
     newest.map(|(_, path)| path)
 }
 
+/// `firm replay` — a session's event log, read back (plan §5, item 1).
+///
+/// The log is the *operations* record: one line per turn, tool, review and error, written
+/// as they happen by the sink wrapper in `assembly`. It is not the transcript — the
+/// transcript is the conversation — and the two are kept apart on purpose. This prints the
+/// operations, cut wherever `--at` says, and then names the other timeline so a reader does
+/// not have to guess which one holds the message they are looking for.
+fn run_replay(
+    store: &SessionStore,
+    session_arg: Option<&str>,
+    at: Option<usize>,
+    json: bool,
+) -> anyhow::Result<()> {
+    use firment_core::eventlog::EventLog;
+
+    let id = match session_arg {
+        Some(id) if id != "latest" => id.to_string(),
+        _ => {
+            store
+                .latest()?
+                .ok_or_else(|| anyhow::anyhow!("no sessions yet"))?
+                .id
+        }
+    };
+    let log = EventLog::new(store.event_log_path(&id));
+    let records = log.read();
+    if records.is_empty() {
+        println!(
+            "no event log for session {id} — the log is written as the session runs \
+             (turns, tools, reviews, errors), so a session from before it existed has none"
+        );
+        return Ok(());
+    }
+
+    let cut = at.unwrap_or(records.len()).min(records.len());
+    if json {
+        println!("{}", serde_json::to_string_pretty(&records[..cut])?);
+        return Ok(());
+    }
+
+    println!("session {id}: {} event(s), showing {cut}", records.len());
+    for (index, record) in records[..cut].iter().enumerate() {
+        println!("  {:>4}  {}", index + 1, record.display());
+    }
+    if cut < records.len() {
+        println!(
+            "  … {} more — `firm replay {id} --at {}` to include them",
+            records.len() - cut,
+            records.len()
+        );
+    }
+
+    // The other timeline, named rather than blended: their units are different (an event is
+    // not a message), so a reader who wants "the change before message 40" needs to know
+    // which command takes a *message* index.
+    if let Ok(session) = store.load(&id) {
+        println!(
+            "\nthe transcript is the other timeline: {}\n  \\
+             `firm review last --at <message index>` reviews the newest change as of a message",
+            session.replay_at(session.messages.len()).summary_line()
+        );
+    }
+    Ok(())
+}
+
 /// `firm board list|show|use` (plan §5, item 3).
 ///
 /// `use` writes the **user's** config, never the merged one: the merged config contains
@@ -1468,6 +1556,7 @@ fn run_review_evidence(
 async fn run_review_last(
     cli: &Cli,
     session_arg: Option<&str>,
+    at: Option<usize>,
     json: bool,
     markdown: bool,
 ) -> anyhow::Result<i32> {
@@ -1483,11 +1572,16 @@ async fn run_review_last(
         }
     };
 
-    let (tool, diff) = session.last_change().ok_or_else(|| {
-        anyhow::anyhow!(
-            "no edit with a diff in session {} yet — nothing to review",
-            session.id
-        )
+    // `--at` is how the review reaches back in time (plan §5, item 1): the newest change
+    // *as of* a message index, which is the one someone means when they say "before that
+    // mess". Without it, the newest in the session — the same thing as `--at len`.
+    let cut = at.unwrap_or(session.messages.len());
+    let (tool, diff) = session.last_change_at(cut).ok_or_else(|| {
+        let where_ = match at {
+            Some(_) => format!("in session {} before message {cut}", session.id),
+            None => format!("in session {}", session.id),
+        };
+        anyhow::anyhow!("no edit with a diff {where_} yet — nothing to review")
     })?;
 
     // The path is in the diff's own header; the tool name is the fallback label, so a
@@ -1982,6 +2076,39 @@ fn format_ts(secs: u64) -> String {
 mod tests {
     use super::*;
     use firment_core::config::CommandProvenance;
+
+    #[test]
+    fn replay_reads_the_event_log_and_stops_where_asked() {
+        // A temp store, so this never touches the machine's real sessions.
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+
+        // Nothing logged yet: the command says so instead of printing an empty table.
+        assert!(run_replay(&store, Some("does-not-exist"), None, false).is_ok());
+
+        // A session with a log: `--at` cuts it, and the log's text form lines up with the
+        // file a reader might open by hand.
+        use firment_core::eventlog::{EventLog, LogRecord};
+        let log = EventLog::new(store.event_log_path("s1"));
+        for (kind, summary) in [
+            ("turn_start", "turn started"),
+            ("tool_end", "#1 edit_file ok — Edited a.c"),
+            ("review", "#1 1 finding(s)"),
+        ] {
+            log.append(&LogRecord {
+                at: 1000,
+                kind: kind.to_string(),
+                summary: summary.to_string(),
+            })
+            .unwrap();
+        }
+        let read = log.read();
+        assert_eq!(read.len(), 3);
+        // `--at 1` is the first event and nothing else — the time travel, in its own unit.
+        assert_eq!(read[..1].len(), 1);
+        assert_eq!(read[..1][0].kind, "turn_start");
+        assert!(read[1].display().starts_with("tool_end"));
+    }
 
     #[test]
     fn board_use_writes_the_tools_defaults_and_an_unknown_board_names_the_known_ones() {
