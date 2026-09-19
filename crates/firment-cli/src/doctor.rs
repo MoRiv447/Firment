@@ -210,6 +210,125 @@ impl Check {
 /// Windows names the actual manager or download page rather than `winget
 /// install <guess>`: a wrong package id is worse than no hint, because it looks
 /// authoritative and fails.
+/// The runtime the **GUI** needs and the CLI does not (plan §6's list).
+///
+/// Two decisions here, both about not turning a check into a scare:
+///
+/// * **Windows only.** On any other platform the question has no answer this machine can
+///   look up, and a guess printed as a check is worse than no line at all.
+/// * **Never `Required`.** Someone who only runs the CLI does not need a webview; a red
+///   "required" line for something the reader is not using is exactly what §16.4 is about.
+///   `Optional` says "this is what the GUI would need" and leaves the exit code alone.
+#[cfg(windows)]
+fn gui_runtime_checks() -> Vec<Check> {
+    let mut checks = Vec::new();
+
+    checks.push(match webview2_version() {
+        Some(version) => Check::found("WebView2 runtime", format!("GUI webview — {version}")),
+        None => Check::missing(
+            "WebView2 runtime",
+            State::Optional,
+            "the webview the GUI renders in",
+            "winget install Microsoft.EdgeWebView2Runtime   (installing Edge brings it too)",
+        ),
+    });
+
+    checks.push(if msvc_runtime_present() {
+        Check::found("MSVC runtime", "GUI binary dependency — vcruntime140.dll")
+    } else {
+        Check::missing(
+            "MSVC runtime",
+            State::Optional,
+            "the C runtime the GUI binary links against",
+            "winget install Microsoft.VCRedist.2015+.x64",
+        )
+    });
+
+    checks
+}
+
+/// Nothing to check off Windows, and saying so with an empty list is more honest than a
+/// line that would have to guess.
+#[cfg(not(windows))]
+fn gui_runtime_checks() -> Vec<Check> {
+    Vec::new()
+}
+
+/// The installed WebView2 runtime's version, from the directory Edge maintains.
+///
+/// The **directory**, not the registry. The obvious probe is `reg query` on Edge's
+/// `EdgeUpdate\Clients\{…}` key, and it was the first version of this function — until
+/// running it here answered that `reg.exe` is on the sandbox's program blacklist. A check
+/// that cannot run where the product runs is not a check.
+///
+/// Version-named subdirectories under `EdgeWebView\Application` are what the installers
+/// leave behind, and the highest is the one that would actually load. Both locations are
+/// searched — the machine-wide install and the per-user one — and the literal
+/// `Program Files (x86)` path is included because an environment without the
+/// `ProgramFiles(x86)` variable would otherwise report a runtime that is plainly there.
+#[cfg(windows)]
+fn webview2_version() -> Option<String> {
+    let mut roots: Vec<std::path::PathBuf> = Vec::new();
+    for var in [
+        "ProgramFiles(x86)",
+        "PROGRAMFILES",
+        "ProgramW6432",
+        "LOCALAPPDATA",
+    ] {
+        if let Some(root) = std::env::var_os(var) {
+            roots.push(std::path::PathBuf::from(root));
+        }
+    }
+    roots.push(std::path::PathBuf::from(r"C:\Program Files (x86)"));
+    roots.push(std::path::PathBuf::from(r"C:\Program Files"));
+
+    let mut found: Vec<String> = Vec::new();
+    for root in roots {
+        let dir = root
+            .join("Microsoft")
+            .join("EdgeWebView")
+            .join("Application");
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            // A version directory starts with a digit; the installer also leaves
+            // `SetupMetrics`-style entries beside them.
+            if name.chars().next().is_some_and(|c| c.is_ascii_digit()) && entry.path().is_dir() {
+                found.push(name);
+            }
+        }
+    }
+
+    // Compare numerically: string order puts `99.0` above `123.0`, and an installed-but-old
+    // runtime is not the one the GUI would load.
+    found.sort_by_key(|version| {
+        let mut parts: Vec<u64> = version
+            .split('.')
+            .map(|part| part.parse::<u64>().unwrap_or(0))
+            .collect();
+        parts.resize(4, 0);
+        (parts[0], parts[1], parts[2], parts[3])
+    });
+    found.pop()
+}
+
+/// Whether the MSVC C runtime is on this machine.
+///
+/// The DLL rather than a registry entry: the GUI binary links against it by name, so its
+/// presence is the fact that matters, and a redistributable entry would still be a proxy.
+#[cfg(windows)]
+fn msvc_runtime_present() -> bool {
+    std::env::var_os("SystemRoot")
+        .map(|root| {
+            std::path::PathBuf::from(root)
+                .join("System32")
+                .join("vcruntime140.dll")
+        })
+        .is_some_and(|dll| dll.exists())
+}
+
 fn install_hint(what: &str) -> &'static str {
     match what {
         "rust" => {
@@ -407,6 +526,10 @@ pub(crate) fn toolchain_checks(
             install_hint("sigrok"),
         )),
     }
+
+    // The GUI's runtime, last because it is the only section a CLI-only user can ignore
+    // (plan §6 lists it; the CLI does not need a webview).
+    checks.extend(gui_runtime_checks());
 
     checks
 }
@@ -839,6 +962,22 @@ fn url_host(url: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    #[test]
+    fn the_gui_runtime_checks_exist_and_can_never_block_a_machine() {
+        // Two facts pinned. The probes exist (plan §6 lists them), and neither can make
+        // doctor fail: someone who only runs the CLI does not need a webview, so a missing
+        // one must be a line in the report, not an exit code.
+        let checks = gui_runtime_checks();
+        let names: Vec<&str> = checks.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.contains(&"WebView2 runtime"), "{names:?}");
+        assert!(names.contains(&"MSVC runtime"), "{names:?}");
+        assert!(
+            checks.iter().all(|check| !check.state.is_blocking()),
+            "the GUI's runtime is optional for a CLI user: {names:?}"
+        );
+    }
+
     use super::*;
     use tempfile::tempdir;
 
