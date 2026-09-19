@@ -1837,6 +1837,7 @@ mod tests {
             // label has to render as nothing rather than `0.0s`.
             started_at: None,
             ended_at: None,
+            review: None,
         });
 
         app.run_command("verbosity summary");
@@ -2216,6 +2217,83 @@ mod tests {
         app.run_command("review");
         assert_eq!(app.items.len(), 1);
         assert!(matches!(app.items[0], Item::System(ref t) if t.contains("Usage: /review <path>")));
+    }
+
+    #[test]
+    fn a_review_attaches_to_the_card_it_names_and_nowhere_else() {
+        // The badge's whole contract: a review names a `seq`, and it attaches to that
+        // card. Anything else — a card that is gone, an empty review — leaves the
+        // transcript untouched rather than putting a finding on the wrong change.
+        let findings = vec![firment_core::review::Finding::new(
+            "f1",
+            "the handle is never closed",
+            firment_core::review::Severity::High,
+            "self-review",
+            "d",
+        )];
+        let mut app = test_app();
+        for seq in [1u64, 2] {
+            app.on_agent(AgentEvent::ToolStart {
+                name: "edit_file".to_string(),
+                args: serde_json::json!({}),
+                seq,
+            });
+            app.on_agent(AgentEvent::ToolEnd {
+                name: "edit_file".to_string(),
+                ok: true,
+                summary: "Edited a.c".to_string(),
+                detail: Some("@@ -1 +1 @@\n-a\n+b\n".to_string()),
+                seq,
+            });
+        }
+
+        // A review for a card that does not exist is dropped, not attached to the newest.
+        app.on_agent(AgentEvent::Review {
+            seq: 99,
+            findings: findings.clone(),
+        });
+        assert!(app.items.iter().all(|item| !matches!(
+            item,
+            Item::Tool {
+                review: Some(_),
+                ..
+            }
+        )));
+
+        // An empty review never badges: "0 findings" is not worth a mark on the card.
+        app.on_agent(AgentEvent::Review {
+            seq: 2,
+            findings: Vec::new(),
+        });
+        assert!(app.items.iter().all(|item| !matches!(
+            item,
+            Item::Tool {
+                review: Some(_),
+                ..
+            }
+        )));
+
+        // The real one lands on seq 1 — the older card — and not on seq 2 beside it.
+        app.on_agent(AgentEvent::Review {
+            seq: 1,
+            findings: findings.clone(),
+        });
+        let reviewed: Vec<u64> = app
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Tool {
+                    seq,
+                    review: Some(found),
+                    ..
+                } => {
+                    assert_eq!(found.len(), 1);
+                    Some(*seq)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(reviewed, vec![1]);
     }
 
     #[test]

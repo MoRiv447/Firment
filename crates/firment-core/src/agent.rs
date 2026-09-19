@@ -84,6 +84,17 @@ pub enum AgentEvent {
         thinking: Option<ThinkingLevel>,
         mode: Option<SessionMode>,
     },
+    /// A self-review of one tool's change finished (plan §4-A).
+    ///
+    /// A separate event rather than a field on `ToolEnd`, because the review finishes
+    /// seconds after the tool did: a card drawn at `ToolEnd` cannot carry findings that do
+    /// not exist yet. `seq` is the tool the review is about, so a UI attaches it to the
+    /// card it names — and a UI that ignores this event loses the findings, which is why
+    /// every surface that shows tool cards handles it.
+    Review {
+        seq: u64,
+        findings: Vec<crate::review::Finding>,
+    },
     /// Model list fetched from the provider (for the model picker).
     Models(Vec<String>),
     /// Saved sessions fetched for the session picker.
@@ -1682,6 +1693,7 @@ fn spawn_self_review(
     config: Option<Config>,
     provider_name: String,
     sink: Arc<dyn EventSink>,
+    seq: u64,
     tool: &str,
     path: Option<&str>,
     output: &str,
@@ -1699,7 +1711,7 @@ fn spawn_self_review(
         return;
     };
     tokio::spawn(async move {
-        let lines = match crate::review::self_review::review_diff(
+        let report = match crate::review::self_review::review_diff(
             &config,
             &provider_name,
             &path,
@@ -1708,16 +1720,25 @@ fn spawn_self_review(
         )
         .await
         {
-            // A clean automatic review says nothing. A line after every edit announcing
-            // that there was nothing to fix is noise the user cannot turn off, and it is
-            // the fastest way to teach someone to stop reading these lines.
+            // A clean review with nothing to say — no findings and nothing it could not
+            // check — is not worth an event. A badge that appears after every edit saying
+            // "0 findings" is noise the user cannot turn off, and it is the fastest way to
+            // teach someone to stop reading badges.
             Ok(report) if report.is_clean() && report.notes.is_empty() => return,
-            Ok(report) => crate::review::self_review::report_lines(&report),
-            Err(e) => vec![format!("Self-review failed: {e}")],
+            Ok(report) => report,
+            // A review that could not run must say so: silence there is indistinguishable
+            // from "nothing wrong with your change".
+            Err(e) => {
+                sink.event(AgentEvent::Info(format!("Self-review failed: {e}")))
+                    .await;
+                return;
+            }
         };
-        for line in lines {
-            sink.event(AgentEvent::Info(line)).await;
-        }
+        sink.event(AgentEvent::Review {
+            seq,
+            findings: report.findings,
+        })
+        .await;
     });
 }
 
@@ -2042,6 +2063,7 @@ async fn execute_tool_calls(
                 agent.self_review.clone(),
                 agent.session.provider.clone(),
                 agent.sink.clone(),
+                call_seqs[k],
                 &call.name,
                 tool_path(call).map(|p| p.display().to_string()).as_deref(),
                 &content,

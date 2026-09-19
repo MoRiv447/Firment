@@ -286,6 +286,7 @@ impl App {
                 expanded,
                 started_at,
                 ended_at,
+                review,
             } => {
                 // Finished cards dim into the background: the eye should go
                 // to what is RUNNING, not to a wall of bright history.
@@ -332,8 +333,26 @@ impl App {
                         text
                     })
                     .unwrap_or_default();
+                // The badge the plan asks for (§4-A): the count on the card, the findings
+                // themselves when the body is open. Worst-first, so the first line under
+                // the diff is the one that matters.
+                let badge = review
+                    .as_ref()
+                    .filter(|findings| !findings.is_empty())
+                    .map(|findings| {
+                        let high = findings
+                            .iter()
+                            .filter(|f| f.severity == firment_core::review::Severity::High)
+                            .count();
+                        if high > 0 {
+                            format!("  ● {high} high")
+                        } else {
+                            format!("  ● {}", findings.len())
+                        }
+                    })
+                    .unwrap_or_default();
                 let line = format!(
-                    "{symbol} {name}{elapsed} {marker} {}{}",
+                    "{symbol} {name}{elapsed} {marker} {}{}{badge}",
                     truncate_chars(summary, 120),
                     counts.unwrap_or_default()
                 );
@@ -343,6 +362,28 @@ impl App {
                 // The body is the whole tool text, whose FIRST line is the
                 // summary already rendered above — skip it so the header does
                 // not appear twice.
+                if *expanded && let Some(findings) = review.as_ref().filter(|f| !f.is_empty()) {
+                    let meta = crate::theme::meta(self.tier);
+                    let danger = crate::theme::danger(self.tier);
+                    rows.push(Line::from(Span::styled(
+                        format!("  review: {} finding(s)", findings.len()),
+                        Style::default().fg(meta),
+                    )));
+                    for finding in findings {
+                        let style = if finding.severity == firment_core::review::Severity::High {
+                            Style::default().fg(danger)
+                        } else {
+                            Style::default().fg(meta)
+                        };
+                        let text = match &finding.fix {
+                            Some(fix) => format!("    {} — fix: {fix}", finding.title),
+                            None => format!("    {}", finding.title),
+                        };
+                        for seg in wrap_text(&text, width.saturating_sub(1)) {
+                            rows.push(Line::from(Span::styled(seg, style)));
+                        }
+                    }
+                }
                 if *expanded && let Some(body) = body {
                     // Read once, outside the loop: the token accessors consult
                     // the detected tier, and a diff body can be hundreds of

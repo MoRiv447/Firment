@@ -44,6 +44,14 @@ pub enum FrontendEvent {
         detail: Option<String>,
         seq: u64,
     },
+    /// A self-review of one tool's change finished (plan §4-A). Carries the same `Finding`
+    /// shape every review capability uses, so the card can render a badge and a list
+    /// without a second vocabulary.
+    Review {
+        session_id: Option<String>,
+        seq: u64,
+        findings: Vec<firment_core::review::Finding>,
+    },
     TurnEnd {
         session_id: Option<String>,
         text: String,
@@ -195,6 +203,11 @@ pub fn frontend_event(e: &AgentEvent, session_id: Option<&str>) -> FrontendEvent
         AgentEvent::TurnEnd { text } => FrontendEvent::TurnEnd {
             session_id: sid,
             text: text.clone(),
+        },
+        AgentEvent::Review { seq, findings } => FrontendEvent::Review {
+            session_id: sid,
+            seq: *seq,
+            findings: findings.clone(),
         },
         AgentEvent::Info(message) => FrontendEvent::Info {
             session_id: sid,

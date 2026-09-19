@@ -249,6 +249,10 @@ impl App {
                         summary: content.clone(),
                         started_at: None,
                         ended_at: None,
+                        // A card restored from a stored transcript carries no review:
+                        // reviews are session state, and inventing one would be worse
+                        // than saying nothing.
+                        review: None,
                     });
                 }
                 ChatMessage::System { content } => {
@@ -323,6 +327,7 @@ impl App {
                     expanded: false,
                     started_at: Some(Instant::now()),
                     ended_at: None,
+                    review: None,
                 });
             }
             AgentEvent::ToolEnd {
@@ -362,6 +367,8 @@ impl App {
                         expanded,
                         started_at,
                         ended_at: current_end,
+                        // The review arrives on its own event, not with the tool's end.
+                        review: _,
                     } = item
                         && n == &name
                         && *item_seq == seq
@@ -393,6 +400,22 @@ impl App {
                 self.thinking_since = None;
                 self.interrupting = false;
                 self.interrupt_armed_at = None;
+            }
+            // The review of a card that is already drawn: attach it by `seq`, the id the
+            // card was built with. A review whose card is gone (transcript cleared,
+            // session switched) is dropped without a word — there is nowhere to put it,
+            // and a stray line in a new transcript would be a lie about what it belongs to.
+            AgentEvent::Review { seq, findings } => {
+                if !findings.is_empty()
+                    && let Some(Item::Tool { review, .. }) = self
+                        .items
+                        .iter_mut()
+                        .rev()
+                        .find(|item| matches!(item, Item::Tool { seq: s, .. } if *s == seq))
+                {
+                    *review = Some(findings);
+                }
+                self.touch_rows();
             }
             AgentEvent::Info(message) => self.items.push(Item::System(message)),
             // A nested agent started/ended. The pair exists so a UI can attribute
@@ -2182,6 +2205,14 @@ pub(crate) enum Item {
         /// Wall-clock end, set in the same update that clears `running`, so the
         /// duration a card shows and the mark beside it are one fact.
         ended_at: Option<Instant>,
+        /// What the self-review of this change found (plan §4-A), when one ran.
+        ///
+        /// Arrives *after* the card is drawn — a review takes seconds — which is why it is
+        /// a field on the card rather than part of `ToolEnd`: the card exists first, and
+        /// this attaches to it by `seq` when the review finishes. `None` means no review
+        /// ran, which is not the same as one that found nothing (the trigger emits
+        /// nothing at all in that case).
+        review: Option<Vec<firment_core::review::Finding>>,
     },
     /// Permission confirmations render as inline cards in the transcript
     /// instead of popups covering the context.
