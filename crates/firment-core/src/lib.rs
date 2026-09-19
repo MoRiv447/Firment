@@ -16,6 +16,7 @@ pub mod providers;
 pub mod review;
 pub mod schema;
 pub mod session;
+pub mod share;
 pub mod subagent;
 pub mod tool;
 pub mod types;

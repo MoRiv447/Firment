@@ -177,6 +177,18 @@ enum Command {
         #[arg(long, default_value_t = 30)]
         timeout: u64,
     },
+    /// Export a session as a self-contained document (plan §5, item 7): the conversation,
+    /// the changes with their diffs, and the event log. Recognisable secrets are masked.
+    Share {
+        /// Session id, or `latest` (the default).
+        session: Option<String>,
+        /// `html` (the default, opens from the filesystem with no network) or `md`.
+        #[arg(long, default_value = "html")]
+        format: String,
+        /// Write to this file instead of stdout.
+        #[arg(long)]
+        out: Option<String>,
+    },
     /// Replay a session's event log (plan §5, item 1): turns, tools, reviews, errors, in
     /// the order they happened. `--at` stops the replay at the n-th event.
     Replay {
@@ -450,6 +462,14 @@ async fn main() -> anyhow::Result<()> {
                 if code != 0 {
                     std::process::exit(code);
                 }
+            }
+            Command::Share {
+                session,
+                format,
+                out,
+            } => {
+                let store = SessionStore::default();
+                run_share(&store, session.as_deref(), format, out.as_deref())?;
             }
             Command::Replay { session, at, json } => {
                 let store = SessionStore::default();
@@ -1354,6 +1374,59 @@ fn newest_replay(dir: &Path) -> Option<PathBuf> {
     newest.map(|(_, path)| path)
 }
 
+/// `firm share` — a session as a document someone can read without Firment (plan §5, item 7).
+///
+/// Prints to stdout by default rather than writing a file: a share is usually a redirect
+/// (`firm share latest > bugreport.html`) or a paste, and a command that leaves a file
+/// behind in a directory the user did not choose is a command that surprises them.
+fn run_share(
+    store: &SessionStore,
+    session_arg: Option<&str>,
+    format: &str,
+    out: Option<&str>,
+) -> anyhow::Result<()> {
+    use firment_core::eventlog::EventLog;
+    use firment_core::share::{self, ExportInput};
+
+    let id = match session_arg {
+        Some(id) if id != "latest" => id.to_string(),
+        _ => {
+            store
+                .latest()?
+                .ok_or_else(|| anyhow::anyhow!("no sessions yet"))?
+                .id
+        }
+    };
+    let session = store.load(&id)?;
+    let events = EventLog::new(store.event_log_path(&id)).read();
+    let document = match format {
+        "html" => share::html(&ExportInput {
+            session: &session,
+            events: &events,
+        }),
+        "md" | "markdown" => share::markdown(&ExportInput {
+            session: &session,
+            events: &events,
+        }),
+        other => anyhow::bail!("unknown format '{other}' — html or md"),
+    };
+
+    match out {
+        Some(path) => {
+            std::fs::write(path, &document)?;
+            // The reminder goes to stderr so a redirect of stdout stays the document.
+            eprintln!(
+                "wrote {} ({} bytes, {}) — secrets that match a known token shape are masked,                  which is a best effort: read it before sharing",
+                path,
+                document.len(),
+                format
+            );
+        }
+        None => print!("{document}"),
+    }
+    Ok(())
+}
+
 /// `firm replay` — a session's event log, read back (plan §5, item 1).
 ///
 /// The log is the *operations* record: one line per turn, tool, review and error, written
@@ -2076,6 +2149,43 @@ fn format_ts(secs: u64) -> String {
 mod tests {
     use super::*;
     use firment_core::config::CommandProvenance;
+
+    #[test]
+    fn share_writes_a_self_contained_document_and_masks_a_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+        let mut session = firment_core::Session::new(dir.path().to_path_buf(), "p", "m");
+        session.push(firment_core::types::ChatMessage::User {
+            content: "key sk-abcdefghijklmnop and <script>x</script>".to_string(),
+        });
+        store.save(&session).unwrap();
+
+        let out = dir.path().join("share.html");
+        run_share(
+            &store,
+            Some(&session.id),
+            "html",
+            Some(&out.to_string_lossy()),
+        )
+        .unwrap();
+        let page = std::fs::read_to_string(&out).unwrap();
+        assert!(page.starts_with("<!DOCTYPE html>"), "{page}");
+        assert!(page.contains("sk-***masked***"), "{page}");
+        assert!(!page.contains("sk-abcdefghijklmnop"), "{page}");
+        assert!(page.contains("&lt;script&gt;"), "{page}");
+
+        // Markdown is the other format, and an unknown one is refused rather than guessed.
+        let md_path = dir.path().join("share.md");
+        run_share(
+            &store,
+            Some(&session.id),
+            "md",
+            Some(&md_path.to_string_lossy()),
+        )
+        .unwrap();
+        assert!(std::fs::read_to_string(&md_path).unwrap().contains("# "));
+        assert!(run_share(&store, Some(&session.id), "pdf", None).is_err());
+    }
 
     #[test]
     fn replay_reads_the_event_log_and_stops_where_asked() {
