@@ -11,25 +11,33 @@ use std::sync::Arc;
 
 /// Spawns nested research agents. The `task` tool calls this; recursion depth
 /// is bounded by `max_subagent_depth` enforced in the tool itself.
+/// One subagent call: what the factory needs that only the caller knows.
+///
+/// A struct rather than a parameter list. The list reached the point where positional
+/// arguments were a hazard — `provider` and `model` are both `Option<&str>`, so swapping them
+/// compiles — and the fields keep arriving one per lesson: `cancel` came from the turn,
+/// `journal` from the same place so a child's edits belong to the transaction that spawned it.
+pub struct SubagentCall<'a> {
+    pub prompt: &'a str,
+    pub cwd: PathBuf,
+    pub provider: Option<&'a str>,
+    pub model: Option<&'a str>,
+    /// Nesting level of the new agent (1 for the first).
+    pub depth: usize,
+    /// The parent's turn-level cancellation signal; when it fires the nested agent stops at
+    /// its next checkpoint.
+    pub cancel: Cancellable,
+    /// The **caller's** edit journal — the parent turn's transaction. A child's edits belong
+    /// to the turn that spawned it: sharing the journal is what makes `/undo` after a batch
+    /// roll back everything, and what stops a child's writes from landing in a journal nobody
+    /// will ever read. See the concurrency design review (§5).
+    pub journal: Arc<std::sync::Mutex<crate::journal::EditJournal>>,
+}
+
 #[async_trait]
 pub trait SubagentFactory: Send + Sync {
-    /// Run a nested read-only agent with the given prompt and return its final
-    /// text. `depth` is the nesting level of the new agent (1 for the first).
-    /// `provider` optionally overrides the provider name from config (e.g. an
-    /// Ollama endpoint added via `add-provider`) so cheap subagents can run on
-    /// a different backend than the main loop; `model` likewise overrides the
-    /// model within that provider. `cancel` is the parent's turn-level
-    /// cancellation signal; when it fires the nested agent stops at its next
-    /// checkpoint.
-    async fn run_subagent(
-        &self,
-        prompt: &str,
-        cwd: PathBuf,
-        provider: Option<&str>,
-        model: Option<&str>,
-        depth: usize,
-        cancel: Cancellable,
-    ) -> Result<String, String>;
+    /// Run a nested read-only agent and return its final text.
+    async fn run_subagent(&self, call: SubagentCall<'_>) -> Result<String, String>;
 }
 
 /// Concrete subagent runner used by the TUI and CLI. Rebuilds the provider from
@@ -117,15 +125,16 @@ impl SubagentRunner {
 
 #[async_trait]
 impl SubagentFactory for SubagentRunner {
-    async fn run_subagent(
-        &self,
-        prompt: &str,
-        cwd: PathBuf,
-        provider: Option<&str>,
-        model: Option<&str>,
-        depth: usize,
-        cancel: Cancellable,
-    ) -> Result<String, String> {
+    async fn run_subagent(&self, call: SubagentCall<'_>) -> Result<String, String> {
+        let SubagentCall {
+            prompt,
+            cwd,
+            provider,
+            model,
+            depth,
+            cancel,
+            journal,
+        } = call;
         // Provider override first (a configured name, e.g. an Ollama endpoint
         // on the SBC), then the model override; both fall back to the
         // session's own values.
@@ -157,6 +166,8 @@ impl SubagentFactory for SubagentRunner {
             self.max_iterations,
         );
         nested.set_subagent_slots(self.subagent_slots.clone());
+        // The parent turn's transaction, not a fresh one: see `SubagentFactory::run_subagent`.
+        nested.set_edit_journal(journal);
         nested.set_subagent_factory(Some(self.child() as Arc<dyn SubagentFactory>));
         nested.set_subagent_depth(depth);
         // Subagents cannot ask the user: the ask_user tool is for questions

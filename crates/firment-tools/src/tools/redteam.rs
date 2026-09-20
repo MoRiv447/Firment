@@ -1077,14 +1077,18 @@ pub(crate) async fn run_campaign(
     let seed = suite.mutation.as_ref().and_then(|m| m.seed).unwrap_or(0);
     let prompt = campaign_prompt(label, suite, corpus_note);
     let text = attacker
-        .run_subagent(
-            &prompt,
-            ctx.cwd.clone(),
-            None,
-            None,
-            ctx.subagent_depth + 1,
-            ctx.cancel.clone(),
-        )
+        .run_subagent(firment_core::SubagentCall {
+            prompt: &prompt,
+            cwd: ctx.cwd.clone(),
+            provider: None,
+            model: None,
+            depth: ctx.subagent_depth + 1,
+            cancel: ctx.cancel.clone(),
+            // The campaign's agents are subagents of this turn like any other, so their edits
+            // (they have none today — the attacker registry has no write tools) would belong to
+            // the same transaction.
+            journal: ctx.journal.clone(),
+        })
         .await?;
     Ok(extract_findings_block(&text, label, seed, next_id))
 }

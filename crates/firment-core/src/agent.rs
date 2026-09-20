@@ -253,6 +253,12 @@ pub struct Agent {
     max_subagent_depth: usize,
     /// Slots for concurrent subagents; see [`ToolContext::subagent_slots`].
     subagent_slots: std::sync::Arc<tokio::sync::Semaphore>,
+    /// A journal to write into instead of opening this turn's own.
+    ///
+    /// Set on a nested agent so a subagent's edits land in the turn that spawned it (the
+    /// concurrency review's §5: otherwise `/undo` reports success and touches none of them).
+    /// `None` — the normal case — means the turn opens the session's own undo directory.
+    journal_override: Option<std::sync::Arc<std::sync::Mutex<crate::journal::EditJournal>>>,
     /// Interactive user front-end exposed to the `ask_user` tool.
     asker: Option<Arc<dyn Asker>>,
     /// Web search provider + resolved API key exposed to the web_search tool.
@@ -336,6 +342,7 @@ impl Agent {
             subagent_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(
                 crate::tool::MAX_CONCURRENT_SUBAGENTS,
             )),
+            journal_override: None,
             asker: None,
             web_search_provider: None,
             tool_seq: 0,
@@ -413,6 +420,28 @@ impl Agent {
     /// Give this agent the parent's pool instead of a fresh one.
     pub fn set_subagent_slots(&mut self, slots: std::sync::Arc<tokio::sync::Semaphore>) {
         self.subagent_slots = slots;
+    }
+
+    /// Write this agent's edits into `journal` instead of opening one for the turn.
+    pub fn set_edit_journal(
+        &mut self,
+        journal: std::sync::Arc<std::sync::Mutex<crate::journal::EditJournal>>,
+    ) {
+        self.journal_override = Some(journal);
+    }
+
+    /// The journal this turn writes into.
+    ///
+    /// Its own, by default: one per turn, in the session's undo directory, so a cancel rolls
+    /// back exactly the turn it belongs to. A nested agent inherits instead, because its edits
+    /// are part of the turn that spawned it.
+    fn turn_journal(&self) -> std::sync::Arc<std::sync::Mutex<crate::journal::EditJournal>> {
+        match &self.journal_override {
+            Some(journal) => journal.clone(),
+            None => std::sync::Arc::new(std::sync::Mutex::new(crate::journal::EditJournal::new(
+                self.store.undo_dir(&self.session.id),
+            ))),
+        }
     }
 
     pub fn max_subagent_depth(&self) -> usize {
@@ -983,9 +1012,8 @@ impl Agent {
         });
         self.sink.event(AgentEvent::TurnStart).await;
 
-        let journal = Arc::new(Mutex::new(EditJournal::new(
-            self.store.undo_dir(&self.session.id),
-        )));
+        // The turn's transaction: its own, or the one a parent handed down to a subagent.
+        let journal = self.turn_journal();
         let ledger = Ledger::new(self.store.ledger_path(&self.session.id));
         let mut mutations_since_verify = 0usize;
 

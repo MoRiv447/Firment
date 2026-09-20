@@ -42,7 +42,7 @@ pub use provider::{
 };
 pub use providers::{CATALOG, ProviderPreset};
 pub use session::{Session, SessionError, SessionKind, SessionStore, SessionSummary};
-pub use subagent::{NullSink, SubagentFactory, SubagentRunner};
+pub use subagent::{NullSink, SubagentCall, SubagentFactory, SubagentRunner};
 pub use tool::{Tool, ToolContext, ToolError, ToolOutput, ToolRegistry};
 pub use types::{ChatMessage, SessionMode, ThinkingLevel, ToolCall, ToolSpec};
 pub use workbench::DecisionEntry;

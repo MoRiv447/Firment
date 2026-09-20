@@ -1,6 +1,6 @@
 use super::util::resolve_within;
 use async_trait::async_trait;
-use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
+use firment_core::{SubagentCall, Tool, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
 
 pub struct Task;
@@ -67,14 +67,19 @@ impl Tool for Task {
         // the honest fallback, because the limiter is gone with the agent that was using it.
         let _slot = ctx.subagent_slots.clone().acquire_owned().await.ok();
         let report = factory
-            .run_subagent(
+            .run_subagent(SubagentCall {
                 prompt,
                 cwd,
                 provider,
                 model,
-                ctx.subagent_depth + 1,
-                ctx.cancel.clone(),
-            )
+                depth: ctx.subagent_depth + 1,
+                cancel: ctx.cancel.clone(),
+                // The parent turn's transaction, handed down (concurrency review §5): a child's
+                // edits belong to the turn that spawned it, so `/undo` after a batch rolls them
+                // back with everything else. Without this a child's writes would land in a
+                // journal nobody reads — undo would report success and touch none of them.
+                journal: ctx.journal.clone(),
+            })
             .await
             .map_err(ToolError::new)?;
         // The report is the subagent's own words, and the parent model is told so twice: in
@@ -97,7 +102,7 @@ impl Tool for Task {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use firment_core::{AutoApprove, EditJournal, SubagentFactory};
+    use firment_core::{AutoApprove, EditJournal, SubagentCall, SubagentFactory};
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
     use tempfile::tempdir;
@@ -108,19 +113,26 @@ mod tests {
     struct StubFactory {
         answer: String,
         captures: Arc<Mutex<Vec<Capture>>>,
+        /// Every call's journal, so a test can assert the tool hands the parent turn's
+        /// transaction down. A vector rather than a slot: with a slot there is an initial
+        /// value that makes the capture silently never happen, which is a test that passes
+        /// while proving nothing.
+        journals: Arc<Mutex<Vec<Arc<Mutex<firment_core::EditJournal>>>>>,
     }
 
     #[async_trait]
     impl SubagentFactory for StubFactory {
-        async fn run_subagent(
-            &self,
-            prompt: &str,
-            cwd: PathBuf,
-            provider: Option<&str>,
-            model: Option<&str>,
-            depth: usize,
-            _cancel: firment_core::Cancellable,
-        ) -> Result<String, String> {
+        async fn run_subagent(&self, call: SubagentCall<'_>) -> Result<String, String> {
+            let SubagentCall {
+                prompt,
+                cwd,
+                provider,
+                model,
+                depth,
+                cancel: _cancel,
+                journal,
+            } = call;
+            self.journals.lock().unwrap().push(journal.clone());
             self.captures.lock().unwrap().push((
                 prompt.to_string(),
                 cwd,
@@ -191,15 +203,8 @@ mod tests {
 
     #[async_trait]
     impl SubagentFactory for SlowFactory {
-        async fn run_subagent(
-            &self,
-            prompt: &str,
-            _cwd: PathBuf,
-            _provider: Option<&str>,
-            _model: Option<&str>,
-            _depth: usize,
-            _cancel: firment_core::Cancellable,
-        ) -> Result<String, String> {
+        async fn run_subagent(&self, call: SubagentCall<'_>) -> Result<String, String> {
+            let prompt = call.prompt.to_string();
             use std::sync::atomic::Ordering;
             let running = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
             self.peak.fetch_max(running, Ordering::SeqCst);
@@ -207,6 +212,37 @@ mod tests {
             self.in_flight.fetch_sub(1, Ordering::SeqCst);
             Ok(format!("report for {prompt}"))
         }
+    }
+
+    #[tokio::test]
+    async fn the_child_gets_the_parent_turns_journal() {
+        // The concurrency review's §5 as an assertion. A child's edits must land in the turn
+        // that spawned it: otherwise `/undo` after a batch reports success and touches none of
+        // the child's writes, which is the failure mode that *looks* handled.
+        let dir = tempdir().unwrap();
+        let journals = Arc::new(Mutex::new(Vec::new()));
+        let factory = StubFactory {
+            answer: "the report".to_string(),
+            captures: Arc::new(Mutex::new(Vec::new())),
+            journals: journals.clone(),
+        };
+        let ctx = ctx(dir.path(), 0, 2, Some(factory));
+        let parent_journal = ctx.journal.clone();
+
+        Task.run(json!({"prompt": "research x"}), &ctx)
+            .await
+            .unwrap();
+
+        let seen = journals.lock().unwrap();
+        assert_eq!(seen.len(), 1, "the factory should have been called once");
+        assert!(
+            Arc::ptr_eq(&seen[0], &parent_journal),
+            "the child must be handed the parent turn's journal, not a fresh one of its own"
+        );
+        drop(seen);
+        // And the parent's journal is the one the tool's own context carries — the identity the
+        // assertion above is about.
+        assert!(Arc::ptr_eq(&ctx.journal, &parent_journal));
     }
 
     #[tokio::test]
@@ -306,6 +342,7 @@ mod tests {
         let factory = StubFactory {
             answer: "n/a".to_string(),
             captures: Arc::new(Mutex::new(Vec::new())),
+            journals: Arc::new(Mutex::new(Vec::new())),
         };
         let err = Task
             .run(
@@ -324,6 +361,7 @@ mod tests {
         let factory = StubFactory {
             answer: "the report".to_string(),
             captures: captures.clone(),
+            journals: Arc::new(Mutex::new(Vec::new())),
         };
         let out = Task
             .run(
@@ -359,6 +397,7 @@ mod tests {
         let factory = StubFactory {
             answer: "n/a".to_string(),
             captures: captures.clone(),
+            journals: Arc::new(Mutex::new(Vec::new())),
         };
         Task.run(
             json!({"prompt": "triage logs", "provider": "sbc-ollama", "model": "qwen3.5:0.8b"}),
@@ -378,6 +417,7 @@ mod tests {
         let factory = StubFactory {
             answer: "n/a".to_string(),
             captures: Arc::new(Mutex::new(Vec::new())),
+            journals: Arc::new(Mutex::new(Vec::new())),
         };
         let err = Task
             .run(
