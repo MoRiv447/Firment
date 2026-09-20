@@ -113,7 +113,54 @@ project has, and building for it now would buy the costs without the case.
    prompts must name the child — a dialog that says "edit file" without saying *who* asked is
    a dialog nobody can answer.
 
-## 5. The smallest slice worth building, in dependency order
+## 5. Journal ownership: the decision step 2 needs
+
+Step 2 gives a child write tools. Reading the code for this review found the hazard that makes
+it a *decision* rather than a patch, and reading opencode found the shape of the answer.
+
+**Firment's journal is per **turn**, not per agent.** `run_turn` creates
+`Arc<Mutex<EditJournal>>` for the turn it is about to run (`core/src/agent.rs:986`), and that
+one value is what a cancel rolls back and what `ToolContext` carries. A child spawned *during*
+that turn is a different agent running a different turn, so it builds its own journal — in its
+own temp store, which is discarded when the call ends. **So today a write-capable child's
+edits would be un-undoable**, and worse, they would look undoable: the parent's `/undo` would
+report success and touch none of them.
+
+**What opencode does**, from `session/revert.ts` and `snapshot/index.ts`: a snapshot is
+*tracked* workspace-wide, but the **patches are attached to message parts** (`part.type ===
+"patch"`), so every message carries the record of what it changed. Revert takes a
+`{sessionID, messageID}` and restores the snapshot for everything after that point. Two
+consequences worth copying:
+
+* **Ownership is per session, and it composes.** A child is a session, its patches live in its
+  own history, and reverting the *parent* to a point before the call undoes whatever the child
+  did to the workspace — because the snapshot is workspace-wide even though the records are
+  not. Granularity and attribution fall out of the same design.
+* **`assertNotBusy`** — revert refuses while the session is running. Firment has no such guard
+  on `/undo`; with children in flight it will need one.
+
+**The decision for Firment: the child shares the parent turn's journal.** Not a new journal,
+not a second mechanism:
+
+* One transaction is the invariant the review already set (§4.1). A child's writes belong to
+  the turn that spawned it, so a failed batch rolls back whole and `/undo` after a batch is one
+  step.
+* The plumbing is small and already has a precedent: `SubagentFactory::run_subagent` takes
+  `cancel: Cancellable` — a per-call value the `task` tool reads from its `ToolContext`. A
+  `journal: Arc<Mutex<EditJournal>>` parameter is the same shape, read from `ctx.journal`,
+  which the tool already holds. The nested agent then needs an override so `run_turn` uses the
+  passed journal instead of creating one.
+* **Attribution is the follow-up, not the price.** opencode gets "which child changed this"
+  for free because patches hang off sessions. Firment's ledger line has no such field; adding
+  an optional label to `LedgerChange` is how `/ledger` and the transcript keep naming the
+  child that made a change — after the sharing works, not before.
+
+**Two smaller ideas from the same files, recorded rather than adopted:** un-revert (opencode
+keeps the pre-revert snapshot, so undo has an undo), and the busy guard above.
+
+---
+
+## 6. The smallest slice worth building, in dependency order
 
 1. **Parallel research** (§2): N read-only children, concurrent, with the existing sink
    bracketing extended to name the child. No new synchronisation, and it is testable without a
@@ -147,10 +194,10 @@ project has, and building for it now would buy the costs without the case.
 
 *The argument above is left as written; this section records what has moved since.*
 
-| §5 step | Status |
+| §6 step | Status |
 |---|---|
 | 1. Parallel research | **Done** — `3241cb5`. And the finding is that it already worked: a turn's tool calls run as one `join_all` wave (`core/src/agent.rs:1860`), so several `task` calls have always run beside each other. What was missing was **telling the model** (the description hinted at it and never said it) and **bounding it** (`subagent_slots`, four, held for the child's life — and shared by the whole tree rather than per level: `efcb28d` caught that the first version was four *per agent*, which multiplies by depth). The test pins both directions: four children overlap, one slot serialises them. |
-| 2. One write-capable child, sequential | Not started — this is the step that would find the surprises, and it is the one that touches the journal. |
+| 2. One write-capable child, sequential | **Not started, and now unblocked**: §5 decides the journal question it was waiting on (the child shares the parent turn's journal, or its edits are un-undoable and look undoable). |
 | 3. Declared scopes | Not started |
 | 4. Two children with disjoint scopes | Not started |
 | 5. Batch rollback test | Not started |
