@@ -141,5 +141,19 @@ These are defects, not missing features — they are the difference between "wor
 
 ---
 
-*Written 2026-09-20 against `7b5d08b`. If the code moves, the file:line references in §2 and
-§4 are the parts to re-check.*
+## Status
+
+*The argument above is left as written; this section records what has moved since.*
+
+| §4 item | Status |
+|---|---|
+| 1. A provider deadline | **Done** — `9436ead`: `PROVIDER_READ_TIMEOUT` (120 s between bytes) and `PROVIDER_CONNECT_TIMEOUT` (15 s) in `core/src/http.rs`, on a client built by `provider_client()`, which replaces `http_client()` — its only callers were the two providers, so the change lands exactly on the chat path. |
+| 2. The heartbeat | **Done by construction** — a keep-alive is a byte, so the read deadline *is* the "no bytes and no heartbeat" rule. No extra machinery, and the `ProviderEvent::Activity => {}` arm is left alone because it no longer needs to do anything. |
+| 3. A `doctor` line answering "can I work right now?" | Not started |
+| 4. Document the offline install path | Not started |
+| 5. The regression test for (1) | **Done** — a local listener that accepts and then stays silent, asserted to fail *and* to have waited (≥250 ms), against a 300 ms deadline built through the same constructor the providers use. The lower bound is the part that distinguishes "the deadline fired" from "the connection was refused instantly". |
+
+---
+
+*Written 2026-09-20 against `7b5d08b`; status section updated after `9436ead`. If the code
+moves, the file:line references in §2 and §4 are the parts to re-check.*
