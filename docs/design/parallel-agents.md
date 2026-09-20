@@ -143,5 +143,20 @@ project has, and building for it now would buy the costs without the case.
 
 ---
 
-*Written 2026-09-20 against `7b5d08b`. The references in §1 are the ones that decide the
-shape of the item; if `assembly.rs` or `subagent.rs` move, this review's premise changes.*
+## Status
+
+*The argument above is left as written; this section records what has moved since.*
+
+| §5 step | Status |
+|---|---|
+| 1. Parallel research | **Done** — `3241cb5`. And the finding is that it already worked: a turn's tool calls run as one `join_all` wave (`core/src/agent.rs:1860`), so several `task` calls have always run beside each other. What was missing was **telling the model** (the description hinted at it and never said it) and **bounding it** (`subagent_slots`, four, held for the child's life). The test pins both directions: four children overlap, one slot serialises them. |
+| 2. One write-capable child, sequential | Not started — this is the step that would find the surprises, and it is the one that touches the journal. |
+| 3. Declared scopes | Not started |
+| 4. Two children with disjoint scopes | Not started |
+| 5. Batch rollback test | Not started |
+
+---
+
+*Written 2026-09-20 against `7b5d08b`; status updated after `3241cb5`. The references in §1 are
+the ones that decide the shape of the item; if `assembly.rs` or `subagent.rs` move, this
+review's premise changes.*
