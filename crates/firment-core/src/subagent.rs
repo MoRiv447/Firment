@@ -56,6 +56,11 @@ pub struct SubagentRunner {
     /// the red team campaign passes the parent's sink so attack tool cards
     /// stream into the live UI.
     pub sink: Arc<dyn EventSink>,
+    /// The slot pool shared by the whole subagent tree (plan §5, item 2).
+    ///
+    /// Passed down rather than created per level: `MAX_CONCURRENT_SUBAGENTS` is a bound on
+    /// concurrent *provider streams*, and a bound that multiplies by depth is not a bound.
+    pub subagent_slots: Arc<tokio::sync::Semaphore>,
 }
 
 impl SubagentRunner {
@@ -72,6 +77,11 @@ impl SubagentRunner {
     ) -> Self {
         Self {
             max_iterations: 8,
+            // A fresh pool by default; the assembly overrides it with the parent agent's so
+            // that a whole tree shares one bound.
+            subagent_slots: Arc::new(tokio::sync::Semaphore::new(
+                crate::tool::MAX_CONCURRENT_SUBAGENTS,
+            )),
             web_search_provider: config.tools.web_search.clone(),
             web_search_api_key: config.tools.resolved_web_search_api_key(),
             config,
@@ -84,7 +94,11 @@ impl SubagentRunner {
         }
     }
 
-    fn child(&self) -> Arc<dyn SubagentFactory> {
+    /// A runner for a nested level, sharing this level's slot pool.
+    ///
+    /// Returns the concrete type so a test can check the sharing; the one call site coerces
+    /// it to the trait object.
+    fn child(&self) -> Arc<SubagentRunner> {
         Arc::new(Self {
             config: self.config.clone(),
             registry: self.registry.clone(),
@@ -96,6 +110,7 @@ impl SubagentRunner {
             web_search_api_key: self.web_search_api_key.clone(),
             permission: self.permission.clone(),
             sink: self.sink.clone(),
+            subagent_slots: self.subagent_slots.clone(),
         })
     }
 }
@@ -141,7 +156,8 @@ impl SubagentFactory for SubagentRunner {
             self.sink.clone(),
             self.max_iterations,
         );
-        nested.set_subagent_factory(Some(self.child()));
+        nested.set_subagent_slots(self.subagent_slots.clone());
+        nested.set_subagent_factory(Some(self.child() as Arc<dyn SubagentFactory>));
         nested.set_subagent_depth(depth);
         // Subagents cannot ask the user: the ask_user tool is for questions
         // only the human can answer, and a nested research agent must not
@@ -227,4 +243,53 @@ pub struct NullSink;
 #[async_trait]
 impl EventSink for NullSink {
     async fn event(&self, _event: AgentEvent) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::permission::AutoApprove;
+    use crate::tool::ToolRegistry;
+
+    #[test]
+    fn a_child_runner_shares_the_slot_pool_instead_of_creating_its_own() {
+        // A bound that multiplies by depth is not a bound. `child()` is what nested levels are
+        // built from, so this is the assertion that keeps the pool shared: without it, a
+        // depth-2 tree could run twenty children while the constant says four.
+        let slots = Arc::new(tokio::sync::Semaphore::new(4));
+        let runner = SubagentRunner {
+            subagent_slots: slots.clone(),
+            ..SubagentRunner::new(
+                Arc::new(Config::default_config()),
+                Arc::new(ToolRegistry::new()),
+                "provider",
+                "model",
+                None,
+                Arc::new(AutoApprove::everything()),
+            )
+        };
+
+        let child = runner.child();
+        assert!(
+            Arc::ptr_eq(&child.subagent_slots, &slots),
+            "the child must share the parent's pool, not create one of its own"
+        );
+        assert_eq!(slots.available_permits(), 4);
+
+        // The default a directly-built runner gets is the shared constant, so a runner
+        // constructed outside the assembly is bounded too.
+        let standalone = SubagentRunner::new(
+            Arc::new(Config::default_config()),
+            Arc::new(ToolRegistry::new()),
+            "provider",
+            "model",
+            None,
+            Arc::new(AutoApprove::everything()),
+        );
+        assert_eq!(
+            standalone.subagent_slots.available_permits(),
+            crate::tool::MAX_CONCURRENT_SUBAGENTS
+        );
+    }
 }

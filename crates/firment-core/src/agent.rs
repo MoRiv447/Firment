@@ -401,6 +401,20 @@ impl Agent {
     }
 
     /// Maximum research-subagent nesting depth.
+    /// The slot pool this agent's `task` calls share (plan §5, item 2).
+    ///
+    /// Exposed so the subagent runner can hand the *same* pool to its children: a child that
+    /// built its own would give every level four more streams, and a depth-2 tree could run
+    /// twenty children while the constant says four.
+    pub fn subagent_slots(&self) -> std::sync::Arc<tokio::sync::Semaphore> {
+        self.subagent_slots.clone()
+    }
+
+    /// Give this agent the parent's pool instead of a fresh one.
+    pub fn set_subagent_slots(&mut self, slots: std::sync::Arc<tokio::sync::Semaphore>) {
+        self.subagent_slots = slots;
+    }
+
     pub fn max_subagent_depth(&self) -> usize {
         self.max_subagent_depth
     }

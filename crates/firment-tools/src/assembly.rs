@@ -164,6 +164,8 @@ pub fn assemble_agent(
     // what it saw before.
     let subagent_factory: Arc<SubagentRunner> = Arc::new(SubagentRunner {
         sink: attacker_sink.clone(),
+        // The parent's pool, so the whole tree shares one bound.
+        subagent_slots: agent.subagent_slots(),
         ..SubagentRunner::new(
             Arc::new(merged.clone()),
             plan_registry(),
@@ -183,6 +185,10 @@ pub fn assemble_agent(
         let attacker = SubagentRunner {
             max_iterations: 16,
             sink: attacker_sink,
+            // Same pool as the research runner: the red-team campaign's agents are subagents
+            // of this session too, and the bound is on provider streams, not on which
+            // registry they carry.
+            subagent_slots: agent.subagent_slots(),
             ..SubagentRunner::new(
                 Arc::new(merged.clone()),
                 attacker_registry(),
