@@ -387,6 +387,12 @@ pub fn load_project_instructions(cwd: &Path) -> Option<String> {
             }
         }
     }
+    // Plan §5, item 4: the project's decisions, as a digest. A project without
+    // `docs/adr/` returns `None` here and nothing is added — the section exists only where
+    // there is something to say.
+    if let Some(decisions) = crate::adr::prompt_section(cwd) {
+        parts.push(decisions);
+    }
     if parts.is_empty() {
         None
     } else {

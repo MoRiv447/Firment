@@ -177,6 +177,14 @@ enum Command {
         #[arg(long, default_value_t = 30)]
         timeout: u64,
     },
+    /// Architecture decision records (plan §5, item 4): the project's decisions, which are
+    /// also injected into the agent's system prompt as a digest.
+    Adr {
+        /// `list` (the default), `show <number>`, or `new <title>`.
+        action: Option<String>,
+        /// The number for `show`, or the title for `new`.
+        arg: Option<String>,
+    },
     /// Export a session as a self-contained document (plan §5, item 7): the conversation,
     /// the changes with their diffs, and the event log. Recognisable secrets are masked.
     Share {
@@ -470,6 +478,10 @@ async fn main() -> anyhow::Result<()> {
             } => {
                 let store = SessionStore::default();
                 run_share(&store, session.as_deref(), format, out.as_deref())?;
+            }
+            Command::Adr { action, arg } => {
+                let cwd = cli.cwd.clone().unwrap_or(env::current_dir()?);
+                run_adr(&cwd, action.as_deref().unwrap_or("list"), arg.as_deref())?;
             }
             Command::Replay { session, at, json } => {
                 let store = SessionStore::default();
@@ -1374,7 +1386,115 @@ fn newest_replay(dir: &Path) -> Option<PathBuf> {
     newest.map(|(_, path)| path)
 }
 
-/// `firm share` — a session as a document someone can read without Firment (plan §5, item 7).
+/// `firm adr list|show|new` (plan §5, item 4).
+///
+/// The same records the agent sees as a digest in its system prompt — this is where a human
+/// reads them, and where a new one starts.
+fn run_adr(cwd: &Path, action: &str, arg: Option<&str>) -> anyhow::Result<()> {
+    use firment_core::adr;
+
+    match action {
+        "list" | "ls" => {
+            let records = adr::scan(cwd);
+            if records.is_empty() {
+                println!(
+                    "no decision records in {}/ - `firm adr new \"<title>\"` starts one\n\
+                     (records are also injected into the agent's system prompt, so the next \
+                     session knows them)",
+                    adr::DIR
+                );
+                return Ok(());
+            }
+            println!("{} decision record(s) in {}:\n", records.len(), adr::DIR);
+            for record in &records {
+                let status = record
+                    .status
+                    .as_deref()
+                    .map(|status| format!(" [{status}]"))
+                    .unwrap_or_default();
+                println!("  ADR-{:04}{status}: {}", record.number, record.title);
+                if !record.summary.is_empty() {
+                    println!("      {}", record.summary);
+                }
+            }
+            println!("\n  `firm adr show <number>` for the whole record");
+        }
+        "show" => {
+            let number: u32 = arg
+                .and_then(|value| value.trim_start_matches("ADR-").parse().ok())
+                .ok_or_else(|| anyhow::anyhow!("firm adr show <number> - see `firm adr list`"))?;
+            let records = adr::scan(cwd);
+            let known: Vec<String> = records
+                .iter()
+                .map(|record| format!("{:04}", record.number))
+                .collect();
+            let record = records
+                .iter()
+                .find(|record| record.number == number)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "no ADR-{number:04} in {}/  known: {}",
+                        adr::DIR,
+                        if known.is_empty() {
+                            "(none)".to_string()
+                        } else {
+                            known.join(", ")
+                        }
+                    )
+                })?;
+            print!("{}", std::fs::read_to_string(&record.path)?);
+        }
+        "new" => {
+            let title = arg.unwrap_or("").trim();
+            if title.is_empty() {
+                anyhow::bail!(
+                    "firm adr new \"<title>\" - the title is the decision, in a few words"
+                );
+            }
+            let number = adr::next_number(cwd);
+            let dir = adr::dir(cwd);
+            std::fs::create_dir_all(&dir)?;
+            let path = dir.join(format!("{number:04}-{}.md", slugify(title)));
+            if path.exists() {
+                anyhow::bail!("{} already exists", path.display());
+            }
+            let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+            std::fs::write(&path, adr::template(number, title, &date))?;
+            println!("created {}", path.display());
+            println!(
+                "\n  fill in Context / Decision / Consequences - the file asks the three \
+                 questions a reader will have.\n  ADR-{number:04} [Proposed] is already in \
+                 every new session's system prompt."
+            );
+        }
+        other => anyhow::bail!("unknown adr action '{other}' - try `firm adr list`"),
+    }
+    Ok(())
+}
+
+/// A filename-safe form of an ADR title.
+fn slugify(title: &str) -> String {
+    let mut slug = String::new();
+    let mut last_dash = false;
+    for ch in title.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash && !slug.is_empty() {
+            slug.push('-');
+            last_dash = true;
+        }
+    }
+    let capped: String = slug.trim_matches('-').chars().take(60).collect();
+    let capped = capped.trim_end_matches('-').to_string();
+    if capped.is_empty() {
+        "decision".to_string()
+    } else {
+        capped
+    }
+}
+
+/// `firm share` - a session as a document someone can read without Firment (plan §5, item 7).
 ///
 /// Prints to stdout by default rather than writing a file: a share is usually a redirect
 /// (`firm share latest > bugreport.html`) or a paste, and a command that leaves a file
@@ -2149,6 +2269,55 @@ fn format_ts(secs: u64) -> String {
 mod tests {
     use super::*;
     use firment_core::config::CommandProvenance;
+
+    #[test]
+    fn adr_new_numbers_creates_and_lists_the_next_record() {
+        let dir = tempfile::tempdir().unwrap();
+        // Nothing yet: listing says so, and the first number is 1.
+        run_adr(dir.path(), "list", None).unwrap();
+        assert_eq!(firment_core::adr::next_number(dir.path()), 1);
+
+        run_adr(dir.path(), "new", Some("Use the journal for rollback")).unwrap();
+        let path = dir
+            .path()
+            .join("docs/adr/0001-use-the-journal-for-rollback.md");
+        assert!(path.is_file(), "expected {}", path.display());
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.starts_with("# 1. Use the journal for rollback"),
+            "{text}"
+        );
+
+        // The second one follows the first, and `show` finds it by number.
+        run_adr(dir.path(), "new", Some("Keep the ISR short")).unwrap();
+        assert!(
+            dir.path()
+                .join("docs/adr/0002-keep-the-isr-short.md")
+                .is_file()
+        );
+        run_adr(dir.path(), "show", Some("2")).unwrap();
+        run_adr(dir.path(), "show", Some("ADR-0002")).unwrap();
+
+        // An unknown number names what does exist instead of failing silently.
+        let error = run_adr(dir.path(), "show", Some("99"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("0001, 0002"), "{error}");
+        // A title is required, and an unknown action is refused.
+        assert!(run_adr(dir.path(), "new", None).is_err());
+        assert!(run_adr(dir.path(), "publish", None).is_err());
+    }
+
+    #[test]
+    fn an_adr_title_becomes_a_filename_that_is_stable_and_readable() {
+        assert_eq!(
+            slugify("Use the Journal for rollback"),
+            "use-the-journal-for-rollback"
+        );
+        // Punctuation collapses instead of producing runs of dashes or empty segments.
+        assert_eq!(slugify("Why  CAS (not locks)?"), "why-cas-not-locks");
+        assert_eq!(slugify("!!!"), "decision");
+    }
 
     #[test]
     fn share_writes_a_self_contained_document_and_masks_a_token() {

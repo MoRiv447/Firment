@@ -1,3 +1,4 @@
+pub mod adr;
 pub mod agent;
 pub mod ask;
 pub mod board;
