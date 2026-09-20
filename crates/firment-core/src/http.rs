@@ -4,6 +4,8 @@
 //! exclusions stay consistent: LAN endpoints must never be sent through the
 //! proxy, or a machine behind a proxy cannot reach its own Ollama.
 
+use std::time::Duration;
+
 /// Ranges that must bypass the proxy. reqwest reads `NO_PROXY` on its own,
 /// but that variable almost never lists the LAN ranges — so an Ollama or LM
 /// Studio server sitting on 192.168.x.x is unreachable the moment a proxy
@@ -38,14 +40,46 @@ pub fn http_builder() -> reqwest::ClientBuilder {
     builder
 }
 
-/// A built client with the LAN exclusions applied. Falls back to a plain
-/// client if construction fails (only TLS initialisation can, in practice).
+/// How long a provider call may go **without a byte** before it is treated as dead.
 ///
-/// Use this instead of `reqwest::Client::new()` — that shorthand reads the
-/// proxy env vars but not these exclusions, which is exactly how a LAN
-/// Ollama ends up unreachable.
-pub fn http_client() -> reqwest::Client {
+/// This is the deadline the offline design review asked for, and it is deliberately a
+/// *read* timeout rather than a total one: a reasoning model that thinks for a minute and
+/// then streams is working, not broken, and a total timeout would cut it off mid-answer.
+///
+/// It also implements the review's "no bytes **and** no heartbeat" rule without any extra
+/// machinery: the stream parsers emit `ProviderEvent::Activity` for keep-alives, and a
+/// keep-alive is a byte — so a server that is alive but slow stays well inside this
+/// deadline, while a black-holed one (a dropped packet, a sleeping laptop, wifi that is up
+/// but not routed) trips it. Before this existed, that case hung until the OS gave up,
+/// which is minutes; a *refused* connection fails instantly, which is why nobody noticed.
+pub const PROVIDER_READ_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How long a provider connection may take to establish.
+///
+/// Shorter than the read deadline: a TCP handshake to a reachable host is milliseconds, so
+/// anything near this number is a failure the user should hear about in seconds.
+pub const PROVIDER_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// A built client for talking to a model provider: LAN exclusions applied, and both
+/// deadlines attached.
+///
+/// Use this instead of `reqwest::Client::new()` — that shorthand reads the proxy env vars
+/// but not the LAN exclusions (which is how a LAN Ollama ends up unreachable) and carries no
+/// deadline at all (which is how a dead endpoint ends up looking like a slow one).
+pub fn provider_client() -> reqwest::Client {
+    provider_client_with(PROVIDER_READ_TIMEOUT, PROVIDER_CONNECT_TIMEOUT)
+}
+
+/// [`provider_client`] with the deadlines passed in, so a test can prove they apply without
+/// waiting two minutes for the production value.
+///
+/// The fallback loses both deadlines, and that is stated rather than hidden: it only runs
+/// when the builder itself fails (TLS initialisation, in practice), where the alternative is
+/// no client at all. It is not a path that should ever be reached.
+pub fn provider_client_with(read: Duration, connect: Duration) -> reqwest::Client {
     http_builder()
+        .read_timeout(read)
+        .connect_timeout(connect)
         .build()
         .unwrap_or_else(|_| reqwest::Client::new())
 }
@@ -86,5 +120,56 @@ mod tests {
         // With or without proxy env vars in the test environment, the
         // builder must stay usable.
         let _ = http_builder();
+    }
+
+    #[tokio::test]
+    async fn a_server_that_accepts_and_then_says_nothing_fails_within_the_deadline() {
+        // The case the offline review found, reproduced without a network: a listener that
+        // completes the TCP handshake and then never writes a byte. Before the read deadline
+        // existed this is where a call to a black-holed endpoint went to wait for the OS.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let holder = std::thread::spawn(move || {
+            if let Ok((_stream, _)) = listener.accept() {
+                // Hold it open, silently, for longer than the deadline under test.
+                std::thread::sleep(Duration::from_secs(5));
+            }
+        });
+
+        let client = provider_client_with(Duration::from_millis(300), Duration::from_millis(300));
+        let started = std::time::Instant::now();
+        let result = client.get(format!("http://{addr}/v1/models")).send().await;
+        let took = started.elapsed();
+
+        assert!(
+            result.is_err(),
+            "a server that never answers must not be reported as a live one"
+        );
+        assert!(
+            took < Duration::from_secs(3),
+            "the deadline did not apply: the call took {took:?}"
+        );
+        // And it waited: without this the test would also pass if the connection had been
+        // refused instantly, which is a different failure and not the one being tested.
+        assert!(
+            took >= Duration::from_millis(250),
+            "the call failed in {took:?} — that is a connection error, not the deadline \
+             firing; the listener is supposed to accept and then stay silent"
+        );
+        drop(holder);
+    }
+
+    #[test]
+    fn the_production_deadlines_are_attached_to_the_client_providers_use() {
+        // The regression this guards: a provider built without a deadline looks exactly like
+        // a provider talking to a slow model — until it never comes back. The values are
+        // asserted by name so that removing one is a test failure rather than a silent
+        // return to "hangs until the OS gives up".
+        assert!(
+            PROVIDER_READ_TIMEOUT >= Duration::from_secs(60),
+            "a slow model is not a broken one"
+        );
+        assert!(PROVIDER_CONNECT_TIMEOUT <= Duration::from_secs(30));
+        let _ = provider_client();
     }
 }

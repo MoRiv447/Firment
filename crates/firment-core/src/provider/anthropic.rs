@@ -24,7 +24,7 @@ impl AnthropicProvider {
         temperature: Option<f32>,
     ) -> Self {
         Self {
-            client: crate::http_client(),
+            client: crate::provider_client(),
             base_url: base_url.into().trim_end_matches('/').to_string(),
             api_key: api_key.into(),
             model: model.into(),

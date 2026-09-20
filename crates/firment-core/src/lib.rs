@@ -31,7 +31,7 @@ pub use config::{
     ToolVerbosity, UiConfig, UiTheme, auth_path, config_dir, config_path, load_auth, save_auth,
 };
 pub use context::{default_system_prompt, delegation_section, system_prompt_for};
-pub use http::{http_builder, http_client};
+pub use http::{http_builder, provider_client, provider_client_with};
 pub use journal::{EditJournal, Ledger, LedgerChange, UndoSummary};
 pub use permission::{
     AutoApprove, PermissionChecker, PermissionError, PlanModePermission, TargetLockPermission,
