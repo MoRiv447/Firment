@@ -150,13 +150,13 @@ These are defects, not missing features — they are the difference between "wor
 | 1. A provider deadline | **Done** — `9436ead`: `PROVIDER_READ_TIMEOUT` (120 s between bytes) and `PROVIDER_CONNECT_TIMEOUT` (15 s) in `core/src/http.rs`, on a client built by `provider_client()`, which replaces `http_client()` — its only callers were the two providers, so the change lands exactly on the chat path. |
 | 2. The heartbeat | **Done by construction** — a keep-alive is a byte, so the read deadline *is* the "no bytes and no heartbeat" rule. No extra machinery, and the `ProviderEvent::Activity => {}` arm is left alone because it no longer needs to do anything. |
 | 3. A `doctor` line answering "can I work right now?" | **Done** — `78a0bcc`: a closing summary built from the probes that already ran (chat reachability, local servers, a CONNACK check on the MQTT broker), plus the line that stops an offline reader concluding that nothing works. Its wording is a pure function, so the test covers the offline case, the LAN case, and "no providers configured" without a network. |
-| 4. Document the offline install path | **Done** — `8d33f5b`: both READMEs say how to install without a network (from a checkout, or by copying the self-contained binary) and point at the doctor summary as the line to read on an unfamiliar machine. |
+| 4. Document the offline install path | **Done** — `3eb7d97`: both READMEs say how to install without a network (from a checkout, or by copying the self-contained binary) and point at the doctor summary as the line to read on an unfamiliar machine. |
 | 5. The regression test for (1) | **Done** — a local listener that accepts and then stays silent, asserted to fail *and* to have waited (≥250 ms), against a 300 ms deadline built through the same constructor the providers use. The lower bound is the part that distinguishes "the deadline fired" from "the connection was refused instantly". |
-| — §4.5, the advisory half | **Done** — `8d33f5b`: a clean report now states the age of the database behind it (`39 day(s) old, 1268 advisories`) and, past 30 days, that a clean result from it is not a clean result today. |
+| — §4.5, the advisory half | **Done** — `3eb7d97`: a clean report now states the age of the database behind it (`39 day(s) old, 1268 advisories`) and, past 30 days, that a clean result from it is not a clean result today. |
 
 ---
 
 *Written 2026-09-20 against `7b5d08b`; status section updated after `9436ead`, `78a0bcc` and
-`8d33f5b`. All five items are delivered; the three that touch behaviour are the deadline, the
+`3eb7d97`. All five items are delivered; the three that touch behaviour are the deadline, the
 summary and the advisory age.
 If the code moves, the file:line references in §2 and §4 are the parts to re-check.*
