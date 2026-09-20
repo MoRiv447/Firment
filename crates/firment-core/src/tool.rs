@@ -9,6 +9,15 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+/// How many subagents may run at once (plan §5, item 2).
+///
+/// A chosen default rather than a derived one: four is enough that a research task feels
+/// parallel, and few enough to stay inside the rate limits of the providers people
+/// configure. The number that would be *right* depends on the provider, which is why this
+/// is one named constant instead of a rule scattered through the code — and why raising it
+/// is a one-line change with an obvious reason.
+pub const MAX_CONCURRENT_SUBAGENTS: usize = 4;
+
 #[derive(Clone)]
 pub struct ToolContext {
     pub cwd: PathBuf,
@@ -20,6 +29,16 @@ pub struct ToolContext {
     pub allow_dangerous: bool,
     /// Per-turn edit journal: backups + rollback for write/edit tools.
     pub journal: Arc<Mutex<EditJournal>>,
+    /// Slots for concurrent subagents (plan §5, item 2).
+    ///
+    /// The agent runs a turn's tool calls as one concurrent wave
+    /// (`futures::future::join_all`), so several `task` calls in one turn already run in
+    /// parallel — that is the read-only research parallelism the concurrency review
+    /// recommends, and it needed no new machinery. What it *did* need is a bound: a wave of
+    /// twenty `task` calls is twenty concurrent provider streams, which is a rate limit, a
+    /// memory cost and a bill. A call waits for a slot rather than being refused, because a
+    /// slow answer beats an error the model will retry.
+    pub subagent_slots: Arc<tokio::sync::Semaphore>,
     /// Configured verification command from `[tools] verify_command`.
     pub verify_command: Option<String>,
     /// Extra roots (besides cwd) that file tools may access, e.g. the
@@ -116,6 +135,7 @@ impl ToolContext {
             device_log_dir: None,
             providers: Vec::new(),
             la: None,
+            subagent_slots: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SUBAGENTS)),
         }
     }
 }

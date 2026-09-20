@@ -251,6 +251,8 @@ pub struct Agent {
     subagent_depth: usize,
     /// Recursion limit for the `task` tool.
     max_subagent_depth: usize,
+    /// Slots for concurrent subagents; see [`ToolContext::subagent_slots`].
+    subagent_slots: std::sync::Arc<tokio::sync::Semaphore>,
     /// Interactive user front-end exposed to the `ask_user` tool.
     asker: Option<Arc<dyn Asker>>,
     /// Web search provider + resolved API key exposed to the web_search tool.
@@ -331,6 +333,9 @@ impl Agent {
             attacker: None,
             subagent_depth: 0,
             max_subagent_depth: 2,
+            subagent_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(
+                crate::tool::MAX_CONCURRENT_SUBAGENTS,
+            )),
             asker: None,
             web_search_provider: None,
             tool_seq: 0,
@@ -989,6 +994,7 @@ impl Agent {
             attacker: self.attacker.clone(),
             subagent_depth: self.subagent_depth,
             max_subagent_depth: self.max_subagent_depth,
+            subagent_slots: self.subagent_slots.clone(),
             asker: self.asker.clone(),
             web_search_provider: self.web_search_provider.clone(),
             web_search_api_key: self.web_search_api_key.clone(),

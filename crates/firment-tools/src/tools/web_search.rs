@@ -702,6 +702,10 @@ mod tests {
             attacker: None,
             allowed_roots: Vec::new(),
             cancel: firment_core::Cancellable::new(),
+            // Everything the test does not care about, including the subagent slots it never
+            // uses — which is also why adding a field to `ToolContext` no longer breaks every
+            // test helper in the crate.
+            ..ToolContext::default()
         }
     }
 

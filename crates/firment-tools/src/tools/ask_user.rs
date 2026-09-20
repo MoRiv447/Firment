@@ -94,6 +94,7 @@ mod tests {
             attacker: None,
             cancel: firment_core::Cancellable::new(),
             allowed_roots: Vec::new(),
+            ..ToolContext::default()
         }
     }
 

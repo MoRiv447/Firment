@@ -12,7 +12,7 @@ impl Tool for Task {
     }
 
     fn description(&self) -> &'static str {
-        "Run a read-only research subagent that investigates on its own and returns a report. Use for long, self-contained investigations (code archaeology, datasheet research, writing a design summary) so you can keep working. The subagent can read files, search the web, fetch pages, and keep todos, but cannot modify the workspace or ask the user. Its report is returned as text; recursion depth is bounded."
+        "Run a read-only research subagent that investigates on its own and returns a report. Use for long, self-contained investigations (code archaeology, datasheet research, writing a design summary) so you can keep working. The subagent can read files, search the web, fetch pages, and keep todos, but cannot modify the workspace or ask the user. Its report is returned as text; recursion depth is bounded.\n\nSeveral `task` calls in ONE turn run in PARALLEL — that is the intended way to investigate independent questions, and it is much faster than asking them one at a time. Use it when the questions do not depend on each other (three modules to understand, two datasheets to read). Do not use it to ask the same question twice, and do not start a parallel batch whose members need each other's answers."
     }
 
     fn input_schema(&self) -> Value {
@@ -56,6 +56,16 @@ impl Tool for Task {
         };
         let model = args.get("model").and_then(|m| m.as_str());
         let provider = args.get("provider").and_then(|p| p.as_str());
+        // Take a slot before starting the child (plan §5, item 2). A turn's tool calls run
+        // as one concurrent wave, so several `task` calls in one turn really do run at once —
+        // this is what keeps "really do" from becoming "twenty provider streams". The slot is
+        // held for the child's whole life, and a call that finds none waits rather than
+        // failing: a slow answer is better than an error the model will retry.
+        //
+        // `ok()` on the acquire: the only way a semaphore errors is being closed, which
+        // happens when its owner is dropped — at which point running the child unbounded is
+        // the honest fallback, because the limiter is gone with the agent that was using it.
+        let _slot = ctx.subagent_slots.clone().acquire_owned().await.ok();
         let report = factory
             .run_subagent(
                 prompt,
@@ -143,7 +153,118 @@ mod tests {
             la: None,
             cancel: firment_core::Cancellable::new(),
             allowed_roots: Vec::new(),
+            ..ToolContext::default()
         }
+    }
+
+    /// A factory whose children take a fixed time, and which records how many ran at once.
+    #[derive(Clone)]
+    struct SlowFactory {
+        millis: u64,
+        in_flight: Arc<std::sync::atomic::AtomicUsize>,
+        peak: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl SlowFactory {
+        fn new(millis: u64) -> Self {
+            Self {
+                millis,
+                in_flight: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                peak: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            }
+        }
+
+        fn peak(&self) -> usize {
+            self.peak.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl SubagentFactory for SlowFactory {
+        async fn run_subagent(
+            &self,
+            prompt: &str,
+            _cwd: PathBuf,
+            _provider: Option<&str>,
+            _model: Option<&str>,
+            _depth: usize,
+            _cancel: firment_core::Cancellable,
+        ) -> Result<String, String> {
+            use std::sync::atomic::Ordering;
+            let running = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak.fetch_max(running, Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(self.millis)).await;
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            Ok(format!("report for {prompt}"))
+        }
+    }
+
+    #[tokio::test]
+    async fn parallel_task_calls_really_overlap_and_the_slots_bound_them() {
+        // The concurrency review's first slice, as evidence rather than as a reading of the
+        // code: a turn's tool calls run as one `join_all` wave (`core/src/agent.rs`), so
+        // several `task` calls in one turn do run at once. This pins both halves — that they
+        // overlap, and that the slots keep "several" from becoming "twenty provider streams".
+        let dir = tempdir().unwrap();
+        let factory = SlowFactory::new(120);
+
+        // Four slots, four calls: all four should be in flight together.
+        let mut slots_ctx = ctx(dir.path(), 0, 2, None);
+        slots_ctx.subagent = Some(Arc::new(factory.clone()) as _);
+        slots_ctx.subagent_slots = Arc::new(tokio::sync::Semaphore::new(4));
+
+        let started = std::time::Instant::now();
+        let runs = (0..4).map(|index| {
+            let ctx = &slots_ctx;
+            async move {
+                Task.run(
+                    serde_json::json!({"prompt": format!("question {index}")}),
+                    ctx,
+                )
+                .await
+            }
+        });
+        let results = futures::future::join_all(runs).await;
+        let elapsed = started.elapsed();
+        assert!(
+            results.iter().all(|r| r.is_ok()),
+            "every child should report"
+        );
+        assert_eq!(
+            factory.peak(),
+            4,
+            "the four children should have overlapped"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_millis(400),
+            "four 120 ms children took {elapsed:?} — they did not overlap"
+        );
+
+        // One slot: the same two calls have to take turns.
+        let serial = SlowFactory::new(120);
+        let mut slots_ctx = ctx(dir.path(), 0, 2, None);
+        slots_ctx.subagent = Some(Arc::new(serial.clone()) as _);
+        slots_ctx.subagent_slots = Arc::new(tokio::sync::Semaphore::new(1));
+
+        let started = std::time::Instant::now();
+        let runs = (0..2).map(|index| {
+            let ctx = &slots_ctx;
+            async move {
+                Task.run(
+                    serde_json::json!({"prompt": format!("serial {index}")}),
+                    ctx,
+                )
+                .await
+            }
+        });
+        let results = futures::future::join_all(runs).await;
+        let elapsed = started.elapsed();
+        assert!(results.iter().all(|r| r.is_ok()));
+        assert_eq!(serial.peak(), 1, "one slot means one child at a time");
+        assert!(
+            elapsed >= std::time::Duration::from_millis(220),
+            "two 120 ms children finished in {elapsed:?} — the slot did not hold one back"
+        );
     }
 
     #[tokio::test]

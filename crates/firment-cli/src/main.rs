@@ -2267,6 +2267,11 @@ async fn run_direct_tool(
         la: config.tools.la.clone(),
         allowed_roots: Vec::new(),
         cancel: firment_core::Cancellable::new(),
+        // A one-shot `firm <tool>` run can still spawn subagents; it gets the same bound the
+        // agent gives its turns.
+        subagent_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(
+            firment_core::tool::MAX_CONCURRENT_SUBAGENTS,
+        )),
     };
     let registry = firment_tools::default_registry();
     match registry.run(tool, args, &ctx).await {
