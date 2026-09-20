@@ -1967,6 +1967,22 @@ fn run_review(cwd: &Path, json: bool, markdown: bool) -> anyhow::Result<i32> {
                     stderr.trim()
                 ));
             } else {
+                // The offline review's §4.5: an advisory database is a live feed, so a clean
+                // "0 advisories" from a two-month-old snapshot must not read like a clean
+                // result from today's. The state is stated; past 30 days it is also a note.
+                match firment_core::review::deps::advisory_database(&stdout) {
+                    Some(database) => {
+                        let (detail, note) = database.summary(chrono::Utc::now());
+                        report.detail(detail);
+                        if let Some(note) = note {
+                            report.note(note);
+                        }
+                    }
+                    None => report.note(
+                        "cargo-audit did not report its database state, so how current this \
+                         check was is unknown",
+                    ),
+                }
                 match firment_core::review::deps::review_advisories(&stdout) {
                     Ok(findings) => {
                         let count = findings.len();

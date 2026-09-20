@@ -167,6 +167,23 @@ macOS / Linux:
 curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | sh
 ```
 
+**Offline or air-gapped machine.** Both installers download a release, so neither works
+without a network. Two ways in instead:
+
+```bash
+# From a checkout (needs the Rust toolchain, and the crates it depends on)
+cargo install --path crates/firment-cli
+
+# Or copy the binary: `firm` is self-contained, so a build from any machine of the same
+# platform runs on the target — `cargo build --release` there, then copy
+# target/release/firm (firm.exe on Windows) and put it on PATH by hand.
+```
+
+Once it runs, `firm doctor` ends with what the machine can and cannot do right now — which
+providers answer, whether a local model server is listening, whether the device-plane broker
+is reachable, and which of them the network is not needed for. That is the line to read on a
+machine you are not sure about.
+
 ## ⚙️ Configuration
 
 `firm config` opens the config file (created on first run, `%APPDATA%\firment\config.toml` on Windows, `~/.config/firment/config.toml` elsewhere):

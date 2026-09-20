@@ -165,6 +165,21 @@ macOS / Linux：
 curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | sh
 ```
 
+**离线 / 物理隔离的机器。** 两个安装脚本都要下载 release，没有网络都用不了。改用这两条路之一：
+
+```bash
+# 从源码仓库安装（需要 Rust 工具链，以及它依赖的 crates）
+cargo install --path crates/firment-cli
+
+# 或者直接拷二进制：`firm` 是自包含的，同平台任一机器上构建的都能在目标机上运行 ——
+# 在那里 `cargo build --release`，再把 target/release/firm（Windows 上是 firm.exe）
+# 拷过去并手工加进 PATH。
+```
+
+跑起来之后，`firm doctor` 的结尾会给出这台机器**此刻**能做什么、不能做什么 —— 哪些
+provider 有响应、本地模型服务在不在监听、设备面 broker 通不通，以及哪些根本不需要网络。
+在一台你没把握的机器上，看这一行就够了。
+
 ## ⚙️ 配置
 
 配置文件（首次运行自动生成；Windows 在 `%APPDATA%\firment\config.toml`，其他系统在 `~/.config/firment/config.toml`；`firm config` 可从内置中立供应商目录交互式添加 provider）：

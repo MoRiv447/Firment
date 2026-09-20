@@ -511,6 +511,86 @@ pub fn cached_license_in(
     None
 }
 
+/// What the advisory database behind a `cargo audit` run actually was.
+///
+/// The offline review's §4.5, and the reason it matters: an advisory database is a **live
+/// feed**, so "0 advisories" from a snapshot taken two months ago reads *exactly* like "0
+/// advisories from today's". The licence half of this report already distinguishes "not read"
+/// from "read and clean"; this is the same honesty for the half that depends on a feed.
+///
+/// `AGENTS.md` records the incident that motivated it: on this machine
+/// `~/.cargo/advisory-db` is a snapshot from 2026-08-11, and a report that did not say so was
+/// a report that quietly answered a different question than the reader asked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdvisoryDatabase {
+    /// The raw `last-updated` string, which is what cargo-audit said — kept verbatim because
+    /// a report should quote its source rather than re-render it.
+    pub last_updated: String,
+    /// How many advisories the snapshot held, when the tool said.
+    pub advisory_count: Option<u64>,
+}
+
+/// The database state inside a `cargo audit --json` document, when it carries one.
+pub fn advisory_database(audit_json: &str) -> Option<AdvisoryDatabase> {
+    let audit: Value = serde_json::from_str(audit_json).ok()?;
+    let database = audit.get("database")?;
+    let last_updated = database.get("last-updated")?.as_str()?.to_string();
+    let advisory_count = database.get("advisory-count").and_then(|n| n.as_u64());
+    Some(AdvisoryDatabase {
+        last_updated,
+        advisory_count,
+    })
+}
+
+impl AdvisoryDatabase {
+    /// How old the snapshot is, when Cargo's timestamp can be read.
+    ///
+    /// `None` rather than a guess when it cannot: a database whose age is unknown is not a
+    /// database that is fresh.
+    pub fn age(&self, now: chrono::DateTime<chrono::Utc>) -> Option<chrono::Duration> {
+        let updated = chrono::DateTime::parse_from_rfc3339(&self.last_updated)
+            .ok()?
+            .with_timezone(&chrono::Utc);
+        Some(now.signed_duration_since(updated))
+    }
+
+    /// The line a reader needs, and a note when the age changes what the report can mean.
+    ///
+    /// The threshold is 30 days: advisories are published continuously, and a month is long
+    /// enough that a clean report starts to mean "nothing was published *and old*" rather
+    /// than "nothing was published". Below it, the date is stated and nothing is implied.
+    pub fn summary(&self, now: chrono::DateTime<chrono::Utc>) -> (String, Option<String>) {
+        let counted = match self.advisory_count {
+            Some(count) => format!(", {count} advisories"),
+            None => ", count unstated".to_string(),
+        };
+        let Some(age) = self.age(now) else {
+            return (
+                format!(
+                    "advisory database last updated {} ({counted})",
+                    self.last_updated
+                ),
+                Some(format!(
+                    "the advisory database's timestamp ({}) could not be read, so how much this check could have seen is unknown — a clean result here says nothing about advisories published since that snapshot",
+                    self.last_updated
+                )),
+            );
+        };
+        let days = age.num_days();
+        let detail = format!(
+            "advisory database last updated {} ({days} day(s) old{counted})",
+            self.last_updated
+        );
+        let note = (days > 30).then(|| {
+            format!(
+                "the advisory database is {days} days old: advisories published since {} are not in this report, so a clean result here is not a clean result today (run `cargo audit` somewhere it can reach the feed to refresh it)",
+                self.last_updated
+            )
+        });
+        (detail, note)
+    }
+}
+
 /// Advisories from `cargo audit --json`.
 ///
 /// The tool is optional in this project (plan §4-D): a caller that cannot run it records
@@ -824,6 +904,58 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
         assert!(!facts.license_file);
         // Not in the cache is `None`, not a guess: the caller turns that into "not read".
         assert!(cached_license_in(dir.path(), "other-crate", "1.0.0").is_none());
+    }
+
+    #[test]
+    fn the_advisory_database_state_is_read_from_the_audit_json() {
+        let audit = r#"{"database":{"advisory-count":1268,"last-commit":"abc","last-updated":"2026-08-11T22:54:25Z"},"vulnerabilities":{"found":false,"count":0,"list":[]}}"#;
+        let database = advisory_database(audit).unwrap();
+        assert_eq!(database.advisory_count, Some(1268));
+        assert_eq!(database.last_updated, "2026-08-11T22:54:25Z");
+        // No database object: `None`, not a default that would look fresh.
+        assert!(advisory_database(r#"{"vulnerabilities":{}}"#).is_none());
+        assert!(advisory_database("not json").is_none());
+    }
+
+    #[test]
+    fn a_clean_report_says_how_old_the_database_behind_it_was() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-09-20T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+
+        // The case this was written for: this machine's own advisory database.
+        let stale = AdvisoryDatabase {
+            last_updated: "2026-08-11T22:54:25Z".to_string(),
+            advisory_count: Some(1268),
+        };
+        let (detail, note) = stale.summary(now);
+        assert!(detail.contains("1268 advisories"), "{detail}");
+        // 39, not 40: the snapshot is from 22:54 and "now" is midday, so the day count
+        // truncates. An age is not a rounding-up kind of number.
+        assert!(detail.contains("39 day(s) old"), "{detail}");
+        let note = note.expect("an old database earns a note");
+        assert!(note.contains("not a clean result today"), "{note}");
+
+        // Recent enough: the age is stated and nothing is implied.
+        let fresh = AdvisoryDatabase {
+            last_updated: "2026-09-19T00:00:00Z".to_string(),
+            advisory_count: Some(1300),
+        };
+        let (detail, note) = fresh.summary(now);
+        assert!(detail.contains("1 day(s) old"), "{detail}");
+        assert!(note.is_none(), "{note:?}");
+
+        // An unreadable timestamp is not a fresh database.
+        let broken = AdvisoryDatabase {
+            last_updated: "yesterday".to_string(),
+            advisory_count: None,
+        };
+        let (detail, note) = broken.summary(now);
+        assert!(detail.contains("count unstated"), "{detail}");
+        assert!(
+            note.unwrap().contains("could not be read"),
+            "unreadable is not fresh"
+        );
     }
 
     #[test]
