@@ -507,14 +507,19 @@ async fn main() -> anyhow::Result<()> {
                     let checks = doctor::doctor_tools(&cwd, &config.tools, true);
                     println!("{}", serde_json::to_string_pretty(&checks)?);
                 } else {
-                    doctor::doctor(&config, &path).await?;
+                    let probes = doctor::doctor(&config, &path).await?;
                     doctor::doctor_install();
-                    doctor::doctor_local(&config).await;
-                    doctor::doctor_local(&config).await;
+                    let locals = doctor::doctor_local(&config).await;
                     let checks = doctor::doctor_tools(&cwd, &config.tools, false);
                     if *sbc {
                         doctor::doctor_sbc(&config).await;
                     }
+                    // The answer, after the evidence: this is the line a reader who ran
+                    // `doctor` to find out whether they can work actually needs.
+                    println!(
+                        "\n{}",
+                        doctor::capabilities(&probes, &locals, &config).await
+                    );
                     // Exit code: 0 clean, 2 something REQUIRED is missing.
                     // Warnings stay 0 -- a missing logic analyser is not a
                     // failure, and turning it into one would make `doctor`
@@ -681,10 +686,14 @@ async fn main() -> anyhow::Result<()> {
         let cwd = cli.cwd.clone().unwrap_or(env::current_dir()?);
         let config = config.merged_for(&cwd);
         if cli.doctor {
-            doctor::doctor(&config, &config_path).await?;
+            let probes = doctor::doctor(&config, &config_path).await?;
             doctor::doctor_install();
-            doctor::doctor_local(&config).await;
+            let locals = doctor::doctor_local(&config).await;
             let checks = doctor::doctor_tools(&cwd, &config.tools, false);
+            println!(
+                "\n{}",
+                doctor::capabilities(&probes, &locals, &config).await
+            );
             if let Some(missing) = doctor::first_required_missing(&checks) {
                 eprintln!("\n✗ required tool missing: {missing}");
                 std::process::exit(2);
@@ -2456,6 +2465,40 @@ mod tests {
             action.contains("--markdown"),
             "the action renders markdown reports"
         );
+    }
+
+    #[test]
+    fn the_doctor_summary_answers_the_question_it_was_written_for() {
+        // The offline design review's §4.3: five sections of detail, no answer to the one
+        // question a reader arrives with. The summary is pure, which is what makes the
+        // wording testable without a network.
+        let offline = doctor::capabilities_summary(&[("glm".to_string(), false)], &[], None);
+        assert!(offline.contains("can I work right now?"), "{offline}");
+        assert!(offline.contains("nothing reachable"), "{offline}");
+        assert!(offline.contains("unreachable: glm"), "{offline}");
+        assert!(offline.contains("none listening"), "{offline}");
+        assert!(offline.contains("not configured"), "{offline}");
+        // The line that keeps an offline reader from concluding that nothing works.
+        assert!(offline.contains("all work offline"), "{offline}");
+
+        // The case this project actually runs: a LAN model and a cloud provider that is out.
+        let lan = doctor::capabilities_summary(
+            &[("sbc-ollama".to_string(), true), ("glm".to_string(), false)],
+            &[firment_core::local::LocalEndpoint {
+                kind: "configured".to_string(),
+                base_url: "http://192.168.1.8:11434/v1".to_string(),
+                models: vec!["qwen3.5:0.8b".to_string()],
+            }],
+            Some(false),
+        );
+        assert!(lan.contains("sbc-ollama reachable"), "{lan}");
+        assert!(lan.contains("192.168.1.8"), "{lan}");
+        assert!(lan.contains("broker unreachable"), "{lan}");
+
+        // No providers at all is a different sentence from "all of them are down".
+        let none = doctor::capabilities_summary(&[], &[], Some(true));
+        assert!(none.contains("no providers configured"), "{none}");
+        assert!(none.contains("broker reachable"), "{none}");
     }
 
     #[test]

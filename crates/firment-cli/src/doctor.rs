@@ -45,11 +45,17 @@ pub(crate) fn doctor_key(
     (key, label)
 }
 
-pub(crate) async fn doctor(config: &Config, path: &Path) -> anyhow::Result<()> {
+/// Probe every configured provider, printing the detail and returning which ones answered.
+///
+/// The return value is what `firm doctor`'s closing summary is built from: a reader who runs
+/// doctor wants one answer to "can I work right now?", and computing it from the probes that
+/// have already happened costs nothing.
+pub(crate) async fn doctor(config: &Config, path: &Path) -> anyhow::Result<Vec<(String, bool)>> {
     println!("config file: {}", path.display());
+    let mut reachable: Vec<(String, bool)> = Vec::new();
     if config.providers.is_empty() {
         println!("no providers configured");
-        return Ok(());
+        return Ok(reachable);
     }
     for (name, provider) in &config.providers {
         let (key, key_status) = doctor_key(config, name, provider);
@@ -73,8 +79,14 @@ pub(crate) async fn doctor(config: &Config, path: &Path) -> anyhow::Result<()> {
             request = request.bearer_auth(key);
         }
         match request.send().await {
-            Ok(response) => println!("  probe {probe_url}: HTTP {}", response.status()),
+            Ok(response) => {
+                // A reachable endpoint that answers 401 is still reachable: the network and
+                // the URL are fine, and the key is a separate problem the line above names.
+                reachable.push((name.clone(), true));
+                println!("  probe {probe_url}: HTTP {}", response.status())
+            }
             Err(e) => {
+                reachable.push((name.clone(), false));
                 println!("  probe {probe_url}: unreachable ({e})");
                 // reqwest's top-level Display hides the real cause; walk the
                 // source chain so the user sees WHAT failed, not just that
@@ -93,7 +105,7 @@ pub(crate) async fn doctor(config: &Config, path: &Path) -> anyhow::Result<()> {
             }
         }
     }
-    Ok(())
+    Ok(reachable)
 }
 
 pub(crate) fn doctor_install() {
@@ -540,7 +552,7 @@ pub(crate) fn toolchain_checks(
 /// The cache is why a second `firm doctor` in the same session costs nothing, and the
 /// expiry is why starting Ollama and asking again works without anyone knowing a cache
 /// exists.
-pub(crate) async fn doctor_local(config: &Config) {
+pub(crate) async fn doctor_local(config: &Config) -> Vec<firment_core::local::LocalEndpoint> {
     use firment_core::local;
 
     println!("\nlocal model servers:");
@@ -566,7 +578,7 @@ pub(crate) async fn doctor_local(config: &Config) {
             .map(|(_, display, port)| format!("{display} on {port}"))
             .collect();
         println!("  none listening ({})", ports.join(", "));
-        return;
+        return Vec::new();
     }
     println!(
         "  (from {})",
@@ -602,6 +614,138 @@ pub(crate) async fn doctor_local(config: &Config) {
             None => println!(
                 "    set [local] vram_gb in config.toml to get a recommendation for this machine"
             ),
+        }
+    }
+    endpoints
+}
+
+/// The closing answer: **can I work right now?**
+///
+/// `firm doctor` already reports each provider, each local server and the toolchain, but a
+/// reader has to combine five sections to answer the one question they came with. An offline
+/// machine makes that obvious: the interesting fact is not "this provider is unreachable", it
+/// is "chat needs the network and everything else does not".
+///
+/// Pure, so the wording is testable without a network — which is the point of the section it
+/// produces.
+pub(crate) fn capabilities_summary(
+    providers: &[(String, bool)],
+    locals: &[firment_core::local::LocalEndpoint],
+    mqtt: Option<bool>,
+) -> String {
+    let mut out = String::from("\ncan I work right now?\n");
+    if providers.is_empty() {
+        out.push_str("  model chat    : no providers configured\n");
+    } else {
+        let up: Vec<&str> = providers
+            .iter()
+            .filter(|(_, ok)| *ok)
+            .map(|(name, _)| name.as_str())
+            .collect();
+        let down: Vec<&str> = providers
+            .iter()
+            .filter(|(_, ok)| !*ok)
+            .map(|(name, _)| name.as_str())
+            .collect();
+        out.push_str(&format!(
+            "  model chat    : {}\n",
+            if up.is_empty() {
+                "nothing reachable — model-backed work needs the network (or a LAN server)"
+                    .to_string()
+            } else {
+                format!("{} reachable", up.join(", "))
+            }
+        ));
+        if !down.is_empty() {
+            out.push_str(&format!(
+                "                  unreachable: {}\n",
+                down.join(", ")
+            ));
+        }
+    }
+    out.push_str(&format!(
+        "  local models  : {}\n",
+        if locals.is_empty() {
+            "none listening (Ollama 11434, llama.cpp 8080, LM Studio 1234)".to_string()
+        } else {
+            locals
+                .iter()
+                .map(|endpoint| format!("{} at {}", endpoint.kind, endpoint.base_url))
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    ));
+    out.push_str(&format!(
+        "  device plane  : {}\n",
+        match mqtt {
+            Some(true) => "broker reachable",
+            Some(false) => "broker unreachable — device alerts and commands are off",
+            None => "not configured (no [mqtt] broker)",
+        }
+    ));
+    // The part that is true regardless of the network, so that an offline reader knows the
+    // answer is not "nothing works".
+    out.push_str(
+        "  no network    : sessions, edits, build/flash/monitor, the static rules review, \
+         replay, share and ADRs all work offline\n",
+    );
+    out
+}
+
+/// [`capabilities_summary`] with the device-plane probe done first.
+pub(crate) async fn capabilities(
+    providers: &[(String, bool)],
+    locals: &[firment_core::local::LocalEndpoint],
+    config: &Config,
+) -> String {
+    let broker = config.mqtt.broker.trim();
+    let mqtt = if broker.is_empty() {
+        None
+    } else {
+        Some(mqtt_reachable(broker).await)
+    };
+    capabilities_summary(providers, locals, mqtt)
+}
+
+/// Whether the configured MQTT broker answers, with a short deadline.
+///
+/// Runs on a **blocking thread**, and that is not a detail: `rumqttc`'s blocking client owns
+/// a runtime of its own, and dropping one inside an async context panics with "Cannot drop a
+/// runtime in a context where blocking is not allowed" — which is exactly what running
+/// `firm --doctor` did, once, before this comment existed. The guard loop gets away with the
+/// same client because it never drops it mid-turn.
+async fn mqtt_reachable(broker: &str) -> bool {
+    let broker = broker.to_string();
+    tokio::task::spawn_blocking(move || mqtt_reachable_blocking(&broker))
+        .await
+        .unwrap_or(false)
+}
+
+/// The probe itself: connect, and treat the CONNACK as the answer.
+fn mqtt_reachable_blocking(broker: &str) -> bool {
+    let (host, port) = match broker.rsplit_once(':') {
+        Some((host, port)) => (host.to_string(), port.parse().unwrap_or(1883)),
+        None => (broker.to_string(), 1883),
+    };
+    let opts = rumqttc::MqttOptions::new("firm-doctor", &host, port);
+    let (_client, mut connection) = rumqttc::Client::new(opts, 8);
+    // `try_recv` in a bounded loop: without the `eventloop` feature the connection hands its
+    // events over a channel that a background thread fills. The answer that means "there is a
+    // broker here" is the CONNACK; anything else — refused, timed out, something unexpected —
+    // is a "no" for this line, and not an error worth propagating.
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        match connection.try_recv() {
+            Ok(Ok(rumqttc::Event::Incoming(rumqttc::Packet::ConnAck(_)))) => return true,
+            // Other traffic before the CONNACK: the broker is talking, keep waiting for it.
+            Ok(Ok(_)) => {}
+            Ok(Err(_)) | Err(rumqttc::TryRecvError::Disconnected) => return false,
+            Err(rumqttc::TryRecvError::Empty) => {
+                if std::time::Instant::now() >= deadline {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
         }
     }
 }
