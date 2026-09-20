@@ -139,7 +139,7 @@ consequences worth copying:
 * **`assertNotBusy`** — revert refuses while the session is running. Firment has no such guard
   on `/undo`; with children in flight it will need one.
 
-**The decision for Firment: the child shares the parent turn's journal.** Not a new journal,
+**The decision for Firment: the child shares the parent turn's journal.** Implemented in `04aabaa` (the plumbing below). Not a new journal,
 not a second mechanism:
 
 * One transaction is the invariant the review already set (§4.1). A child's writes belong to
@@ -197,7 +197,7 @@ keeps the pre-revert snapshot, so undo has an undo), and the busy guard above.
 | §6 step | Status |
 |---|---|
 | 1. Parallel research | **Done** — `3241cb5`. And the finding is that it already worked: a turn's tool calls run as one `join_all` wave (`core/src/agent.rs:1860`), so several `task` calls have always run beside each other. What was missing was **telling the model** (the description hinted at it and never said it) and **bounding it** (`subagent_slots`, four, held for the child's life — and shared by the whole tree rather than per level: `efcb28d` caught that the first version was four *per agent*, which multiplies by depth). The test pins both directions: four children overlap, one slot serialises them. |
-| 2. One write-capable child, sequential | **Not started, and now unblocked**: §5 decides the journal question it was waiting on (the child shares the parent turn's journal, or its edits are un-undoable and look undoable). |
+| 2. One write-capable child, sequential | **Half done**: §5's journal plumbing landed in `04aabaa` — a child now writes inside the caller's transaction. What is left is the actual step: a registry that lets a child write, the permission story for it, and the batch-rollback test. |
 | 3. Declared scopes | Not started |
 | 4. Two children with disjoint scopes | Not started |
 | 5. Batch rollback test | Not started |
