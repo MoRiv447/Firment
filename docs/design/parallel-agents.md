@@ -149,7 +149,7 @@ project has, and building for it now would buy the costs without the case.
 
 | §5 step | Status |
 |---|---|
-| 1. Parallel research | **Done** — `3241cb5`. And the finding is that it already worked: a turn's tool calls run as one `join_all` wave (`core/src/agent.rs:1860`), so several `task` calls have always run beside each other. What was missing was **telling the model** (the description hinted at it and never said it) and **bounding it** (`subagent_slots`, four, held for the child's life). The test pins both directions: four children overlap, one slot serialises them. |
+| 1. Parallel research | **Done** — `3241cb5`. And the finding is that it already worked: a turn's tool calls run as one `join_all` wave (`core/src/agent.rs:1860`), so several `task` calls have always run beside each other. What was missing was **telling the model** (the description hinted at it and never said it) and **bounding it** (`subagent_slots`, four, held for the child's life — and shared by the whole tree rather than per level: `efcb28d` caught that the first version was four *per agent*, which multiplies by depth). The test pins both directions: four children overlap, one slot serialises them. |
 | 2. One write-capable child, sequential | Not started — this is the step that would find the surprises, and it is the one that touches the journal. |
 | 3. Declared scopes | Not started |
 | 4. Two children with disjoint scopes | Not started |
