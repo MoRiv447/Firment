@@ -246,9 +246,14 @@ enum Command {
     /// change in a session with your own provider (plan §4-A); `evidence` reviews what a
     /// HIL run proved about the hardware (plan §4-B).
     Review {
-        /// What to review: `deps`, `last`, `evidence`, or a path to review statically
-        /// with the built-in rules (plan §4-C).
-        target: Option<String>,
+        /// What to review: the named targets `deps` / `last` / `evidence`, or one or more
+        /// paths to review statically with the built-in rules (plan §4-C).
+        ///
+        /// Several paths are one report, because that is what a pull request is: a list of
+        /// changed files. A rename of a flag would have made every caller loop and merge by
+        /// hand, and the merge is the part that decides the exit code.
+        #[arg(value_name = "TARGET")]
+        targets: Vec<String>,
         /// Session to review for `last` (id, or "latest" — the default).
         #[arg(long)]
         session: Option<String>,
@@ -439,13 +444,14 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             Command::Review {
-                target,
+                targets,
                 session,
                 replay,
                 at,
                 json,
                 markdown,
             } => {
+                let target = targets.first().cloned();
                 let cwd = cli
                     .cwd
                     .clone()
@@ -456,16 +462,13 @@ async fn main() -> anyhow::Result<()> {
                         run_review_last(&cli, session.as_deref(), *at, *json, *markdown).await?
                     }
                     "evidence" => run_review_evidence(&cwd, replay.as_deref(), *json, *markdown)?,
-                    // A path is the static review (plan §4-C). The named targets are
-                    // matched first, so a file called `deps` cannot shadow the dependency
-                    // review — and a name that is neither gets a message that lists both.
-                    other if Path::new(other).exists() => {
-                        run_review_path(Path::new(other), *json, *markdown)?
+                    // Paths are the static review (plan §4-C). The named target is
+                    // matched only for a single argument, so a file called `deps` cannot
+                    // shadow the dependency review, and a list can never be half-named.
+                    _ => {
+                        let paths = review_paths(targets)?;
+                        run_review_paths(&paths, *json, *markdown)?
                     }
-                    other => anyhow::bail!(
-                        "review target '{other}' is neither a known target (deps, last, \
-                         evidence) nor an existing path"
-                    ),
                 };
                 if code != 0 {
                     std::process::exit(code);
@@ -1307,32 +1310,102 @@ fn show_config(config: &Config, path: &Path, out: &mut impl std::io::Write) -> s
 /// Rules first, and the model only where rules cannot see: this half costs nothing, can be
 /// run on every commit, and does not depend on a provider being configured. The LLM pass
 /// the plan also asks for supplements this — it does not replace it.
-fn run_review_path(path: &Path, json: bool, markdown: bool) -> anyhow::Result<i32> {
+/// The paths a `firm review` call names, or the reason it cannot be one call.
+///
+/// A named target (`deps`, `last`, `evidence`) is a single-argument form: mixing one with
+/// paths would mean half the arguments go to one review and half to another, and the exit
+/// code — the thing a CI job reads — would then belong to whichever ran last. Refusing is
+/// the only answer that keeps the code meaningful.
+fn review_paths(targets: &[String]) -> anyhow::Result<Vec<PathBuf>> {
+    let named = |value: &str| matches!(value, "deps" | "last" | "evidence" | "--all");
+    if targets.is_empty() {
+        anyhow::bail!(
+            "firm review <target> — a named target (deps, last, evidence) or one or more paths"
+        );
+    }
+    if targets.len() > 1
+        && let Some(problem) = targets.iter().find(|target| named(target))
+    {
+        anyhow::bail!(
+            "'{problem}' is a named review target and cannot be mixed with paths — run it on \
+             its own"
+        );
+    }
+    let paths: Vec<PathBuf> = targets.iter().map(PathBuf::from).collect();
+    for path in &paths {
+        if !path.exists() {
+            anyhow::bail!("{} does not exist", path.display());
+        }
+    }
+    Ok(paths)
+}
+
+fn run_review_paths(roots: &[PathBuf], json: bool, markdown: bool) -> anyhow::Result<i32> {
     use firment_tools::review::{rules, walk};
 
-    let files = walk::collect(path);
-    if files.files.is_empty() {
-        anyhow::bail!("nothing reviewable under {}", path.display());
+    // One report over every root, with the files labelled relative to the root they came
+    // from. A caller that passed the same directory twice gets one copy of each file.
+    let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    let mut roots_and_files: Vec<(PathBuf, Vec<PathBuf>)> = Vec::new();
+    let mut empty: Vec<String> = Vec::new();
+    let mut skipped_total = 0usize;
+    for root in roots {
+        let collected = walk::collect(root);
+        skipped_total += collected.skipped;
+        let files: Vec<PathBuf> = collected
+            .files
+            .into_iter()
+            .filter(|file| seen.insert(file.clone()))
+            .collect();
+        if files.is_empty() {
+            empty.push(root.display().to_string());
+        } else {
+            roots_and_files.push((root.clone(), files));
+        }
+    }
+    if roots_and_files.is_empty() {
+        anyhow::bail!(
+            "nothing reviewable under {}",
+            roots
+                .iter()
+                .map(|r| r.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
     }
 
-    let mut report = firment_core::review::ReviewReport::new(format!("static: {}", path.display()));
-    report.detail(format!("{} file(s) read", files.files.len()));
+    let scope = if roots.len() == 1 {
+        roots[0].display().to_string()
+    } else {
+        format!("{} path(s)", roots.len())
+    };
+    let mut report = firment_core::review::ReviewReport::new(format!("static: {scope}"));
+    report.detail(format!(
+        "{} file(s) read",
+        roots_and_files
+            .iter()
+            .map(|(_, files)| files.len())
+            .sum::<usize>()
+    ));
     let mut findings = 0usize;
     let mut skipped_tests = 0usize;
-    for file in &files.files {
-        let Ok(text) = std::fs::read_to_string(file) else {
-            report.note(format!("{} could not be read as text", file.display()));
-            continue;
-        };
-        // The label has to keep the file's own name when `path` *is* the file: an empty
-        // label silently disabled every path-dependent rule (measured — one file reported
-        // nothing while its directory reported two findings in it).
-        let label = walk::label_for(path, file);
-        let reviewed = rules::review_source(&label, &text);
-        findings += reviewed.findings.len();
-        skipped_tests += reviewed.skipped_test_lines;
-        for finding in reviewed.findings {
-            report.push(finding);
+    for (root, files) in &roots_and_files {
+        for file in files {
+            let Ok(text) = std::fs::read_to_string(file) else {
+                report.note(format!("{} could not be read as text", file.display()));
+                continue;
+            };
+            // The label is relative to the root the file came from, and it has to keep the
+            // file's own name when that root *is* the file: an empty label silently
+            // disabled every path-dependent rule (measured — one file reported nothing
+            // while its directory reported two findings in it).
+            let label = walk::label_for(root, file);
+            let reviewed = rules::review_source(&label, &text);
+            findings += reviewed.findings.len();
+            skipped_tests += reviewed.skipped_test_lines;
+            for finding in reviewed.findings {
+                report.push(finding);
+            }
         }
     }
     report.detail(format!("{findings} finding(s) from the built-in rules"));
@@ -1341,10 +1414,12 @@ fn run_review_path(path: &Path, json: bool, markdown: bool) -> anyhow::Result<i3
             "{skipped_tests} test-module line(s) skipped — a test that demonstrates a pattern is not a defect"
         ));
     }
-    if files.skipped > 0 {
+    if !empty.is_empty() {
+        report.note(format!("nothing reviewable under: {}", empty.join(", ")));
+    }
+    if skipped_total > 0 {
         report.note(format!(
-            "{} more file(s) were left unread (the run stops at {})",
-            files.skipped,
+            "{skipped_total} more file(s) were left unread (each root stops at {})",
             walk::FILE_LIMIT
         ));
     }
@@ -2269,6 +2344,119 @@ fn format_ts(secs: u64) -> String {
 mod tests {
     use super::*;
     use firment_core::config::CommandProvenance;
+
+    #[test]
+    fn several_paths_are_one_report_and_a_named_target_cannot_hide_in_the_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let one = dir.path().join("one.rs");
+        let two = dir.path().join("two.rs");
+        std::fs::write(&one, "fn f() {\n    unsafe { x() }\n}\n").unwrap();
+        std::fs::write(&two, "fn g() {}\n").unwrap();
+
+        // Two files, one report — the shape a pull request has, and the reason the action
+        // can drive this command instead of looping and merging by hand.
+        let paths = review_paths(&[one.display().to_string(), two.display().to_string()]).unwrap();
+        assert_eq!(paths.len(), 2);
+        let code = run_review_paths(&paths, false, false).unwrap();
+        assert_eq!(
+            code, 0,
+            "a medium finding is reported without failing the command"
+        );
+
+        // A path that is not there is refused rather than reviewed as nothing.
+        assert!(review_paths(&[dir.path().join("missing.rs").display().to_string()]).is_err());
+        // `deps` mixed into a list would split the arguments across two reviews, so the
+        // exit code would belong to whichever ran last.
+        let mixed = review_paths(&["deps".to_string(), one.display().to_string()]).unwrap_err();
+        assert!(mixed.to_string().contains("cannot be mixed"), "{mixed}");
+        // And an empty call says what the forms are.
+        assert!(review_paths(&[]).is_err());
+    }
+
+    #[test]
+    fn the_github_action_is_structurally_sound_and_calls_commands_that_exist() {
+        // The action is YAML that cannot be executed here and cannot be parsed here either
+        // (no YAML library in this tree, no network to fetch one), so this checks what an
+        // offline check honestly can: the failure modes that actually break a composite
+        // action, and drift from the CLI it drives.
+        //
+        //   - a step without `shell` is a hard error in a composite action;
+        //   - a tab anywhere is a YAML syntax error;
+        //   - an unbalanced `${{ }}` expression fails at the runner, in public;
+        //   - a renamed subcommand or flag is found by whoever first ran the action.
+        let action = include_str!("../../../.github/actions/firment-review/action.yml");
+        assert!(!action.contains('\t'), "a tab in YAML is a syntax error");
+        assert!(
+            action.contains("using: 'composite'"),
+            "a composite action must say so"
+        );
+
+        // Each step must carry a name, a shell, and a body. `steps:` begins the list; the
+        // block ends at the top-level `outputs:`… which is above it, so scan to the end.
+        let steps_start = action
+            .find("  steps:")
+            .expect("a composite action has steps");
+        let steps = &action[steps_start..];
+        let mut named = 0;
+        let mut shells = 0;
+        for block in steps.split("\n    - name:").skip(1) {
+            named += 1;
+            let body = block.split("\n    - name:").next().unwrap_or(block);
+            assert!(
+                body.contains("shell: bash") || body.contains("shell: sh"),
+                "a composite step has no shell: {body}"
+            );
+            assert!(body.contains("run:"), "a composite step has no run: {body}");
+            shells += 1;
+        }
+        assert!(
+            named >= 4,
+            "expected the install/diff/review/comment steps, found {named}"
+        );
+        assert_eq!(named, shells);
+
+        // Expressions are balanced, and the report marker the comment step searches for is
+        // the one the review step writes — a mismatch would post a new comment every push.
+        assert_eq!(action.matches("${{").count(), action.matches("}}").count());
+        assert_eq!(action.matches("<!-- firment-review -->").count(), 2);
+
+        // Every top-level `firm <subcommand>` it names must exist in this binary today.
+        let known = [
+            "review", "config", "doctor", "tools", "board", "replay", "share", "adr",
+        ];
+        let mut seen: Vec<String> = Vec::new();
+        for line in action.lines() {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            for (index, word) in words.iter().enumerate() {
+                if *word != "firm" {
+                    continue;
+                }
+                let Some(next) = words.get(index + 1) else {
+                    continue;
+                };
+                let cleaned = next.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-');
+                if cleaned.is_empty() || cleaned.starts_with('-') {
+                    continue;
+                }
+                if !seen.contains(&cleaned.to_string()) {
+                    seen.push(cleaned.to_string());
+                }
+            }
+        }
+        assert!(!seen.is_empty(), "the action should drive the CLI");
+        for subcommand in &seen {
+            assert!(
+                known.contains(&subcommand.as_str()),
+                "the action calls `firm {subcommand}`, which this binary does not have \
+                 (known: {known:?})"
+            );
+        }
+        // The flag the reports are rendered with.
+        assert!(
+            action.contains("--markdown"),
+            "the action renders markdown reports"
+        );
+    }
 
     #[test]
     fn adr_new_numbers_creates_and_lists_the_next_record() {

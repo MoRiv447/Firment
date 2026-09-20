@@ -1,0 +1,150 @@
+name: 'Firment review'
+description: >-
+  Review a pull request with Firment: the built-in rules over the files the PR changed,
+  plus the dependency graph (licences, and advisories when cargo-audit is available).
+  Posts the result as one PR comment, updated in place on each push.
+author: 'Firment'
+
+branding:
+  icon: 'cpu'
+  color: 'purple'
+
+inputs:
+  version:
+    description: 'Firment version tag to install (`latest`, or e.g. v0.8.1)'
+    required: false
+    default: 'latest'
+  paths:
+    description: >-
+      Files or directories to review. Empty (the default) uses the files this PR changed,
+      which is what makes the report about THIS change rather than about the repository.
+    required: false
+    default: ''
+  deps:
+    description: 'Also audit the dependency graph (needs a Rust manifest; advisories need cargo-audit)'
+    required: false
+    default: 'true'
+  comment:
+    description: 'Post the report as a PR comment. Needs `pull-requests: write`.'
+    required: false
+    default: 'true'
+  fail-on-high:
+    description: 'Fail the job when a high-severity finding is reported'
+    required: false
+    default: 'true'
+
+outputs:
+  findings:
+    description: 'How many findings the review reported'
+    value: ${{ steps.review.outputs.findings }}
+  high:
+    description: 'How many of them were high severity'
+    value: ${{ steps.review.outputs.high }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install firm
+      shell: bash
+      env:
+        FIRMENT_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | sh
+        echo "$HOME/.firment/bin" >> "$GITHUB_PATH"
+
+    - name: Decide what to review
+      id: changed
+      shell: bash
+      env:
+        INPUT_PATHS: ${{ inputs.paths }}
+      run: |
+        set -euo pipefail
+        if [ -n "$INPUT_PATHS" ]; then
+          # An explicit list wins: a caller may want a directory, or a file the PR did not
+          # touch (a caller that wants the whole repository passes `.`).
+          echo "paths=$INPUT_PATHS" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        base="${{ github.event.pull_request.base.sha }}"
+        if [ -z "$base" ]; then
+          base="HEAD~1"
+        fi
+        # Only what the four rule-bearing extensions cover, and capped: a review of a
+        # 3000-file PR is not a review, it is a timeout.
+        files=$(git diff --name-only "$base"...HEAD -- '*.rs' '*.c' '*.h' '*.s' | head -200 | tr '\n' ' ')
+        echo "paths=${files:-.}" >> "$GITHUB_OUTPUT"
+
+    - name: Review
+      id: review
+      shell: bash
+      env:
+        PATHS: ${{ steps.changed.outputs.paths }}
+        DEPS: ${{ inputs.deps }}
+      run: |
+        set -uo pipefail
+        # The reviews exit 2 when something high is found — that is the signal, not a
+        # crash, so the code is captured rather than aborting the step.
+        firm review $PATHS --markdown > static.md 2>&1
+        static_status=$?
+
+        deps_status=0
+        if [ "$DEPS" = "true" ] && [ -f Cargo.toml ]; then
+          firm review deps --markdown > deps.md 2>&1
+          deps_status=$?
+        else
+          printf 'Not run: no `Cargo.toml` in this repository (or `deps: false`).\n' > deps.md
+        fi
+
+        findings=$(grep -c '^\(□\|■\)' static.md || true)
+        high=$(grep -c '^■' static.md || true)
+        {
+          echo "findings=${findings:-0}"
+          echo "high=${high:-0}"
+        } >> "$GITHUB_OUTPUT"
+
+        {
+          echo "<!-- firment-review -->"
+          echo "## Firment review"
+          echo
+          echo "<sub>firm $(firm --version 2>/dev/null | head -1)</sub>"
+          echo
+          echo "### Changed files"
+          echo
+          cat static.md
+          echo
+          echo "### Dependencies"
+          echo
+          cat deps.md
+        } > report.md
+
+        cat report.md
+        if [ "$static_status" -ne 0 ] || [ "$deps_status" -ne 0 ]; then
+          echo "firment-high=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "firment-high=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Comment on the PR
+      if: ${{ inputs.comment == 'true' && github.event_name == 'pull_request' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        # One comment, updated in place: a review that appends a new comment per push
+        # trains people to stop reading them.
+        existing=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+          --jq 'map(select(.body | startswith("<!-- firment-review -->"))) | .[0].id // empty')
+        if [ -n "$existing" ]; then
+          gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$existing" -f body="$(cat report.md)" > /dev/null
+        else
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file report.md
+        fi
+
+    - name: Fail when asked to
+      if: ${{ inputs.fail-on-high == 'true' && steps.review.outputs.firment-high == 'true' }}
+      shell: bash
+      run: |
+        echo "::error::Firment reported a high-severity finding — see the PR comment."
+        exit 1

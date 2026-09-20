@@ -1,0 +1,28 @@
+# This repository reviewing its own pull requests — the same action it ships
+# (`.github/actions/firment-review`). Two reasons it lives here rather than in a
+# documentation snippet: it keeps the action honest (a change that breaks it breaks this
+# repository's CI), and it is the shortest description of how to use it.
+name: review
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  firment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The action diffs against the base commit, so a shallow clone is not enough.
+          fetch-depth: 0
+      - uses: ./.github/actions/firment-review
+        with:
+          deps: 'true'
+          # Reports first, gates later: this repository has not decided that a medium
+          # finding should block a pull request, and a gate nobody has agreed to is a gate
+          # people learn to bypass.
+          fail-on-high: 'false'
