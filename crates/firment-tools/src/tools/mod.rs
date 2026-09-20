@@ -29,6 +29,7 @@ mod periph_init;
 mod pinmap;
 mod read_file;
 mod redteam;
+mod rename_symbol;
 pub(crate) mod run;
 mod shell;
 mod symbols;
@@ -63,6 +64,7 @@ pub fn all() -> Vec<Arc<dyn Tool>> {
         Arc::new(flash::Flash),
         Arc::new(debug::Debug),
         Arc::new(edit_file::EditFile),
+        Arc::new(rename_symbol::RenameSymbol),
         Arc::new(elf_analyze::ElfAnalyze),
         Arc::new(list_dir::ListDir),
         Arc::new(models::Models),
