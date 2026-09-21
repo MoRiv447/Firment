@@ -2251,6 +2251,7 @@ async fn run_direct_tool(
         symbols_backend: config.tools.symbols_backend.clone(),
         build_command: config.tools.build_command.clone(),
         default_chip: config.tools.default_chip.clone(),
+        active_board: config.board.active.clone(),
         monitor_port: config.tools.monitor_port.clone(),
         monitor_baud: config.tools.monitor_baud,
         subagent: None,

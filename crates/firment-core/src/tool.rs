@@ -50,6 +50,13 @@ pub struct ToolContext {
     pub build_command: Option<String>,
     /// Default target chip for the flash tool from `[tools] default_chip`.
     pub default_chip: Option<String>,
+    /// The active board profile's name, from `[board] active` (e.g. `nucleo-g431rb`).
+    ///
+    /// A tool that needs the board's *identity* rather than a path reads it here and resolves
+    /// the profile with `board::find`. `periph_init` is the first: its `part` and its pinmap
+    /// filter both fall back to the profile, which is what the profile's own `part` field says
+    /// it is for.
+    pub active_board: Option<String>,
     /// Serial port for the monitor tool from `[tools] monitor_port`.
     pub monitor_port: Option<String>,
     /// Baud rate for the monitor tool from `[tools] monitor_baud`.
@@ -120,6 +127,7 @@ impl ToolContext {
             symbols_backend: None,
             build_command: None,
             default_chip: None,
+            active_board: None,
             monitor_port: None,
             monitor_baud: 115_200,
             subagent: None,

@@ -30,25 +30,49 @@ impl Tool for PeriphInit {
         json!({
             "type": "object",
             "properties": {
-                "part": {"type": "string", "description": "MCU part number, e.g. stm32f103c8t6 or esp32s3"},
+                "part": {"type": "string", "description": "MCU part number, e.g. stm32f103c8t6 or esp32s3. Optional: when omitted, the part from the active board profile is used"},
                 "peripheral": {"type": "string", "enum": ["uart", "gpio", "i2c", "spi", "tim", "adc", "dma"], "description": "Peripheral to initialize"},
                 "baudrate": {"type": "integer", "description": "UART baud rate (default 115200)"},
                 "pins": {"type": "string", "description": "Pin names, e.g. PA9/PA10"},
-                "board": {"type": "string", "description": "Optional board name (= pinmap board / MQTT node). Limits the pin-conflict check and table to this board"},
+                "board": {"type": "string", "description": "Optional board name (= pinmap board / MQTT node). Limits the pin-conflict check and table to this board; when omitted, the active board profile's pinmap key is used"},
                 "dma": {"type": "boolean", "default": false, "description": "Enable DMA on the peripheral (uart only for now)"},
                 "interrupt": {"type": "boolean", "default": false, "description": "Enable the peripheral interrupt (uart only for now)"}
             },
-            "required": ["part", "peripheral"]
+            "required": ["peripheral"]
         })
     }
 
     async fn run(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
-        let part = args
+        // The active board profile, when one is set: its `part` and its pinmap key are what
+        // this tool needs, and the profile's own docs say so ("MCU part number, for
+        // `periph_init`"). Resolved once, used for both fallbacks below.
+        let board_profile = ctx
+            .active_board
+            .as_deref()
+            .and_then(firment_core::board::find);
+        // `part` falls back to the profile, so the common case is one argument instead of two
+        // and a typo in a part number is something the profile carries rather than the caller.
+        // Passing it explicitly still wins: a one-off part needs no config change.
+        let part_from_args = args
             .get("part")
             .and_then(|p| p.as_str())
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .ok_or_else(|| ToolError::new("[InvalidInput] missing 'part'"))?;
+            .map(str::to_string);
+        let part_owned = match part_from_args {
+            Some(part) => part,
+            None => match &board_profile {
+                Some(profile) => profile.part.clone(),
+                None => {
+                    return Err(ToolError::new(
+                        "[InvalidInput] missing 'part', and no active board profile is set — \
+                         either pass `part`, or pick a board once with `firm board use <name>` \
+                         and let the profile supply it",
+                    ));
+                }
+            },
+        };
+        let part: &str = &part_owned;
         let peripheral = args
             .get("peripheral")
             .and_then(|p| p.as_str())
@@ -151,12 +175,15 @@ impl Tool for PeriphInit {
                         .collect()
                 })
                 .unwrap_or_default();
+            // The filter falls back to the active profile's pinmap key, which is the board
+            // this checkout is actually attached to — the reason the argument exists.
             let board_filter = args
                 .get("board")
                 .and_then(|b| b.as_str())
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
-                .map(str::to_string);
+                .map(str::to_string)
+                .or_else(|| board_profile.as_ref().map(|profile| profile.board.clone()));
 
             if !cfg.pinmap.is_empty() {
                 text.push_str("\n## 引脚分配表（.firment/workbench.toml，按板）\n");
@@ -469,6 +496,68 @@ mod tests {
             allowed_roots: Vec::new(),
             ..ToolContext::default()
         }
+    }
+
+    #[tokio::test]
+    async fn the_part_comes_from_the_active_board_profile() {
+        // `periph_init` used to require the part number every single call, while the board
+        // profile it belongs to carries it and says so ("MCU part number, for `periph_init`").
+        // With an active board the call is one argument.
+        let dir = tempdir().unwrap();
+        let profile = firment_core::board::find("nucleo-g431rb").expect("bundled profile");
+        let mut context = ctx(dir.path());
+        context.active_board = Some("nucleo-g431rb".to_string());
+
+        let out = PeriphInit
+            .run(json!({"peripheral": "uart"}), &context)
+            .await
+            .expect("the profile supplies the part");
+        assert!(
+            out.text.contains(&profile.part),
+            "the skeleton should name the profile's part {}: {}",
+            profile.part,
+            out.text
+        );
+        assert!(out.text.contains("uart"), "{}", out.text);
+    }
+
+    #[tokio::test]
+    async fn an_explicit_part_still_wins_over_the_profile() {
+        // A one-off part must not need a config change: the argument beats the profile.
+        let dir = tempdir().unwrap();
+        let mut context = ctx(dir.path());
+        context.active_board = Some("nucleo-g431rb".to_string());
+
+        let out = PeriphInit
+            .run(
+                json!({"peripheral": "uart", "part": "stm32f407vet6"}),
+                &context,
+            )
+            .await
+            .unwrap();
+        assert!(out.text.contains("stm32f407"), "{}", out.text);
+        let profile = firment_core::board::find("nucleo-g431rb").unwrap();
+        assert!(!out.text.contains(&profile.part), "{}", out.text);
+    }
+
+    #[tokio::test]
+    async fn without_a_part_or_a_board_the_error_names_both_ways_out() {
+        // The error is the documentation for the fallback: it says what is missing and both
+        // things that would fix it.
+        let dir = tempdir().unwrap();
+        let context = ctx(dir.path());
+        assert!(context.active_board.is_none(), "the helper starts unset");
+
+        let err = PeriphInit
+            .run(json!({"peripheral": "uart"}), &context)
+            .await
+            .unwrap_err();
+        assert!(err.message.contains("missing 'part'"), "{}", err.message);
+        assert!(
+            err.message.contains("firm board use"),
+            "the error should name the command that fixes it: {}",
+            err.message
+        );
     }
 
     #[tokio::test]

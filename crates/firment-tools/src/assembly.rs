@@ -142,6 +142,7 @@ pub fn assemble_agent(
     agent.set_symbols_backend(merged.tools.symbols_backend.clone());
     agent.set_build_command(merged.tools.build_command.clone());
     agent.set_default_chip(merged.tools.default_chip.clone());
+    agent.set_active_board(merged.board.active.clone());
     agent.set_monitor_port(merged.tools.monitor_port.clone());
     agent.set_monitor_baud(merged.tools.monitor_baud);
     agent.set_elf_config(merged.tools.elf.clone());

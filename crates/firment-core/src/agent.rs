@@ -241,6 +241,8 @@ pub struct Agent {
     symbols_backend: Option<String>,
     build_command: Option<String>,
     default_chip: Option<String>,
+    /// See [`ToolContext::active_board`].
+    active_board: Option<String>,
     monitor_port: Option<String>,
     monitor_baud: u32,
     /// Nested-agent runner exposed to the `task` tool.
@@ -333,6 +335,7 @@ impl Agent {
             symbols_backend: None,
             build_command: None,
             default_chip: None,
+            active_board: None,
             monitor_port: None,
             monitor_baud: 115_200,
             subagent: None,
@@ -584,6 +587,11 @@ impl Agent {
     /// Set the default target chip for the flash tool.
     pub fn set_default_chip(&mut self, chip: Option<String>) {
         self.default_chip = chip;
+    }
+
+    /// Set the active board profile's name (from `[board] active`).
+    pub fn set_active_board(&mut self, board: Option<String>) {
+        self.active_board = board;
     }
 
     /// Set the serial port for the monitor tool.
@@ -1030,6 +1038,7 @@ impl Agent {
             symbols_backend: self.symbols_backend.clone(),
             build_command: self.build_command.clone(),
             default_chip: self.default_chip.clone(),
+            active_board: self.active_board.clone(),
             monitor_port: self.monitor_port.clone(),
             monitor_baud: self.monitor_baud,
             subagent: self.subagent.clone(),
