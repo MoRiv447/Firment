@@ -1,4 +1,4 @@
-use super::util::{read_text, resolve_within, simple_diff};
+use super::util::{read_text, resolve_write_scope, simple_diff};
 use async_trait::async_trait;
 use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
@@ -37,7 +37,7 @@ impl Tool for WriteFile {
     fn preview(&self, args: &Value, ctx: &ToolContext) -> Option<String> {
         let path = args.get("path")?.as_str()?;
         let content = args.get("content")?.as_str()?;
-        let resolved = resolve_within(&ctx.cwd, path, &ctx.allowed_roots).ok()?;
+        let resolved = resolve_write_scope(ctx, path).ok()?;
         let old = read_text(&resolved).unwrap_or_default();
         Some(simple_diff(&resolved, &old, content, 4000))
     }
@@ -51,8 +51,7 @@ impl Tool for WriteFile {
             .get("content")
             .and_then(|c| c.as_str())
             .ok_or_else(|| ToolError::new("missing 'content'"))?;
-        let resolved =
-            resolve_within(&ctx.cwd, path, &ctx.allowed_roots).map_err(ToolError::new)?;
+        let resolved = resolve_write_scope(ctx, path).map_err(ToolError::new)?;
         let existed = resolved.exists();
         let original_bytes = if existed {
             Some(fs::read(&resolved).map_err(|e| {
@@ -139,6 +138,38 @@ mod tests {
             allowed_roots: Vec::new(),
             ..ToolContext::default()
         }
+    }
+
+    #[tokio::test]
+    async fn a_declared_scope_refuses_a_write_outside_it() {
+        // The gate, at the tool a child would actually use: a refusal that names the scope,
+        // and a file that was never created.
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("crates/foo")).unwrap();
+        std::fs::create_dir_all(dir.path().join("crates/bar")).unwrap();
+        let mut context = ctx(dir.path());
+        context.write_scope = Some(vec![dir.path().join("crates/foo")]);
+
+        WriteFile
+            .run(
+                json!({"path": "crates/foo/a.rs", "content": "fn a() {}\n"}),
+                &context,
+            )
+            .await
+            .expect("a write inside the scope is allowed");
+
+        let err = WriteFile
+            .run(
+                json!({"path": "crates/bar/b.rs", "content": "fn b() {}\n"}),
+                &context,
+            )
+            .await
+            .unwrap_err();
+        assert!(err.message.contains("declared scope"), "{}", err.message);
+        assert!(
+            !dir.path().join("crates/bar/b.rs").exists(),
+            "a refused write must not have happened"
+        );
     }
 
     #[tokio::test]

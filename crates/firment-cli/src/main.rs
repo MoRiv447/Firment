@@ -2252,6 +2252,8 @@ async fn run_direct_tool(
         build_command: config.tools.build_command.clone(),
         default_chip: config.tools.default_chip.clone(),
         active_board: config.board.active.clone(),
+        // A one-shot `firm <tool>` run has no parent to declare a scope, so it has none.
+        write_scope: None,
         monitor_port: config.tools.monitor_port.clone(),
         monitor_baud: config.tools.monitor_baud,
         subagent: None,

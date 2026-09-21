@@ -17,7 +17,7 @@
 //! not for a plan — but the tool is built so that running it twice is safe: the second run
 //! finds no matches and refuses, which is the same answer as "already done".
 
-use super::util::{resolve_within, simple_diff};
+use super::util::{resolve_write_scope, simple_diff};
 use async_trait::async_trait;
 use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
@@ -93,7 +93,7 @@ impl Tool for RenameSymbol {
         let paths = args.get("paths").and_then(|v| v.as_array())?;
         let mut preview = String::new();
         for path in paths.iter().filter_map(|value| value.as_str()) {
-            let Ok(resolved) = resolve_within(&ctx.cwd, path, &ctx.allowed_roots) else {
+            let Ok(resolved) = resolve_write_scope(ctx, path) else {
                 continue;
             };
             let Ok(text) = std::fs::read_to_string(&resolved) else {
@@ -141,8 +141,7 @@ impl Tool for RenameSymbol {
         let mut plans: Vec<FilePlan> = Vec::new();
         let mut unmatched: Vec<String> = Vec::new();
         for path in &paths {
-            let resolved =
-                resolve_within(&ctx.cwd, path, &ctx.allowed_roots).map_err(ToolError::new)?;
+            let resolved = resolve_write_scope(ctx, path).map_err(ToolError::new)?;
             let text = std::fs::read_to_string(&resolved).map_err(|e| {
                 ToolError::new(format!(
                     "[Io] {} could not be read as text: {e} — remove it from `paths` if it is \

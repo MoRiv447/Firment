@@ -243,6 +243,8 @@ pub struct Agent {
     default_chip: Option<String>,
     /// See [`ToolContext::active_board`].
     active_board: Option<String>,
+    /// See [`ToolContext::write_scope`].
+    write_scope: Option<Vec<std::path::PathBuf>>,
     monitor_port: Option<String>,
     monitor_baud: u32,
     /// Nested-agent runner exposed to the `task` tool.
@@ -336,6 +338,7 @@ impl Agent {
             build_command: None,
             default_chip: None,
             active_board: None,
+            write_scope: None,
             monitor_port: None,
             monitor_baud: 115_200,
             subagent: None,
@@ -587,6 +590,11 @@ impl Agent {
     /// Set the default target chip for the flash tool.
     pub fn set_default_chip(&mut self, chip: Option<String>) {
         self.default_chip = chip;
+    }
+
+    /// Declare which paths this agent may write to (see [`ToolContext::write_scope`]).
+    pub fn set_write_scope(&mut self, scope: Option<Vec<std::path::PathBuf>>) {
+        self.write_scope = scope;
     }
 
     /// Set the active board profile's name (from `[board] active`).
@@ -1039,6 +1047,7 @@ impl Agent {
             build_command: self.build_command.clone(),
             default_chip: self.default_chip.clone(),
             active_board: self.active_board.clone(),
+            write_scope: self.write_scope.clone(),
             monitor_port: self.monitor_port.clone(),
             monitor_baud: self.monitor_baud,
             subagent: self.subagent.clone(),

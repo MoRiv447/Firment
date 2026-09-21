@@ -103,7 +103,10 @@ pub fn write_capable_subagent_registry() -> Arc<ToolRegistry> {
         if full.get(tool.name()).is_none() {
             continue;
         }
-        if matches!(tool.name(), "todo" | "ask_user") {
+        // `shell` is excluded from the write-capable set on purpose: a declared scope cannot
+        // constrain a shell, and a scope that silently does not cover one is worse than no
+        // scope at all. A child that needs a shell is a separate decision, not a default.
+        if matches!(tool.name(), "todo" | "ask_user" | "shell") {
             continue;
         }
         registry.register(tool);
@@ -177,16 +180,10 @@ mod tests {
     #[test]
     fn the_write_capable_registry_is_the_full_set_minus_what_a_child_cannot_use() {
         // Even with writes on, the two structural exclusions stand: a child has no session
-        // directory (`todo`) and no user to ask (`ask_user`).
+        // directory (`todo`) and no user to ask (`ask_user`) — and a third, `shell`, because a
+        // declared scope cannot constrain a shell (asserted below).
         let writing = write_capable_subagent_registry();
-        for name in [
-            "write_file",
-            "edit_file",
-            "shell",
-            "read_file",
-            "grep",
-            "task",
-        ] {
+        for name in ["write_file", "edit_file", "read_file", "grep", "task"] {
             assert!(
                 writing.get(name).is_some(),
                 "{name} should be available when writes are on"
@@ -198,6 +195,12 @@ mod tests {
                 "{name} cannot work in a child either way"
             );
         }
+        // `shell` is excluded on purpose: a declared scope cannot constrain a shell, and a
+        // scope that silently does not cover one is worse than no scope at all.
+        assert!(
+            writing.get("shell").is_none(),
+            "a shell would step around every declared scope"
+        );
         // And the read-only table must not have grown a write tool by accident.
         let read_only = subagent_registry();
         for name in ["write_file", "edit_file", "shell"] {

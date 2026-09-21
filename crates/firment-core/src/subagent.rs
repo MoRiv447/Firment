@@ -27,6 +27,9 @@ pub struct SubagentCall<'a> {
     /// The parent's turn-level cancellation signal; when it fires the nested agent stops at
     /// its next checkpoint.
     pub cancel: Cancellable,
+    /// The paths the child may write to, when the caller declares a scope (review §6 step 3).
+    /// Resolved by the caller against the workspace, so a scope cannot point out of it.
+    pub scope: Option<Vec<PathBuf>>,
     /// The **caller's** edit journal — the parent turn's transaction. A child's edits belong
     /// to the turn that spawned it: sharing the journal is what makes `/undo` after a batch
     /// roll back everything, and what stops a child's writes from landing in a journal nobody
@@ -133,6 +136,7 @@ impl SubagentFactory for SubagentRunner {
             model,
             depth,
             cancel,
+            scope,
             journal,
         } = call;
         // Provider override first (a configured name, e.g. an Ollama endpoint
@@ -168,6 +172,7 @@ impl SubagentFactory for SubagentRunner {
         nested.set_subagent_slots(self.subagent_slots.clone());
         // The parent turn's transaction, not a fresh one: see `SubagentFactory::run_subagent`.
         nested.set_edit_journal(journal);
+        nested.set_write_scope(scope);
         nested.set_subagent_factory(Some(self.child() as Arc<dyn SubagentFactory>));
         nested.set_subagent_depth(depth);
         // Subagents cannot ask the user: the ask_user tool is for questions

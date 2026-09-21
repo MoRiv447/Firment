@@ -42,6 +42,50 @@ pub(crate) fn resolve_within(
     Ok(target)
 }
 
+/// Resolve `path` for a **write**: the workspace boundary *and* the scope a parent declared
+/// for this agent (concurrency review §6, step 3).
+///
+/// The scope narrows **writes only**. Reading outside it stays allowed: a research child that
+/// cannot read a reference elsewhere in the workspace is a child that cannot do its job, and a
+/// read was never the hazard being designed against.
+///
+/// What this does *not* cover is named in `ToolContext::write_scope` — a guarantee that does
+/// not state its boundary is not a guarantee, and this one deliberately does not try to cover
+/// a shell.
+pub(crate) fn resolve_write_scope(
+    ctx: &firment_core::ToolContext,
+    path: &str,
+) -> Result<PathBuf, String> {
+    let resolved = resolve_within(&ctx.cwd, path, &ctx.allowed_roots)?;
+    let Some(scope) = ctx.write_scope.as_ref() else {
+        return Ok(resolved);
+    };
+    let target_canon = canonicalize_for_check(&resolved)
+        .map_err(|e| format!("cannot resolve {}: {e}", resolved.display()))?;
+    let inside = scope.iter().any(|root| {
+        let root = if root.is_absolute() {
+            root.clone()
+        } else {
+            ctx.cwd.join(root)
+        };
+        canonicalize_for_check(&root)
+            .map(|root_canon| target_canon.starts_with(&root_canon))
+            .unwrap_or(false)
+    });
+    if !inside {
+        return Err(format!(
+            "[Permission] path is outside this subagent's declared scope: {} (scope: {})",
+            resolved.display(),
+            scope
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    Ok(resolved)
+}
+
 /// Canonicalize a path for boundary checking. An existing path is canonicalized
 /// directly; for a not-yet-existing path (e.g. a file to be created), the
 /// deepest existing ancestor is canonicalized and the missing suffix is
@@ -755,6 +799,35 @@ fn ps_descendants(pid: u32) -> Vec<u32> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn a_write_scope_narrows_writes_and_leaves_reads_alone() {
+        // The contract in one test: the gate refuses outside the scope, allows inside it, and
+        // `resolve_within` — which is what reads use — never looks at the scope at all. So the
+        // boundary the doc claims is the boundary the code has.
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("crates/foo")).unwrap();
+        std::fs::create_dir_all(dir.path().join("crates/bar")).unwrap();
+
+        let mut ctx = firment_core::ToolContext::with_cwd(dir.path().to_path_buf());
+        ctx.write_scope = Some(vec![dir.path().join("crates/foo")]);
+
+        assert!(resolve_write_scope(&ctx, "crates/foo/a.rs").is_ok());
+        let err = resolve_write_scope(&ctx, "crates/bar/b.rs").unwrap_err();
+        assert!(err.contains("declared scope"), "{err}");
+        assert!(
+            err.contains("crates/foo"),
+            "the scope should be named: {err}"
+        );
+
+        // Reads: not this function. The boundary that applies to them is the workspace one.
+        assert!(resolve_within(&ctx.cwd, "crates/bar/b.rs", &ctx.allowed_roots).is_ok());
+
+        // With no scope declared the gate is exactly the workspace check it replaces.
+        let plain = firment_core::ToolContext::with_cwd(dir.path().to_path_buf());
+        assert!(resolve_write_scope(&plain, "crates/bar/b.rs").is_ok());
+        assert!(resolve_write_scope(&plain, "../escape.rs").is_err());
+    }
 
     #[test]
     fn probe_rs_err_classifies_missing_binary_stuck_probe_and_generic() {

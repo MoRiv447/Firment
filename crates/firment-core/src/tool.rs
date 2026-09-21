@@ -50,6 +50,19 @@ pub struct ToolContext {
     pub build_command: Option<String>,
     /// Default target chip for the flash tool from `[tools] default_chip`.
     pub default_chip: Option<String>,
+    /// The paths this agent may **write** to, when a parent declared a scope for it
+    /// (concurrency review §6, step 3). `None` means "the workspace, as usual".
+    ///
+    /// A write path must be inside both the workspace and this scope. Reads are not
+    /// constrained: the hazard being designed against is two writers, and a research child
+    /// that cannot read across the workspace cannot do its job.
+    ///
+    /// **The boundary of the guarantee, stated rather than implied**: it covers the file-edit
+    /// tools (`write_file`, `edit_file`, `rename_symbol`). It does *not* cover `shell` — which
+    /// is why the write-capable subagent registry excludes that tool — nor `build`/`verify`,
+    /// which run the project's own commands, nor the hardware tools. A scope that silently
+    /// did not cover a shell would be worse than no scope at all.
+    pub write_scope: Option<Vec<PathBuf>>,
     /// The active board profile's name, from `[board] active` (e.g. `nucleo-g431rb`).
     ///
     /// A tool that needs the board's *identity* rather than a path reads it here and resolves
@@ -128,6 +141,7 @@ impl ToolContext {
             build_command: None,
             default_chip: None,
             active_board: None,
+            write_scope: None,
             monitor_port: None,
             monitor_baud: 115_200,
             subagent: None,

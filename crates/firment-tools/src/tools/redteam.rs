@@ -1084,6 +1084,9 @@ pub(crate) async fn run_campaign(
             model: None,
             depth: ctx.subagent_depth + 1,
             cancel: ctx.cancel.clone(),
+            // No declared scope: the campaign's registry has no file tools at all, and its
+            // hardware reach is already pinned by `TargetLockPermission`.
+            scope: None,
             // The campaign's agents are subagents of this turn like any other, so their edits
             // (they have none today — the attacker registry has no write tools) would belong to
             // the same transaction.

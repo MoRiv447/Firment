@@ -1,4 +1,4 @@
-use super::util::{read_text, resolve_within, simple_diff};
+use super::util::{read_text, resolve_write_scope, simple_diff};
 use async_trait::async_trait;
 use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
@@ -72,7 +72,7 @@ impl Tool for EditFile {
 
     fn preview(&self, args: &Value, ctx: &ToolContext) -> Option<String> {
         let path = args.get("path")?.as_str()?;
-        let resolved = resolve_within(&ctx.cwd, path, &ctx.allowed_roots).ok()?;
+        let resolved = resolve_write_scope(ctx, path).ok()?;
         let original = read_text(&resolved).ok()?;
         let new_content = compute_edit(&resolved, &original, args).ok()?;
         Some(simple_diff(&resolved, &original, &new_content, 4000))
@@ -83,8 +83,7 @@ impl Tool for EditFile {
             .get("path")
             .and_then(|p| p.as_str())
             .ok_or_else(|| ToolError::new("[InvalidInput] missing 'path'"))?;
-        let resolved =
-            resolve_within(&ctx.cwd, path, &ctx.allowed_roots).map_err(ToolError::new)?;
+        let resolved = resolve_write_scope(ctx, path).map_err(ToolError::new)?;
         let original = read_text(&resolved).map_err(|e| {
             if resolved.exists() {
                 ToolError::new(format!("[Io] {e}"))
