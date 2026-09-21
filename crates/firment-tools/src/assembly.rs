@@ -7,7 +7,10 @@
 //! single wiring point: frontends supply their I/O adapters (sink,
 //! permission checker, asker) and get back a fully configured agent.
 
-use crate::{attacker_registry, default_registry, plan_registry, subagent_registry};
+use crate::{
+    attacker_registry, default_registry, plan_registry, subagent_registry,
+    write_capable_subagent_registry,
+};
 use firment_core::{
     Agent, Asker, Cancellable, Config, EventSink, PermissionChecker, PlanModePermission, Session,
     SessionMode, SessionStore, SubagentRunner,
@@ -168,8 +171,13 @@ pub fn assemble_agent(
         subagent_slots: agent.subagent_slots(),
         ..SubagentRunner::new(
             Arc::new(merged.clone()),
-            // Not `plan_registry`: see `subagent_registry` for the two tools it drops.
-            subagent_registry(),
+            // Not `plan_registry`: see `subagent_registry` for the two tools it drops — and
+            // the write-capable table is its own opt-in ([tools] subagents_may_write).
+            if merged.tools.subagents_may_write {
+                write_capable_subagent_registry()
+            } else {
+                subagent_registry()
+            },
             agent.session().provider.clone(),
             agent.session().model.clone(),
             asker,

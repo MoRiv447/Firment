@@ -525,6 +525,18 @@ pub struct ToolsConfig {
     /// Recursion limit for the `task` subagent tool.
     #[serde(default = "default_max_subagent_depth")]
     pub max_subagent_depth: usize,
+    /// Whether a research subagent may **write** to the workspace (plan §5, item 2).
+    ///
+    /// Off by default, like the self-review pass: a capability that changes what an unattended
+    /// child can do is opt-in, and the reason is the same one the concurrency review gives —
+    /// the child's edits land in the spawning turn's journal, so they are undoable, but they are
+    /// still edits nobody watched happen. When on, the child's registry is the full tool set
+    /// minus the two tools that cannot work in a child either way.
+    ///
+    /// Scope is not yet declared per child (review §6 step 3): a writing child may touch
+    /// anything `resolve_within` allows, which is the workspace.
+    #[serde(default)]
+    pub subagents_may_write: bool,
     /// ELF binary-analysis gate: glob + thresholds. When set, the harness
     /// captures an ELF baseline and automatically runs `elf_analyze` against
     /// the newest match before each finished turn; changes above the
@@ -561,6 +573,8 @@ impl Default for ToolsConfig {
             web_search_api_key: None,
             web_search_api_key_env: None,
             max_subagent_depth: default_max_subagent_depth(),
+            // Off: a capability that changes what an unattended child can do is opt-in.
+            subagents_may_write: false,
             elf: None,
             la: None,
         }

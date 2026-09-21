@@ -87,6 +87,30 @@ pub fn subagent_registry() -> Arc<ToolRegistry> {
     Arc::new(registry)
 }
 
+/// Registry for a subagent that is allowed to **write** (`[tools] subagents_may_write`).
+///
+/// The full tool set minus the same two tools a read-only child must not have: `todo` needs a
+/// session directory a nested agent does not have, and `ask_user` needs a user a nested agent
+/// cannot reach. Everything else — including `task`, bounded by `max_subagent_depth` — is
+/// available, and the workspace boundary still comes from `resolve_within`.
+///
+/// Opt-in, never the default: a child that writes is a child nobody watches, and the turn's
+/// journal makes the edits undoable rather than reviewable.
+pub fn write_capable_subagent_registry() -> Arc<ToolRegistry> {
+    let full = default_registry();
+    let mut registry = ToolRegistry::new();
+    for tool in tools::all() {
+        if full.get(tool.name()).is_none() {
+            continue;
+        }
+        if matches!(tool.name(), "todo" | "ask_user") {
+            continue;
+        }
+        registry.register(tool);
+    }
+    Arc::new(registry)
+}
+
 /// Attacker-profile registry for the `redteam` campaign subagent: the
 /// hardware-facing observation/probing tools, but NOT the ones that could
 /// brick the host or self-replicate — no shell, no write_file/edit_file, no
@@ -148,6 +172,48 @@ mod tests {
                 "{name} must not reach a subagent"
             );
         }
+    }
+
+    #[test]
+    fn the_write_capable_registry_is_the_full_set_minus_what_a_child_cannot_use() {
+        // Even with writes on, the two structural exclusions stand: a child has no session
+        // directory (`todo`) and no user to ask (`ask_user`).
+        let writing = write_capable_subagent_registry();
+        for name in [
+            "write_file",
+            "edit_file",
+            "shell",
+            "read_file",
+            "grep",
+            "task",
+        ] {
+            assert!(
+                writing.get(name).is_some(),
+                "{name} should be available when writes are on"
+            );
+        }
+        for name in ["todo", "ask_user"] {
+            assert!(
+                writing.get(name).is_none(),
+                "{name} cannot work in a child either way"
+            );
+        }
+        // And the read-only table must not have grown a write tool by accident.
+        let read_only = subagent_registry();
+        for name in ["write_file", "edit_file", "shell"] {
+            assert!(
+                read_only.get(name).is_none(),
+                "{name} must not reach a read-only child"
+            );
+        }
+    }
+
+    #[test]
+    fn writes_from_a_subagent_are_off_unless_asked_for() {
+        // The default is the feature: an unattended child that can edit is something a user
+        // opts into, not something they discover.
+        let config = firment_core::config::Config::default_config();
+        assert!(!config.tools.subagents_may_write);
     }
 
     #[test]
