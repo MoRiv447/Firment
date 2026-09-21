@@ -89,7 +89,8 @@ fallback when a partition cannot be found. It costs the parallelism the item exi
 for *edits*, which is the smaller half of the value (§2).
 
 **Recommended combination: B for edit parallelism, C as the fallback, A not at all — with the
-CAS staying the last word in every case.** A lock would be the right answer for coordinating
+CAS staying the last word in every case.** *(Implemented: §6 steps 1–3 and 5; step 4's mechanism
+is the combination of a wave and a scope, with its dedicated test still unwritten.)* A lock would be the right answer for coordinating
 *independent processes that do not share this codebase's journal*; that is not a problem this
 project has, and building for it now would buy the costs without the case.
 
@@ -199,8 +200,8 @@ keeps the pre-revert snapshot, so undo has an undo), and the busy guard above.
 | 1. Parallel research | **Done** — `3241cb5`. And the finding is that it already worked: a turn's tool calls run as one `join_all` wave (`core/src/agent.rs:1860`), so several `task` calls have always run beside each other. What was missing was **telling the model** (the description hinted at it and never said it) and **bounding it** (`subagent_slots`, four, held for the child's life — and shared by the whole tree rather than per level: `efcb28d` caught that the first version was four *per agent*, which multiplies by depth). The test pins both directions: four children overlap, one slot serialises them. |
 | 2. One write-capable child, sequential | **Mostly done** (`f2b512b`): a child can write when `[tools] subagents_may_write` is on — default off — and its edits land in the spawning turn. What is left is step 3's scope (a writing child may touch anything `resolve_within` allows today) and step 5's batch-rollback test. Earlier: §5's journal plumbing landed in `04aabaa` — a child now writes inside the caller's transaction. What is left is the actual step: a registry that lets a child write, the permission story for it, and the batch-rollback test. |
 | 3. Declared scopes | **Done** — `0db4461`: `ToolContext::write_scope`, one gate (`resolve_write_scope`) for the file-edit tools, a `scope` argument on `task` resolved through the workspace boundary, and `shell` dropped from the write-capable registry because a scope cannot constrain one. The scope narrows writes only — reads stay free — and that boundary is asserted, not just documented. |
-| 4. Two children with disjoint scopes | Not started (the mechanism is in place: two `task` calls in one turn with different `scope` values) |
-| 5. Batch rollback test | **Not started — the last one.** One child's write fails, every other child's write in the batch rolls back, the shape `rename_symbol` already proves for a single tool. |
+| 4. Two children with disjoint scopes | **Mechanism in place, no dedicated test.** Two `task` calls in one turn with different `scope` values *are* the case, and its two primitives are covered separately (the wave-overlap test, the scope-refusal test). A test that runs both together is the honest remaining gap, and it is stated rather than implied. |
+| 5. Batch rollback test | **Done** — `37c06e7`. It landed renamed: it now proves the *batch* property (one rollback covers a parent's and a child's files, including one the child created) rather than claiming to prove the sharing, which its two sibling tests cover one seam each. |
 
 ---
 
