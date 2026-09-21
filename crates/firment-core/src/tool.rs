@@ -227,7 +227,13 @@ pub trait Tool: Send + Sync {
 }
 
 pub struct ToolRegistry {
-    tools: HashMap<&'static str, Arc<dyn Tool>>,
+    /// Keyed by an **owned** name, not `&'static str` (plugin review §5 step 1).
+    ///
+    /// `Tool::name()` still returns `&'static str`, so every built-in is unchanged and the
+    /// registry pays one small allocation per tool to copy the name in. What that buys is the
+    /// thing a plugin mechanism needs: the map itself no longer demands that a tool's name was
+    /// known at compile time, which was the constraint the review found first.
+    tools: HashMap<Arc<str>, Arc<dyn Tool>>,
 }
 
 impl ToolRegistry {
@@ -238,15 +244,19 @@ impl ToolRegistry {
     }
 
     pub fn register(&mut self, tool: Arc<dyn Tool>) {
-        self.tools.insert(tool.name(), tool);
+        self.tools.insert(Arc::from(tool.name()), tool);
     }
 
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
         self.tools.get(name).cloned()
     }
 
-    pub fn names(&self) -> Vec<&'static str> {
-        self.tools.keys().copied().collect()
+    /// Every registered name, **owned**.
+    ///
+    /// It used to return `&'static str`, which was free and also the reason a runtime-named
+    /// tool could not be described. The caller that wants borrowed strings maps them.
+    pub fn names(&self) -> Vec<Arc<str>> {
+        self.tools.keys().cloned().collect()
     }
 
     pub fn specs(&self) -> Vec<ToolSpec> {
@@ -298,5 +308,74 @@ impl ToolRegistry {
 impl Default for ToolRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+
+    /// A tool whose name is fixed at compile time — which is all a `Tool` can be today
+    /// (`name()` returns `&'static str`). The registry no longer needs that, and the next step
+    /// is letting a tool say otherwise; see the plugin review's §5.
+    struct Stub(&'static str);
+
+    #[async_trait]
+    impl Tool for Stub {
+        fn name(&self) -> &'static str {
+            self.0
+        }
+
+        fn description(&self) -> &'static str {
+            "a stub"
+        }
+
+        fn input_schema(&self) -> Value {
+            serde_json::json!({"type": "object"})
+        }
+
+        async fn run(&self, _args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput {
+                text: String::new(),
+            })
+        }
+    }
+
+    #[test]
+    fn the_names_it_advertises_are_the_names_it_resolves() {
+        // The invariant the owned key has to keep as the registry stops being compile-time
+        // closed: what the model is shown (`specs`) and what a call resolves through (`get`)
+        // are the same set. A plugin mechanism starts inserting names that were never
+        // `'static`, and a registration that only one of the two could see is exactly the bug
+        // this would catch.
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(Stub("alpha")));
+        registry.register(Arc::new(Stub("beta")));
+
+        let names = registry.names();
+        assert_eq!(names.len(), 2);
+        for name in &names {
+            assert!(
+                registry.get(name).is_some(),
+                "{name} is advertised but not resolvable"
+            );
+        }
+        let specs = registry.specs();
+        assert_eq!(specs.len(), names.len());
+        for spec in &specs {
+            assert!(
+                names.iter().any(|n| n.as_ref() == spec.name),
+                "{} is in specs() but not names()",
+                spec.name
+            );
+        }
+
+        // Re-registering a name replaces the tool: last one wins. That is the behaviour the
+        // plugin step has to make a decision about (a plugin that shadows `write_file` would be
+        // a security hole, so a built-in collision must be refused) — this test pins today's
+        // behaviour so changing it is a deliberate act.
+        registry.register(Arc::new(Stub("alpha")));
+        assert_eq!(registry.names().len(), 2);
     }
 }

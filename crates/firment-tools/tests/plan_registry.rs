@@ -3,7 +3,9 @@ use firment_tools::plan_registry;
 #[test]
 fn plan_registry_exposes_only_read_only_tools() {
     let registry = plan_registry();
-    let names = registry.names();
+    // `names()` is owned now (see `ToolRegistry::names`); the assertions below want `&str`.
+    let owned = registry.names();
+    let names: Vec<&str> = owned.iter().map(|n| n.as_ref()).collect();
     assert!(names.contains(&"read_file"));
     assert!(names.contains(&"list_dir"));
     assert!(names.contains(&"glob"));
