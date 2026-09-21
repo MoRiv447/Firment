@@ -223,6 +223,7 @@ describe('Primitive layer and shell conventions', () => {
       'tool-diff',
       'tool-output',
       'tool-result',
+      'tool-review',
       'tool-run',
       'transcript',
       'user-bubble',

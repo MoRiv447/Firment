@@ -211,6 +211,13 @@ export type FrontendEvent =
       seq: number;
     }
   | { type: 'turn_end'; session_id?: string | null; text: string }
+  /** A self-review of one tool's change finished (plan §4-A). `seq` names the tool. */
+  | {
+      type: 'review';
+      session_id?: string | null;
+      seq: number;
+      findings: ReviewFinding[];
+    }
   // UI-internal: App dispatches this after the post-turn transcript fetch
   // lands, clearing the retained finished turn (anti blank-flash).
   | { type: 'turn_synced'; session_id?: string | null }
@@ -285,6 +292,28 @@ export interface ProviderEntryDto {
   api_key: string | null;
 }
 
+/**
+ * One review finding, mirroring `firment_core::review::Finding`.
+ *
+ * The same shape every capability produces (dependency / hardware / static / self-review), so
+ * a card renders a badge from `severity` and a list from the rest without a second vocabulary.
+ * `severity` is lowercase because that is how Rust serialises it.
+ */
+export interface ReviewFinding {
+  id: string;
+  title: string;
+  severity: 'medium' | 'high';
+  category: string;
+  file?: string | null;
+  symbol?: string | null;
+  description: string;
+  impact?: string | null;
+  code?: string | null;
+  steps: string[];
+  fix?: string | null;
+  tags: string[];
+}
+
 export interface ToolCardState {
   seq: number;
   name: string;
@@ -300,6 +329,14 @@ export interface ToolCardState {
   summary?: string;
   /** Unified diff (header line included) for edit/write tools. */
   detail?: string | null;
+  /**
+   * The self-review's findings about this tool's change, attached by `seq`.
+   *
+   * Arrives as its own event *after* the tool ends (the review runs a beat later), which is
+   * why the card cannot be final at `tool_end`. A card that ignores this event loses the
+   * findings silently — the review ran, the reader never learns.
+   */
+  findings?: ReviewFinding[];
   /** Wall-clock start for the per-tool elapsed label. */
   startedAt?: number;
   /**

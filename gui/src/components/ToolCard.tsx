@@ -6,7 +6,7 @@ import { editedPath } from '../lib/changes';
 import { parseDiff } from '../lib/diff';
 import { quickActionsFor } from '../lib/quickActions';
 import { describeArgs } from '../lib/toolArgs';
-import type { ToolCardState } from '../types';
+import type { ReviewFinding, ToolCardState } from '../types';
 import { Button, Callout, Chip, Icon } from '../ui';
 import type { ChipStatus } from '../ui';
 import styles from './ToolCard.module.css';
@@ -105,6 +105,11 @@ export function DiffBody({ detail }: { detail: string }) {
   );
 }
 
+/** The severity a badge reports. A card has one badge, so it reports the worst finding. */
+function worstSeverity(findings: ReviewFinding[]): ReviewFinding['severity'] {
+  return findings.some((f) => f.severity === 'high') ? 'high' : 'medium';
+}
+
 export function ToolCard({
   tool,
   collapsible,
@@ -139,6 +144,19 @@ export function ToolCard({
       </Chip>
       {path && <span className={styles.path}>{path}</span>}
       <span className={styles.seq}>#{tool.seq}</span>
+      {(tool.findings?.length ?? 0) > 0 && (
+        // The badge carries the count and the worst severity; the body carries the findings.
+        // A badge alone would make a reader open a diff to learn what was wrong with it, and
+        // the list alone would hide that the card has anything to say at all.
+        <span
+          data-ui="tool-review"
+          data-severity={worstSeverity(tool.findings ?? [])}
+          className={styles.review}
+          title={`${tool.findings?.length ?? 0} review finding(s)`}
+        >
+          {tool.findings?.length ?? 0}
+        </span>
+      )}
       {diff && (diff.added > 0 || diff.removed > 0) && (
         // Right-aligned by `margin-inline-start: auto`, so the counts sit at the
         // far edge of the row rather than next to the tool name.
@@ -185,6 +203,20 @@ export function ToolCard({
             tool.status !== 'running' &&
             tool.summary && <p className={styles.summary}>{tool.summary}</p>
           )}
+          {tool.findings?.map((finding) => (
+            // Tone `failed` for high: the kit's vocabulary is info/warn/failed, and a finding
+            // that should stop a release is the closest thing to a failure it has. Medium is
+            // `warn` — worth knowing, no decision forced.
+            <Callout
+              key={finding.id}
+              tone={finding.severity === 'high' ? 'failed' : 'warn'}
+              title={finding.title}
+            >
+              <p>{finding.description}</p>
+              {finding.impact && <p>{finding.impact}</p>}
+              {finding.fix && <p>{finding.fix}</p>}
+            </Callout>
+          ))}
           {danger && <Callout tone="warn">Dangerous command — verify before allowing</Callout>}
           {/*
             What you do *after* an edit. Only once the edit has finished: an offer

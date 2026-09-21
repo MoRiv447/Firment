@@ -165,6 +165,27 @@ export function turnReducer(state: TurnState, e: FrontendEvent): TurnState {
       return { ...state, turn: { ...state.turn, tools: { ...state.turn.tools, [e.seq]: card } } };
     }
 
+    case 'review': {
+      // The self-review, joined to its card by `seq` — the same key the card is filed under,
+      // so a review that arrives after its tool_end still lands on the right card. Routed
+      // through the subagent stack for the same reason a tool call is: a nested agent's
+      // change is reviewed too, and its finding belongs on the nested step, not the turn.
+      if (!state.turn) return state;
+      const patch = (t: ToolCardState): ToolCardState => ({ ...t, findings: e.findings });
+      const subagents = routeToSubagent(state, (steps) =>
+        steps.map((t) => (t.seq === e.seq ? patch(t) : t)),
+      );
+      if (subagents) return { ...state, subagents };
+      if (!state.turn.tools[e.seq]) return state;
+      return {
+        ...state,
+        turn: {
+          ...state.turn,
+          tools: { ...state.turn.tools, [e.seq]: patch(state.turn.tools[e.seq]) },
+        },
+      };
+    }
+
     case 'tool_end': {
       if (!state.turn) return state;
       const patch = (t: ToolCardState): ToolCardState => ({

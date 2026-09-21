@@ -1,12 +1,55 @@
 import { describe, expect, it } from 'vitest';
 import { initialTurnState, turnReducer, turnsReducer, type TurnState } from '../turnReducer';
-import type { FrontendEvent } from '../../types';
+import type { FrontendEvent, ReviewFinding } from '../../types';
 
 function feed(events: FrontendEvent[], start: TurnState = initialTurnState()): TurnState {
   return events.reduce(turnReducer, start);
 }
 
+const finding: ReviewFinding = {
+  id: 'r1',
+  title: 'unchecked cast',
+  severity: 'high',
+  category: 'self-review',
+  description: 'the cast discards the length check',
+  steps: [],
+  tags: [],
+};
+
 describe('turnReducer (IDE event->UI contract)', () => {
+  it('attaches a self-review to the card it names, by seq', () => {
+    // Plan §4-A: the review runs a beat after the tool, so a card cannot be final at
+    // tool_end. The join is `seq` — the same key the card is filed under — which is what
+    // lets the badge appear on the card that earned it, whenever the review lands.
+    const state = feed([
+      { type: 'turn_start' },
+      { type: 'tool_start', name: 'edit_file', args: { path: 'a.rs' }, seq: 3 },
+      { type: 'tool_end', name: 'edit_file', ok: true, summary: 'ok', seq: 3 },
+      { type: 'review', seq: 3, findings: [finding] },
+    ]);
+    expect(state.turn?.tools[3].findings).toEqual([finding]);
+  });
+
+  it("routes a nested agent's review to its step, not to the turn", () => {
+    // A subagent's change is reviewed too, and its finding belongs on the nested step —
+    // the same routing rule tool calls follow, for the same reason.
+    const state = feed([
+      { type: 'turn_start' },
+      { type: 'subagent_start', id: 's1', label: 'research', depth: 1 },
+      { type: 'tool_start', name: 'edit_file', args: {}, seq: 4 },
+      { type: 'review', seq: 4, findings: [finding] },
+    ]);
+    expect(state.subagents[0].steps[0].findings).toEqual([finding]);
+    expect(state.turn?.tools[4]).toBeUndefined();
+  });
+
+  it('drops a review for a seq it has no card for', () => {
+    // No phantom card: a review is a fact about a tool call, never a reason to invent one.
+    const state = feed([{ type: 'turn_start' }, { type: 'review', seq: 9, findings: [] }]);
+    expect(state.turn?.tools[9]).toBeUndefined();
+  });
+
+
   it('builds a turn from a full event sequence', () => {
     const state = feed([
       { type: 'turn_start' },

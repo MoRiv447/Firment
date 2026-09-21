@@ -174,3 +174,27 @@
   gap: var(--sp-2);
   margin-top: var(--sp-1);
 }
+
+/*
+ * The review badge. Two token pairs rather than one: `--warn-*` for a medium finding and the
+ * removed-diff family for a high one, which the tokens file itself describes as "the same
+ * message, other size" — the design system's own word for "this is bad" before a badge needed
+ * a word for it. No new colour is introduced, so the contrast tests still cover it.
+ */
+.review {
+  display: inline-flex;
+  align-items: center;
+  padding-inline: var(--sp-2);
+  border-radius: var(--r-chip);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-minor);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--fw-label);
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+}
+
+.review[data-severity='high'] {
+  background: var(--diff-removed-bg);
+  color: var(--diff-removed-ink);
+}
