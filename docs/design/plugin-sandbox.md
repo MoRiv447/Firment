@@ -154,5 +154,28 @@ Ordered by dependency, and deliberately small:
 
 ---
 
-*Written 2026-09-20 against `7b5d08b`. The file:line references in §1 and §4 are the parts to
-re-check if the code moves.*
+## Status
+
+*The argument above is left as written; this section records what has moved since.*
+
+| §5 step | Status |
+|---|---|
+| 1. Names that are not `'static` | **Done** — `af9e431`: the registry is keyed by `Arc<str>`; `register` copies the name in, `get(&str)` is unchanged, and all 54 `Tool` impls are untouched because `name()` still returns `&'static str`. |
+| 2. A manifest with declared capabilities | Not started |
+| 3. One subprocess tool | Not started |
+| 4. A refusal test | Not started |
+| 5. Untrusted-output labelling | **Partly done, elsewhere**: the `task` tool's report is already a delimited `<subagent_report>` block whose description says it is data rather than instructions. A plugin's output needs the same treatment, and the wording to reuse exists. |
+
+**Two things this step surfaced, recorded here so step 2 does not rediscover them:**
+
+- **A collision with a built-in must be refused.** `register` replaces on a duplicate name
+  (pinned by a test), which is fine while every tool is compiled in and a security hole the
+  moment a plugin can choose its own name. The registry needs to know the difference.
+- **`Tool::name()` does not have to become `&str`.** That would touch 54 impls. An `owned_name()`
+  whose default is `self.name()` lets a plugin override exactly one method and costs every
+  built-in nothing.
+
+---
+
+*Written 2026-09-20 against `7b5d08b`; status updated after `af9e431`. The file:line references in
+§1 and §4 are the parts to re-check if the code moves.*
