@@ -2398,6 +2398,53 @@ fn thinking_opt(level: ThinkingLevel) -> Option<ThinkingLevel> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_nested_agent_writes_into_the_journal_it_was_handed() {
+        // The seam between "the task tool passes the parent's journal" (tested in the tool) and
+        // "the turn uses it" (here, `turn_journal`). Without it the sharing would stop one layer
+        // short, and a child's edits would land in a journal nobody reads — the failure mode
+        // that looks handled, which is what the concurrency review's §5 exists to stop.
+        struct Silent;
+
+        #[async_trait::async_trait]
+        impl Provider for Silent {
+            async fn stream(&self, _request: ChatRequest) -> Result<ProviderStream, ProviderError> {
+                Ok(Box::pin(futures::stream::iter(vec![])))
+            }
+
+            fn model(&self) -> &str {
+                "silent"
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+        let session = Session::new(dir.path().to_path_buf(), "mock", "mock");
+        let mut agent = Agent::new(
+            Some(Box::new(Silent)),
+            Arc::new(ToolRegistry::new()),
+            session,
+            store,
+            Arc::new(AutoApprove::everything()),
+            Arc::new(crate::NullSink),
+            4,
+        );
+
+        // By default a turn opens its own journal in the session's undo directory.
+        let own = agent.turn_journal();
+        let handed = Arc::new(Mutex::new(EditJournal::new(dir.path().join("undo"))));
+        assert!(
+            !Arc::ptr_eq(&own, &handed),
+            "the turn's own journal is not one a parent would hand down"
+        );
+
+        agent.set_edit_journal(handed.clone());
+        assert!(
+            Arc::ptr_eq(&agent.turn_journal(), &handed),
+            "an agent handed a journal must write into it instead of opening its own"
+        );
+    }
+
     use super::*;
     use std::time::Duration;
 

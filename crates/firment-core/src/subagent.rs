@@ -263,6 +263,64 @@ impl EventSink for NullSink {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn one_rollback_covers_every_file_the_batch_touched() {
+        // Concurrency review §4.1 and §6 step 5 — the last link of the chain, and this test is
+        // careful about which link it is.
+        //
+        // That a child *is handed* the parent's journal is proven elsewhere, one seam per test:
+        // `task.rs::the_child_gets_the_parent_turns_journal` (the tool passes it to the runner)
+        // and `agent.rs::a_nested_agent_writes_into_the_journal_it_was_handed` (the turn uses
+        // the one it was given). This is the third seam: **given** one journal shared across a
+        // parent and a child, a single rollback covers the child's files too — including a file
+        // the child created, which the rollback has to remove rather than leave behind. Naming
+        // this test after the sharing would be claiming a proof it does not contain.
+        use crate::journal::EditJournal;
+        use std::sync::{Arc, Mutex};
+
+        let dir = tempfile::tempdir().unwrap();
+        let parent_file = dir.path().join("parent.rs");
+        let child_file = dir.path().join("child.rs");
+        let created = dir.path().join("created-by-child.rs");
+        std::fs::write(&parent_file, "parent: original\n").unwrap();
+        std::fs::write(&child_file, "child: original\n").unwrap();
+
+        let journal = Arc::new(Mutex::new(EditJournal::new(dir.path().join("undo"))));
+
+        // The turn mutates its own file…
+        journal.lock().unwrap().begin(&parent_file).unwrap();
+        std::fs::write(&parent_file, "parent: changed\n").unwrap();
+
+        // …and the child it spawns mutates its own, through the SAME journal — which is what
+        // `SubagentCall::journal` carries into the nested agent's `set_edit_journal`.
+        journal.lock().unwrap().begin(&child_file).unwrap();
+        std::fs::write(&child_file, "child: changed\n").unwrap();
+        // A file the child *creates* has nothing to restore, so the rollback has to remove it.
+        journal.lock().unwrap().begin(&created).unwrap();
+        std::fs::write(&created, "new\n").unwrap();
+
+        // The batch fails: one rollback, every file the batch touched.
+        let restored = journal.lock().unwrap().rollback().unwrap();
+        assert_eq!(
+            restored.len(),
+            3,
+            "all three belong to the batch: {restored:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&parent_file).unwrap(),
+            "parent: original\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&child_file).unwrap(),
+            "child: original\n",
+            "the child's edit must roll back with the turn that spawned it"
+        );
+        assert!(
+            !created.exists(),
+            "a file the child created must be removed, not left behind half-undone"
+        );
+    }
+
     use super::*;
     use crate::config::Config;
     use crate::permission::AutoApprove;
