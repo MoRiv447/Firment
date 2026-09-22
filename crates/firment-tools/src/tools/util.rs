@@ -333,7 +333,7 @@ pub(crate) enum EnvPolicy<'a> {
 pub(crate) fn shell_command(command: &str, cwd: &Path, env: Option<EnvPolicy<'_>>) -> Command {
     let mut cmd = if cfg!(windows) {
         let mut c = Command::new("cmd");
-        c.arg("/C").arg(command);
+        c.arg("/C");
         c
     } else {
         let mut c = Command::new("sh");
@@ -344,6 +344,20 @@ pub(crate) fn shell_command(command: &str, cwd: &Path, env: Option<EnvPolicy<'_>
     {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
+        // The command is passed as a raw command line, not as an argument: `arg` applies Rust's
+        // own quoting to it, which escapes the quotes a command line legitimately contains —
+        // `"C:\\Program Files\\x.exe" --flag` reached cmd as `\"C:\\Program Files\\x.exe\"` and
+        // ran nothing.
+        //
+        // The extra pair is cmd's own rule on top of that: `/C` strips the outermost quote pair,
+        // so a command that *starts* with a quoted path needs one more pair around everything.
+        // The shell tool rarely noticed either problem, because its commands rarely begin with a
+        // quoted path; a plugin's always does, because the host quotes the configured path.
+        if command.starts_with('"') {
+            cmd.raw_arg(format!("\"{command}\""));
+        } else {
+            cmd.raw_arg(command);
+        }
     }
     #[cfg(unix)]
     {
@@ -766,7 +780,7 @@ pub(crate) fn probe_rs_err(e: String) -> ToolError {
 /// the command inherit our pipe handles; killing only the direct child would
 /// leave those handles open and the capture would never reach EOF.
 #[cfg(windows)]
-fn kill_process_tree(pid: u32) {
+pub(crate) fn kill_process_tree(pid: u32) {
     use std::os::windows::process::CommandExt;
     let _ = std::process::Command::new("taskkill")
         .args(["/PID", &pid.to_string(), "/T", "/F"])
@@ -775,7 +789,7 @@ fn kill_process_tree(pid: u32) {
 }
 
 #[cfg(not(windows))]
-fn kill_process_tree(pid: u32) {
+pub(crate) fn kill_process_tree(pid: u32) {
     // Kill every descendant directly (discovered recursively via `ps`)
     // instead of signalling a process group. Group kills are unsafe on
     // hosted runners: when the child's pgid resolves to the job's own

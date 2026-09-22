@@ -29,6 +29,9 @@ pub struct PluginTool {
     registered_as: Arc<str>,
     plugin: DeclaredPlugin,
     capabilities: Vec<Capability>,
+    /// Overridable so a test can prove the timeout in 300 ms instead of waiting out the real
+    /// one — a test that takes 30 s to check a 30 s timeout is a test nobody runs.
+    timeout: Duration,
 }
 
 impl PluginTool {
@@ -36,11 +39,16 @@ impl PluginTool {
     /// declaration is reported by `firm doctor`, not turned into a tool that quietly has fewer
     /// powers than its author believed.
     pub fn new(plugin: DeclaredPlugin) -> Option<PluginTool> {
+        Self::with_timeout(plugin, PLUGIN_TIMEOUT)
+    }
+
+    pub fn with_timeout(plugin: DeclaredPlugin, timeout: Duration) -> Option<PluginTool> {
         let capabilities = plugin.capabilities.as_ref().ok()?.clone();
         Some(PluginTool {
             registered_as: Arc::from(plugin.name.as_str()),
             plugin,
             capabilities,
+            timeout,
         })
     }
 
@@ -145,8 +153,15 @@ impl Tool for PluginTool {
         // future that owns it — on timeout the task is aborted, the child is dropped inside it,
         // and `kill_on_drop` is what actually stops the process. Cancelling without a kill
         // would leave a plugin running with nobody reading it.
+        // The pid is taken before the child moves into the task. On timeout `kill_on_drop` stops
+        // the *direct* child — the shell — and the plugin the shell started would survive it,
+        // holding the pipe open: a plugin still running with nobody reading it, and a test suite
+        // that waits out the sleep it was supposed to interrupt (which is how this was noticed:
+        // five tests, 29 seconds). `kill_process_tree` is the same killer `run_command` uses, for
+        // the same reason.
+        let pid = child.id();
         let waiter = tokio::spawn(async move { child.wait_with_output().await });
-        let output = match tokio::time::timeout(PLUGIN_TIMEOUT, waiter).await {
+        let output = match tokio::time::timeout(self.timeout, waiter).await {
             Ok(Ok(Ok(output))) => output,
             Ok(Ok(Err(e))) => {
                 return Err(ToolError::new(format!(
@@ -155,9 +170,12 @@ impl Tool for PluginTool {
             }
             Ok(Err(e)) => return Err(ToolError::new(format!("[Io] the plugin task failed: {e}"))),
             Err(_) => {
+                if let Some(pid) = pid {
+                    crate::tools::util::kill_process_tree(pid);
+                }
                 return Err(ToolError::new(format!(
-                    "[Timeout] the plugin did not answer within {}s and was killed",
-                    PLUGIN_TIMEOUT.as_secs()
+                    "[Timeout] the plugin did not answer within {:?} and was killed",
+                    self.timeout
                 )));
             }
         };
@@ -192,4 +210,151 @@ pub fn plugin_tools(
             PluginTool::new(declared).map(|tool| Arc::new(tool) as Arc<dyn Tool>)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use firment_core::plugin::PluginConfig;
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+
+    /// A plugin that is a script, so the tests need no toolchain beyond the platform shell the
+    /// host already uses. Written per-platform because the host runs children through `cmd` on
+    /// Windows and `sh` elsewhere — the same asymmetry the product has.
+    fn script(dir: &Path, body: &str) -> PathBuf {
+        if cfg!(windows) {
+            let path = dir.join("plugin.bat");
+            std::fs::write(&path, format!("@echo off\r\n{body}\r\n")).unwrap();
+            path
+        } else {
+            let path = dir.join("plugin.sh");
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            path
+        }
+    }
+
+    fn plugin_for(command: &Path, capabilities: &[&str]) -> DeclaredPlugin {
+        let config = PluginConfig {
+            command: command.to_string_lossy().into_owned(),
+            args: vec![],
+            capabilities: capabilities.iter().map(|c| c.to_string()).collect(),
+        };
+        let mut map = HashMap::new();
+        map.insert("sensor".to_string(), config);
+        firment_core::plugin::declared_plugins(&map, Path::new("."))
+            .into_iter()
+            .next()
+            .unwrap()
+    }
+
+    fn ctx(dir: &Path) -> ToolContext {
+        ToolContext::with_cwd(dir.to_path_buf())
+    }
+
+    #[tokio::test]
+    async fn a_plugin_answers_and_the_result_is_labelled_untrusted() {
+        // The whole path, once: a real child process, the request on its stdin, a response on
+        // its stdout, and a result the model is told not to obey.
+        let dir = tempfile::tempdir().unwrap();
+        let script = script(
+            dir.path(),
+            r#"echo {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"from the plugin"}]}}"#,
+        );
+        let tool =
+            PluginTool::new(plugin_for(&script, &["fs.read"])).expect("a usable declaration");
+
+        let out = tool
+            .run(serde_json::json!({"bus": "i2c"}), &ctx(dir.path()))
+            .await
+            .unwrap();
+        assert!(out.text.contains("from the plugin"), "{}", out.text);
+        assert!(
+            out.text.contains("<plugin_result name=\"sensor\">"),
+            "{}",
+            out.text
+        );
+        assert!(
+            out.text.contains("UNTRUSTED"),
+            "the label is the point: {}",
+            out.text
+        );
+    }
+
+    #[tokio::test]
+    async fn a_plugin_that_prints_junk_is_refused_with_what_it_printed() {
+        // Untrusted means "checked", not "hoped for": a child that answers with something else
+        // is an error that names what came back, because that is what makes it fixable.
+        let dir = tempfile::tempdir().unwrap();
+        let script = script(dir.path(), "echo this is not a response");
+        let tool = PluginTool::new(plugin_for(&script, &[])).unwrap();
+
+        let err = tool
+            .run(serde_json::json!({}), &ctx(dir.path()))
+            .await
+            .unwrap_err();
+        assert!(err.message.contains("no response"), "{}", err.message);
+        assert!(err.message.contains("not a response"), "{}", err.message);
+    }
+
+    #[tokio::test]
+    async fn a_plugin_that_never_answers_is_killed() {
+        // The one path that cannot be checked by reading: the timeout has to actually stop the
+        // process. Asserted on the clock as well as on the message — a future that returns
+        // "timed out" while leaving the child running would pass the message check and fail
+        // this one.
+        let dir = tempfile::tempdir().unwrap();
+        let sleeper = if cfg!(windows) {
+            "ping -n 30 127.0.0.1 >nul"
+        } else {
+            "sleep 30"
+        };
+        let script = script(dir.path(), sleeper);
+        let tool = PluginTool::with_timeout(
+            plugin_for(&script, &[]),
+            std::time::Duration::from_millis(300),
+        )
+        .unwrap();
+
+        let started = std::time::Instant::now();
+        let err = tool
+            .run(serde_json::json!({}), &ctx(dir.path()))
+            .await
+            .unwrap_err();
+        assert!(err.message.contains("did not answer"), "{}", err.message);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the call must return promptly after the timeout, took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_declaration_that_does_not_parse_yields_no_tool() {
+        // Not "a tool with fewer powers": no tool at all. `firm doctor` is where the user finds
+        // out why, and the two must not disagree.
+        let dir = tempfile::tempdir().unwrap();
+        let script = script(dir.path(), "echo {}");
+        assert!(PluginTool::new(plugin_for(&script, &["fs.raed"])).is_none());
+    }
+
+    #[tokio::test]
+    async fn the_command_line_carries_the_config_and_never_the_model() {
+        // The model's arguments go to the child on stdin. This is the assertion that says so:
+        // a shell metacharacter in them cannot do anything, because it never reaches a shell.
+        let dir = tempfile::tempdir().unwrap();
+        let script = script(dir.path(), "echo {}");
+        let tool = PluginTool::new(plugin_for(&script, &[])).unwrap();
+        let line = tool.command_line(false);
+        assert!(line.starts_with('\''), "the path is quoted: {line}");
+        assert!(
+            line.ends_with("2>&1"),
+            "stderr is folded in for diagnosis: {line}"
+        );
+    }
 }
