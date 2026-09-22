@@ -327,7 +327,16 @@ impl Tool for Shell {
                 .collect::<HashMap<String, String>>()
         });
         let (text, _code) =
-            super::util::run_command(&command, &cwd, timeout_ms, env.as_ref(), Some(&ctx.cancel))
+            // `Inherit`: the shell tool runs the user's own commands, and a command that cannot see
+        // the environment it would see in a terminal is a broken shell. The plugin host is the
+        // one caller that must not inherit (see `EnvPolicy`).
+        super::util::run_command(
+            &command,
+            &cwd,
+            timeout_ms,
+            env.as_ref().map(super::util::EnvPolicy::Inherit),
+            Some(&ctx.cancel),
+        )
                 .await
                 .map_err(ToolError::new)?;
         Ok(ToolOutput { text })

@@ -174,9 +174,271 @@ pub struct DeclaredPlugin {
     pub declared: Vec<String>,
 }
 
+// ---------------------------------------------------------------------------
+// The wire: one MCP-shaped call over stdio (plugin review §5 step 3)
+// ---------------------------------------------------------------------------
+
+/// The request a plugin receives on stdin.
+///
+/// The **shape** of an MCP `tools/call`, not a whole MCP session: no initialize handshake, no
+/// `tools/list`, one request and one response per invocation. That is a deliberate limit of the
+/// first slice — a plugin that must keep state between calls (a held serial port, say) would
+/// need the session, and the shape is what a future session would still use.
+pub fn request_json(id: u64, tool: &str, arguments: &serde_json::Value) -> String {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "tools/call",
+        "params": { "name": tool, "arguments": arguments },
+    })
+    .to_string()
+}
+
+/// The text out of an MCP-shaped response, or why the output is not one.
+///
+/// The child's stdout is **untrusted** (review §4 invariant 2): it may contain the plugin's own
+/// logging, and it may contain nothing usable at all. So: scan for the last line that parses as
+/// a JSON object carrying our id, take `result.content[]` entries of type `text`, and when
+/// there is none say so with a bounded excerpt — the reader needs to see what came back, and
+/// the prompt must not receive an unbounded blob of somebody else's output.
+pub fn parse_result(stdout: &str, id: u64) -> Result<String, String> {
+    let mut found: Option<serde_json::Value> = None;
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('{') {
+            continue;
+        }
+        // A guard rather than nested `if let`: clippy is right that the nested form reads as
+        // two conditions when it is one question — "is this line an answer to our call".
+        match serde_json::from_str::<serde_json::Value>(trimmed) {
+            Ok(value) if value.get("id").and_then(|v| v.as_u64()) == Some(id) => {
+                found = Some(value);
+            }
+            _ => {}
+        }
+    }
+
+    let Some(value) = found else {
+        return Err(format!(
+            "the plugin produced no response for call {id}; its output was: {}",
+            excerpt(stdout)
+        ));
+    };
+
+    if let Some(error) = value.get("error") {
+        return Err(format!(
+            "the plugin reported an error: {}",
+            excerpt(&error.to_string())
+        ));
+    }
+
+    let text: Vec<String> = value
+        .get("result")
+        .and_then(|r| r.get("content"))
+        .and_then(|c| c.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| item.get("type").and_then(|t| t.as_str()) == Some("text"))
+                .filter_map(|item| item.get("text").and_then(|t| t.as_str()))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if text.is_empty() {
+        return Err(format!(
+            "the plugin's response carried no text content: {}",
+            excerpt(&value.to_string())
+        ));
+    }
+    Ok(text.join("\n"))
+}
+
+fn excerpt(text: &str) -> String {
+    const MAX: usize = 400;
+    let trimmed = text.trim();
+    if trimmed.chars().count() <= MAX {
+        return trimmed.to_string();
+    }
+    let head: String = trimmed.chars().take(MAX).collect();
+    format!("{head}… ({} chars total)", trimmed.chars().count())
+}
+
+/// Quote one word for the platform's shell.
+///
+/// A plugin's command and args come from the user's own config, and the *model's* arguments go
+/// through stdin as JSON — never onto the command line — so this is not the only thing standing
+/// between a model and a shell. It is still needed, because a plugin path with a space in it
+/// (`C:\Program Files\…`) has to survive being turned into a command string.
+pub fn quote_for_shell(word: &str, windows: bool) -> String {
+    if windows {
+        // cmd.exe has no escape for a double quote inside a quoted argument; refusing the word
+        // is honest, and a plugin path containing `"` is not a case worth guessing at.
+        format!("\"{}\"", word.replace('"', ""))
+    } else {
+        format!("'{}'", word.replace('\'', r"'\''"))
+    }
+}
+
+/// The environment a plugin gets, given what it declared.
+///
+/// **Allow-listed, never inherited** (review §5 step 3): `parent` is read for the few variables
+/// below and nothing else, so a plugin cannot see the user's API keys, their `FIRMENT_*`
+/// settings or anything else — not because they are filtered out, but because nothing is passed
+/// unless it is named here.
+///
+/// `PATH` is always passed, because a child that cannot be found cannot run at all;
+/// `SystemRoot`, `TEMP` and `TMP` come with it on Windows because programs there refuse to
+/// start without them. The proxy variables come **only** with the `net` capability: a plugin
+/// that did not ask for the network does not get a route to it either.
+pub fn plugin_env(
+    parent: &std::collections::HashMap<String, String>,
+    capabilities: &[Capability],
+    windows: bool,
+) -> std::collections::HashMap<String, String> {
+    let mut names: Vec<&str> = vec!["PATH"];
+    if windows {
+        names.extend(["SystemRoot", "TEMP", "TMP"]);
+    }
+    if capabilities.contains(&Capability::Net) {
+        names.extend(["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "ALL_PROXY"]);
+    }
+
+    names
+        .into_iter()
+        .filter_map(|name| {
+            parent
+                .get(name)
+                .map(|value| (name.to_string(), value.clone()))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_request_is_the_mcp_call_shape_and_nothing_else() {
+        let request = request_json(7, "sensor", &serde_json::json!({"bus": "i2c"}));
+        let value: serde_json::Value = serde_json::from_str(&request).unwrap();
+        assert_eq!(value["jsonrpc"], "2.0");
+        assert_eq!(value["id"], 7);
+        assert_eq!(value["method"], "tools/call");
+        assert_eq!(value["params"]["name"], "sensor");
+        assert_eq!(value["params"]["arguments"]["bus"], "i2c");
+    }
+
+    #[test]
+    fn a_result_is_taken_from_the_line_that_answers_our_call() {
+        // The child's stdout is untrusted and may carry its own logging, so the parser looks for
+        // the response rather than trusting the first thing it sees — and it must not accept a
+        // response to somebody else's call id.
+        let stdout = format!(
+            "plugin: starting\n{}\n{}\n",
+            r#"{"jsonrpc":"2.0","id":99,"result":{"content":[{"type":"text","text":"not ours"}]}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"ours"},{"type":"text","text":"second"}]}}"#,
+        );
+        assert_eq!(parse_result(&stdout, 1).unwrap(), "ours\nsecond");
+    }
+
+    #[test]
+    fn unusable_output_says_what_came_back() {
+        // Three ways a plugin's output is not a result, and the reader needs the excerpt in
+        // both of them: "it printed nothing useful" is not diagnosable, "it printed this" is.
+        let nothing = parse_result("plugin: oops\n", 1).unwrap_err();
+        assert!(nothing.contains("no response"), "{nothing}");
+        assert!(
+            nothing.contains("oops"),
+            "the excerpt should be there: {nothing}"
+        );
+
+        let err = parse_result(
+            r#"{"jsonrpc":"2.0","id":1,"error":{"message":"no bus"}}"#,
+            1,
+        )
+        .unwrap_err();
+        assert!(err.contains("no bus"), "{err}");
+
+        let empty =
+            parse_result(r#"{"jsonrpc":"2.0","id":1,"result":{"content":[]}}"#, 1).unwrap_err();
+        assert!(empty.contains("no text"), "{empty}");
+    }
+
+    #[test]
+    fn an_excerpt_is_bounded() {
+        let long = "x".repeat(2_000);
+        let err = parse_result(&long, 1).unwrap_err();
+        assert!(err.contains("chars total"), "{err}");
+        assert!(
+            err.len() < 600,
+            "the excerpt must stay bounded: {}",
+            err.len()
+        );
+    }
+
+    #[test]
+    fn quoting_keeps_a_path_with_a_space_in_one_piece() {
+        assert_eq!(quote_for_shell("sensor", false), "'sensor'");
+        assert_eq!(
+            quote_for_shell("C:\\Program Files\\sensor.exe", true),
+            "\"C:\\Program Files\\sensor.exe\""
+        );
+        // A single quote inside a unix word must survive as data, not end the quoting.
+        assert_eq!(quote_for_shell("it's", false), r"'it'\''s'");
+    }
+
+    #[test]
+    fn the_environment_is_a_list_and_never_the_parents() {
+        // The invariant the review asks for, as an assertion: a plugin sees the handful of
+        // variables named here and nothing else. Checked with a parent environment that looks
+        // like a real one, keys included.
+        let mut parent = HashMap::new();
+        for (k, v) in [
+            ("PATH", "/usr/bin"),
+            ("SystemRoot", "C:\\Windows"),
+            ("TEMP", "C:\\Temp"),
+            ("TMP", "C:\\Temp"),
+            ("HTTPS_PROXY", "http://127.0.0.1:7890"),
+            ("NO_PROXY", "localhost"),
+            ("ANTHROPIC_API_KEY", "sk-secret"),
+            ("OPENAI_API_KEY", "sk-secret"),
+            ("FIRMENT_SOMETHING", "private"),
+            ("AWS_SECRET_ACCESS_KEY", "secret"),
+        ] {
+            parent.insert(k.to_string(), v.to_string());
+        }
+
+        let read_only = plugin_env(&parent, &[Capability::FsRead], false);
+        assert_eq!(read_only.get("PATH").map(String::as_str), Some("/usr/bin"));
+        assert!(!read_only.contains_key("ANTHROPIC_API_KEY"));
+        assert!(!read_only.contains_key("OPENAI_API_KEY"));
+        assert!(!read_only.contains_key("FIRMENT_SOMETHING"));
+        assert!(!read_only.contains_key("AWS_SECRET_ACCESS_KEY"));
+        assert!(
+            !read_only.contains_key("HTTPS_PROXY"),
+            "without `net` a plugin does not even get a route out"
+        );
+
+        // The network capability adds the proxy variables — and nothing else.
+        let networked = plugin_env(&parent, &[Capability::FsRead, Capability::Net], false);
+        assert_eq!(
+            networked.get("HTTPS_PROXY").map(String::as_str),
+            Some("http://127.0.0.1:7890")
+        );
+        assert!(!networked.contains_key("ANTHROPIC_API_KEY"));
+        assert_eq!(
+            networked.len(),
+            read_only.len() + 2,
+            "net adds proxies, not the parent's environment"
+        );
+
+        // Windows needs a few more to start at all; unix must not be given them.
+        let windows = plugin_env(&parent, &[Capability::FsRead], true);
+        assert!(windows.contains_key("SystemRoot"));
+        assert!(!read_only.contains_key("SystemRoot"));
+    }
 
     #[test]
     fn the_vocabulary_is_closed_and_the_error_names_it() {

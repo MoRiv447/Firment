@@ -309,13 +309,28 @@ fn lock_sharing(buf: &Mutex<Vec<u8>>) -> std::sync::MutexGuard<'_, Vec<u8>> {
 /// timeout. `cancel` (the turn-level cancellation signal) stops the process
 /// tree promptly when the turn is interrupted. Returns (formatted text, exit
 /// code); exit code `None` means the process was killed (timeout or cancel).
-pub(crate) async fn run_command(
-    command: &str,
-    cwd: &Path,
-    timeout_ms: u64,
-    env: Option<&HashMap<String, String>>,
-    cancel: Option<&Cancellable>,
-) -> Result<(String, Option<i32>), String> {
+/// How a child's environment is built.
+///
+/// Explicit because the difference is invisible otherwise: `Some(map)` used to mean "inherit
+/// and apply these on top", which is what the shell tool wants and the opposite of what a
+/// plugin host needs. An allow-list that only overrides is inheritance with extra steps.
+pub(crate) enum EnvPolicy<'a> {
+    /// The parent's environment, with these applied on top.
+    Inherit(&'a HashMap<String, String>),
+    /// Nothing but these. The child starts from an empty environment, so "the plugin cannot
+    /// read your API keys" is a property of the code rather than of the map's contents.
+    Only(&'a HashMap<String, String>),
+}
+
+/// Build the shell command a child runs, with the policies this crate applies everywhere:
+/// the platform shell, no console window on Windows, its own process group on unix, the given
+/// working directory, piped output, and the environment policy.
+///
+/// Shared with the plugin host so that `EnvPolicy::Only` is enforced in exactly one place. The
+/// difference between "the child inherits the environment" and "the child gets this list" is
+/// too consequential for a second implementation to exist, and the first version of this host
+/// had one — it built its own command and quietly inherited everything.
+pub(crate) fn shell_command(command: &str, cwd: &Path, env: Option<EnvPolicy<'_>>) -> Command {
     let mut cmd = if cfg!(windows) {
         let mut c = Command::new("cmd");
         c.arg("/C").arg(command);
@@ -341,11 +356,31 @@ pub(crate) async fn run_command(
     cmd.current_dir(cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if let Some(env) = env {
-        for (k, v) in env {
-            cmd.env(k, v);
+    match env {
+        Some(EnvPolicy::Inherit(env)) => {
+            for (k, v) in env {
+                cmd.env(k, v);
+            }
         }
+        Some(EnvPolicy::Only(env)) => {
+            cmd.env_clear();
+            for (k, v) in env {
+                cmd.env(k, v);
+            }
+        }
+        None => {}
     }
+    cmd
+}
+
+pub(crate) async fn run_command(
+    command: &str,
+    cwd: &Path,
+    timeout_ms: u64,
+    env: Option<EnvPolicy<'_>>,
+    cancel: Option<&Cancellable>,
+) -> Result<(String, Option<i32>), String> {
+    let mut cmd = shell_command(command, cwd, env);
 
     let mut child = cmd
         .kill_on_drop(true) // drop-safety net: see comment above the drain task
@@ -872,6 +907,72 @@ mod tests {
         )
         .unwrap();
         assert!(ok.starts_with(extra.path()));
+    }
+
+    #[tokio::test]
+    async fn only_env_starts_the_child_from_nothing() {
+        // The policy the plugin host depends on. `Some(map)` used to mean "inherit and apply on
+        // top", which is not an allow-list however it is spelled — so the assertion is about a
+        // variable the parent HAS and the child must not see.
+        let dir = tempdir().unwrap();
+        let mut env = HashMap::new();
+        env.insert("PLUGIN_ONLY".to_string(), "yes".to_string());
+        if let Ok(path) = std::env::var("PATH") {
+            env.insert("PATH".to_string(), path);
+        }
+        // A variable that is certainly in this process's environment, whatever the platform —
+        // and long enough that its value cannot appear by accident in the command echo.
+        let inherited = ["HOME", "USERPROFILE", "PATHEXT", "USERNAME"]
+            .into_iter()
+            .find_map(|name| {
+                std::env::var(name)
+                    .ok()
+                    .filter(|v| v.len() >= 4)
+                    .map(|v| (name, v))
+            });
+
+        let probe = if cfg!(windows) {
+            "echo [%PLUGIN_ONLY%]"
+        } else {
+            "echo [$PLUGIN_ONLY]"
+        };
+        let (text, code) = run_command(probe, dir.path(), 5_000, Some(EnvPolicy::Only(&env)), None)
+            .await
+            .expect("run_command returns Ok");
+        assert_eq!(code, Some(0), "got: {text}");
+        assert!(
+            text.contains("[yes]"),
+            "the declared variable must arrive: {text}"
+        );
+
+        if let Some((name, value)) = inherited {
+            let probe = if cfg!(windows) {
+                format!("echo [%{name}%]")
+            } else {
+                format!("echo [${name}]")
+            };
+            // The assertion is about the parent's *value*, not about how the shell renders an
+            // undefined variable: cmd.exe prints `%HOME%` literally when it is unset, so
+            // comparing against "[]" would have been testing cmd's habits. (It did, and failed.)
+            let (text, _) =
+                run_command(&probe, dir.path(), 5_000, Some(EnvPolicy::Only(&env)), None)
+                    .await
+                    .unwrap();
+            assert!(
+                !text.contains(&value),
+                "`{name}` is in this process and its value must not reach an Only child: {text}"
+            );
+
+            // And under `Inherit` the same value does arrive — the two policies are not one
+            // behaviour with a nicer name.
+            let (text, _) = run_command(&probe, dir.path(), 5_000, None, None)
+                .await
+                .unwrap();
+            assert!(
+                text.contains(&value),
+                "the parent's environment should be inherited here: {text}"
+            );
+        }
     }
 
     #[tokio::test]
