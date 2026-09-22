@@ -261,6 +261,17 @@ impl ToolRegistry {
         self.tools.insert(tool.owned_name(), tool);
     }
 
+    /// Add every tool of `other`, as built-ins.
+    ///
+    /// A shallow copy of `Arc`s, which is what makes composing registries cheap enough to do
+    /// rather than to cache. The name rule is `register`'s (last wins), because that is what
+    /// assembling the built-in set is.
+    pub fn extend_from(&mut self, other: &ToolRegistry) {
+        for (name, tool) in &other.tools {
+            self.tools.insert(name.clone(), tool.clone());
+        }
+    }
+
     /// Register a **plugin's** tool, refusing a name that is already taken.
     ///
     /// The difference from [`ToolRegistry::register`] is the point of having two methods. While

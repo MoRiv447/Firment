@@ -90,9 +90,24 @@ pub async fn run(
         Some(asker),
         true,
     );
-    let startup_hint = assembly.provider_error.take().map(|e| {
-        format!("⚠ {e} (run /apikey sk-xxx inside the TUI to configure it without exiting)")
-    });
+    let startup_hint = {
+        let mut hints: Vec<String> = Vec::new();
+        if let Some(e) = assembly.provider_error.take() {
+            hints.push(format!(
+                "⚠ {e} (run /apikey sk-xxx inside the TUI to configure it without exiting)"
+            ));
+        }
+        // Plugin refusals ride the same banner: they are the same kind of news — something the
+        // user asked for is not active, and here is the sentence that says why.
+        for refusal in &assembly.plugin_refusals {
+            hints.push(format!("⚠ {refusal}"));
+        }
+        if hints.is_empty() {
+            None
+        } else {
+            Some(hints.join("\n"))
+        }
+    };
 
     let session_mode = assembly.agent.session().mode;
     let initial_messages = assembly.agent.session().messages.clone();

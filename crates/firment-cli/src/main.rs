@@ -507,7 +507,7 @@ async fn main() -> anyhow::Result<()> {
                     let checks = doctor::doctor_tools(&cwd, &config.tools, true);
                     println!("{}", serde_json::to_string_pretty(&checks)?);
                 } else {
-                    let probes = doctor::doctor(&config, &path).await?;
+                    let probes = doctor::doctor(&config, &path, &cwd).await?;
                     doctor::doctor_install();
                     let locals = doctor::doctor_local(&config).await;
                     let checks = doctor::doctor_tools(&cwd, &config.tools, false);
@@ -686,7 +686,7 @@ async fn main() -> anyhow::Result<()> {
         let cwd = cli.cwd.clone().unwrap_or(env::current_dir()?);
         let config = config.merged_for(&cwd);
         if cli.doctor {
-            let probes = doctor::doctor(&config, &config_path).await?;
+            let probes = doctor::doctor(&config, &config_path, &cwd).await?;
             doctor::doctor_install();
             let locals = doctor::doctor_local(&config).await;
             let checks = doctor::doctor_tools(&cwd, &config.tools, false);
@@ -834,6 +834,12 @@ async fn run_once(
             "{error}\n  (non-interactive: run `firm config` to add a provider, or \
              `firm --set-key <provider>=<key>`)"
         );
+    }
+    // A plugin that did not load is a warning, not a fatal error: the session is still
+    // usable, and the line says which declaration to fix. Silent skipping is the failure mode
+    // this exists to prevent — a plugin that is simply absent looks like one that is not needed.
+    for refusal in &assembly.plugin_refusals {
+        eprintln!("warning: {refusal}");
     }
     let text = assembly.agent.run_turn(prompt).await?;
     println!("{text}");

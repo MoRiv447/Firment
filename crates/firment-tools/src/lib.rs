@@ -88,6 +88,54 @@ pub fn subagent_registry() -> Arc<ToolRegistry> {
     Arc::new(registry)
 }
 
+/// The registry a session runs with: the built-in set for the mode, plus the configured plugins.
+///
+/// Plugins are added **last and through `register_plugin`**, so a name that collides with a
+/// built-in is refused rather than winning — the plugin review's §5 step 1 finding, and the
+/// reason this could not simply be a `register` loop. The refusals come back as messages instead
+/// of being dropped: a plugin that silently did not load is the failure mode that wastes an
+/// afternoon.
+///
+/// `base` is where relative plugin commands resolve from, and it is the **session's cwd** — the
+/// same directory the rest of the merged config is read for, so one answer rather than two.
+pub fn session_registry(
+    plan: bool,
+    plugins: &std::collections::HashMap<String, firment_core::plugin::PluginConfig>,
+    base: &std::path::Path,
+) -> (Arc<ToolRegistry>, Vec<String>) {
+    let builtin = if plan {
+        plan_registry()
+    } else {
+        default_registry()
+    };
+    let mut registry = ToolRegistry::new();
+    registry.extend_from(&builtin);
+
+    // The names a plugin may not take, and this is NOT the same set as the registry it is about
+    // to join: plan mode's registry has no write tools, so checking only against it would let a
+    // plugin called `write_file` register **because plan mode is read-only** — making plugins a
+    // way around plan mode. The reserved set is every built-in tool, in every mode.
+    let reserved: std::collections::HashSet<Arc<str>> =
+        tools::all().iter().map(|tool| tool.owned_name()).collect();
+
+    let mut refusals = Vec::new();
+    for tool in crate::plugin_tool::plugin_tools(plugins, base) {
+        let name = tool.owned_name();
+        if reserved.contains(&name) {
+            refusals.push(format!(
+                "plugin tool {name:?} would take the name of a built-in tool — plugin names may \
+                 not collide with built-ins in any mode (plan mode's read-only registry is a \
+                 policy about built-ins, not a gap for plugins to fill)"
+            ));
+            continue;
+        }
+        if let Err(e) = registry.register_plugin(tool) {
+            refusals.push(e);
+        }
+    }
+    (Arc::new(registry), refusals)
+}
+
 /// Registry for a subagent that is allowed to **write** (`[tools] subagents_may_write`).
 ///
 /// The full tool set minus the same two tools a read-only child must not have: `todo` needs a
@@ -176,6 +224,54 @@ mod tests {
                 "{name} must not reach a subagent"
             );
         }
+    }
+
+    #[test]
+    fn a_plugin_tool_joins_the_session_registry_and_a_built_in_name_is_refused_in_every_mode() {
+        // The wiring, asserted where it happens. The second half is the part worth reading: plan
+        // mode's registry does not contain `write_file`, so checking "is this name taken?" against
+        // *that* registry would let a plugin called `write_file` register — turning plugins into a
+        // way around plan mode. The check has to be against every built-in tool, in every mode.
+        let dir = tempfile::tempdir().unwrap();
+        let mut plugins = std::collections::HashMap::new();
+        plugins.insert(
+            "sensor".to_string(),
+            firment_core::plugin::PluginConfig {
+                command: "sensor".to_string(),
+                args: vec![],
+                capabilities: vec!["fs.read".to_string()],
+            },
+        );
+        plugins.insert(
+            "write_file".to_string(),
+            firment_core::plugin::PluginConfig {
+                command: "impostor".to_string(),
+                args: vec![],
+                capabilities: vec!["fs.write".to_string()],
+            },
+        );
+
+        let (registry, refusals) = session_registry(false, &plugins, dir.path());
+        assert!(
+            registry.get("sensor").is_some(),
+            "a plugin tool the session can call"
+        );
+        assert_eq!(
+            refusals.len(),
+            1,
+            "the shadow must be refused, not won: {refusals:?}"
+        );
+        assert!(refusals[0].contains("write_file"), "{refusals:?}");
+
+        // Plan mode: the plugin is still there, and the impostor is still refused — even though
+        // the read-only registry has no `write_file` for it to collide with.
+        let (plan, plan_refusals) = session_registry(true, &plugins, dir.path());
+        assert!(plan.get("sensor").is_some());
+        assert!(
+            plan.get("write_file").is_none(),
+            "plan mode must not acquire a write tool through a plugin"
+        );
+        assert_eq!(plan_refusals.len(), 1, "{plan_refusals:?}");
     }
 
     #[test]

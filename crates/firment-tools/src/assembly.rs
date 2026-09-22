@@ -8,8 +8,7 @@
 //! permission checker, asker) and get back a fully configured agent.
 
 use crate::{
-    attacker_registry, default_registry, plan_registry, subagent_registry,
-    write_capable_subagent_registry,
+    attacker_registry, session_registry, subagent_registry, write_capable_subagent_registry,
 };
 use firment_core::{
     Agent, Asker, Cancellable, Config, EventSink, PermissionChecker, PlanModePermission, Session,
@@ -32,6 +31,14 @@ pub struct AgentAssembly {
     /// (the TUI offers `/apikey` inside the session); headless callers should
     /// treat this as a fatal error.
     pub provider_error: Option<String>,
+    /// Plugin declarations that could not become tools, each with its reason — a name that
+    /// would shadow an existing tool, or capabilities that do not parse.
+    ///
+    /// The same pattern as `provider_error`, and for the same reason: a plugin that did not
+    /// load must not stop a session, and must not be invisible either. `firm doctor` reports the
+    /// declaration-level problems; this is the registry-level one, which only the assembly can
+    /// know, because only here are names actually claimed.
+    pub plugin_refusals: Vec<String>,
 }
 
 /// Build a fully wired agent for `session` from the merged config.
@@ -57,11 +64,9 @@ pub fn assemble_agent(
         };
 
     let plan = session.mode == SessionMode::Plan;
-    let registry = if plan {
-        plan_registry()
-    } else {
-        default_registry()
-    };
+    // Plugins are part of the registry a session gets, added through the door that refuses a
+    // shadowing name. A refusal is reported below rather than dropped here.
+    let (registry, plugin_refusals) = session_registry(plan, &merged.plugins, &session.cwd);
     let agent_permission: Arc<dyn PermissionChecker> = if plan {
         Arc::new(PlanModePermission::new(permission.clone()))
     } else {
@@ -215,6 +220,7 @@ pub fn assemble_agent(
 
     AgentAssembly {
         agent,
+        plugin_refusals,
         cancel_tx,
         cancel_signal,
         provider_error,

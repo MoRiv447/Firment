@@ -50,11 +50,15 @@ pub(crate) fn doctor_key(
 /// The return value is what `firm doctor`'s closing summary is built from: a reader who runs
 /// doctor wants one answer to "can I work right now?", and computing it from the probes that
 /// have already happened costs nothing.
-pub(crate) async fn doctor(config: &Config, path: &Path) -> anyhow::Result<Vec<(String, bool)>> {
+pub(crate) async fn doctor(
+    config: &Config,
+    path: &Path,
+    cwd: &Path,
+) -> anyhow::Result<Vec<(String, bool)>> {
     println!("config file: {}", path.display());
     // Before the provider check, and deliberately so: a plugin declaration says nothing about
     // providers, and a config with plugins and no provider would otherwise report neither.
-    doctor_plugins(config, path);
+    doctor_plugins(config, cwd);
     let mut reachable: Vec<(String, bool)> = Vec::new();
     if config.providers.is_empty() {
         println!("no providers configured");
@@ -117,13 +121,13 @@ pub(crate) async fn doctor(config: &Config, path: &Path) -> anyhow::Result<Vec<(
 /// someone wrote once; a plugin is a path that will be executed. Showing both makes "which file
 /// is `./plugins/x.sh`" answerable without reading the config parser, and makes a change to
 /// either visible before anything runs.
-fn doctor_plugins(config: &Config, config_path: &Path) {
+fn doctor_plugins(config: &Config, base: &Path) {
     if config.plugins.is_empty() {
         return;
     }
-    // Relative commands resolve against the config's own directory — the project the
-    // declaration belongs to, not wherever the command happened to be typed from.
-    let base = config_path.parent().unwrap_or(Path::new("."));
+    // `base` is the session's cwd, the same directory the merged config was read for and the
+    // same one `session_registry` resolves against. One answer, not two: a doctor report that
+    // disagreed with what the agent would run would be worse than no report.
     println!("\nplugins:");
     for plugin in firment_core::plugin::declared_plugins(&config.plugins, base) {
         println!(
