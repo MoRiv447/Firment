@@ -131,13 +131,20 @@ fn doctor_plugins(config: &Config, base: &Path) {
     println!("\nplugins:");
     for plugin in firment_core::plugin::declared_plugins(&config.plugins, base) {
         println!(
-            "  {} -> {}{}",
+            "  {} -> {}{}{}",
             plugin.name,
             plugin.path.display(),
             if plugin.path.exists() {
                 ""
             } else {
                 "  (not found)"
+            },
+            // The reason a declared plugin is not callable, printed where the declaration is:
+            // "it is in the config but the agent cannot use it" is the question this answers.
+            if plugin.trusted {
+                ""
+            } else {
+                "  [declared, not enabled — needs trusted = true]"
             }
         );
         if !plugin.args.is_empty() {

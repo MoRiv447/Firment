@@ -244,6 +244,10 @@ mod tests {
             command: command.to_string_lossy().into_owned(),
             args: vec![],
             capabilities: capabilities.iter().map(|c| c.to_string()).collect(),
+            // The host tests exercise the path a session actually takes, so they declare the
+            // plugin trusted — the trust gate itself is asserted where it lives, in
+            // `session_registry`.
+            trusted: true,
         };
         let mut map = HashMap::new();
         map.insert("sensor".to_string(), config);

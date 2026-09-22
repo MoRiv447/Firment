@@ -118,9 +118,26 @@ pub fn session_registry(
     let reserved: std::collections::HashSet<Arc<str>> =
         tools::all().iter().map(|tool| tool.owned_name()).collect();
 
+    // The plugins the user vouched for. Nothing here is a sandbox: this is the difference between
+    // "declared" and "enabled", which is why the report has two words for it.
+    let trusted: std::collections::HashSet<&str> = plugins
+        .iter()
+        .filter(|(_, config)| config.trusted)
+        .map(|(name, _)| name.as_str())
+        .collect();
+
     let mut refusals = Vec::new();
     for tool in crate::plugin_tool::plugin_tools(plugins, base) {
         let name = tool.owned_name();
+        if !trusted.contains(name.as_ref()) {
+            // Declared, not enabled — and said out loud, because a plugin that is absent without
+            // an explanation is a plugin the user believes is working.
+            refusals.push(format!(
+                "plugin {name:?} is declared but not enabled — a plugin runs unsandboxed, so it \
+                 needs `trusted = true` in its `[plugins.{name}]` entry before it can be called"
+            ));
+            continue;
+        }
         if reserved.contains(&name) {
             refusals.push(format!(
                 "plugin tool {name:?} would take the name of a built-in tool — plugin names may \
@@ -240,6 +257,7 @@ mod tests {
                 command: "sensor".to_string(),
                 args: vec![],
                 capabilities: vec!["fs.read".to_string()],
+                trusted: true,
             },
         );
         plugins.insert(
@@ -248,6 +266,17 @@ mod tests {
                 command: "impostor".to_string(),
                 args: vec![],
                 capabilities: vec!["fs.write".to_string()],
+                trusted: true,
+            },
+        );
+        // Declared and vouched for by nobody: in the config, absent from the session.
+        plugins.insert(
+            "unvouched".to_string(),
+            firment_core::plugin::PluginConfig {
+                command: "mystery".to_string(),
+                args: vec![],
+                capabilities: vec![],
+                trusted: false,
             },
         );
 
@@ -256,12 +285,25 @@ mod tests {
             registry.get("sensor").is_some(),
             "a plugin tool the session can call"
         );
+        assert!(
+            registry.get("unvouched").is_none(),
+            "an untrusted plugin must not be callable"
+        );
         assert_eq!(
             refusals.len(),
-            1,
-            "the shadow must be refused, not won: {refusals:?}"
+            2,
+            "the shadow and the untrusted one are both refused: {refusals:?}"
         );
-        assert!(refusals[0].contains("write_file"), "{refusals:?}");
+        assert!(
+            refusals.iter().any(|r| r.contains("write_file")),
+            "{refusals:?}"
+        );
+        // The refusal names the flag: "why is my plugin not working" should not need a second
+        // lookup, and the answer is a decision the user has to make, not a bug to report.
+        assert!(
+            refusals.iter().any(|r| r.contains("trusted = true")),
+            "{refusals:?}"
+        );
 
         // Plan mode: the plugin is still there, and the impostor is still refused — even though
         // the read-only registry has no `write_file` for it to collide with.
@@ -271,7 +313,7 @@ mod tests {
             plan.get("write_file").is_none(),
             "plan mode must not acquire a write tool through a plugin"
         );
-        assert_eq!(plan_refusals.len(), 1, "{plan_refusals:?}");
+        assert_eq!(plan_refusals.len(), 2, "{plan_refusals:?}");
     }
 
     #[test]

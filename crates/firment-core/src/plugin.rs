@@ -86,6 +86,20 @@ pub struct PluginConfig {
     /// nothing, so `fs.read` has to be asked for.
     #[serde(default)]
     pub capabilities: Vec<String>,
+    /// Whether the user vouches for this plugin.
+    ///
+    /// **Off by default, and the reason is not caution for its own sake.** A plugin is a program
+    /// this agent starts, and the host does **not** sandbox it: `capabilities` is a contract the
+    /// plugin is trusted to honour, not a wall around it. A plugin without `fs.write` can still
+    /// write anywhere the OS lets it, because nothing stops it — so a plugin that declares
+    /// nothing and runs anyway would be telling the user a story about a boundary that does not
+    /// exist yet.
+    ///
+    /// Setting this to `true` says: *I know what this program is, and I accept that it runs with
+    /// my authority.* Until the OS-level sandbox in the review's §3B exists, that is what
+    /// running a plugin means.
+    #[serde(default)]
+    pub trusted: bool,
 }
 
 impl PluginConfig {
@@ -151,6 +165,7 @@ pub fn declared_plugins(
         .iter()
         .map(|(name, config)| DeclaredPlugin {
             name: name.clone(),
+            trusted: config.trusted,
             path: resolve_command(base, &config.command),
             args: config.args.clone(),
             capabilities: config.capabilities(),
@@ -165,6 +180,8 @@ pub fn declared_plugins(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeclaredPlugin {
     pub name: String,
+    /// See [`PluginConfig::trusted`]: false means it is declared but will not be registered.
+    pub trusted: bool,
     /// The resolved command path.
     pub path: PathBuf,
     pub args: Vec<String>,
@@ -533,6 +550,7 @@ mod tests {
                 command: "z".to_string(),
                 args: vec![],
                 capabilities: vec!["net".to_string()],
+                trusted: true,
             },
         );
         plugins.insert(
@@ -541,6 +559,7 @@ mod tests {
                 command: "a".to_string(),
                 args: vec!["--flag".to_string()],
                 capabilities: vec!["bogus".to_string()],
+                trusted: true,
             },
         );
 
