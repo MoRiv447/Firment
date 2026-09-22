@@ -161,12 +161,15 @@ Ordered by dependency, and deliberately small:
 | §5 step | Status |
 |---|---|
 | 1. Names that are not `'static` | **Done** — `af9e431`: the registry is keyed by `Arc<str>`; `register` copies the name in, `get(&str)` is unchanged, and all 54 `Tool` impls are untouched because `name()` still returns `&'static str`. |
-| 2. A manifest with declared capabilities | Not started |
+| 2. A manifest with declared capabilities | **Done** — `d2465c2`: `[plugins.<name>]` with `command`/`args`/`capabilities`; a closed five-word capability vocabulary whose parser names the valid set on a typo; a relative command resolved against the config's directory and printed by `firm doctor` (verified by running it); `Tool::owned_name()` so a run-time name registers without touching 54 impls; and `register_plugin`, which **refuses** a name that would shadow an existing tool. |
 | 3. One subprocess tool | Not started |
-| 4. A refusal test | Not started |
+| 4. A refusal test | Not started — but its first half exists in another form: `ToolRegistry::register_plugin` refusing a shadow, and the capability parser refusing an unknown name, are both covered. What step 4 adds is the *running* plugin that tries. |
 | 5. Untrusted-output labelling | **Partly done, elsewhere**: the `task` tool's report is already a delimited `<subagent_report>` block whose description says it is data rather than instructions. A plugin's output needs the same treatment, and the wording to reuse exists. |
 
-**Two things this step surfaced, recorded here so step 2 does not rediscover them:**
+**Both of those were done in step 2** (`Tool::owned_name()` and `register_plugin`, with tests);
+the notes stay because they are the reasons the shape is what it is.
+
+**Two things step 1 surfaced, recorded here so step 2 does not rediscover them:**
 
 - **A collision with a built-in must be refused.** `register` replaces on a duplicate name
   (pinned by a test), which is fine while every tool is compiled in and a security hole the
