@@ -209,6 +209,16 @@ impl ToolError {
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &'static str;
+
+    /// The name this tool is registered under, as an **owned** string.
+    ///
+    /// Defaults to `self.name()`, which is why all 54 built-in implementations are untouched by
+    /// the registry's change: they inherit this, and a tool whose name is only known at run time
+    /// — a plugin's — overrides this one method (plugin review §5 step 2).
+    fn owned_name(&self) -> Arc<str> {
+        Arc::from(self.name())
+    }
+
     fn description(&self) -> &'static str;
     fn input_schema(&self) -> Value;
 
@@ -243,8 +253,31 @@ impl ToolRegistry {
         }
     }
 
+    /// Register a **built-in** tool. A duplicate name replaces.
+    ///
+    /// That is right while the built-in set is assembled in one place, and wrong for anything
+    /// whose name comes from a manifest — see [`ToolRegistry::register_plugin`].
     pub fn register(&mut self, tool: Arc<dyn Tool>) {
-        self.tools.insert(Arc::from(tool.name()), tool);
+        self.tools.insert(tool.owned_name(), tool);
+    }
+
+    /// Register a **plugin's** tool, refusing a name that is already taken.
+    ///
+    /// The difference from [`ToolRegistry::register`] is the point of having two methods. While
+    /// every tool is compiled in, a duplicate name is a mistake inside one file. The moment a
+    /// name can come from a manifest, a duplicate is a plugin claiming to be `write_file`, and
+    /// "the last one wins" would mean a plugin silently replacing the tool the user believes
+    /// they are calling.
+    pub fn register_plugin(&mut self, tool: Arc<dyn Tool>) -> Result<(), String> {
+        let name = tool.owned_name();
+        if self.tools.contains_key(name.as_ref()) {
+            return Err(format!(
+                "plugin tool {name:?} would shadow a tool that already exists — plugin names \
+                 must not collide with built-ins or with each other"
+            ));
+        }
+        self.tools.insert(name, tool);
+        Ok(())
     }
 
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
@@ -340,6 +373,78 @@ mod tests {
                 text: String::new(),
             })
         }
+    }
+
+    /// A tool whose name is built at run time — which is exactly what the registry could not
+    /// hold before the key became owned, and what a plugin's tool will look like.
+    struct Named(String);
+
+    #[async_trait]
+    impl Tool for Named {
+        fn name(&self) -> &'static str {
+            // Deliberately not the run-time name: a plugin-provided tool has no `'static` one
+            // to give, and `owned_name` is the door it uses instead.
+            "plugin-tool"
+        }
+
+        fn owned_name(&self) -> Arc<str> {
+            Arc::from(self.0.as_str())
+        }
+
+        fn description(&self) -> &'static str {
+            "a runtime-named stub"
+        }
+
+        fn input_schema(&self) -> Value {
+            serde_json::json!({"type": "object"})
+        }
+
+        async fn run(&self, _args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput {
+                text: String::new(),
+            })
+        }
+    }
+
+    #[test]
+    fn owned_name_defaults_to_the_static_one_and_lets_a_runtime_name_through() {
+        // Two halves of one promise: built-ins keep working without an edit (the default), and
+        // a name that did not exist at compile time can be registered (the override).
+        let dir = tempfile::tempdir().unwrap();
+        let _ = dir; // the stub never runs
+
+        assert_eq!(&*Stub("alpha").owned_name(), "alpha");
+
+        let mut registry = ToolRegistry::new();
+        let runtime_name = format!("sensor-{}", 7);
+        registry.register(Arc::new(Named(runtime_name.clone())));
+        assert!(
+            registry.get(&runtime_name).is_some(),
+            "a run-time name must be registrable"
+        );
+        assert!(registry.get("plugin-tool").is_none());
+    }
+
+    #[test]
+    fn a_plugin_tool_may_not_shadow_an_existing_one() {
+        // The premise that makes the plugin step safe: with names coming from a manifest, "last one
+        // wins" would let a plugin replace `write_file` and the user would never see it.
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(Stub("write_file")));
+
+        let err = registry
+            .register_plugin(Arc::new(Named("write_file".to_string())))
+            .unwrap_err();
+        assert!(err.contains("write_file"), "{err}");
+        assert!(err.contains("shadow"), "{err}");
+        // And the original is still the one that answers.
+        assert_eq!(registry.get("write_file").unwrap().description(), "a stub");
+
+        // A fresh name is fine.
+        registry
+            .register_plugin(Arc::new(Named("sensor".to_string())))
+            .expect("a new name is allowed");
+        assert!(registry.get("sensor").is_some());
     }
 
     #[test]

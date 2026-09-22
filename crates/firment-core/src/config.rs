@@ -11,6 +11,13 @@ use std::time::Duration;
 pub struct Config {
     #[serde(default)]
     pub providers: HashMap<String, ProviderConfig>,
+    /// Plugin declarations: `[plugins.<name>]` (see `crate::plugin`).
+    ///
+    /// Declared, not discovered: the capability list is what a host will honour, an unknown
+    /// name is an error rather than something ignored, and an empty list is a valid
+    /// declaration meaning "nothing but its own stdio".
+    #[serde(default)]
+    pub plugins: HashMap<String, crate::plugin::PluginConfig>,
     #[serde(default = "default_provider_name")]
     pub default_provider: String,
     #[serde(default)]
@@ -708,6 +715,7 @@ impl Config {
         providers.insert(name.to_string(), provider);
         Self {
             providers,
+            plugins: HashMap::new(),
             default_provider: name.to_string(),
             auto_approve: vec!["build".to_string()],
             max_iterations: 30,

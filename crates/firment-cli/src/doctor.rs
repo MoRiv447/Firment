@@ -52,6 +52,9 @@ pub(crate) fn doctor_key(
 /// have already happened costs nothing.
 pub(crate) async fn doctor(config: &Config, path: &Path) -> anyhow::Result<Vec<(String, bool)>> {
     println!("config file: {}", path.display());
+    // Before the provider check, and deliberately so: a plugin declaration says nothing about
+    // providers, and a config with plugins and no provider would otherwise report neither.
+    doctor_plugins(config, path);
     let mut reachable: Vec<(String, bool)> = Vec::new();
     if config.providers.is_empty() {
         println!("no providers configured");
@@ -106,6 +109,52 @@ pub(crate) async fn doctor(config: &Config, path: &Path) -> anyhow::Result<Vec<(
         }
     }
     Ok(reachable)
+}
+
+/// Every declared plugin: the resolved command, whether it exists, and its capabilities.
+///
+/// Printing the *resolved* path is the point (plugin review §5 step 2). A declaration is a path
+/// someone wrote once; a plugin is a path that will be executed. Showing both makes "which file
+/// is `./plugins/x.sh`" answerable without reading the config parser, and makes a change to
+/// either visible before anything runs.
+fn doctor_plugins(config: &Config, config_path: &Path) {
+    if config.plugins.is_empty() {
+        return;
+    }
+    // Relative commands resolve against the config's own directory — the project the
+    // declaration belongs to, not wherever the command happened to be typed from.
+    let base = config_path.parent().unwrap_or(Path::new("."));
+    println!("\nplugins:");
+    for plugin in firment_core::plugin::declared_plugins(&config.plugins, base) {
+        println!(
+            "  {} -> {}{}",
+            plugin.name,
+            plugin.path.display(),
+            if plugin.path.exists() {
+                ""
+            } else {
+                "  (not found)"
+            }
+        );
+        if !plugin.args.is_empty() {
+            println!("    args: {}", plugin.args.join(" "));
+        }
+        match &plugin.capabilities {
+            Ok(caps) if caps.is_empty() => println!(
+                "    capabilities: none declared — the plugin gets nothing but its own stdio"
+            ),
+            Ok(caps) => println!(
+                "    capabilities: {}",
+                caps.iter()
+                    .map(|c| c.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            // A declaration that does not parse is shown as broken rather than as a plugin
+            // that is quietly missing.
+            Err(e) => println!("    capabilities: INVALID — {e}"),
+        }
+    }
 }
 
 pub(crate) fn doctor_install() {
