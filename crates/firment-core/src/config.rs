@@ -709,6 +709,38 @@ pub enum ConfigError {
     ListModels { status: u16, message: String },
 }
 
+/// Where an API key came from, in the order the resolution tries them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApiKeySource {
+    /// `api_key` in the provider's own block.
+    Inline,
+    /// A key saved by `firm --set-key` into `auth.json`.
+    Auth,
+    /// The variable named by `api_key_env`.
+    Env(String),
+    /// `api_key_env` names a variable that is set to nothing — a different fix from never
+    /// having set it, which is why the two are not one variant.
+    EnvEmpty(String),
+    /// `api_key_env` names a variable that is not in the environment at all.
+    EnvUnset(String),
+    /// Neither `api_key` nor `api_key_env` is configured.
+    None,
+}
+
+impl ApiKeySource {
+    /// One line for a person, naming the place rather than the mechanism.
+    pub fn label(&self) -> String {
+        match self {
+            ApiKeySource::Inline => "configured (inline)".to_string(),
+            ApiKeySource::Auth => "configured (auth.json)".to_string(),
+            ApiKeySource::Env(name) => format!("configured via ${name}"),
+            ApiKeySource::EnvEmpty(name) => format!("MISSING (${name} is empty)"),
+            ApiKeySource::EnvUnset(name) => format!("MISSING (${name} not set)"),
+            ApiKeySource::None => "MISSING (no api_key or api_key_env)".to_string(),
+        }
+    }
+}
+
 impl Config {
     pub fn default_with_provider(name: &str, provider: ProviderConfig) -> Self {
         let mut providers = HashMap::new();
@@ -940,19 +972,82 @@ impl Config {
     /// falls through to auth.json / the environment instead of breaking every
     /// request with an empty key.
     pub fn api_key_for(&self, provider: &ProviderConfig, name: &str) -> Option<String> {
+        self.resolve_api_key(provider, name).0
+    }
+
+    /// Where this provider's key comes from, and its value.
+    ///
+    /// One resolver behind both, so the line a UI prints and the key a turn uses cannot disagree
+    /// about which source won — the failure that looks like a stale key and is really a different
+    /// precedence rule in two places.
+    ///
+    /// The order is the plan's ("inline > auth.json > env", item 10), and `EnvEmpty`/`EnvUnset`
+    /// are separate cases because "you set the variable to nothing" and "you never set it" have
+    /// different fixes.
+    pub fn resolve_api_key(
+        &self,
+        provider: &ProviderConfig,
+        name: &str,
+    ) -> (Option<String>, ApiKeySource) {
         if let Some(key) = provider.api_key.as_deref().filter(|k| !k.is_empty()) {
-            return Some(key.to_string());
+            return (Some(key.to_string()), ApiKeySource::Inline);
         }
         if let Some(key) = load_auth().get(name) {
-            return Some(key.clone());
+            return (Some(key.clone()), ApiKeySource::Auth);
         }
-        provider
+        let Some(env_name) = provider.api_key_env.as_deref() else {
+            return (None, ApiKeySource::None);
+        };
+        match env::var(env_name) {
+            // An empty-but-set variable is treated as unset, matching the inline-key rule above
+            // and `resolved_web_search_api_key`.
+            Ok(value) if !value.is_empty() => {
+                (Some(value), ApiKeySource::Env(env_name.to_string()))
+            }
+            Ok(_) => (None, ApiKeySource::EnvEmpty(env_name.to_string())),
+            Err(_) => (None, ApiKeySource::EnvUnset(env_name.to_string())),
+        }
+    }
+
+    /// Sources that are set but **losing** to a higher-priority one.
+    ///
+    /// Not an error — precedence is deliberate, and the plan asks for exactly this order. It is
+    /// worth saying out loud anyway, because the usual cause is a key the user replaced in one
+    /// place and forgot in another, and the symptom ("my new key is not being used") points at
+    /// nothing in particular. Each sentence names both places, so the fix is a decision rather
+    /// than a hunt.
+    pub fn api_key_conflicts(&self, provider: &ProviderConfig, name: &str) -> Vec<String> {
+        let (_, winner) = self.resolve_api_key(provider, name);
+        let mut conflicts = Vec::new();
+
+        let auth = load_auth().contains_key(name);
+        let env_name = provider
             .api_key_env
-            .as_ref()
-            // An empty-but-set variable is treated as unset, matching the
-            // inline-key rule above and resolved_web_search_api_key.
-            .and_then(|env_name| env::var(env_name).ok())
-            .filter(|k| !k.is_empty())
+            .as_deref()
+            .filter(|v| env::var(v).is_ok_and(|value| !value.is_empty()));
+
+        match &winner {
+            ApiKeySource::Inline => {
+                if auth {
+                    conflicts.push(
+                        "auth.json also holds a key for this provider — the inline one wins".into(),
+                    );
+                }
+                if let Some(env_name) = env_name {
+                    conflicts.push(format!(
+                        "${env_name} is also set — the inline key wins, and a stale value there \
+                         will look like the inline key being ignored"
+                    ));
+                }
+            }
+            ApiKeySource::Auth => {
+                if let Some(env_name) = env_name {
+                    conflicts.push(format!("${env_name} is also set — the auth.json key wins"));
+                }
+            }
+            _ => {}
+        }
+        conflicts
     }
 
     /// Persist an API key to `auth.json` (kept separate from config.toml so
@@ -1321,6 +1416,109 @@ pub fn default_max_output_tokens() -> u32 {
 
 #[cfg(test)]
 mod tests {
+    /// A provider name that cannot be in anybody's `auth.json`, so the resolution tests are
+    /// hermetic without touching the config directory: the auth lookup misses, and what is left
+    /// is the order between inline and the environment.
+    const GHOST: &str = "firment-test-provider-that-does-not-exist";
+
+    /// A config from TOML text, which is also the shape a user writes — `#[serde(default)]` on
+    /// the fields means the minimal case needs three lines.
+    fn cfg_from(toml_text: &str) -> Config {
+        toml::from_str(toml_text).expect("a config from TOML")
+    }
+
+    fn ghost_config(extra: &str) -> (Config, ProviderConfig) {
+        let text = format!(
+            "default_provider = \"{GHOST}\"\n\
+             [providers.{GHOST}]\n\
+             type = \"openai\"\n\
+             model = \"mock\"\n{extra}"
+        );
+        let config = cfg_from(&text);
+        let provider = config.providers[GHOST].clone();
+        (config, provider)
+    }
+
+    #[test]
+    fn every_source_says_where_it_came_from() {
+        // The line a person reads. Each case has a different *fix*, which is why they are
+        // separate variants rather than one "missing".
+        assert_eq!(ApiKeySource::Inline.label(), "configured (inline)");
+        assert_eq!(ApiKeySource::Auth.label(), "configured (auth.json)");
+        assert_eq!(ApiKeySource::Env("K".into()).label(), "configured via $K");
+        assert_eq!(
+            ApiKeySource::EnvEmpty("K".into()).label(),
+            "MISSING ($K is empty)"
+        );
+        assert_eq!(
+            ApiKeySource::EnvUnset("K".into()).label(),
+            "MISSING ($K not set)"
+        );
+        assert_eq!(
+            ApiKeySource::None.label(),
+            "MISSING (no api_key or api_key_env)"
+        );
+    }
+
+    #[test]
+    fn the_resolution_names_the_source_it_used() {
+        // Inline wins outright and never consults anything else.
+        let (inline, provider) = ghost_config(
+            "api_key = \"sk-inline\"\napi_key_env = \"FIRMENT_TEST_KEY_UNSET_4C1A\"\n",
+        );
+        let (key, source) = inline.resolve_api_key(&provider, GHOST);
+        assert_eq!(key.as_deref(), Some("sk-inline"));
+        assert_eq!(source, ApiKeySource::Inline);
+
+        // Nothing configured at all.
+        let (bare, provider) = ghost_config("");
+        assert_eq!(
+            bare.resolve_api_key(&provider, GHOST),
+            (None, ApiKeySource::None)
+        );
+
+        // A variable that is named and not set is a different case from no variable: the fix is
+        // "export it", not "configure one".
+        let (unset, provider) = ghost_config("api_key_env = \"FIRMENT_TEST_KEY_UNSET_4C1A\"\n");
+        assert_eq!(
+            unset.resolve_api_key(&provider, GHOST),
+            (
+                None,
+                ApiKeySource::EnvUnset("FIRMENT_TEST_KEY_UNSET_4C1A".into())
+            )
+        );
+    }
+
+    #[test]
+    fn a_losing_source_is_named_in_a_conflict() {
+        // The case the plan asks for: precedence is deliberate, but "my new inline key is being
+        // ignored" points at nothing unless the sentence says the environment still holds one.
+        //
+        // `set_var` is unsafe in edition 2024 and acceptable here for one reason: the name is
+        // unique to this test, so no other test can observe it and no ordering can change the
+        // answer.
+        const ENV_NAME: &str = "FIRMENT_TEST_KEY_CONFLICT_7B2E";
+        unsafe { std::env::set_var(ENV_NAME, "sk-stale") };
+
+        let (config, provider) = ghost_config(&format!(
+            "api_key = \"sk-inline\"\napi_key_env = \"{ENV_NAME}\"\n"
+        ));
+        let conflicts = config.api_key_conflicts(&provider, GHOST);
+        assert_eq!(conflicts.len(), 1, "{conflicts:?}");
+        assert!(conflicts[0].contains(ENV_NAME), "{conflicts:?}");
+        assert!(conflicts[0].contains("inline"), "{conflicts:?}");
+
+        // With no inline key the environment wins, and there is nothing to report.
+        let (env_only, provider) = ghost_config(&format!("api_key_env = \"{ENV_NAME}\"\n"));
+        assert_eq!(
+            env_only.resolve_api_key(&provider, GHOST).1,
+            ApiKeySource::Env(ENV_NAME.into())
+        );
+        assert!(env_only.api_key_conflicts(&provider, GHOST).is_empty());
+
+        unsafe { std::env::remove_var(ENV_NAME) };
+    }
+
     use super::*;
 
     #[test]

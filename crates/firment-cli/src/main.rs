@@ -1276,16 +1276,6 @@ fn masked_key(key: &str) -> String {
 /// resolves it (inline, then auth.json, then the environment). Display only: the
 /// usability verdict below comes from the kernel, so the two cannot disagree about
 /// *whether* a key exists — only this line can name the wrong place.
-fn describe_key_source(provider: &firment_core::ProviderConfig) -> &'static str {
-    if provider.api_key.as_deref().is_some_and(|k| !k.is_empty()) {
-        "inline (config.toml)"
-    } else {
-        // auth.json and the environment are indistinguishable here without reading
-        // the store twice; `usable` below is the line that is allowed to decide.
-        "auth.json or the environment"
-    }
-}
-
 /// `firm config --show`: the effective configuration, with every secret masked.
 fn show_config(config: &Config, path: &Path, out: &mut impl std::io::Write) -> std::io::Result<()> {
     writeln!(out, "config file: {}", path.display())?;
@@ -1301,7 +1291,15 @@ fn show_config(config: &Config, path: &Path, out: &mut impl std::io::Write) -> s
             writeln!(out, "  base_url: {url}")?;
         }
         writeln!(out, "  model   : {}", provider.model)?;
-        writeln!(out, "  key     : {}", describe_key_source(provider))?;
+        // The source, named exactly: the kernel's own resolver decides, so this view cannot
+        // claim a different origin from the one a turn would use.
+        let (_, source) = config.resolve_api_key(provider, name);
+        writeln!(out, "  key     : {}", source.label())?;
+        // Precedence is deliberate; a second source still holding a value usually is not. The
+        // plan asks for this to stand out, and without a colour facility the words do that.
+        for conflict in config.api_key_conflicts(provider, name) {
+            writeln!(out, "  ! conflict: {conflict}")?;
+        }
     }
     // The usability verdict is the kernel's own resolution — inline, then auth.json,
     // then the environment — so this view cannot call a provider usable when a turn

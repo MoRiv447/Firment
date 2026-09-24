@@ -8,8 +8,8 @@
 //! instead of failing mid-task with a confusing tool error.
 
 use crate::install;
+use firment_core::Config;
 use firment_core::config::config_path;
-use firment_core::{Config, load_auth};
 use std::env;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -24,25 +24,11 @@ pub(crate) fn doctor_key(
     name: &str,
     provider: &firment_core::config::ProviderConfig,
 ) -> (Option<String>, String) {
-    let key = config.api_key_for(provider, name);
-    let label = match &key {
-        Some(_) if provider.api_key.as_deref().is_some_and(|k| !k.is_empty()) => {
-            "configured (inline)".to_string()
-        }
-        Some(_) if load_auth().contains_key(name) => "configured (auth.json)".to_string(),
-        Some(_) => format!(
-            "configured via ${}",
-            provider.api_key_env.as_deref().unwrap_or_default()
-        ),
-        None => match provider.api_key_env.as_deref() {
-            Some(env_name) if env::var(env_name).is_ok() => {
-                format!("MISSING (${env_name} is empty)")
-            }
-            Some(env_name) => format!("MISSING (${env_name} not set)"),
-            None => "MISSING (no api_key or api_key_env)".to_string(),
-        },
-    };
-    (key, label)
+    // One resolver in the kernel, so the doctor and `firm config --show` cannot disagree about
+    // which source won — they used to be two implementations, and the weaker one could only say
+    // "auth.json or the environment".
+    let (key, source) = config.resolve_api_key(provider, name);
+    (key, source.label())
 }
 
 /// Probe every configured provider, printing the detail and returning which ones answered.
