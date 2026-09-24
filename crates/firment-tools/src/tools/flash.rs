@@ -173,6 +173,11 @@ impl Tool for Flash {
         let hist_file = resolved.to_string_lossy().into_owned();
         let hist_probe = probe.clone();
 
+        // The phase the plan asks for (item 7): the download is the long part, and a card that
+        // says "flashing" for ninety seconds tells the user nothing they cannot guess.
+        if let Some(progress) = ctx.progress.as_ref() {
+            progress.phase("downloading to the target");
+        }
         let result =
             run_probe_rs(dl_args, &ctx.cwd, timeout_ms, Some(ctx.cancel.clone()), &[]).await;
         let outcome: Result<ToolOutput, ToolError> = match result {

@@ -243,6 +243,8 @@ impl App {
                         name: name.clone(),
                         seq: u64::MAX,
                         running: false,
+                        // A restored card has no live phase to show: the tool is long over.
+                        progress: None,
                         ok,
                         detail: Some(content.clone()),
                         expanded,
@@ -305,14 +307,31 @@ impl App {
                     self.thinking_since = Some(Instant::now());
                 }
             }
-            AgentEvent::Progress { .. } => {
-                // Carried by the core, not drawn yet — and deliberately so rather than by
-                // oversight. The phase belongs on the *running card*, beside its spinner, and the
-                // card's own rules apply there (§16.2: nothing is shown for a run under two
-                // seconds, because a line that appears and vanishes is worse than silence). That
-                // means touching the card render, which is the next step; this arm exists so the
-                // core can carry the event at all — the alternative is a non-exhaustive match
-                // that does not build.
+            AgentEvent::Progress { seq, event, .. } => {
+                // §16.2: nothing is shown for a run under two seconds, because a line that
+                // appears and vanishes is worse than silence. The gate is applied *here*, where
+                // the card's own clock is, rather than in the core: the core reports, the card
+                // decides what deserves drawing.
+                let running = self.items.iter().rev().find_map(|item| match item {
+                    Item::Tool {
+                        seq: s, started_at, ..
+                    } if *s == seq => Some(*started_at),
+                    _ => None,
+                });
+                let long_enough = running
+                    .flatten()
+                    .is_some_and(|started| started.elapsed() >= std::time::Duration::from_secs(2));
+                if !long_enough {
+                    return;
+                }
+                if let Some(Item::Tool { progress, .. }) = self
+                    .items
+                    .iter_mut()
+                    .rev()
+                    .find(|item| matches!(item, Item::Tool { seq: s, .. } if *s == seq))
+                {
+                    *progress = Some(event.phase);
+                }
             }
             AgentEvent::ToolStart { name, args, seq } => {
                 self.ai_thinking = false;
@@ -334,6 +353,7 @@ impl App {
                     summary,
                     detail: None,
                     expanded: false,
+                    progress: None,
                     started_at: Some(Instant::now()),
                     ended_at: None,
                     review: None,
@@ -374,6 +394,7 @@ impl App {
                         summary: current_summary,
                         detail: current_detail,
                         expanded,
+                        progress,
                         started_at,
                         ended_at: current_end,
                         // The review arrives on its own event, not with the tool's end.
@@ -383,6 +404,10 @@ impl App {
                         && *item_seq == seq
                     {
                         *running = false;
+                        // The phase means "what it is doing now", so a finished tool has none —
+                        // a stale "downloading to the target" under a ✓ would be a lie about the
+                        // past dressed as a statement about the present.
+                        *progress = None;
                         *current_ok = ok;
                         *current_summary = summary;
                         *expanded = auto_expand;
@@ -2250,6 +2275,10 @@ pub(crate) enum Item {
         /// Whether this card's diff body is open. Per card, and always reset
         /// to the small-diff default when the card is (re)built.
         expanded: bool,
+        /// What the tool is doing now, from `AgentEvent::Progress`. Only ever set for a *running*
+        /// card that has already been going long enough to matter — the two-second rule is applied
+        /// where the event arrives, not here (see the arm in `on_agent`).
+        progress: Option<String>,
         /// Wall-clock start, for the card's elapsed label. `None` for a card
         /// restored from a stored transcript: the tool ran, but nobody timed it.
         started_at: Option<Instant>,

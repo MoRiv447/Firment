@@ -284,6 +284,7 @@ impl App {
                 summary,
                 detail,
                 expanded,
+                progress,
                 started_at,
                 ended_at,
                 review,
@@ -351,8 +352,14 @@ impl App {
                         }
                     })
                     .unwrap_or_default();
+                // What the tool is doing *now*. Only ever set once the card has been running for
+                // more than §16.2's two seconds, so this cannot add a line that comes and goes.
+                let phase = progress
+                    .as_deref()
+                    .map(|phase| format!("  · {phase}"))
+                    .unwrap_or_default();
                 let line = format!(
-                    "{symbol} {name}{elapsed} {marker} {}{}{badge}",
+                    "{symbol} {name}{elapsed} {marker} {}{}{badge}{phase}",
                     truncate_chars(summary, 120),
                     counts.unwrap_or_default()
                 );

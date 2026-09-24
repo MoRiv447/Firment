@@ -1847,6 +1847,7 @@ mod tests {
             summary: "Edited a.c".to_string(),
             detail: Some(diff),
             expanded: true,
+            progress: None,
             // Hand-built, so there is no clock on it -- the same shape a card
             // restored from a stored transcript has, which is what the elapsed
             // label has to render as nothing rather than `0.0s`.
