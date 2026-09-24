@@ -1440,7 +1440,7 @@ impl Agent {
                     continue;
                 }
 
-                let commit_result = lock_journal(&journal).commit();
+                let commit_result = lock_journal(&journal).commit_at_seq(self.tool_seq);
                 match commit_result {
                     Ok(changes) if !changes.is_empty() => {
                         if let Err(e) = ledger.append(&changes) {
@@ -1536,7 +1536,7 @@ impl Agent {
                 }
             }
         } else {
-            match lock_journal(&journal).commit() {
+            match lock_journal(&journal).commit_at_seq(self.tool_seq) {
                 Ok(changes) if !changes.is_empty() => {
                     if let Err(e) =
                         Ledger::new(self.store.ledger_path(&self.session.id)).append(&changes)
@@ -1742,6 +1742,24 @@ impl Agent {
     /// Restore the most recently committed edit batch for this session.
     pub async fn undo_last(&mut self) -> Result<String, String> {
         self.undo_turns(1).await
+    }
+
+    /// Undo back to **before** the turn that contained tool call `seq` — the shape the review
+    /// linkage needs ("rewind to before the step where this was found").
+    ///
+    /// Fails with a sentence rather than a guess when the session's turns predate the record:
+    /// undoing the wrong number of turns loses work, and the user can still say `/undo <n>`.
+    pub async fn undo_to_before(&mut self, seq: u64) -> Result<String, String> {
+        let dir = self.store.undo_dir(&self.session.id);
+        let Some(turns) = EditJournal::turns_before_seq(&dir, seq) else {
+            return Err(format!(
+                "cannot tell which turn contained tool call #{seq}: this session's turns do not \
+                 record which calls they made (they were written before that was kept). Use \
+                 `/undo <n>` with a count instead."
+            ));
+        };
+        let message = self.undo_turns(turns).await?;
+        Ok(format!("{message}\n  (rewound past tool call #{seq})"))
     }
 
     /// Undo up to `turns` committed turns (see [`EditJournal::undo_turns`]).

@@ -472,6 +472,19 @@ pub(crate) fn spawn_agent_task(
                             .await;
                     }
                 },
+                AgentCmd::UndoBefore { seq } => {
+                    let mut agent = agent.lock().await;
+                    match agent.undo_to_before(seq).await {
+                        Ok(summary) => {
+                            agent.emit(AgentEvent::Info(summary)).await;
+                        }
+                        Err(e) => {
+                            agent
+                                .emit(AgentEvent::Error(format!("undo failed: {e}")))
+                                .await;
+                        }
+                    }
+                }
                 AgentCmd::Undo { turns } => {
                     let mut agent = agent.lock().await;
                     match agent.undo_turns(turns).await {
@@ -790,6 +803,12 @@ pub(crate) enum AgentCmd {
     Undo {
         /// How many committed turns to walk back. `/undo` is one; `/undo 3` is three.
         turns: usize,
+    },
+    /// `/undo --before <seq>`: walk back past the turn that contained that tool call. What the
+    /// review cards need — the seq is printed on the card (`#12`), so a finding's own step is
+    /// something the user can name.
+    UndoBefore {
+        seq: u64,
     },
     Ledger {
         /// Where to write the changes as a unified diff (plan §8's `/ledger --export`).

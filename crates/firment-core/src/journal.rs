@@ -17,6 +17,15 @@ struct EntryRecord {
 struct IndexRecord {
     created_at: u64,
     entries: Vec<EntryRecord>,
+    /// The highest tool-call `seq` this turn reached (0 when it is not known).
+    ///
+    /// The counter is monotonic *within a turn*, so the range `1..=max_seq` is exactly the calls
+    /// this turn made — which is what lets "rewind to before the step where the review found a
+    /// problem" be answered by a number instead of a mapping table. `serde(default)` keeps every
+    /// entry written before this field existed readable; those read back as 0, and the caller is
+    /// told the answer is unknown rather than given a wrong one.
+    #[serde(default)]
+    max_seq: u64,
 }
 
 /// Result of restoring a committed undo entry.
@@ -357,6 +366,15 @@ impl EditJournal {
     }
 
     pub fn commit(&mut self) -> Result<Vec<LedgerChange>, String> {
+        self.commit_at_seq(0)
+    }
+
+    /// `commit`, recording which tool calls the turn reached.
+    ///
+    /// `max_seq` is the turn's highest seq, and it is what makes `/undo --before <seq>` possible:
+    /// with it, "which turn contained call 7" is arithmetic; without it, it would need a mapping
+    /// kept in step with the journal, which is one more thing to get wrong.
+    pub fn commit_at_seq(&mut self, max_seq: u64) -> Result<Vec<LedgerChange>, String> {
         if self.entries.is_empty() {
             return Ok(Vec::new());
         }
@@ -365,12 +383,23 @@ impl EditJournal {
         let record = IndexRecord {
             created_at: created,
             entries: self.entries.clone(),
+            max_seq,
         };
-        let name = self.index_name(self.next_seq);
-        // The slot must be this commit's own: `next_seq` only moves when a
-        // backup is taken, so a turn that edited brand-new files would reuse
-        // the previous turn's name and overwrite its undo entry.
+        // The slot must be this commit's own: `next_seq` only moves when a backup is taken, so a
+        // turn that edited brand-new files would reuse the previous turn's name and overwrite its
+        // undo entry.
+        //
+        // And the *name* must be free, not merely derived from the clock. `now_nanos` has
+        // millisecond resolution on Windows, so two turns committed in the same tick used to
+        // write to the same file — the second silently replacing the first's undo entry and
+        // losing a turn of history. The stamp still orders entries; this walks the sequence up
+        // until the name is unused, which keeps that ordering and makes the collision impossible.
         self.next_seq += 1;
+        let mut name = self.index_name(self.next_seq);
+        while self.dir.join(&name).exists() {
+            self.next_seq += 1;
+            name = self.index_name(self.next_seq);
+        }
         let text = serde_json::to_string_pretty(&record).map_err(|e| e.to_string())?;
         fs::write(self.dir.join(name), text).map_err(|e| e.to_string())?;
 
@@ -413,6 +442,48 @@ impl EditJournal {
                 restored,
             },
         ))
+    }
+
+    /// How many turns to undo so that the turn **containing** `seq` is undone — the count a
+    /// "rewind to before the step where this was found" needs.
+    ///
+    /// `None` when no recorded turn knows its `max_seq`: a session from before this was recorded
+    /// cannot answer the question, and guessing would undo the wrong amount of work. The caller
+    /// says so instead, and `/undo <n>` still works.
+    pub fn turns_before_seq(dir: &Path, seq: u64) -> Option<usize> {
+        let candidates = undo_candidates(dir).ok()?;
+        let mut counted = 0;
+        let mut answer: Option<usize> = None;
+        // Newest first, and the walk continues while turns *reach* `seq` — because "reaches" is
+        // not "contains". A turn reaching seq 5 also reaches seq 2 if an older turn made it, and
+        // the turn whose range actually contains the call is the **oldest** one that reaches it:
+        // its range starts after the turn below it ended.
+        //
+        // Getting this wrong is not academic: returning the newest turn that reached the call
+        // would rewind one turn for a finding from three turns ago, leaving the very edit the
+        // user asked to undo in place. This test caught exactly that.
+        for path in candidates.iter().rev() {
+            let Ok(text) = fs::read_to_string(path) else {
+                return None;
+            };
+            let Ok(record) = serde_json::from_str::<IndexRecord>(&text) else {
+                return None;
+            };
+            counted += 1;
+            if record.max_seq == 0 {
+                // A turn from before `max_seq` was recorded cannot answer the question. Neither
+                // can the ones past it, so there is nothing to give the caller but `None`.
+                return None;
+            }
+            if record.max_seq >= seq {
+                answer = Some(counted);
+            } else {
+                // This turn ended before the call, so the one above it in age is the owner.
+                break;
+            }
+        }
+        // `None` when no turn reached it: the call is not in this session's recorded turns.
+        answer
     }
 
     /// How many committed turns are available to undo. Zero is a normal state, not an error —
@@ -713,6 +784,51 @@ fn undo_candidates(dir: &Path) -> Result<Vec<PathBuf>, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn turns_before_seq_counts_back_to_the_turn_that_contained_a_call() {
+        // The review linkage: a finding names a tool call (`seq`), and the rewind has to include
+        // the turn that made it. Three turns reaching seqs 1, 3 and 5 — rewinding past call 1
+        // takes one turn, past 2 takes two (it was in the turn that reached 3), past 5 takes all
+        // three.
+        let dir = tempfile::tempdir().unwrap();
+        let undo_dir = dir.path().join("undo");
+        for (i, max_seq) in [1u64, 3, 5].iter().enumerate() {
+            let file = dir.path().join(format!("f{i}.rs"));
+            std::fs::write(&file, "original\n").unwrap();
+            let mut journal = EditJournal::new(undo_dir.clone());
+            journal.begin(&file).unwrap();
+            std::fs::write(&file, "changed\n").unwrap();
+            journal.commit_at_seq(*max_seq).unwrap();
+        }
+
+        // Call 5 was in the newest turn; call 3 in the middle; call 1 in the oldest — so
+        // rewinding *past* it takes one, two and three turns respectively.
+        assert_eq!(EditJournal::turns_before_seq(&undo_dir, 5), Some(1));
+        assert_eq!(EditJournal::turns_before_seq(&undo_dir, 3), Some(2));
+        assert_eq!(EditJournal::turns_before_seq(&undo_dir, 1), Some(3));
+        // Call 2 was made by the middle turn (its range is 2..=3), so it takes two as well.
+        assert_eq!(EditJournal::turns_before_seq(&undo_dir, 2), Some(2));
+        // A call this session never made: nothing to rewind, and no guess.
+        assert_eq!(EditJournal::turns_before_seq(&undo_dir, 9), None);
+    }
+
+    #[test]
+    fn a_turn_without_a_recorded_seq_says_so_instead_of_guessing() {
+        // Entries written before `max_seq` existed still parse (serde default) and read as 0. The
+        // count is then unknowable, and `None` is the only honest answer — undoing the wrong
+        // number of turns loses work, and `/undo <n>` is right there.
+        let dir = tempfile::tempdir().unwrap();
+        let undo_dir = dir.path().join("undo");
+        let file = dir.path().join("a.rs");
+        std::fs::write(&file, "original\n").unwrap();
+        let mut journal = EditJournal::new(undo_dir.clone());
+        journal.begin(&file).unwrap();
+        std::fs::write(&file, "changed\n").unwrap();
+        journal.commit().unwrap();
+
+        assert_eq!(EditJournal::turns_before_seq(&undo_dir, 1), None);
+    }
+
     #[test]
     fn undo_turns_walks_back_several_turns_and_stops_at_the_end() {
         // The rewind, at the level where it can be checked: three committed turns, walk back two,
