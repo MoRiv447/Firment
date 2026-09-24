@@ -198,7 +198,20 @@ export type FrontendEvent =
   | { type: 'turn_start'; session_id?: string | null }
   | { type: 'text_delta'; session_id?: string | null; text: string }
   | { type: 'thinking'; session_id?: string | null; text: string }
-  | { type: 'tool_start'; session_id?: string | null; name: string; args: unknown; seq: number }
+  /**
+   * `owner` is the agent that issued the call: absent/null for the session's own turn, the
+   * subagent's id for a delegated one. It is not redundant with `seq` — a nested agent numbers
+   * its calls from its own session, so `#3` can exist twice in one wave, and a card addressed by
+   * number alone gets closed, badged or phased by whichever agent got there first.
+   */
+  | {
+      type: 'tool_start';
+      session_id?: string | null;
+      name: string;
+      args: unknown;
+      seq: number;
+      owner?: string | null;
+    }
   | {
       type: 'tool_end';
       session_id?: string | null;
@@ -209,27 +222,30 @@ export type FrontendEvent =
        * everything else and for the cancel/timeout paths. */
       detail?: string | null;
       seq: number;
+      owner?: string | null;
     }
   | { type: 'turn_end'; session_id?: string | null; text: string }
   /**
-   * A long tool reporting a phase. `seq` names the tool, so the phase lands on its own card —
-   * a subagent's tool and the turn's own are indistinguishable otherwise.
+   * A long tool reporting a phase. `seq` + `owner` name the tool, so the phase lands on its own
+   * card — a subagent's tool and the turn's own are indistinguishable otherwise.
    */
   | {
       type: 'progress';
       session_id?: string | null;
       tool: string;
       seq: number;
+      owner?: string | null;
       phase: string;
       current: number;
       total: number;
       eta_ms?: number | null;
     }
-  /** A self-review of one tool's change finished (plan §4-A). `seq` names the tool. */
+  /** A self-review of one tool's change finished (plan §4-A). `seq` + `owner` name the tool. */
   | {
       type: 'review';
       session_id?: string | null;
       seq: number;
+      owner?: string | null;
       findings: ReviewFinding[];
     }
   // UI-internal: App dispatches this after the post-turn transcript fetch

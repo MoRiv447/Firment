@@ -96,25 +96,34 @@ pub fn record_of(event: &AgentEvent, at: u64) -> Option<LogRecord> {
             "turn_end".to_string(),
             format!("turn ended ({} chars)", text.chars().count()),
         ),
-        AgentEvent::ToolStart { name, seq, .. } => {
-            ("tool_start".to_string(), format!("#{seq} {name}"))
-        }
+        AgentEvent::ToolStart {
+            name, seq, owner, ..
+        } => (
+            "tool_start".to_string(),
+            format!("{} {name}", card_ref(*seq, owner)),
+        ),
         AgentEvent::ToolEnd {
             name,
             ok,
             summary,
             seq,
+            owner,
             ..
         } => (
             "tool_end".to_string(),
             format!(
-                "#{seq} {name} {} — {summary}",
+                "{} {name} {} — {summary}",
+                card_ref(*seq, owner),
                 if *ok { "ok" } else { "FAILED" }
             ),
         ),
-        AgentEvent::Review { seq, findings } => (
+        AgentEvent::Review {
+            seq,
+            owner,
+            findings,
+        } => (
             "review".to_string(),
-            format!("#{seq} {} finding(s)", findings.len()),
+            format!("{} {} finding(s)", card_ref(*seq, owner), findings.len()),
         ),
         AgentEvent::Info(message) => ("info".to_string(), one_line(message)),
         AgentEvent::Error(message) => ("error".to_string(), one_line(message)),
@@ -139,6 +148,18 @@ pub fn record_of(event: &AgentEvent, at: u64) -> Option<LogRecord> {
 
 fn one_line(text: &str) -> String {
     truncate(&text.split_whitespace().collect::<Vec<_>>().join(" "), 200)
+}
+
+/// A reference to the tool card an event belongs to.
+///
+/// A bare `#7` stopped identifying one thing: a delegated call is numbered from the subagent's
+/// own session, so the parent turn and a `task` child can each show `#7`. The log line says which
+/// one it was, because a reader who cannot find the card cannot use the entry.
+fn card_ref(seq: u64, owner: &Option<String>) -> String {
+    match owner {
+        Some(_) => format!("#{seq} (subagent)"),
+        None => format!("#{seq}"),
+    }
 }
 
 fn truncate(text: &str, limit: usize) -> String {
@@ -392,6 +413,7 @@ mod tests {
                 name: "build".to_string(),
                 args: serde_json::json!({}),
                 seq: 3,
+                owner: None,
             },
             AgentEvent::ToolEnd {
                 name: "build".to_string(),
@@ -399,9 +421,11 @@ mod tests {
                 summary: "exit 1".to_string(),
                 detail: None,
                 seq: 3,
+                owner: None,
             },
             AgentEvent::Review {
                 seq: 3,
+                owner: None,
                 findings: Vec::new(),
             },
             AgentEvent::Info("note".to_string()),
@@ -412,6 +436,41 @@ mod tests {
             assert_eq!(record.at, 5);
             assert!(!record.summary.is_empty());
         }
+        // The parent turn and a delegated call can both be number 3, since each agent numbers from
+        // its own session. A log line that cannot tell them apart cannot be followed back to the
+        // card it describes.
+        let delegated = record_of(
+            &AgentEvent::ToolEnd {
+                name: "build".to_string(),
+                ok: true,
+                summary: "exit 0".to_string(),
+                detail: None,
+                seq: 3,
+                owner: Some("sub-1".to_string()),
+            },
+            5,
+        )
+        .unwrap();
+        let own = record_of(
+            &AgentEvent::ToolStart {
+                name: "build".to_string(),
+                args: serde_json::json!({}),
+                seq: 3,
+                owner: None,
+            },
+            5,
+        )
+        .unwrap();
+        assert!(
+            delegated.summary.contains("(subagent)"),
+            "a delegated call must read as one: {}",
+            delegated.summary
+        );
+        assert!(
+            !own.summary.contains("(subagent)"),
+            "the session's own turn must not: {}",
+            own.summary
+        );
         // A failure says so: a log that erased the difference would be a log that lies.
         let failed = record_of(
             &AgentEvent::ToolEnd {
@@ -420,6 +479,7 @@ mod tests {
                 summary: "exit 1".to_string(),
                 detail: None,
                 seq: 3,
+                owner: None,
             },
             5,
         )

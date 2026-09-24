@@ -1155,6 +1155,7 @@ mod tests {
         app.on_agent(AgentEvent::TextDelta("stale delta".to_string()));
         app.on_agent(AgentEvent::Info("stale info".to_string()));
         app.on_agent(AgentEvent::ToolStart {
+            owner: None,
             name: "read_file".to_string(),
             args: serde_json::json!({}),
             seq: 1,
@@ -1325,6 +1326,7 @@ mod tests {
     fn a_card_is_timed_from_its_own_start_and_end() {
         let mut app = test_app();
         app.on_agent(AgentEvent::ToolStart {
+            owner: None,
             name: "build".to_string(),
             args: serde_json::json!({}),
             seq: 1,
@@ -1343,6 +1345,7 @@ mod tests {
         assert!(ended_at.is_none());
 
         app.on_agent(AgentEvent::ToolEnd {
+            owner: None,
             name: "build".to_string(),
             ok: true,
             summary: "built".to_string(),
@@ -1375,11 +1378,13 @@ mod tests {
         let mut app = test_app();
         for seq in 1..=2u64 {
             app.on_agent(AgentEvent::ToolStart {
+                owner: None,
                 name: "flash".to_string(),
                 args: serde_json::json!({}),
                 seq,
             });
             app.on_agent(AgentEvent::ToolEnd {
+                owner: None,
                 name: "flash".to_string(),
                 ok: true,
                 summary: String::new(),
@@ -1397,6 +1402,7 @@ mod tests {
     fn a_measurement_from_the_analyzer_reaches_the_la_block() {
         let mut app = test_app();
         app.on_agent(AgentEvent::ToolEnd {
+            owner: None,
             name: "la".to_string(),
             ok: true,
             summary: String::new(),
@@ -1430,6 +1436,7 @@ mod tests {
     fn a_capture_does_not_become_a_measurement_in_the_panel() {
         let mut app = test_app();
         app.on_agent(AgentEvent::ToolEnd {
+            owner: None,
             name: "la".to_string(),
             ok: true,
             summary: String::new(),
@@ -1557,6 +1564,7 @@ mod tests {
 
         // Rung 1 is earned by writing code, before anything compiles.
         app.on_agent(AgentEvent::ToolEnd {
+            owner: None,
             name: "edit_file".to_string(),
             ok: true,
             summary: String::new(),
@@ -1564,6 +1572,7 @@ mod tests {
             seq: 1,
         });
         app.on_agent(AgentEvent::ToolEnd {
+            owner: None,
             name: "build".to_string(),
             ok: true,
             summary: String::new(),
@@ -1582,6 +1591,7 @@ mod tests {
     fn a_failed_step_does_not_tick_its_rung() {
         let mut app = test_app();
         app.on_agent(AgentEvent::ToolEnd {
+            owner: None,
             name: "build".to_string(),
             ok: false,
             summary: String::new(),
@@ -1596,6 +1606,7 @@ mod tests {
     fn a_running_step_shows_the_spinner_not_a_tick() {
         let mut app = test_app();
         app.on_agent(AgentEvent::ToolStart {
+            owner: None,
             name: "flash".to_string(),
             args: serde_json::json!({}),
             seq: 1,
@@ -1840,6 +1851,7 @@ mod tests {
         .join("\n")
             + "\n";
         app.items.push(Item::Tool {
+            owner: None,
             name: "edit_file".to_string(),
             seq: 1,
             running: false,
@@ -1964,6 +1976,7 @@ mod tests {
         assert_eq!(app.status_text(), "thinking");
 
         app.on_agent(AgentEvent::ToolStart {
+            owner: None,
             name: "grep".to_string(),
             args: serde_json::json!({ "pattern": "fn main" }),
             seq: 1,
@@ -1971,6 +1984,7 @@ mod tests {
         assert_eq!(app.status_text(), "working · searching fn main…");
 
         app.on_agent(AgentEvent::ToolStart {
+            owner: None,
             name: "flash".to_string(),
             args: serde_json::json!({ "file": "app.elf" }),
             seq: 2,
@@ -1978,6 +1992,7 @@ mod tests {
         assert_eq!(app.status_text(), "working · 2× flashing app.elf…");
 
         app.on_agent(AgentEvent::ToolEnd {
+            owner: None,
             name: "flash".to_string(),
             ok: true,
             summary: String::new(),
@@ -1987,6 +2002,7 @@ mod tests {
         assert_eq!(app.status_text(), "working · searching fn main…");
 
         app.on_agent(AgentEvent::ToolEnd {
+            owner: None,
             name: "grep".to_string(),
             ok: true,
             summary: String::new(),
@@ -2269,11 +2285,13 @@ mod tests {
         let mut app = test_app();
         for seq in [1u64, 2] {
             app.on_agent(AgentEvent::ToolStart {
+                owner: None,
                 name: "edit_file".to_string(),
                 args: serde_json::json!({}),
                 seq,
             });
             app.on_agent(AgentEvent::ToolEnd {
+                owner: None,
                 name: "edit_file".to_string(),
                 ok: true,
                 summary: "Edited a.c".to_string(),
@@ -2284,6 +2302,7 @@ mod tests {
 
         // A review for a card that does not exist is dropped, not attached to the newest.
         app.on_agent(AgentEvent::Review {
+            owner: None,
             seq: 99,
             findings: findings.clone(),
         });
@@ -2297,6 +2316,7 @@ mod tests {
 
         // An empty review never badges: "0 findings" is not worth a mark on the card.
         app.on_agent(AgentEvent::Review {
+            owner: None,
             seq: 2,
             findings: Vec::new(),
         });
@@ -2310,6 +2330,7 @@ mod tests {
 
         // The real one lands on seq 1 — the older card — and not on seq 2 beside it.
         app.on_agent(AgentEvent::Review {
+            owner: None,
             seq: 1,
             findings: findings.clone(),
         });
@@ -2329,6 +2350,83 @@ mod tests {
             })
             .collect();
         assert_eq!(reviewed, vec![1]);
+    }
+
+    #[test]
+    fn a_delegated_call_cannot_touch_the_turns_own_card() {
+        // Each agent numbers its calls from its own session, so `#1` can exist twice in one wave.
+        // Comparing the number alone lets the subagent's events close and badge the parent's card,
+        // which leaves the parent's own card spinning with nothing left to stop it.
+        let mut app = test_app();
+        for owner in [None, Some("sub-1".to_string())] {
+            app.on_agent(AgentEvent::ToolStart {
+                owner,
+                name: "read_file".to_string(),
+                args: serde_json::json!({}),
+                seq: 1,
+            });
+        }
+        let open = app
+            .items
+            .iter()
+            .filter(|item| matches!(item, Item::Tool { running: true, .. }))
+            .count();
+        assert_eq!(open, 2, "both agents opened a card numbered 1");
+
+        app.on_agent(AgentEvent::ToolEnd {
+            owner: Some("sub-1".to_string()),
+            name: "read_file".to_string(),
+            ok: true,
+            summary: "read 12 lines".to_string(),
+            detail: None,
+            seq: 1,
+        });
+        let running: Vec<Option<String>> = app
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Tool {
+                    running: true,
+                    owner,
+                    ..
+                } => Some(owner.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            running,
+            vec![None],
+            "the delegated end stopped the turn's own card instead of its own"
+        );
+
+        app.on_agent(AgentEvent::Review {
+            owner: Some("sub-1".to_string()),
+            seq: 1,
+            findings: vec![firment_core::review::Finding::new(
+                "f1",
+                "the handle is never closed",
+                firment_core::review::Severity::High,
+                "self-review",
+                "d",
+            )],
+        });
+        let badged: Vec<Option<String>> = app
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Tool {
+                    review: Some(_),
+                    owner,
+                    ..
+                } => Some(owner.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            badged,
+            vec![Some("sub-1".to_string())],
+            "a delegated finding badged a card that did not earn it"
+        );
     }
 
     #[test]

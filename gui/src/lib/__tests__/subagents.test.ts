@@ -6,14 +6,14 @@ import type { FrontendEvent } from '../../types';
 /**
  * Subagent attribution.
  *
- * A nested agent shares the parent's event sink, so its tool calls arrive on the
- * parent's stream stamped with the parent's session id. Before the
- * `subagent_start` / `subagent_end` pair existed they were indistinguishable
- * from the main agent's, and the transcript showed a research subagent's
- * `read_file` as if the main agent had made it.
+ * A nested agent shares the parent's event sink, and each agent numbers its own calls from its
+ * own session — so `#1` can be two different cards in one turn. Every card-addressed event names
+ * its author (`owner`), and that is what puts a start, an end, a phase and a finding badge on the
+ * list belonging to the agent that made the call. Prose and reasoning carry no author, so the
+ * open-agent stack still decides where those go.
  *
- * The stack is the mechanism, so these are the cases that decide whether it
- * holds: nesting, out-of-order ends, and a run that never reports back.
+ * The cases that follow are the ones that decide whether it holds: nested frames, two agents
+ * running side by side, an author this UI never heard of, and a run that never reports back.
  */
 
 function apply(events: FrontendEvent[], from: TurnState = initialTurnState()): TurnState {
@@ -31,18 +31,20 @@ const end = (id: string, depth = 1): FrontendEvent => ({
   id,
   depth,
 });
-const toolStart = (seq: number, name: string): FrontendEvent => ({
+const toolStart = (seq: number, name: string, owner?: string): FrontendEvent => ({
   type: 'tool_start',
   name,
   args: {},
   seq,
+  owner: owner ?? null,
 });
-const toolEnd = (seq: number, name: string, ok = true): FrontendEvent => ({
+const toolEnd = (seq: number, name: string, ok = true, owner?: string): FrontendEvent => ({
   type: 'tool_end',
   name,
   ok,
   summary: `${name} done`,
   seq,
+  owner: owner ?? null,
 });
 const turnStart: FrontendEvent = { type: 'turn_start' };
 
@@ -51,8 +53,8 @@ describe('subagent attribution', () => {
     const s = apply([
       turnStart,
       start('a'),
-      toolStart(1, 'read_file'),
-      toolEnd(1, 'read_file'),
+      toolStart(1, 'read_file', 'a'),
+      toolEnd(1, 'read_file', true, 'a'),
       end('a'),
     ]);
     expect(s.turn?.tools).toEqual({});
@@ -67,22 +69,46 @@ describe('subagent attribution', () => {
     expect(s.subagents).toEqual([]);
   });
 
-  it('attributes to the innermost agent when subagents nest', () => {
+  it('attributes each call to the agent that issued it, through nesting', () => {
     const s = apply([
       turnStart,
       start('outer'),
-      toolStart(1, 'read_file'),
+      toolStart(1, 'read_file', 'outer'),
       start('inner', 2),
-      toolStart(2, 'grep'),
+      toolStart(2, 'grep', 'inner'),
       end('inner', 2),
-      toolStart(3, 'list_dir'),
+      toolStart(3, 'list_dir', 'outer'),
     ]);
     const outer = s.subagents.find((x) => x.id === 'outer');
     const inner = s.subagents.find((x) => x.id === 'inner');
-    // `grep` ran inside the inner agent; `list_dir` resumed in the outer one,
-    // which is what makes the stack worth having over a boolean flag.
+    // `grep` ran inside the inner agent; the other two belong to the outer one.
+    // The numbers do not decide this, because each agent counts from one.
     expect(outer?.steps.map((t) => t.name)).toEqual(['read_file', 'list_dir']);
     expect(inner?.steps.map((t) => t.name)).toEqual(['grep']);
+  });
+
+  it('keeps two parallel agents with the same call number apart', () => {
+    // The case a stack cannot answer: subagents run concurrently, so with two
+    // frames open the innermost one would take both agents' `#1` — one card
+    // would be closed by the other agent's end, and the first would spin.
+    const s = apply([
+      turnStart,
+      start('a'),
+      start('b'),
+      toolStart(1, 'read_file', 'a'),
+      toolStart(1, 'grep', 'b'),
+      toolEnd(1, 'read_file', true, 'a'),
+    ]);
+    const a = s.subagents.find((x) => x.id === 'a');
+    const b = s.subagents.find((x) => x.id === 'b');
+    expect(a?.steps.map((t) => [t.name, t.status])).toEqual([['read_file', 'ok']]);
+    expect(b?.steps.map((t) => [t.name, t.status])).toEqual([['grep', 'running']]);
+  });
+
+  it('shows a call whose author it never saw on the turn, rather than losing it', () => {
+    const s = apply([turnStart, toolStart(1, 'read_file', 'ghost'), toolEnd(1, 'read_file', true, 'ghost')]);
+    expect(Object.keys(s.turn?.tools ?? {})).toEqual(['1']);
+    expect(s.turn?.tools['1'].status).toBe('ok');
   });
 
   it('keeps a finished subagent in the list', () => {
@@ -113,7 +139,7 @@ describe('subagent attribution', () => {
   });
 
   it('ignores an end for an id it never saw', () => {
-    const s = apply([turnStart, start('a'), end('ghost'), toolStart(1, 'read_file')]);
+    const s = apply([turnStart, start('a'), end('ghost'), toolStart(1, 'read_file', 'a')]);
     const a = s.subagents.find((x) => x.id === 'a');
     expect(a?.steps).toHaveLength(1);
   });
@@ -157,7 +183,7 @@ describe('subagent attribution', () => {
     const s = apply([
       turnStart,
       start('a'),
-      toolStart(1, 'read_file'),
+      toolStart(1, 'read_file', 'a'),
       end('a'),
       { type: 'turn_end', text: 'done' },
       { type: 'turn_synced' },

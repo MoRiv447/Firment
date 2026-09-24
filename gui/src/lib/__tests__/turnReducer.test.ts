@@ -42,14 +42,25 @@ describe('turnReducer (IDE event->UI contract)', () => {
   });
 
   it("routes a nested agent's phase to its step, and drops one with no card", () => {
+    // Each agent numbers its own calls, so the turn and the subagent can both hold a `#6`.
+    // The phase says which one it belongs to, and only that card changes.
     const nested = feed([
       { type: 'turn_start' },
       { type: 'subagent_start', id: 's1', label: 'research', depth: 1 },
+      { type: 'tool_start', name: 'build', args: {}, seq: 6, owner: 's1' },
       { type: 'tool_start', name: 'build', args: {}, seq: 6 },
-      { type: 'progress', tool: 'build', seq: 6, phase: 'compiling', current: 0, total: 0 },
+      {
+        type: 'progress',
+        tool: 'build',
+        seq: 6,
+        owner: 's1',
+        phase: 'compiling',
+        current: 0,
+        total: 0,
+      },
     ]);
     expect(nested.subagents[0].steps[0].progress).toBe('compiling');
-    expect(nested.turn?.tools[6]).toBeUndefined();
+    expect(nested.turn?.tools[6].progress).toBeUndefined();
 
     const orphan = feed([
       { type: 'turn_start' },
@@ -72,16 +83,18 @@ describe('turnReducer (IDE event->UI contract)', () => {
   });
 
   it("routes a nested agent's review to its step, not to the turn", () => {
-    // A subagent's change is reviewed too, and its finding belongs on the nested step —
-    // the same routing rule tool calls follow, for the same reason.
+    // A subagent's change is reviewed too, and its finding belongs on the nested step. The
+    // turn's own card carries the same number here, which is the case that makes the author
+    // load-bearing rather than decorative.
     const state = feed([
       { type: 'turn_start' },
       { type: 'subagent_start', id: 's1', label: 'research', depth: 1 },
+      { type: 'tool_start', name: 'edit_file', args: {}, seq: 4, owner: 's1' },
       { type: 'tool_start', name: 'edit_file', args: {}, seq: 4 },
-      { type: 'review', seq: 4, findings: [finding] },
+      { type: 'review', seq: 4, owner: 's1', findings: [finding] },
     ]);
     expect(state.subagents[0].steps[0].findings).toEqual([finding]);
-    expect(state.turn?.tools[4]).toBeUndefined();
+    expect(state.turn?.tools[4].findings).toBeUndefined();
   });
 
   it('drops a review for a seq it has no card for', () => {

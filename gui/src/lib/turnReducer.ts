@@ -10,12 +10,12 @@ import type { FrontendEvent, RunningTurn, ToolCardState } from '../types';
  * drives it through useReducer and keeps the side effects (transcript
  * refresh on turn_end) outside.
  *
- * It also owns **subagent attribution**. A nested agent shares the parent's
- * event sink, so its tool calls arrive on the parent's stream stamped with the
- * parent's session id -- a `task` subagent's `read_file` is indistinguishable
- * from the main agent's, which is how it used to render. `subagent_start` /
- * `subagent_end` bracket the nested run, and a stack of open ids is what routes
- * the events in between to the agent that actually made the call.
+ * It also owns **subagent attribution**. A nested agent shares the parent's event sink, and each
+ * agent numbers its calls from its own session, so `#3` can be two different cards at once. Every
+ * card-addressed event therefore names its author (`owner`), and that is what routes a start, an
+ * end, a phase and a finding badge to the right list. The stack of open agents remains, but only
+ * for what carries no author: a nested run's prose and reasoning, which arrive as plain deltas
+ * between its `subagent_start` and `subagent_end`.
  */
 
 /** A nested agent, as the UI needs it: what it was asked, and what it did. */
@@ -48,13 +48,23 @@ export function initialTurnState(): TurnState {
   return { running: false, turn: null, subagents: [], stack: [] };
 }
 
-/** Apply `update` to the innermost open subagent's steps, or `null` if none. */
+/**
+ * Apply `update` to the step list of the agent that issued the call, or `null` when the call
+ * belongs to the turn itself (or to an author this UI has never heard of — a card is better
+ * merged than dropped, so it lands on the turn and stays visible).
+ *
+ * This used to read the innermost open stack frame instead. That cannot work: subagents run in
+ * parallel (`MAX_CONCURRENT_SUBAGENTS`), so with two frames open the innermost one would take
+ * both agents' calls, and each agent numbers its own calls from its own session, so the numbers
+ * collide as well.
+ */
 function routeToSubagent(
   state: TurnState,
+  owner: string | null | undefined,
   update: (steps: ToolCardState[]) => ToolCardState[],
 ): SubagentState[] | null {
-  const owner = state.stack[state.stack.length - 1];
   if (!owner) return null;
+  if (!state.subagents.some((s) => s.id === owner)) return null;
   return state.subagents.map((s) => (s.id === owner ? { ...s, steps: update(s.steps) } : s));
 }
 
@@ -160,18 +170,18 @@ export function turnReducer(state: TurnState, e: FrontendEvent): TurnState {
         status: 'running',
         startedAt: Date.now(),
       };
-      const subagents = routeToSubagent(state, (steps) => [...steps, card]);
+      const subagents = routeToSubagent(state, e.owner, (steps) => [...steps, card]);
       if (subagents) return { ...state, subagents };
       return { ...state, turn: { ...state.turn, tools: { ...state.turn.tools, [e.seq]: card } } };
     }
 
     case 'progress': {
-      // Joined by `seq`, like the review: the card is filed under that key, so a phase that
-      // arrives before or after its tool_end still lands on the right one. Routed through the
-      // subagent stack for the same reason tool calls are.
+      // Joined by `seq` + `owner`, like the review: the card is filed under that key in that
+      // agent's list, so a phase that arrives before or after its tool_end still lands on the
+      // right one.
       if (!state.turn) return state;
       const patch = (t: ToolCardState): ToolCardState => ({ ...t, progress: e.phase });
-      const subagents = routeToSubagent(state, (steps) =>
+      const subagents = routeToSubagent(state, e.owner, (steps) =>
         steps.map((t) => (t.seq === e.seq ? patch(t) : t)),
       );
       if (subagents) return { ...state, subagents };
@@ -186,13 +196,13 @@ export function turnReducer(state: TurnState, e: FrontendEvent): TurnState {
     }
 
     case 'review': {
-      // The self-review, joined to its card by `seq` — the same key the card is filed under,
-      // so a review that arrives after its tool_end still lands on the right card. Routed
-      // through the subagent stack for the same reason a tool call is: a nested agent's
-      // change is reviewed too, and its finding belongs on the nested step, not the turn.
+      // The self-review, joined to its card by `seq` + `owner` — the same key the card is filed
+      // under, so a review that arrives after its tool_end still lands on the right card. A
+      // nested agent's change is reviewed too, and its finding belongs on the nested step, not on
+      // the turn's card that happens to carry the same number.
       if (!state.turn) return state;
       const patch = (t: ToolCardState): ToolCardState => ({ ...t, findings: e.findings });
-      const subagents = routeToSubagent(state, (steps) =>
+      const subagents = routeToSubagent(state, e.owner, (steps) =>
         steps.map((t) => (t.seq === e.seq ? patch(t) : t)),
       );
       if (subagents) return { ...state, subagents };
@@ -217,7 +227,7 @@ export function turnReducer(state: TurnState, e: FrontendEvent): TurnState {
         // it reports are one fact instead of two that could drift.
         endedAt: Date.now(),
       });
-      const subagents = routeToSubagent(state, (steps) =>
+      const subagents = routeToSubagent(state, e.owner, (steps) =>
         steps.map((t) => (t.seq === e.seq ? patch(t) : t)),
       );
       if (subagents) return { ...state, subagents };

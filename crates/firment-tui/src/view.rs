@@ -279,6 +279,7 @@ impl App {
             Item::Tool {
                 name,
                 seq: _,
+                owner: _,
                 running,
                 ok,
                 summary,

@@ -27,8 +27,15 @@ pub enum AgentEvent {
         name: String,
         args: Value,
         /// Monotonic per-start id; ToolEnd carries the same id so concurrent
-        /// same-name tool calls resolve to their own cards.
+        /// same-name tool calls resolve to their own cards. Unique within a
+        /// **session**, not within an agent: several agents share one event
+        /// channel, so `owner` says whose call it was.
         seq: u64,
+        /// The agent that issued this call: `None` for the session's own turn,
+        /// the nested session's id for a `task` subagent's. Without it, two agents
+        /// sharing the sink cannot be told apart — their numbers collide, and a
+        /// subagent's tool reads as if the main agent had made it.
+        owner: Option<String>,
     },
     /// A long tool reporting a phase (plan §6-10, item 7).
     ///
@@ -39,6 +46,7 @@ pub enum AgentEvent {
     Progress {
         tool: String,
         seq: u64,
+        owner: Option<String>,
         event: crate::progress::ProgressEvent,
     },
     ToolEnd {
@@ -56,6 +64,9 @@ pub enum AgentEvent {
         /// `Agent::spill_text`, so nothing is lost by dropping this field.
         detail: Option<String>,
         seq: u64,
+        /// The agent the matching [`AgentEvent::ToolStart`] belonged to. The two must agree, or a
+        /// card one agent opened gets closed by another and the first one spins forever.
+        owner: Option<String>,
     },
     TurnEnd {
         text: String,
@@ -104,6 +115,7 @@ pub enum AgentEvent {
     /// every surface that shows tool cards handles it.
     Review {
         seq: u64,
+        owner: Option<String>,
         findings: Vec<crate::review::Finding>,
     },
     /// Model list fetched from the provider (for the model picker).
@@ -274,6 +286,10 @@ pub struct Agent {
     /// concurrency review's §5: otherwise `/undo` reports success and touches none of them).
     /// `None` — the normal case — means the turn opens the session's own undo directory.
     journal_override: Option<std::sync::Arc<std::sync::Mutex<crate::journal::EditJournal>>>,
+    /// Which agent the events this one emits belong to: `None` for the session's own turn, the
+    /// nested session's id for a subagent. Pairs with `journal_override` — both exist because a
+    /// `task` call shares one turn with the agent that spawned it, on one event sink.
+    event_owner: Option<String>,
     /// Interactive user front-end exposed to the `ask_user` tool.
     asker: Option<Arc<dyn Asker>>,
     /// Web search provider + resolved API key exposed to the web_search tool.
@@ -358,6 +374,7 @@ impl Agent {
                 crate::tool::MAX_CONCURRENT_SUBAGENTS,
             )),
             journal_override: None,
+            event_owner: None,
             asker: None,
             web_search_provider: None,
             web_search_api_key: None,
@@ -442,6 +459,21 @@ impl Agent {
         journal: std::sync::Arc<std::sync::Mutex<crate::journal::EditJournal>>,
     ) {
         self.journal_override = Some(journal);
+    }
+
+    /// Say which agent the events this one emits belong to.
+    ///
+    /// The same inheritance argument as `set_edit_journal`: a nested agent shares the parent's
+    /// event sink, and its call numbers come from its own session, so a UI cannot tell the two
+    /// agents apart unless each event names its author. Call it with the nested session's id,
+    /// which is also what `SubagentStart` names itself with.
+    pub fn set_event_owner(&mut self, owner: impl Into<String>) {
+        self.event_owner = Some(owner.into());
+    }
+
+    /// The `owner` to stamp on a card-addressed event.
+    fn event_owner(&self) -> Option<String> {
+        self.event_owner.clone()
     }
 
     /// The journal this turn writes into, and whether this turn may close it.
@@ -1315,6 +1347,7 @@ impl Agent {
                             name: "verify".to_string(),
                             args: json!({}),
                             seq,
+                            owner: self.event_owner(),
                         })
                         .await;
                     let result = self
@@ -1337,6 +1370,7 @@ impl Agent {
                             // session at :1152); no diff to show.
                             detail: None,
                             seq,
+                            owner: self.event_owner(),
                         })
                         .await;
                     self.session.push(ChatMessage::Tool {
@@ -1840,6 +1874,14 @@ fn is_broad_tool(name: &str) -> bool {
     matches!(name, "shell" | "verify" | "grep" | "glob" | "list_dir")
 }
 
+/// The change a self-review is asked to look at: which tool produced it, which file it touched,
+/// and the output the reviewer can quote.
+struct ReviewTarget<'a> {
+    tool: &'a str,
+    path: Option<&'a str>,
+    output: &'a str,
+}
+
 /// Spawn a review of the edit that just landed, if the policy asks for one.
 ///
 /// Nothing here blocks: the caller has already emitted the tool's result, and the review
@@ -1850,17 +1892,16 @@ fn spawn_self_review(
     provider_name: String,
     sink: Arc<dyn EventSink>,
     seq: u64,
-    tool: &str,
-    path: Option<&str>,
-    output: &str,
+    owner: Option<String>,
+    target: &ReviewTarget<'_>,
 ) {
     let Some(config) = config else {
         return;
     };
     let Some((path, diff)) = crate::review::self_review::reviewable_change(
-        tool,
-        path,
-        output,
+        target.tool,
+        target.path,
+        target.output,
         config.review.after_edit,
         config.review.min_lines,
     ) else {
@@ -1892,6 +1933,7 @@ fn spawn_self_review(
         };
         sink.event(AgentEvent::Review {
             seq,
+            owner,
             findings: report.findings,
         })
         .await;
@@ -1972,6 +2014,9 @@ async fn execute_tool_calls(
             .filter(|&i| !done[i] && deps[i].iter().all(|&j| done[j]))
             .collect();
         let mut call_seqs: Vec<u64> = Vec::with_capacity(ready.len());
+        // One owner for the whole wave: a start, its progress lines and its end have to name the
+        // same agent, or a card one agent opened gets closed by another.
+        let owner = agent.event_owner();
         for &i in &ready {
             let call = &tool_calls[i];
             let seq = agent.next_tool_seq();
@@ -1982,6 +2027,7 @@ async fn execute_tool_calls(
                     name: call.name.clone(),
                     args: call.arguments.clone(),
                     seq,
+                    owner: owner.clone(),
                 })
                 .await;
         }
@@ -2031,10 +2077,12 @@ async fn execute_tool_calls(
                     call_seqs[n],
                     {
                         let tx = progress_tx.clone();
+                        let owner = owner.clone();
                         Arc::new(move |tool: &str, seq: u64, event| {
                             let _ = tx.send(AgentEvent::Progress {
                                 tool: tool.to_string(),
                                 seq,
+                                owner: owner.clone(),
                                 event,
                             });
                         })
@@ -2105,6 +2153,7 @@ async fn execute_tool_calls(
                         summary: "cancelled".to_string(),
                         detail: None,
                         seq: call_seqs[k],
+                        owner: owner.clone(),
                     })
                     .await;
                 agent.session.push(ChatMessage::Tool {
@@ -2153,6 +2202,7 @@ async fn execute_tool_calls(
                         summary: format!("timed out after {}s", agent.tool_wave_timeout.as_secs()),
                         detail: None,
                         seq: call_seqs[k],
+                        owner: owner.clone(),
                     })
                     .await;
                 agent.session.push(ChatMessage::Tool {
@@ -2276,6 +2326,7 @@ async fn execute_tool_calls(
                     summary: summary.clone(),
                     detail,
                     seq: call_seqs[k],
+                    owner: owner.clone(),
                 })
                 .await;
             agent.session.push(ChatMessage::Tool {
@@ -2286,14 +2337,18 @@ async fn execute_tool_calls(
             // Plan §4-A's automatic trigger. Spawned, so the turn does not wait: §16.2-1
             // defaults this to `off` precisely because a per-edit model call doubles the
             // wait, and a blocking version would be worse than the manual path.
+            let reviewed_path = tool_path(call).map(|p| p.display().to_string());
             spawn_self_review(
                 agent.self_review.clone(),
                 agent.session.provider.clone(),
                 agent.sink.clone(),
                 call_seqs[k],
-                &call.name,
-                tool_path(call).map(|p| p.display().to_string()).as_deref(),
-                &content,
+                owner.clone(),
+                &ReviewTarget {
+                    tool: &call.name,
+                    path: reviewed_path.as_deref(),
+                    output: &content,
+                },
             );
             done[i] = true;
             remaining -= 1;

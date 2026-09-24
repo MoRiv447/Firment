@@ -172,6 +172,11 @@ impl SubagentFactory for SubagentRunner {
         nested.set_subagent_slots(self.subagent_slots.clone());
         // The parent turn's transaction, not a fresh one: see `SubagentFactory::run_subagent`.
         nested.set_edit_journal(journal);
+        // Same argument, one layer up in the event stream: the nested agent shares the parent's
+        // sink and numbers its own calls from its own session, so each of its events has to name
+        // its author or a UI cannot tell its cards apart from the turn's. The id is the one
+        // `SubagentStart` carries, so a surface that handles the pair can match them.
+        nested.set_event_owner(subagent_id.clone());
         nested.set_write_scope(scope);
         nested.set_subagent_factory(Some(self.child() as Arc<dyn SubagentFactory>));
         nested.set_subagent_depth(depth);

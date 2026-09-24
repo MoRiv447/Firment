@@ -32,6 +32,10 @@ pub enum FrontendEvent {
         name: String,
         args: serde_json::Value,
         seq: u64,
+        /// Which agent issued the call (`None` = the session's own turn). A delegated call is
+        /// numbered from its own session, so `seq` alone can name two cards; the frontend needs
+        /// this to route a start, its end, its phase and its finding badge to the right one.
+        owner: Option<String>,
     },
     ToolEnd {
         session_id: Option<String>,
@@ -43,6 +47,8 @@ pub enum FrontendEvent {
         /// the path produced no output at all.
         detail: Option<String>,
         seq: u64,
+        /// See [`FrontendEvent::ToolStart`]'s `owner`.
+        owner: Option<String>,
     },
     /// A self-review of one tool's change finished (plan §4-A). Carries the same `Finding`
     /// shape every review capability uses, so the card can render a badge and a list
@@ -50,6 +56,8 @@ pub enum FrontendEvent {
     Review {
         session_id: Option<String>,
         seq: u64,
+        /// See [`FrontendEvent::ToolStart`]'s `owner`.
+        owner: Option<String>,
         findings: Vec<firment_core::review::Finding>,
     },
     TurnEnd {
@@ -63,6 +71,8 @@ pub enum FrontendEvent {
         session_id: Option<String>,
         tool: String,
         seq: u64,
+        /// See [`FrontendEvent::ToolStart`]'s `owner`.
+        owner: Option<String>,
         phase: String,
         current: u64,
         total: u64,
@@ -192,11 +202,17 @@ pub fn frontend_event(e: &AgentEvent, session_id: Option<&str>) -> FrontendEvent
             session_id: sid,
             text: text.clone(),
         },
-        AgentEvent::ToolStart { name, args, seq } => FrontendEvent::ToolStart {
+        AgentEvent::ToolStart {
+            name,
+            args,
+            seq,
+            owner,
+        } => FrontendEvent::ToolStart {
             session_id: sid,
             name: name.clone(),
             args: args.clone(),
             seq: *seq,
+            owner: owner.clone(),
         },
         AgentEvent::ToolEnd {
             name,
@@ -204,6 +220,7 @@ pub fn frontend_event(e: &AgentEvent, session_id: Option<&str>) -> FrontendEvent
             summary,
             detail,
             seq,
+            owner,
         } => FrontendEvent::ToolEnd {
             session_id: sid,
             name: name.clone(),
@@ -211,20 +228,32 @@ pub fn frontend_event(e: &AgentEvent, session_id: Option<&str>) -> FrontendEvent
             summary: summary.clone(),
             detail: detail.clone(),
             seq: *seq,
+            owner: owner.clone(),
         },
         AgentEvent::TurnEnd { text } => FrontendEvent::TurnEnd {
             session_id: sid,
             text: text.clone(),
         },
-        AgentEvent::Review { seq, findings } => FrontendEvent::Review {
+        AgentEvent::Review {
+            seq,
+            owner,
+            findings,
+        } => FrontendEvent::Review {
             session_id: sid,
             seq: *seq,
+            owner: owner.clone(),
             findings: findings.clone(),
         },
-        AgentEvent::Progress { tool, seq, event } => FrontendEvent::Progress {
+        AgentEvent::Progress {
+            tool,
+            seq,
+            owner,
+            event,
+        } => FrontendEvent::Progress {
             session_id: sid,
             tool: tool.clone(),
             seq: *seq,
+            owner: owner.clone(),
             phase: event.phase.clone(),
             current: event.current,
             total: event.total,

@@ -679,6 +679,67 @@ async fn a_fresh_agent_on_a_reopened_session_continues_its_numbering() {
     assert_eq!(second.session().tool_seq, 2);
 }
 
+/// A delegated call is numbered from the subagent's own session, so `seq` alone cannot pick a card
+/// out of a turn that also has its own calls — the events have to name their author.
+#[tokio::test]
+async fn a_subagents_events_name_the_agent_that_issued_them() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let dir = tempdir().unwrap();
+    let mut agent = Agent::new(
+        Some(Box::new(fake_provider(echo_turns("nested")))),
+        registry_with(vec![Arc::new(EchoTool)]),
+        Session::new(dir.path().to_path_buf(), "default", "fake"),
+        SessionStore::new(dir.path().to_path_buf()),
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(events.clone())),
+        10,
+    );
+    agent.set_event_owner("sub-1");
+    agent.run_turn("echo hi").await.unwrap();
+
+    let owners: Vec<Option<String>> = events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::ToolStart { owner, .. } | AgentEvent::ToolEnd { owner, .. } => {
+                Some(owner.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !owners.is_empty(),
+        "the turn emitted no card-addressed events to check"
+    );
+    assert!(
+        owners.iter().all(|owner| owner.as_deref() == Some("sub-1")),
+        "every event a nested agent emits must name it, got {owners:?}"
+    );
+
+    // The session's own turn stays addressable as such.
+    let own = Arc::new(Mutex::new(Vec::new()));
+    let mut plain = Agent::new(
+        Some(Box::new(fake_provider(echo_turns("own")))),
+        registry_with(vec![Arc::new(EchoTool)]),
+        Session::new(dir.path().to_path_buf(), "default", "fake"),
+        SessionStore::new(dir.path().join("own")),
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(own.clone())),
+        10,
+    );
+    plain.run_turn("echo hi").await.unwrap();
+    assert!(
+        own.lock().unwrap().iter().all(|e| match e {
+            AgentEvent::ToolStart { owner, .. } | AgentEvent::ToolEnd { owner, .. } => {
+                owner.is_none()
+            }
+            _ => true,
+        }),
+        "a turn that was not spawned by anyone must not claim a parent"
+    );
+}
+
 /// Stands in for the real `edit_file`: the output text is shaped exactly like
 /// the editor's (one-line header, then a unified diff). Only the NAME decides
 /// whether `detail` is populated, so a stub is enough to pin the contract.

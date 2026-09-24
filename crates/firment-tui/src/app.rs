@@ -242,6 +242,9 @@ impl App {
                     self.items.push(Item::Tool {
                         name: name.clone(),
                         seq: u64::MAX,
+                        // The transcript records what a call returned, not which agent made it, so
+                        // a restored card cannot claim an author. It never receives events either.
+                        owner: None,
                         running: false,
                         // A restored card has no live phase to show: the tool is long over.
                         progress: None,
@@ -307,15 +310,20 @@ impl App {
                     self.thinking_since = Some(Instant::now());
                 }
             }
-            AgentEvent::Progress { seq, event, .. } => {
+            AgentEvent::Progress {
+                seq, owner, event, ..
+            } => {
                 // §16.2: nothing is shown for a run under two seconds, because a line that
                 // appears and vanishes is worse than silence. The gate is applied *here*, where
                 // the card's own clock is, rather than in the core: the core reports, the card
                 // decides what deserves drawing.
                 let running = self.items.iter().rev().find_map(|item| match item {
                     Item::Tool {
-                        seq: s, started_at, ..
-                    } if *s == seq => Some(*started_at),
+                        seq: s,
+                        owner: o,
+                        started_at,
+                        ..
+                    } if *s == seq && *o == owner => Some(*started_at),
                     _ => None,
                 });
                 let long_enough = running
@@ -324,16 +332,21 @@ impl App {
                 if !long_enough {
                     return;
                 }
-                if let Some(Item::Tool { progress, .. }) = self
-                    .items
-                    .iter_mut()
-                    .rev()
-                    .find(|item| matches!(item, Item::Tool { seq: s, .. } if *s == seq))
+                if let Some(Item::Tool { progress, .. }) =
+                    self.items.iter_mut().rev().find(|item| {
+                        matches!(item, Item::Tool { seq: s, owner: o, .. }
+                            if *s == seq && *o == owner)
+                    })
                 {
                     *progress = Some(event.phase);
                 }
             }
-            AgentEvent::ToolStart { name, args, seq } => {
+            AgentEvent::ToolStart {
+                name,
+                args,
+                seq,
+                owner,
+            } => {
                 self.ai_thinking = false;
                 self.thinking_since = None;
                 // The verification ladder is advanced from the same two events
@@ -348,6 +361,7 @@ impl App {
                 self.items.push(Item::Tool {
                     name,
                     seq,
+                    owner,
                     running: true,
                     ok: false,
                     summary,
@@ -365,6 +379,7 @@ impl App {
                 summary,
                 detail,
                 seq,
+                owner,
             } => {
                 if let Some(pos) = self.active_tools.iter().position(|(n, _)| n == &name) {
                     self.active_tools.remove(pos);
@@ -389,6 +404,7 @@ impl App {
                     if let Item::Tool {
                         name: n,
                         seq: item_seq,
+                        owner: card_owner,
                         running,
                         ok: current_ok,
                         summary: current_summary,
@@ -402,6 +418,7 @@ impl App {
                     } = item
                         && n == &name
                         && *item_seq == seq
+                        && *card_owner == owner
                     {
                         *running = false;
                         // The phase means "what it is doing now", so a finished tool has none —
@@ -435,17 +452,22 @@ impl App {
                 self.interrupting = false;
                 self.interrupt_armed_at = None;
             }
-            // The review of a card that is already drawn: attach it by `seq`, the id the
-            // card was built with. A review whose card is gone (transcript cleared,
-            // session switched) is dropped without a word — there is nowhere to put it,
-            // and a stray line in a new transcript would be a lie about what it belongs to.
-            AgentEvent::Review { seq, findings } => {
+            // The review of a card that is already drawn: attach it by the (agent, number) pair the
+            // card was built with, because a delegated call and the turn's own can share a number.
+            // A review whose card is gone (transcript cleared, session switched) is dropped without
+            // a word — there is nowhere to put it, and a stray line in a new transcript would be a
+            // lie about what it belongs to.
+            AgentEvent::Review {
+                seq,
+                owner,
+                findings,
+            } => {
                 if !findings.is_empty()
-                    && let Some(Item::Tool { review, .. }) = self
-                        .items
-                        .iter_mut()
-                        .rev()
-                        .find(|item| matches!(item, Item::Tool { seq: s, .. } if *s == seq))
+                    && let Some(Item::Tool { review, .. }) =
+                        self.items.iter_mut().rev().find(|item| {
+                            matches!(item, Item::Tool { seq: s, owner: o, .. }
+                                if *s == seq && *o == owner)
+                        })
                 {
                     *review = Some(findings);
                 }
@@ -2282,6 +2304,11 @@ pub(crate) enum Item {
         /// Event-pairing id from AgentEvent::ToolStart/ToolEnd; parallel
         /// same-name tool calls each get their own card.
         seq: u64,
+        /// Which agent issued the call (`None` = this session's own turn). A
+        /// `task` subagent numbers its calls from its own session, so `seq` alone
+        /// can name two cards at once — every lookup that finds a card by number
+        /// has to compare this too.
+        owner: Option<String>,
         running: bool,
         ok: bool,
         summary: String,
