@@ -917,8 +917,19 @@ impl Tool for La {
             "info" => self.run_info(&cfg, &args, ctx).await,
             "list_captures" => self.run_list_captures(ctx),
             "measure" => self.run_measure(&args, ctx),
-            "decode" => self.run_decode(&cfg, &args, ctx).await,
+            "decode" => {
+                // The two long actions report what kind of wait this is (plan item 7). `run`
+                // dispatches, so this is where the phase belongs; the backend seam below it has
+                // no context to report through.
+                if let Some(progress) = ctx.progress.as_ref() {
+                    progress.phase("decoding the capture");
+                }
+                self.run_decode(&cfg, &args, ctx).await
+            }
             "capture" => {
+                if let Some(progress) = ctx.progress.as_ref() {
+                    progress.phase("capturing");
+                }
                 let driver = args
                     .get("driver")
                     .and_then(|v| v.as_str())
