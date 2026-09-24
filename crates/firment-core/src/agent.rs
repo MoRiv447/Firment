@@ -1727,13 +1727,36 @@ impl Agent {
 
     /// Restore the most recently committed edit batch for this session.
     pub async fn undo_last(&mut self) -> Result<String, String> {
+        self.undo_turns(1).await
+    }
+
+    /// Undo up to `turns` committed turns (see [`EditJournal::undo_turns`]).
+    ///
+    /// Says which of the two numbers ran out: asking for three turns and getting one is a
+    /// different message from asking for three and getting three, and the difference is the only
+    /// thing the user needs to know.
+    pub async fn undo_turns(&mut self, turns: usize) -> Result<String, String> {
         let dir = self.store.undo_dir(&self.session.id);
-        let summary = EditJournal::undo_latest(&dir)?;
-        Ok(format!(
-            "Restored {} file(s): {}",
+        let (undone, summary) = EditJournal::undo_turns(&dir, turns)?;
+        if summary.files == 0 {
+            return Ok(if undone == 0 {
+                "Nothing to undo: this session has no committed edits left".to_string()
+            } else {
+                format!("Undid {undone} turn(s); they had no file changes to restore")
+            });
+        }
+        let mut message = format!(
+            "Restored {} file(s) across {} turn(s): {}",
             summary.files,
+            undone,
             summary.restored.join(", ")
-        ))
+        );
+        if undone < turns {
+            message.push_str(&format!(
+                "\n  (asked for {turns} turn(s); only {undone} had edits recorded)"
+            ));
+        }
+        Ok(message)
     }
 }
 

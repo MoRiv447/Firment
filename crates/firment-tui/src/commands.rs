@@ -472,9 +472,9 @@ pub(crate) fn spawn_agent_task(
                             .await;
                     }
                 },
-                AgentCmd::Undo => {
+                AgentCmd::Undo { turns } => {
                     let mut agent = agent.lock().await;
-                    match agent.undo_last().await {
+                    match agent.undo_turns(turns).await {
                         Ok(summary) => {
                             agent.emit(AgentEvent::Info(summary)).await;
                         }
@@ -787,7 +787,10 @@ pub(crate) enum AgentCmd {
     OpenSessionPicker,
     NewSession,
     LoadSession(String),
-    Undo,
+    Undo {
+        /// How many committed turns to walk back. `/undo` is one; `/undo 3` is three.
+        turns: usize,
+    },
     Ledger {
         /// Where to write the changes as a unified diff (plan §8's `/ledger --export`).
         /// `None` reads the summary instead.

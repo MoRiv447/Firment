@@ -1872,7 +1872,7 @@ impl App {
             .unwrap_or((command, ""));
         match name {
             "help" => self.items.push(Item::System(
-                "Commands: /new  /plan [on|off]  /agent  /models  /model <id>  /sessions (use ↑/↓ to select)  /session <id>  /delete <id>  /undo  /ledger  /retry-last  /review-last  /review <path>  /ledger [--export [path]]  /pin <path>  /unpin <path>  /copy  /provider <name>  /add-provider <name> <openai|anthropic> <base_url> <model>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /budget <chars>  /output <tokens>  /verbosity [summary|normal|expanded]  /context  /config  /clear  /help  /quit\nKeys: ↑/↓ browse history when input is empty, move the input cursor on multi-line input, scroll the transcript on single-line input · Shift+Enter manual newline · PgUp/PgDn/wheel scroll · Ctrl+P model picker · Ctrl+O expand/collapse the diff on the selected tool card (the newest one when nothing is selected) · Ctrl+T collapse/expand every diff at once · inside /sessions: c copies the selected id to clipboard, d deletes it (drag-select and right-click are disabled because the TUI captures mouse events; press Esc to dismiss the picker, then your terminal's native selection works in the scrollback) · Ctrl+C copies the selection (copies the last reply when there is none) · Ctrl+V paste · Ctrl+Shift+C copy last reply · ←/→ move the input cursor · y/n/a permission answers · Esc interrupts AI output (Esc twice while working; clears input when idle) · Ctrl+Q quit\nInput box: auto-wraps and grows to up to 5 lines; taller content scrolls, large pastes collapse into 【line x-y】, and the title shows hidden/collapsed line counts before sending"
+                "Commands: /new  /plan [on|off]  /agent  /models  /model <id>  /sessions (use ↑/↓ to select)  /session <id>  /delete <id>  /undo [n] (files only — the transcript is not rewritten)  /ledger  /retry-last  /review-last  /review <path>  /ledger [--export [path]]  /pin <path>  /unpin <path>  /copy  /provider <name>  /add-provider <name> <openai|anthropic> <base_url> <model>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /budget <chars>  /output <tokens>  /verbosity [summary|normal|expanded]  /context  /config  /clear  /help  /quit\nKeys: ↑/↓ browse history when input is empty, move the input cursor on multi-line input, scroll the transcript on single-line input · Shift+Enter manual newline · PgUp/PgDn/wheel scroll · Ctrl+P model picker · Ctrl+O expand/collapse the diff on the selected tool card (the newest one when nothing is selected) · Ctrl+T collapse/expand every diff at once · inside /sessions: c copies the selected id to clipboard, d deletes it (drag-select and right-click are disabled because the TUI captures mouse events; press Esc to dismiss the picker, then your terminal's native selection works in the scrollback) · Ctrl+C copies the selection (copies the last reply when there is none) · Ctrl+V paste · Ctrl+Shift+C copy last reply · ←/→ move the input cursor · y/n/a permission answers · Esc interrupts AI output (Esc twice while working; clears input when idle) · Ctrl+Q quit\nInput box: auto-wraps and grows to up to 5 lines; taller content scrolls, large pastes collapse into 【line x-y】, and the title shows hidden/collapsed line counts before sending"
                     .to_string(),
             )),
             "retry-last" => self.retry_last(),
@@ -2039,10 +2039,28 @@ impl App {
                 self.open_session_picker();
             }
             "undo" => {
-                self.send_cmd(AgentCmd::Undo);
-                self.items.push(Item::System(
-                    "Undoing the last committed edit…".to_string(),
-                ));
+                // `/undo` walks back one committed turn; `/undo 3` walks back three. The count is
+                // the only argument because the *files* are the only thing that moves: the
+                // transcript is not rewritten, so a user who went back two turns can still see
+                // what they went back from (see `EditJournal::undo_turns`).
+                let turns = match arg.trim() {
+                    "" => 1,
+                    other => match other.parse::<usize>() {
+                        Ok(n) if n >= 1 => n,
+                        _ => {
+                            self.items.push(Item::System(format!(
+                                "`/undo {other}` is not a number of turns — try `/undo` or `/undo 2`"
+                            )));
+                            return;
+                        }
+                    },
+                };
+                self.send_cmd(AgentCmd::Undo { turns });
+                self.items.push(Item::System(if turns == 1 {
+                    "Undoing the last committed edit…".to_string()
+                } else {
+                    format!("Undoing the last {turns} committed turns…")
+                }));
             }
             "ledger" if arg.is_empty() => {
                 self.send_cmd(AgentCmd::Ledger { export: None });

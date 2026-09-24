@@ -383,18 +383,48 @@ impl EditJournal {
     }
 
     /// Restore the most recently committed undo entry for a session.
-    pub fn undo_latest(dir: &Path) -> Result<UndoSummary, String> {
-        let mut candidates: Vec<PathBuf> = Vec::new();
-        if dir.is_dir() {
-            for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
-                let entry = entry.map_err(|e| e.to_string())?;
-                let name = entry.file_name().to_string_lossy().into_owned();
-                if name.starts_with("undo-") && name.ends_with(".json") {
-                    candidates.push(entry.path());
-                }
-            }
+    /// Undo up to `turns` committed turns, newest first.
+    ///
+    /// Returns how many turns were actually undone *and* what they restored, because those are
+    /// different facts: asking to go back three turns when the session only has one is not an
+    /// error, and the caller should be able to say "one, and here is why" instead of reporting a
+    /// silent success. Running out of turns stops the walk — it never fails on it.
+    ///
+    /// **Files only, and that is the whole of what this command does.** The transcript is not
+    /// rewritten: the turns still happened, and the user who asked to go back can see what they
+    /// are going back from. Rewinding the conversation is a separate decision with its own
+    /// question (what does the model see afterwards?), and this function does not make it by
+    /// accident.
+    pub fn undo_turns(dir: &Path, turns: usize) -> Result<(usize, UndoSummary), String> {
+        // Counted first, so an empty session is "zero turns" rather than an error: walking back
+        // three turns when only one is recorded should say "one", not fail.
+        let available = EditJournal::pending_turns(dir);
+        let mut undone = 0;
+        let mut restored: Vec<String> = Vec::new();
+        for _ in 0..turns.min(available) {
+            let summary = EditJournal::undo_latest(dir)?;
+            undone += 1;
+            restored.extend(summary.restored);
         }
-        candidates.sort();
+        Ok((
+            undone,
+            UndoSummary {
+                files: restored.len(),
+                restored,
+            },
+        ))
+    }
+
+    /// How many committed turns are available to undo. Zero is a normal state, not an error —
+    /// which is the whole reason this exists: `undo_latest` reports "nothing to undo" as an
+    /// error, so a caller walking back several turns cannot tell "the session is empty" from
+    /// "something went wrong" without asking first.
+    pub fn pending_turns(dir: &Path) -> usize {
+        undo_candidates(dir).map(|c| c.len()).unwrap_or(0)
+    }
+
+    pub fn undo_latest(dir: &Path) -> Result<UndoSummary, String> {
+        let candidates = undo_candidates(dir)?;
         let latest = candidates.last().ok_or_else(|| {
             "nothing to undo (no file changes committed in this session)".to_string()
         })?;
@@ -662,8 +692,95 @@ fn now_nanos() -> u128 {
         .unwrap_or(0)
 }
 
+/// The `undo-*.json` index files of a session, oldest first. Factored out so `undo_latest` and
+/// `pending_turns` cannot disagree about what counts as a turn — the two answers have to be the
+/// same list or the count means nothing.
+#[allow(dead_code)]
+fn undo_candidates(dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if dir.is_dir() {
+        for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with("undo-") && name.ends_with(".json") {
+                candidates.push(entry.path());
+            }
+        }
+    }
+    candidates.sort();
+    Ok(candidates)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn undo_turns_walks_back_several_turns_and_stops_at_the_end() {
+        // The rewind, at the level where it can be checked: three committed turns, walk back two,
+        // then ask for more than is left. "Asked for five and got one" is not an error — it is a
+        // smaller number, which is why the count comes back alongside the files.
+        let dir = tempfile::tempdir().unwrap();
+        let undo_dir = dir.path().join("undo");
+        let files: Vec<PathBuf> = (0..3)
+            .map(|i| dir.path().join(format!("f{i}.rs")))
+            .collect();
+
+        for (i, file) in files.iter().enumerate() {
+            std::fs::write(file, "original\n").unwrap();
+            let mut journal = EditJournal::new(undo_dir.clone());
+            journal.begin(file).unwrap();
+            std::fs::write(file, format!("changed {i}\n")).unwrap();
+            journal.commit().unwrap();
+        }
+
+        let (undone, summary) = EditJournal::undo_turns(&undo_dir, 2).unwrap();
+        assert_eq!(undone, 2);
+        assert_eq!(summary.files, 2, "two turns, one file each: {summary:?}");
+        assert_eq!(std::fs::read_to_string(&files[2]).unwrap(), "original\n");
+        assert_eq!(std::fs::read_to_string(&files[1]).unwrap(), "original\n");
+        assert_eq!(
+            std::fs::read_to_string(&files[0]).unwrap(),
+            "changed 0\n",
+            "the oldest turn is still standing — the walk goes newest first and stops"
+        );
+
+        // Asking for more turns than the session has takes what is there and stops.
+        let (undone, summary) = EditJournal::undo_turns(&undo_dir, 5).unwrap();
+        assert_eq!(undone, 1);
+        assert_eq!(summary.files, 1);
+        assert_eq!(std::fs::read_to_string(&files[0]).unwrap(), "original\n");
+
+        // And with nothing left, still not an error.
+        let (undone, summary) = EditJournal::undo_turns(&undo_dir, 3).unwrap();
+        assert_eq!(undone, 0);
+        assert_eq!(summary.files, 0);
+        assert!(summary.restored.is_empty());
+    }
+
+    #[test]
+    fn undo_turns_restores_every_file_of_one_turn() {
+        // One turn, several files: `/undo 1` is the existing behaviour and has to stay exactly
+        // that after the count arrived.
+        let dir = tempfile::tempdir().unwrap();
+        let undo_dir = dir.path().join("undo");
+        let a = dir.path().join("a.rs");
+        let b = dir.path().join("b.rs");
+        std::fs::write(&a, "a original\n").unwrap();
+        std::fs::write(&b, "b original\n").unwrap();
+
+        let mut journal = EditJournal::new(undo_dir.clone());
+        journal.begin(&a).unwrap();
+        journal.begin(&b).unwrap();
+        std::fs::write(&a, "a changed\n").unwrap();
+        std::fs::write(&b, "b changed\n").unwrap();
+        journal.commit().unwrap();
+
+        let (undone, summary) = EditJournal::undo_turns(&undo_dir, 1).unwrap();
+        assert_eq!(undone, 1);
+        assert_eq!(summary.files, 2);
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "a original\n");
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "b original\n");
+    }
+
     use super::*;
     use tempfile::tempdir;
 
