@@ -93,6 +93,17 @@ describe('the run ledger', () => {
     expect(estimateFor('build')).toBe(4_500);
   });
 
+  it('counts a second turn of one session, whose calls are numbered after the first', () => {
+    // The same dedup, one level down. The GUI builds a fresh `Agent` for every turn, so
+    // while the call counter lived on the agent each turn restarted at 1 and every run of
+    // turn two looked like a repeat already counted: the ledger stopped learning after the
+    // first turn of a chat. The counter is the session's now, so the stream continues.
+    recordCompleted([ran(1, 'build', 4_000), ran(2, 'build', 6_000)], 'same-session');
+    recordCompleted([ran(3, 'build', 3_000), ran(4, 'build', 5_000)], 'same-session');
+    // Four runs, not two: 3000/4000/5000/6000.
+    expect(estimateFor('build')).toBe(4_500);
+  });
+
   it('keeps the tools apart', () => {
     for (const ms of [1_000, 3_000]) recordCompleted([ran(ms, 'build', ms)], 's');
     for (const ms of [20_000, 30_000]) recordCompleted([ran(ms, 'flash', ms)], 's');
