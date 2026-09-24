@@ -1758,16 +1758,29 @@ impl Agent {
     /// Undo back to **before** the turn that contained tool call `seq` — the shape the review
     /// linkage needs ("rewind to before the step where this was found").
     ///
-    /// Fails with a sentence rather than a guess when the session's turns predate the record:
-    /// undoing the wrong number of turns loses work, and the user can still say `/undo <n>`.
+    /// Three honest answers because there are three things that can be true: the rewind runs, the
+    /// call number belongs to no turn this session recorded, or the recorded numbers cannot answer
+    /// the question at all. The last case refuses without touching a file — a guessed count here
+    /// restores the wrong work — and says so, since `/undo <n>` is still available.
     pub async fn undo_to_before(&mut self, seq: u64) -> Result<String, String> {
         let dir = self.store.undo_dir(&self.session.id);
-        let Some(turns) = EditJournal::turns_before_seq(&dir, seq) else {
-            return Err(format!(
-                "cannot tell which turn contained tool call #{seq}: this session's turns do not \
-                 record which calls they made (they were written before that was kept). Use \
-                 `/undo <n>` with a count instead."
-            ));
+        let turns = match EditJournal::turns_before_seq(&dir, seq) {
+            crate::journal::Rewind::Turns(turns) => turns,
+            crate::journal::Rewind::Unrecorded => {
+                return Err(format!(
+                    "no recorded turn reaches tool call #{seq}, so there is nothing to rewind \
+                     past it. Cards are numbered per session: a session reopened or written \
+                     before call numbering may show numbers this record does not hold."
+                ));
+            }
+            crate::journal::Rewind::Unknown => {
+                return Err(format!(
+                    "cannot tell which turn contained tool call #{seq}: the undo entries for this \
+                     session do not record increasing call numbers (they predate that, or were \
+                     written while the counter restarted between turns). Nothing was undone — use \
+                     `/undo <n>` with a count instead."
+                ));
+            }
         };
         let message = self.undo_turns(turns).await?;
         Ok(format!("{message}\n  (rewound past tool call #{seq})"))

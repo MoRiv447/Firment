@@ -17,15 +17,31 @@ struct EntryRecord {
 struct IndexRecord {
     created_at: u64,
     entries: Vec<EntryRecord>,
-    /// The highest tool-call `seq` this turn reached (0 when it is not known).
+    /// The session's highest tool-call number when this turn closed (0 when it is not known).
     ///
-    /// The counter is monotonic *within a turn*, so the range `1..=max_seq` is exactly the calls
-    /// this turn made — which is what lets "rewind to before the step where the review found a
-    /// problem" be answered by a number instead of a mapping table. `serde(default)` keeps every
-    /// entry written before this field existed readable; those read back as 0, and the caller is
-    /// told the answer is unknown rather than given a wrong one.
+    /// The counter is the session's, so this column must increase from one turn to the next: a
+    /// turn's range is *"above the previous turn's number, up to mine"*, which is what lets
+    /// "rewind to before the step where the review found a problem" be answered by a number
+    /// instead of a mapping table. A store where the column does not increase is one written
+    /// while the counter restarted — per turn in the GUI, per process on reopen — and
+    /// `turns_before_seq` refuses to guess at those rather than undoing the wrong amount of
+    /// work. `serde(default)` keeps every entry written before the field existed readable;
+    /// those read back as 0, and the caller is told the answer is unknown.
     #[serde(default)]
     max_seq: u64,
+}
+
+/// How [`EditJournal::turns_before_seq`] answered a "rewind to before call N".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rewind {
+    /// Undo this many turns; the turn that made the call is among them.
+    Turns(usize),
+    /// No recorded turn reaches that number, so this session never made that call. Nothing to do.
+    Unrecorded,
+    /// The recorded numbers cannot answer the question: a turn written before the call number was
+    /// kept, or a store whose numbering restarted so the column is no longer cumulative. Guessing
+    /// here would restore the wrong files.
+    Unknown,
 }
 
 /// Result of restoring a committed undo entry.
@@ -447,43 +463,60 @@ impl EditJournal {
     /// How many turns to undo so that the turn **containing** `seq` is undone — the count a
     /// "rewind to before the step where this was found" needs.
     ///
-    /// `None` when no recorded turn knows its `max_seq`: a session from before this was recorded
-    /// cannot answer the question, and guessing would undo the wrong amount of work. The caller
-    /// says so instead, and `/undo <n>` still works.
-    pub fn turns_before_seq(dir: &Path, seq: u64) -> Option<usize> {
-        let candidates = undo_candidates(dir).ok()?;
-        let mut counted = 0;
-        let mut answer: Option<usize> = None;
-        // Newest first, and the walk continues while turns *reach* `seq` — because "reaches" is
-        // not "contains". A turn reaching seq 5 also reaches seq 2 if an older turn made it, and
-        // the turn whose range actually contains the call is the **oldest** one that reaches it:
-        // its range starts after the turn below it ended.
-        //
-        // Getting this wrong is not academic: returning the newest turn that reached the call
-        // would rewind one turn for a finding from three turns ago, leaving the very edit the
-        // user asked to undo in place. This test caught exactly that.
+    /// Three answers, not one `Option`, because the caller has to say something true: undoing the
+    /// wrong number of turns destroys work, and "I cannot tell" and "that call is not in this
+    /// session" are different instructions for what to type next.
+    pub fn turns_before_seq(dir: &Path, seq: u64) -> Rewind {
+        let Ok(candidates) = undo_candidates(dir) else {
+            return Rewind::Unknown;
+        };
+        // Newest first, and read the whole column before answering: the walk below stops as soon
+        // as a turn ends below `seq`, so validating it *during* the walk would happily answer from
+        // a store whose numbering restarted further down — the very case that makes a count wrong.
+        let mut columns: Vec<u64> = Vec::with_capacity(candidates.len());
         for path in candidates.iter().rev() {
             let Ok(text) = fs::read_to_string(path) else {
-                return None;
+                return Rewind::Unknown;
             };
             let Ok(record) = serde_json::from_str::<IndexRecord>(&text) else {
-                return None;
+                return Rewind::Unknown;
             };
-            counted += 1;
+            // A turn from before `max_seq` was recorded cannot answer the question, and neither can
+            // the ones past it.
             if record.max_seq == 0 {
-                // A turn from before `max_seq` was recorded cannot answer the question. Neither
-                // can the ones past it, so there is nothing to give the caller but `None`.
-                return None;
+                return Rewind::Unknown;
             }
-            if record.max_seq >= seq {
+            columns.push(record.max_seq);
+        }
+        // Walking younger to older the column has to fall; anywhere it does not, this is a store
+        // whose counter restarted and "the oldest turn reaching `seq`" stops meaning anything.
+        if columns.windows(2).any(|pair| pair[1] >= pair[0]) {
+            return Rewind::Unknown;
+        }
+        let mut counted = 0;
+        let mut answer: Option<usize> = None;
+        // The walk continues while turns *reach* `seq` — because "reaches" is not "contains". A
+        // turn reaching seq 5 also reaches seq 2 if an older turn made it, and the turn whose range
+        // actually contains the call is the **oldest** one that reaches it: its range starts after
+        // the turn below it ended.
+        //
+        // Getting this wrong is not academic: returning the newest turn that reached the call would
+        // rewind one turn for a finding from three turns ago, leaving the very edit the user asked
+        // to undo in place. This test caught exactly that.
+        for max_seq in &columns {
+            counted += 1;
+            if *max_seq >= seq {
                 answer = Some(counted);
             } else {
                 // This turn ended before the call, so the one above it in age is the owner.
                 break;
             }
         }
-        // `None` when no turn reached it: the call is not in this session's recorded turns.
-        answer
+        match answer {
+            Some(turns) => Rewind::Turns(turns),
+            // No turn reached it: the call is not in this session's recorded turns.
+            None => Rewind::Unrecorded,
+        }
     }
 
     /// How many committed turns are available to undo. Zero is a normal state, not an error —
@@ -785,6 +818,34 @@ fn undo_candidates(dir: &Path) -> Result<Vec<PathBuf>, String> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn turns_before_seq_refuses_a_store_whose_counter_restarted() {
+        // What the GUI wrote while the call counter lived on the Agent and the Agent was rebuilt
+        // every turn: three turns closing at 5, 2 and 3. The column is no longer cumulative, so
+        // "the oldest turn reaching call 2" answers three — undoing a turn that had already ended
+        // before that call was made. Refusing is the only honest answer; `/undo <n>` still works.
+        let dir = tempfile::tempdir().unwrap();
+        let undo_dir = dir.path().join("undo");
+        for (i, max_seq) in [5u64, 2, 3].iter().enumerate() {
+            let file = dir.path().join(format!("f{i}.rs"));
+            std::fs::write(&file, "original\n").unwrap();
+            let mut journal = EditJournal::new(undo_dir.clone());
+            journal.begin(&file).unwrap();
+            std::fs::write(&file, "changed\n").unwrap();
+            journal.commit_at_seq(*max_seq).unwrap();
+        }
+
+        for seq in [1u64, 2, 3, 5, 9] {
+            assert_eq!(
+                EditJournal::turns_before_seq(&undo_dir, seq),
+                Rewind::Unknown,
+                "call #{seq}: a restarted column must not be walked as if it were cumulative"
+            );
+        }
+        // The store is otherwise healthy: an ordinary undo of the newest turn still works.
+        assert_eq!(EditJournal::pending_turns(&undo_dir), 3);
+    }
+
+    #[test]
     fn turns_before_seq_counts_back_to_the_turn_that_contained_a_call() {
         // The review linkage: a finding names a tool call (`seq`), and the rewind has to include
         // the turn that made it. Three turns reaching seqs 1, 3 and 5 — rewinding past call 1
@@ -803,13 +864,28 @@ mod tests {
 
         // Call 5 was in the newest turn; call 3 in the middle; call 1 in the oldest — so
         // rewinding *past* it takes one, two and three turns respectively.
-        assert_eq!(EditJournal::turns_before_seq(&undo_dir, 5), Some(1));
-        assert_eq!(EditJournal::turns_before_seq(&undo_dir, 3), Some(2));
-        assert_eq!(EditJournal::turns_before_seq(&undo_dir, 1), Some(3));
+        assert_eq!(
+            EditJournal::turns_before_seq(&undo_dir, 5),
+            Rewind::Turns(1)
+        );
+        assert_eq!(
+            EditJournal::turns_before_seq(&undo_dir, 3),
+            Rewind::Turns(2)
+        );
+        assert_eq!(
+            EditJournal::turns_before_seq(&undo_dir, 1),
+            Rewind::Turns(3)
+        );
         // Call 2 was made by the middle turn (its range is 2..=3), so it takes two as well.
-        assert_eq!(EditJournal::turns_before_seq(&undo_dir, 2), Some(2));
+        assert_eq!(
+            EditJournal::turns_before_seq(&undo_dir, 2),
+            Rewind::Turns(2)
+        );
         // A call this session never made: nothing to rewind, and no guess.
-        assert_eq!(EditJournal::turns_before_seq(&undo_dir, 9), None);
+        assert_eq!(
+            EditJournal::turns_before_seq(&undo_dir, 9),
+            Rewind::Unrecorded
+        );
     }
 
     #[test]
@@ -826,7 +902,7 @@ mod tests {
         std::fs::write(&file, "changed\n").unwrap();
         journal.commit().unwrap();
 
-        assert_eq!(EditJournal::turns_before_seq(&undo_dir, 1), None);
+        assert_eq!(EditJournal::turns_before_seq(&undo_dir, 1), Rewind::Unknown);
     }
 
     #[test]
