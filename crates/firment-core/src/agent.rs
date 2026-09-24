@@ -1048,6 +1048,9 @@ impl Agent {
             default_chip: self.default_chip.clone(),
             active_board: self.active_board.clone(),
             write_scope: self.write_scope.clone(),
+            // Set per call, not per turn: the reporter carries the call's identity, and a turn
+            // has many calls. See `run_tool`'s clone.
+            progress: None,
             monitor_port: self.monitor_port.clone(),
             monitor_baud: self.monitor_baud,
             subagent: self.subagent.clone(),

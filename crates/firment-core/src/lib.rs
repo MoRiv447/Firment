@@ -13,6 +13,7 @@ pub mod kb;
 pub mod local;
 pub mod permission;
 pub mod plugin;
+pub mod progress;
 pub mod provider;
 pub mod providers;
 pub mod review;

@@ -2247,6 +2247,8 @@ async fn run_direct_tool(
     let cwd = cwd.unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     let ctx = firment_core::ToolContext {
         cwd: cwd.clone(),
+        // A one-shot `firm <tool>` run has no turn to report phases into.
+        progress: None,
         device_log_dir: Some(firment_core::config::config_dir()),
         permission: Arc::new(firment_core::AutoApprove::everything()),
         allow_dangerous: true,

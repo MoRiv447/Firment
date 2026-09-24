@@ -63,6 +63,10 @@ pub struct ToolContext {
     /// which run the project's own commands, nor the hardware tools. A scope that silently
     /// did not cover a shell would be worse than no scope at all.
     pub write_scope: Option<Vec<PathBuf>>,
+    /// Where a long tool reports phases (plan §6-10, item 7). `None` means nobody is listening —
+    /// which is every direct tool run and every test, so a tool that reports has to work without
+    /// a reporter as well as with one.
+    pub progress: Option<crate::progress::ProgressReporter>,
     /// The active board profile's name, from `[board] active` (e.g. `nucleo-g431rb`).
     ///
     /// A tool that needs the board's *identity* rather than a path reads it here and resolves
@@ -142,6 +146,7 @@ impl ToolContext {
             default_chip: None,
             active_board: None,
             write_scope: None,
+            progress: None,
             monitor_port: None,
             monitor_baud: 115_200,
             subagent: None,
