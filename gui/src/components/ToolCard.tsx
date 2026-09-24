@@ -123,6 +123,14 @@ export function ToolCard({
   /** Sends a canned request to the agent. See lib/quickActions.ts. */
   onAction?: (prompt: string) => void;
 }) {
+  // §16.2: nothing is shown for a run under two seconds — a line that appears and vanishes while
+  // you are reading the one above it is worse than silence. The card's own start time is the
+  // clock, and the gate lives here rather than in the reducer because the reducer is pure.
+  const showProgress =
+    tool.progress !== undefined &&
+    tool.startedAt !== undefined &&
+    Date.now() - tool.startedAt >= 2000;
+
   const danger = dangerousName(tool.name, tool.args);
   const status = chipStatus(tool.status, danger);
   const mark = markFor(tool.status, danger);
@@ -144,6 +152,11 @@ export function ToolCard({
       </Chip>
       {path && <span className={styles.path}>{path}</span>}
       <span className={styles.seq}>#{tool.seq}</span>
+      {showProgress && (
+        <span data-ui="tool-progress" className={styles.progress}>
+          {tool.progress}
+        </span>
+      )}
       {(tool.findings?.length ?? 0) > 0 && (
         // The badge carries the count and the worst severity; the body carries the findings.
         // A badge alone would make a reader open a diff to learn what was wrong with it, and

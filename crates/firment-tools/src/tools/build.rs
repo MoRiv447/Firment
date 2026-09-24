@@ -172,6 +172,12 @@ impl Tool for Build {
             .get("timeout_ms")
             .and_then(|t| t.as_u64())
             .unwrap_or(600_000);
+        // The phase the card shows while this runs (plan item 7). "Compiling" rather than the
+        // command itself, which the card already carries: the useful news is what *kind* of wait
+        // this is, and a build is the one people start and walk away from.
+        if let Some(progress) = ctx.progress.as_ref() {
+            progress.phase("compiling");
+        }
         let (text, code) =
             super::util::run_command(&command, &work_dir, timeout_ms, None, Some(&ctx.cancel))
                 .await

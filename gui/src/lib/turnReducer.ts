@@ -165,6 +165,26 @@ export function turnReducer(state: TurnState, e: FrontendEvent): TurnState {
       return { ...state, turn: { ...state.turn, tools: { ...state.turn.tools, [e.seq]: card } } };
     }
 
+    case 'progress': {
+      // Joined by `seq`, like the review: the card is filed under that key, so a phase that
+      // arrives before or after its tool_end still lands on the right one. Routed through the
+      // subagent stack for the same reason tool calls are.
+      if (!state.turn) return state;
+      const patch = (t: ToolCardState): ToolCardState => ({ ...t, progress: e.phase });
+      const subagents = routeToSubagent(state, (steps) =>
+        steps.map((t) => (t.seq === e.seq ? patch(t) : t)),
+      );
+      if (subagents) return { ...state, subagents };
+      if (!state.turn.tools[e.seq]) return state;
+      return {
+        ...state,
+        turn: {
+          ...state.turn,
+          tools: { ...state.turn.tools, [e.seq]: patch(state.turn.tools[e.seq]) },
+        },
+      };
+    }
+
     case 'review': {
       // The self-review, joined to its card by `seq` — the same key the card is filed under,
       // so a review that arrives after its tool_end still lands on the right card. Routed

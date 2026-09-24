@@ -211,6 +211,20 @@ export type FrontendEvent =
       seq: number;
     }
   | { type: 'turn_end'; session_id?: string | null; text: string }
+  /**
+   * A long tool reporting a phase. `seq` names the tool, so the phase lands on its own card —
+   * a subagent's tool and the turn's own are indistinguishable otherwise.
+   */
+  | {
+      type: 'progress';
+      session_id?: string | null;
+      tool: string;
+      seq: number;
+      phase: string;
+      current: number;
+      total: number;
+      eta_ms?: number | null;
+    }
   /** A self-review of one tool's change finished (plan §4-A). `seq` names the tool. */
   | {
       type: 'review';
@@ -337,6 +351,14 @@ export interface ToolCardState {
    * findings silently — the review ran, the reader never learns.
    */
   findings?: ReviewFinding[];
+  /**
+   * What the tool is doing *now* (plan §6-10, item 7), from the `progress` event.
+   *
+   * The two-second rule (§16.2) is applied where the card is drawn, not here: this is a pure
+   * state shape and has no clock. A card whose `progress` is set but which has been running for
+   * less than two seconds renders without it.
+   */
+  progress?: string;
   /** Wall-clock start for the per-tool elapsed label. */
   startedAt?: number;
   /**

@@ -326,6 +326,11 @@ impl Tool for Shell {
                 .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
                 .collect::<HashMap<String, String>>()
         });
+        // Added little for a one-liner and a lot for a long one: the card's elapsed clock only
+        // becomes readable once you know whether the wait is a build or a hung process.
+        if let Some(progress) = ctx.progress.as_ref() {
+            progress.phase("running the command");
+        }
         let (text, _code) =
             // `Inherit`: the shell tool runs the user's own commands, and a command that cannot see
         // the environment it would see in a terminal is a broken shell. The plugin host is the

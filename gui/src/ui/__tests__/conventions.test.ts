@@ -222,6 +222,7 @@ describe('Primitive layer and shell conventions', () => {
       'tool-card-head',
       'tool-diff',
       'tool-output',
+      'tool-progress',
       'tool-result',
       'tool-review',
       'tool-run',

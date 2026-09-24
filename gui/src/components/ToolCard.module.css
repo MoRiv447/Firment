@@ -198,3 +198,15 @@
   background: var(--diff-removed-bg);
   color: var(--diff-removed-ink);
 }
+
+/*
+ * The phase a running tool reports. Muted like the other secondary text on the card: it is news
+ * about the wait, not about the outcome, and the outcome owns the colour. Hidden by the caller
+ * for the first two seconds (§16.2) — see the gate in `ToolCard`.
+ */
+.progress {
+  margin-inline-start: var(--sp-2);
+  color: var(--muted);
+  font-size: var(--fs-minor);
+  white-space: nowrap;
+}

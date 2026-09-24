@@ -17,6 +17,47 @@ const finding: ReviewFinding = {
 };
 
 describe('turnReducer (IDE event->UI contract)', () => {
+  it('attaches a phase to the card it names, by seq', () => {
+    // The phase means "what it is doing now", so it is joined the same way the review is — by
+    // `seq`, the key the card is filed under — and it arrives on its own event rather than with
+    // the call. Whether it is *shown* is a separate decision: the two-second rule lives where the
+    // card is drawn, because this file is pure and has no clock (see ToolCard).
+    const state = feed([
+      { type: 'turn_start' },
+      { type: 'tool_start', name: 'flash', args: {}, seq: 5 },
+      { type: 'progress', tool: 'flash', seq: 5, phase: 'downloading', current: 0, total: 0 },
+    ]);
+    expect(state.turn?.tools[5].progress).toBe('downloading');
+
+    // A later phase replaces the earlier one: the card shows the newest thing, not a history.
+    const later = turnReducer(state, {
+      type: 'progress',
+      tool: 'flash',
+      seq: 5,
+      phase: 'verifying',
+      current: 0,
+      total: 0,
+    });
+    expect(later.turn?.tools[5].progress).toBe('verifying');
+  });
+
+  it("routes a nested agent's phase to its step, and drops one with no card", () => {
+    const nested = feed([
+      { type: 'turn_start' },
+      { type: 'subagent_start', id: 's1', label: 'research', depth: 1 },
+      { type: 'tool_start', name: 'build', args: {}, seq: 6 },
+      { type: 'progress', tool: 'build', seq: 6, phase: 'compiling', current: 0, total: 0 },
+    ]);
+    expect(nested.subagents[0].steps[0].progress).toBe('compiling');
+    expect(nested.turn?.tools[6]).toBeUndefined();
+
+    const orphan = feed([
+      { type: 'turn_start' },
+      { type: 'progress', tool: 'ghost', seq: 9, phase: 'nowhere', current: 0, total: 0 },
+    ]);
+    expect(orphan.turn?.tools[9]).toBeUndefined();
+  });
+
   it('attaches a self-review to the card it names, by seq', () => {
     // Plan §4-A: the review runs a beat after the tool, so a card cannot be final at
     // tool_end. The join is `seq` — the same key the card is filed under — which is what

@@ -47,6 +47,10 @@ impl Tool for Verify {
             .get("timeout_ms")
             .and_then(|t| t.as_u64())
             .unwrap_or(120_000);
+        // Same shape as `build`: the phase says what kind of wait this is.
+        if let Some(progress) = ctx.progress.as_ref() {
+            progress.phase("verifying");
+        }
         let (text, code) =
             super::util::run_command(&command, &ctx.cwd, timeout_ms, None, Some(&ctx.cancel))
                 .await
