@@ -56,6 +56,18 @@ pub enum FrontendEvent {
         session_id: Option<String>,
         text: String,
     },
+    /// A long tool reporting a phase (plan §6-10, item 7). The GUI carries it and does not draw
+    /// it yet; the field list is the whole event, so the frontend half is a render and not a
+    /// protocol change.
+    Progress {
+        session_id: Option<String>,
+        tool: String,
+        seq: u64,
+        phase: String,
+        current: u64,
+        total: u64,
+        eta_ms: Option<u64>,
+    },
     Info {
         session_id: Option<String>,
         message: String,
@@ -208,6 +220,15 @@ pub fn frontend_event(e: &AgentEvent, session_id: Option<&str>) -> FrontendEvent
             session_id: sid,
             seq: *seq,
             findings: findings.clone(),
+        },
+        AgentEvent::Progress { tool, seq, event } => FrontendEvent::Progress {
+            session_id: sid,
+            tool: tool.clone(),
+            seq: *seq,
+            phase: event.phase.clone(),
+            current: event.current,
+            total: event.total,
+            eta_ms: event.eta_ms,
         },
         AgentEvent::Info(message) => FrontendEvent::Info {
             session_id: sid,

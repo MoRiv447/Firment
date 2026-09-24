@@ -305,6 +305,15 @@ impl App {
                     self.thinking_since = Some(Instant::now());
                 }
             }
+            AgentEvent::Progress { .. } => {
+                // Carried by the core, not drawn yet — and deliberately so rather than by
+                // oversight. The phase belongs on the *running card*, beside its spinner, and the
+                // card's own rules apply there (§16.2: nothing is shown for a run under two
+                // seconds, because a line that appears and vanishes is worse than silence). That
+                // means touching the card render, which is the next step; this arm exists so the
+                // core can carry the event at all — the alternative is a non-exhaustive match
+                // that does not build.
+            }
             AgentEvent::ToolStart { name, args, seq } => {
                 self.ai_thinking = false;
                 self.thinking_since = None;

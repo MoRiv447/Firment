@@ -30,6 +30,17 @@ pub enum AgentEvent {
         /// same-name tool calls resolve to their own cards.
         seq: u64,
     },
+    /// A long tool reporting a phase (plan §6-10, item 7).
+    ///
+    /// Carries the call it belongs to, so a frontend can put the phase on the right card rather
+    /// than in a global corner — and so a subagent's tool is distinguishable from the turn's own.
+    /// The core does not rate-limit these: the tools that report are the ones that know how long
+    /// their steps take, and a throttle here would be a second opinion about that.
+    Progress {
+        tool: String,
+        seq: u64,
+        event: crate::progress::ProgressEvent,
+    },
     ToolEnd {
         name: String,
         ok: bool,
@@ -1932,13 +1943,74 @@ async fn execute_tool_calls(
                 })
                 .await;
         }
+        // A tool's progress report is a plain synchronous call and `EventSink::event` is async,
+        // so the two are joined by a queue and one task. It is awaited after the wave, so a phase
+        // can never arrive after its own tool's `ToolEnd` — a progress line for a finished tool
+        // would be noise the reader cannot place.
+        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
+        // The drain ends on an explicit signal rather than on "every sender dropped". It has to:
+        // on the cancel and timeout paths the wave's futures are still alive — `select!` holds
+        // them by `&mut` — and each of those holds a per-call context, which holds a reporter.
+        // Waiting for the senders to go away there waits forever, which is exactly what the
+        // wave-timeout test caught. On the signal, whatever is already queued is still delivered,
+        // so a phase reported just before the end is not swallowed.
+        let (drain_done_tx, mut drain_done_rx) = tokio::sync::oneshot::channel::<()>();
+        let drain = {
+            let sink = agent.sink.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        Some(event) = progress_rx.recv() => sink.event(event).await,
+                        _ = &mut drain_done_rx => {
+                            while let Ok(event) = progress_rx.try_recv() {
+                                sink.event(event).await;
+                            }
+                            break;
+                        }
+                    }
+                }
+            })
+        };
+
         let futures: Vec<_> = ready
             .iter()
-            .map(|&i| {
+            .enumerate()
+            // `n` indexes `call_seqs` (which is built in `ready` order) and `i` indexes
+            // `tool_calls`; they are different lists, and the first version of this used the
+            // wrong one — which panics the moment a turn has more than one call.
+            .map(|(n, &i)| {
                 let call = &tool_calls[i];
-                agent.registry.run(&call.name, call.arguments.clone(), ctx)
+                // A context per call, not per turn: the reporter carries the call's identity, and
+                // a turn has many calls. The clone is cheap — every field of the context is an
+                // `Arc` — and a tool that never reports anything pays only for the clone.
+                let mut call_ctx = ctx.clone();
+                call_ctx.progress = Some(crate::progress::ProgressReporter::new(
+                    call.name.as_str(),
+                    call_seqs[n],
+                    {
+                        let tx = progress_tx.clone();
+                        Arc::new(move |tool: &str, seq: u64, event| {
+                            let _ = tx.send(AgentEvent::Progress {
+                                tool: tool.to_string(),
+                                seq,
+                                event,
+                            });
+                        })
+                    },
+                ));
+                // The registry is cloned out rather than borrowed through `agent`: the future has
+                // to own everything it touches, and `agent` itself belongs to the caller.
+                let registry = agent.registry.clone();
+                async move {
+                    registry
+                        .run(&call.name, call.arguments.clone(), &call_ctx)
+                        .await
+                }
             })
             .collect();
+        // This sender is the loop's own; the reporters hold the rest. Dropping it here means the
+        // drain can end once the wave is done with its contexts.
+        drop(progress_tx);
         // Interruptible wave: on cancel, the running tool futures are dropped
         // (tools themselves kill their child processes via the shared cancel
         // signal), every pending tool_call_id gets a `[cancelled]` answer so
@@ -1974,6 +2046,12 @@ async fn execute_tool_calls(
                 out
             }
         };
+        // Told to finish, and awaited, so the ordering promise above holds: a phase cannot land
+        // after its tool's `ToolEnd`. The signal is what makes this bounded — see the note where
+        // the task is spawned.
+        let _ = drain_done_tx.send(());
+        let _ = drain.await;
+
         if wave_cancelled {
             for (k, &i) in ready.iter().enumerate() {
                 let call = &tool_calls[i];
