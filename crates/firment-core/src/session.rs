@@ -63,6 +63,16 @@ pub struct Session {
     /// happened to render it. `Some` is an explicit rename, and clearing it
     /// (setting whitespace) hands the row back to the derived name.
     pub title: Option<String>,
+    /// The highest tool-call number issued in this session. Every `seq` in the
+    /// event stream, and the undo journal's `max_seq`, is a value of this counter.
+    ///
+    /// It belongs to the session rather than to the `Agent` because the `Agent` is
+    /// not long-lived: the GUI builds a fresh one for every turn, so a counter that
+    /// restarted per turn made `seq` mean "unique within this Agent" while all of its
+    /// consumers — `/undo --before`, the estimate ledger, card addressing — read it as
+    /// session-scoped. Persisted, so a reopened session resumes its own numbering
+    /// instead of reissuing numbers the journal has already recorded.
+    pub tool_seq: u64,
 }
 
 impl Session {
@@ -82,6 +92,7 @@ impl Session {
             updated_at: now,
             messages: Vec::new(),
             title: None,
+            tool_seq: 0,
         }
     }
 
@@ -358,6 +369,13 @@ struct MetaLine {
     /// rename does not bake itself into the derivation.
     #[serde(default)]
     preview: String,
+    /// The session's highest tool-call number. `default` keeps every transcript
+    /// written before this existed loadable; such a session resumes numbering from
+    /// 1, which can only reissue numbers an old `max_seq` already used — and
+    /// `EditJournal::turns_before_seq` refuses a store whose numbering is not
+    /// increasing rather than guessing at it.
+    #[serde(default)]
+    tool_seq: u64,
     created_at: u64,
     updated_at: u64,
 }
@@ -522,6 +540,7 @@ impl SessionStore {
             updated_at: meta.updated_at,
             messages,
             title: meta.title,
+            tool_seq: meta.tool_seq,
         };
         if model != meta.model {
             // deepseek-chat / deepseek-reasoner were deprecated on 2026-07-24;
@@ -779,6 +798,7 @@ fn serialize_session(session: &Session) -> Result<String, SessionError> {
         context_budget_chars: session.context_budget_chars,
         parent_session: session.parent_session.clone(),
         session_kind: session.kind,
+        tool_seq: session.tool_seq,
         created_at: session.created_at,
         updated_at: session.updated_at,
     };
@@ -1172,6 +1192,36 @@ mod tests {
         let raw = fs::read_to_string(&path).unwrap();
         assert!(raw.contains("\"session_kind\":\"normal\""));
         assert!(!raw.contains("\"session_kind\":\"main\""));
+    }
+
+    #[test]
+    fn the_call_counter_round_trips_and_an_old_transcript_starts_at_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let store_dir = dir.path().join("sessions");
+        let store = SessionStore::new(store_dir.clone());
+        let mut session = Session::new(dir.path().to_path_buf(), "openrouter", "test-model");
+        session.tool_seq = 17;
+        store.save(&session).unwrap();
+
+        assert_eq!(
+            store.load(&session.id).unwrap().tool_seq,
+            17,
+            "a reopened session must not reissue numbers the undo journal already recorded"
+        );
+
+        // A transcript from before the field existed is loadable unchanged, and its
+        // numbering simply starts again at 1.
+        fs::create_dir_all(&store_dir).unwrap();
+        let legacy = format!(
+            r#"{{"type":"meta","id":"legacy-no-counter","cwd":"{}","provider":"openrouter","model":"test-model","thinking":"off","mode":"agent","created_at":100,"updated_at":200}}"#,
+            dir.path().to_string_lossy().replace('\\', "\\\\")
+        );
+        fs::write(
+            store_dir.join("legacy-no-counter.jsonl"),
+            format!("{legacy}\n"),
+        )
+        .unwrap();
+        assert_eq!(store.load("legacy-no-counter").unwrap().tool_seq, 0);
     }
 
     /// ADR-lite inheritance: creating a branch whose title overlaps a

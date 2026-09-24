@@ -278,8 +278,6 @@ pub struct Agent {
     asker: Option<Arc<dyn Asker>>,
     /// Web search provider + resolved API key exposed to the web_search tool.
     web_search_provider: Option<String>,
-    /// Monotonic counter for tool-start/end event pairing.
-    tool_seq: u64,
     web_search_api_key: Option<String>,
     /// Per-session bookkeeping directory (todo list etc.).
     session_dir: Option<PathBuf>,
@@ -362,7 +360,6 @@ impl Agent {
             journal_override: None,
             asker: None,
             web_search_provider: None,
-            tool_seq: 0,
             web_search_api_key: None,
             session_dir: None,
             elf_config: None,
@@ -737,9 +734,9 @@ impl Agent {
     /// expect tool call ids not to repeat within a conversation.
     async fn inject_elf_report(&mut self, content: &str, text: &str) {
         self.session.messages.pop();
-        self.tool_seq += 1;
+        let gate_seq = self.next_tool_seq();
         let gate_call = ToolCall {
-            id: format!("elf_gate_{}", self.tool_seq),
+            id: format!("elf_gate_{gate_seq}"),
             name: "elf_analyze".to_string(),
             arguments: json!({}),
         };
@@ -925,6 +922,26 @@ impl Agent {
         self.session.mode = mode;
         self.registry = registry;
         self.permission = permission;
+    }
+
+    /// Issue the next tool-call number.
+    ///
+    /// The counter is the session's, not the agent's. `Agent::new` used to own it, and
+    /// because the GUI builds a fresh `Agent` for every turn (`commands.rs`), the numbers
+    /// restarted each turn while three consumers read them as session-scoped: the estimate
+    /// ledger deduplicated on `(session, seq)` and stopped learning from turn two on,
+    /// `EditJournal::turns_before_seq` assumed a cumulative `max_seq` and could undo far
+    /// more than asked, and a subagent's card could be addressed by the parent's number.
+    /// This is the only place that moves it.
+    fn next_tool_seq(&mut self) -> u64 {
+        self.session.tool_seq += 1;
+        self.session.tool_seq
+    }
+
+    /// The highest call number issued so far this session — what the undo journal records
+    /// as the turn's `max_seq`.
+    fn tool_seq(&self) -> u64 {
+        self.session.tool_seq
     }
 
     /// Replace the whole session (used when switching to another saved session
@@ -1291,8 +1308,7 @@ impl Agent {
                     && self.verify_command.is_some()
                     && self.registry.get("verify").is_some()
                 {
-                    self.tool_seq += 1;
-                    let seq = self.tool_seq;
+                    let seq = self.next_tool_seq();
                     let gate_call = ToolCall {
                         id: format!("verify_gate_{seq}"),
                         name: "verify".to_string(),
@@ -1440,7 +1456,7 @@ impl Agent {
                     continue;
                 }
 
-                let commit_result = lock_journal(&journal).commit_at_seq(self.tool_seq);
+                let commit_result = lock_journal(&journal).commit_at_seq(self.tool_seq());
                 match commit_result {
                     Ok(changes) if !changes.is_empty() => {
                         if let Err(e) = ledger.append(&changes) {
@@ -1536,7 +1552,7 @@ impl Agent {
                 }
             }
         } else {
-            match lock_journal(&journal).commit_at_seq(self.tool_seq) {
+            match lock_journal(&journal).commit_at_seq(self.tool_seq()) {
                 Ok(changes) if !changes.is_empty() => {
                     if let Err(e) =
                         Ledger::new(self.store.ledger_path(&self.session.id)).append(&changes)
@@ -1950,14 +1966,14 @@ async fn execute_tool_calls(
         let mut call_seqs: Vec<u64> = Vec::with_capacity(ready.len());
         for &i in &ready {
             let call = &tool_calls[i];
-            agent.tool_seq += 1;
-            call_seqs.push(agent.tool_seq);
+            let seq = agent.next_tool_seq();
+            call_seqs.push(seq);
             agent
                 .sink
                 .event(AgentEvent::ToolStart {
                     name: call.name.clone(),
                     args: call.arguments.clone(),
-                    seq: agent.tool_seq,
+                    seq,
                 })
                 .await;
         }

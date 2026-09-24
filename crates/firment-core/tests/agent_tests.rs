@@ -569,6 +569,116 @@ async fn agent_loop_runs_tools() {
     assert_eq!(roles, vec!["user", "assistant", "tool", "assistant"]);
 }
 
+/// One provider turn that calls `echo` and stops, then one that answers.
+fn echo_turns(message: &str) -> Vec<Vec<ProviderEvent>> {
+    vec![
+        vec![
+            ProviderEvent::Text(format!("calling for {message}")),
+            ProviderEvent::ToolCall(firment_core::ToolCall {
+                id: format!("call_{message}"),
+                name: "echo".to_string(),
+                arguments: json!({"message": message}),
+            }),
+            ProviderEvent::Stop(StopReason::ToolUse),
+        ],
+        vec![
+            ProviderEvent::Text("Done".to_string()),
+            ProviderEvent::Stop(StopReason::EndTurn),
+        ],
+    ]
+}
+
+fn fake_provider(turns: Vec<Vec<ProviderEvent>>) -> FakeProvider {
+    FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from(turns))),
+        model: "fake".to_string(),
+    }
+}
+
+fn tool_start_seqs(events: &[AgentEvent]) -> Vec<u64> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::ToolStart { seq, .. } => Some(*seq),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The number behind `seq` belongs to the session, not to the `Agent`.
+///
+/// Two turns of one conversation must not hand out the same number twice: the undo
+/// journal records the turn's `max_seq` from it, and `/undo --before` walks that column
+/// assuming it only ever grows.
+#[tokio::test]
+async fn two_turns_in_one_session_never_reuse_a_seq() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let dir = tempdir().unwrap();
+    let mut agent = Agent::new(
+        Some(Box::new(fake_provider(
+            [echo_turns("first"), echo_turns("second")].concat(),
+        ))),
+        registry_with(vec![Arc::new(EchoTool)]),
+        Session::new(dir.path().to_path_buf(), "default", "fake"),
+        SessionStore::new(dir.path().to_path_buf()),
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(events.clone())),
+        10,
+    );
+
+    agent.run_turn("first").await.unwrap();
+    assert_eq!(tool_start_seqs(&events.lock().unwrap()), vec![1]);
+
+    agent.run_turn("second").await.unwrap();
+    let seqs = tool_start_seqs(&events.lock().unwrap());
+    assert_eq!(seqs, vec![1, 2], "the second turn resumes, not restarts");
+    assert_eq!(agent.session().tool_seq, 2);
+}
+
+/// The shape the GUI actually runs: `start_turn` builds a fresh `Agent` from the stored
+/// session every time, so a counter kept on the `Agent` restarted per turn. That is the
+/// one number the estimate ledger deduplicates on — with it restarting, every sample from
+/// the second turn of a chat on looked already counted and the ledger stopped learning.
+#[tokio::test]
+async fn a_fresh_agent_on_a_reopened_session_continues_its_numbering() {
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    let id = session.id.clone();
+
+    let mut first = Agent::new(
+        Some(Box::new(fake_provider(echo_turns("one")))),
+        registry_with(vec![Arc::new(EchoTool)]),
+        session,
+        store.clone(),
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(events.clone())),
+        10,
+    );
+    first.run_turn("one").await.unwrap();
+
+    let reloaded = store.load(&id).unwrap();
+    assert_eq!(
+        reloaded.tool_seq, 1,
+        "the number has to travel with the transcript"
+    );
+
+    let mut second = Agent::new(
+        Some(Box::new(fake_provider(echo_turns("two")))),
+        registry_with(vec![Arc::new(EchoTool)]),
+        reloaded,
+        store.clone(),
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(events.clone())),
+        10,
+    );
+    second.run_turn("two").await.unwrap();
+
+    assert_eq!(tool_start_seqs(&events.lock().unwrap()), vec![1, 2]);
+    assert_eq!(second.session().tool_seq, 2);
+}
+
 /// Stands in for the real `edit_file`: the output text is shaped exactly like
 /// the editor's (one-line header, then a unified diff). Only the NAME decides
 /// whether `detail` is populated, so a stub is enough to pin the contract.
