@@ -444,16 +444,17 @@ impl Agent {
         self.journal_override = Some(journal);
     }
 
-    /// The journal this turn writes into.
+    /// The journal this turn writes into, and whether this turn may close it.
     ///
     /// Its own, by default: one per turn, in the session's undo directory, so a cancel rolls
     /// back exactly the turn it belongs to. A nested agent inherits instead, because its edits
-    /// are part of the turn that spawned it.
-    fn turn_journal(&self) -> std::sync::Arc<std::sync::Mutex<crate::journal::EditJournal>> {
+    /// are part of the turn that spawned it — but inheriting the journal is not inheriting the
+    /// right to finish the transaction, which is what the flag on the returned handle records.
+    fn turn_journal(&self) -> TurnJournal {
         match &self.journal_override {
-            Some(journal) => journal.clone(),
-            None => std::sync::Arc::new(std::sync::Mutex::new(crate::journal::EditJournal::new(
-                self.store.undo_dir(&self.session.id),
+            Some(journal) => TurnJournal::borrowed(journal.clone()),
+            None => TurnJournal::owned(Arc::new(std::sync::Mutex::new(
+                crate::journal::EditJournal::new(self.store.undo_dir(&self.session.id)),
             ))),
         }
     }
@@ -1065,7 +1066,7 @@ impl Agent {
             cwd: self.session.cwd.clone(),
             permission: self.permission.clone(),
             allow_dangerous: self.allow_dangerous,
-            journal: journal.clone(),
+            journal: journal.handle(),
             verify_command: self.verify_command.clone(),
             allowed_roots: vec![
                 self.store.spill_dir(&self.session.id),
@@ -1103,7 +1104,7 @@ impl Agent {
             self.compact_if_needed().await;
             if *cancel_rx.borrow() {
                 self.sink
-                    .event(AgentEvent::Info(interrupted_note(&journal)))
+                    .event(AgentEvent::Info(journal.interrupted_note()))
                     .await;
                 let _ = self.store.save(&self.session);
                 self.sink
@@ -1124,10 +1125,8 @@ impl Agent {
                     // inform, persist — otherwise the edits are stranded
                     // neither committed nor undoable.
                     Err(e) => {
-                        let message = match rollback_journal(&journal) {
-                            Some(summary) => {
-                                format!("provider error; rolled back this turn's edits: {summary}")
-                            }
+                        let message = match journal.rolled_back_clause() {
+                            Some(clause) => format!("provider error; {clause}"),
                             None => format!("provider error: {e}"),
                         };
                         self.sink.event(AgentEvent::Error(message)).await;
@@ -1142,7 +1141,7 @@ impl Agent {
                 },
                 _ = cancel_rx.changed() => {
                     self.sink
-                        .event(AgentEvent::Info(interrupted_note(&journal)))
+                        .event(AgentEvent::Info(journal.interrupted_note()))
                         .await;
                     let _ = self.store.save(&self.session);
                     self.sink
@@ -1159,10 +1158,7 @@ impl Agent {
                 // Either way we must NOT hang the whole turn — surface the
                 // failure to the UI and end the turn so the user can retry.
                 _ = tokio::time::sleep(self.stream_timeout) => {
-                    let rollback_note = match rollback_journal(&journal) {
-                        Some(summary) => format!(" Partial edits rolled back: {summary}"),
-                        None => String::new(),
-                    };
+                    let rollback_note = journal.partial_note();
                     self.sink
                         .event(AgentEvent::Info(format!(
                             "⚠ Provider stream timed out after {}s; ending turn.{rollback_note}",
@@ -1210,10 +1206,8 @@ impl Agent {
                         // An empty journal means nothing was rolled back —
                         // saying "rolled back: no file changes" reads like a
                         // second failure on top of the real one.
-                        let message = match rollback_journal(&journal) {
-                            Some(summary) => {
-                                format!("provider error; rolled back this turn's edits: {summary}")
-                            }
+                        let message = match journal.rolled_back_clause() {
+                            Some(clause) => format!("provider error; {clause}"),
                             None => format!("provider error: {e}"),
                         };
                         self.sink.event(AgentEvent::Error(message)).await;
@@ -1257,7 +1251,7 @@ impl Agent {
 
             if cancelled {
                 self.sink
-                    .event(AgentEvent::Info(interrupted_note(&journal)))
+                    .event(AgentEvent::Info(journal.interrupted_note()))
                     .await;
                 let _ = self.store.save(&self.session);
                 self.sink
@@ -1283,10 +1277,7 @@ impl Agent {
             }
 
             if stalled {
-                let rollback_note = match rollback_journal(&journal) {
-                    Some(summary) => format!(" Partial edits rolled back: {summary}"),
-                    None => String::new(),
-                };
+                let rollback_note = journal.partial_note();
                 self.sink
                     .event(AgentEvent::Info(format!(
                         "⚠ Provider stream stalled (no bytes for {}s); ending turn.{rollback_note}",
@@ -1456,9 +1447,8 @@ impl Agent {
                     continue;
                 }
 
-                let commit_result = lock_journal(&journal).commit_at_seq(self.tool_seq());
-                match commit_result {
-                    Ok(changes) if !changes.is_empty() => {
+                match journal.commit_at_seq(self.tool_seq()) {
+                    Commit::Recorded(changes) if !changes.is_empty() => {
                         if let Err(e) = ledger.append(&changes) {
                             self.sink
                                 .event(AgentEvent::Info(format!(
@@ -1467,8 +1457,10 @@ impl Agent {
                                 .await;
                         }
                     }
-                    Ok(_) => {}
-                    Err(e) => {
+                    // Nothing to record, or not this turn's transaction to close: either way the
+                    // spawning turn's own epilogue records these edits with its own call number.
+                    Commit::Recorded(_) | Commit::LeftToParent => {}
+                    Commit::Failed(e) => {
                         self.sink
                             .event(AgentEvent::Info(format!(
                                 "failed to write edit journal: {e}"
@@ -1499,10 +1491,7 @@ impl Agent {
 
             let stats = execute_tool_calls(self, &tool_calls, &ctx, &journal).await;
             if stats.timed_out {
-                let rollback_note = match rollback_journal(&journal) {
-                    Some(summary) => format!(" Partial edits rolled back: {summary}"),
-                    None => String::new(),
-                };
+                let rollback_note = journal.partial_note();
                 self.sink
                     .event(AgentEvent::Info(format!(
                         "⚠ Tool wave timed out after {}s; ending turn.{rollback_note}",
@@ -1543,17 +1532,20 @@ impl Agent {
         //   /undo instead of silently losing useful work.
         let unverified = self.verify_command.is_some() && mutations_since_verify > 0;
         let outcome = if unverified {
-            match rollback_journal(&journal) {
-                Some(summary) => {
+            match journal.rollback() {
+                Rollback::Done(summary) => {
                     format!("rolled back this turn's edits (verify never passed): {summary}")
                 }
-                None => {
+                Rollback::Empty => {
                     "verify never passed, and no file changes were recorded this turn".to_string()
                 }
+                Rollback::OwnedByParent => "verify never passed; the edits this step wrote stay \
+                 on disk — the turn that spawned it owns them"
+                    .to_string(),
             }
         } else {
-            match lock_journal(&journal).commit_at_seq(self.tool_seq()) {
-                Ok(changes) if !changes.is_empty() => {
+            match journal.commit_at_seq(self.tool_seq()) {
+                Commit::Recorded(changes) if !changes.is_empty() => {
                     if let Err(e) =
                         Ledger::new(self.store.ledger_path(&self.session.id)).append(&changes)
                     {
@@ -1568,8 +1560,11 @@ impl Agent {
                         )
                     }
                 }
-                Ok(_) => "no file changes were recorded this turn".to_string(),
-                Err(e) => format!("failed to finalize the edit journal: {e}"),
+                Commit::Recorded(_) => "no file changes were recorded this turn".to_string(),
+                Commit::LeftToParent => "kept this step's edits; the turn that spawned it owns \
+                 the transaction and will record them with its own"
+                    .to_string(),
+                Commit::Failed(e) => format!("failed to finalize the edit journal: {e}"),
             }
         };
         self.sink
@@ -1951,7 +1946,7 @@ async fn execute_tool_calls(
     agent: &mut Agent,
     tool_calls: &[ToolCall],
     ctx: &ToolContext,
-    journal: &Arc<Mutex<EditJournal>>,
+    journal: &TurnJournal,
 ) -> ToolRunStats {
     let n = tool_calls.len();
     let deps = tool_call_dependencies(tool_calls);
@@ -2197,14 +2192,18 @@ async fn execute_tool_calls(
         // prefixed onto the first tool result below, keeping the transcript a
         // valid assistant(tool_calls) -> tool(...) -> tool(...) sequence.
         let mut rollback_note = if any_mutation_failed {
-            let summary = match rollback_journal(journal) {
-                Some(summary) => summary,
-                // Even when there is nothing on disk to restore, the model
-                // must learn that the whole wave was discarded — its earlier
-                // "successful" edits are no longer in effect.
-                None => "no file changes were recorded".to_string(),
+            // Whatever happened to the files, the model has to be told: after a restore its
+            // earlier "successful" edits are no longer in effect, and when the transaction
+            // belongs to a turn further out, nothing was restored and they still are.
+            let note = match journal.rollback() {
+                Rollback::Done(summary) => format!("edit batch failed; rolled back: {summary}"),
+                // Even when there is nothing on disk to restore, the model must learn that the
+                // whole wave was discarded.
+                Rollback::Empty => "edit batch failed; no file changes were recorded".to_string(),
+                Rollback::OwnedByParent => "edit batch failed; this step does not own the file \
+                 transaction, so nothing was restored — the edits made so far are still on disk"
+                    .to_string(),
             };
-            let note = format!("edit batch failed; rolled back: {summary}");
             agent.sink.event(AgentEvent::Info(note.clone())).await;
             Some(note)
         } else {
@@ -2401,24 +2400,131 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
     chars.into_iter().collect()
 }
 
-fn rollback_journal(journal: &Arc<Mutex<EditJournal>>) -> Option<String> {
-    match lock_journal(journal).rollback() {
-        Ok(files) if files.is_empty() => None,
-        Ok(files) => Some(format!(
-            "restored {} file(s): {}",
-            files.len(),
-            files.join(", ")
-        )),
-        Err(e) => Some(format!("rollback incomplete: {e}")),
-    }
+/// The transaction a turn writes its file edits into, and whether that turn may close it.
+///
+/// Two agents share one `EditJournal` on purpose: a `task` call's edits belong to the turn that
+/// spawned it, so `/undo` after the batch has to reach them all. What must not be shared is the
+/// authority to finish the transaction. A nested agent that ran its own epilogue used to
+/// `commit_at_seq` with *its own* call number — closing the parent's turn mid-flight, so the
+/// parent's later edits landed in a transaction nobody would undo — and a wave timeout inside the
+/// child rolled back files the parent had already written and was still using.
+struct TurnJournal {
+    inner: Arc<Mutex<EditJournal>>,
+    /// False when the journal belongs to a turn further out.
+    owned: bool,
 }
 
-/// User-facing interrupt note; the rollback clause only appears when there
-/// was actually something to roll back.
-fn interrupted_note(journal: &Arc<Mutex<EditJournal>>) -> String {
-    match rollback_journal(journal) {
-        Some(summary) => format!("⏹ Interrupted; rolled back this turn's edits: {summary}"),
-        None => "⏹ Interrupted".to_string(),
+/// What asking the transaction to give its files back actually did.
+enum Rollback {
+    /// The files were restored; the text describes them, or says the restore stopped early.
+    Done(String),
+    /// Nothing was recorded, so there was nothing to restore.
+    Empty,
+    /// Not ours to undo: the edits stay on disk for the spawning turn to decide about.
+    OwnedByParent,
+}
+
+/// What closing the transaction did.
+enum Commit {
+    /// The turn's changes are recorded and undoable; these are they.
+    Recorded(Vec<crate::journal::LedgerChange>),
+    /// An outer turn owns the transaction and will record these edits with its own call number.
+    LeftToParent,
+    /// The journal could not be written; the text is the OS error.
+    Failed(String),
+}
+
+impl TurnJournal {
+    fn owned(inner: Arc<Mutex<EditJournal>>) -> Self {
+        TurnJournal { inner, owned: true }
+    }
+
+    fn borrowed(inner: Arc<Mutex<EditJournal>>) -> Self {
+        TurnJournal {
+            inner,
+            owned: false,
+        }
+    }
+
+    /// What a tool records its backup under: the shared journal, whoever owns it.
+    fn handle(&self) -> Arc<Mutex<EditJournal>> {
+        self.inner.clone()
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, EditJournal> {
+        lock_journal(&self.inner)
+    }
+
+    /// Record this turn's edits as undoable up to call number `seq`.
+    fn commit_at_seq(&self, seq: u64) -> Commit {
+        if !self.owned {
+            // The parent's epilogue commits the shared transaction with the parent's own
+            // highest number, which is the one `/undo --before` has to be measured against.
+            return Commit::LeftToParent;
+        }
+        match self.lock().commit_at_seq(seq) {
+            Ok(changes) => Commit::Recorded(changes),
+            Err(e) => Commit::Failed(e),
+        }
+    }
+
+    /// Restore the transaction's files. Never call this to mean "undo the child's writes": a
+    /// borrowed journal holds the parent's files too, and they all go back together.
+    fn rollback(&self) -> Rollback {
+        if !self.owned {
+            return Rollback::OwnedByParent;
+        }
+        match self.lock().rollback() {
+            Ok(files) if files.is_empty() => Rollback::Empty,
+            Ok(files) => Rollback::Done(format!(
+                "restored {} file(s): {}",
+                files.len(),
+                files.join(", ")
+            )),
+            Err(e) => Rollback::Done(format!("rollback incomplete: {e}")),
+        }
+    }
+
+    /// The clause after a failure the reader is being told about — `None` when there is nothing
+    /// to add, so a bare "provider error" is not padded with a second, imaginary failure.
+    fn rolled_back_clause(&self) -> Option<String> {
+        match self.rollback() {
+            Rollback::Done(summary) => Some(format!("rolled back this turn's edits: {summary}")),
+            Rollback::OwnedByParent => Some(
+                "left the edits this step wrote in place: they belong to the turn that \
+                 spawned it"
+                    .to_string(),
+            ),
+            Rollback::Empty => None,
+        }
+    }
+
+    /// A trailing note for the timeout paths, which must say *"partial"*: the turn was cut off,
+    /// and only what it had already recorded can come back.
+    fn partial_note(&self) -> String {
+        match self.rollback() {
+            Rollback::Done(summary) => format!(" Partial edits rolled back: {summary}"),
+            Rollback::OwnedByParent => " This step's edits stay as they are; the turn that \
+                 spawned it owns them."
+                .to_string(),
+            Rollback::Empty => String::new(),
+        }
+    }
+
+    /// User-facing interrupt note; the rollback clause only appears when there was actually
+    /// something to roll back, and says plainly when the transaction is not ours to undo.
+    fn interrupted_note(&self) -> String {
+        match self.rollback() {
+            Rollback::Done(summary) => {
+                format!("⏹ Interrupted; rolled back this turn's edits: {summary}")
+            }
+            Rollback::OwnedByParent => {
+                "⏹ Interrupted; the edits this step wrote stay on disk — the turn that spawned \
+                 it owns them"
+                    .to_string()
+            }
+            Rollback::Empty => "⏹ Interrupted".to_string(),
+        }
     }
 }
 
@@ -2570,16 +2676,89 @@ mod tests {
 
         // By default a turn opens its own journal in the session's undo directory.
         let own = agent.turn_journal();
+        assert!(
+            own.owned,
+            "a turn that opened its own transaction is the one allowed to close it"
+        );
         let handed = Arc::new(Mutex::new(EditJournal::new(dir.path().join("undo"))));
         assert!(
-            !Arc::ptr_eq(&own, &handed),
+            !Arc::ptr_eq(&own.handle(), &handed),
             "the turn's own journal is not one a parent would hand down"
         );
 
         agent.set_edit_journal(handed.clone());
+        let borrowed = agent.turn_journal();
         assert!(
-            Arc::ptr_eq(&agent.turn_journal(), &handed),
+            Arc::ptr_eq(&borrowed.handle(), &handed),
             "an agent handed a journal must write into it instead of opening its own"
+        );
+        assert!(
+            !borrowed.owned,
+            "being handed the journal must not also hand over the right to finish the transaction"
+        );
+    }
+
+    #[test]
+    fn a_borrowed_transaction_is_neither_committed_nor_rolled_back_by_the_child() {
+        // The parent's turn owns the transaction; a nested agent writing into the same journal
+        // used to close it (`commit_at_seq` with the child's own call number, so the parent's
+        // later edits landed in an entry nobody would undo) and, on a wave timeout inside the
+        // child, restore files the parent had already written. Both are refused here — while the
+        // child's backups still go into the shared journal, which is what `/undo` needs.
+        let dir = tempfile::tempdir().unwrap();
+        let journal_dir = dir.path().join("undo");
+        let parent_file = dir.path().join("main.c");
+        std::fs::write(&parent_file, b"int x = 1;\n").unwrap();
+
+        let parent = Arc::new(Mutex::new(EditJournal::new(journal_dir.clone())));
+        parent.lock().unwrap().begin(&parent_file).unwrap();
+        std::fs::write(&parent_file, b"int x = 2;\n").unwrap();
+
+        let child = TurnJournal::borrowed(parent.clone());
+        assert!(
+            matches!(child.commit_at_seq(3), Commit::LeftToParent),
+            "a child must not close the transaction it was handed"
+        );
+        let written_indexes = || -> Vec<String> {
+            match std::fs::read_dir(&journal_dir) {
+                Ok(entries) => entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .filter(|name| name.starts_with("undo-"))
+                    .collect(),
+                Err(_) => Vec::new(),
+            }
+        };
+        assert!(
+            written_indexes().is_empty(),
+            "committing from the child wrote an undo entry anyway: {:?}",
+            written_indexes()
+        );
+        assert!(matches!(child.rollback(), Rollback::OwnedByParent));
+        assert_eq!(
+            std::fs::read_to_string(&parent_file).unwrap(),
+            "int x = 2;\n",
+            "the child's rollback reached into the parent's files"
+        );
+
+        // The same handle, owned: it may undo what is open…
+        let owner = TurnJournal::owned(parent.clone());
+        assert!(matches!(owner.rollback(), Rollback::Done(_)));
+        assert_eq!(
+            std::fs::read_to_string(&parent_file).unwrap(),
+            "int x = 1;\n",
+            "the owning turn's rollback did not restore the file"
+        );
+        // …and it is the owning turn that records an entry at all.
+        owner.lock().begin(&parent_file).unwrap();
+        std::fs::write(&parent_file, b"int x = 3;\n").unwrap();
+        assert!(
+            matches!(owner.commit_at_seq(7), Commit::Recorded(changes) if !changes.is_empty()),
+            "an owned transaction must record its edits"
+        );
+        assert!(
+            !written_indexes().is_empty(),
+            "the owning turn's commit wrote no undo entry"
         );
     }
 
@@ -2993,7 +3172,9 @@ mod tests {
             Arc::new(CollectingSink(events.clone())),
             4,
         );
-        let journal = Arc::new(Mutex::new(EditJournal::new(dir.path().join("undo"))));
+        let journal = TurnJournal::owned(Arc::new(Mutex::new(EditJournal::new(
+            dir.path().join("undo"),
+        ))));
         let ctx = ToolContext::with_cwd(dir.path().to_path_buf());
 
         let calls = vec![
@@ -3041,7 +3222,11 @@ mod tests {
             })
             .collect();
         assert!(
-            tool_contents.iter().any(|c| c.contains("rolled back")),
+            // The second half of the note says what really happened to the files, so the
+            // contract pinned here is that the note reaches a tool result at all.
+            tool_contents
+                .iter()
+                .any(|c| c.contains("edit batch failed")),
             "rollback note should be present in a tool result, got: {tool_contents:?}"
         );
     }
@@ -3105,7 +3290,9 @@ mod tests {
             Arc::new(CollectingSink(events.clone())),
             4,
         );
-        let journal = Arc::new(Mutex::new(EditJournal::new(dir.path().join("undo"))));
+        let journal = TurnJournal::owned(Arc::new(Mutex::new(EditJournal::new(
+            dir.path().join("undo"),
+        ))));
         let ctx = ToolContext::with_cwd(dir.path().to_path_buf());
 
         let calls = vec![
@@ -3213,7 +3400,9 @@ mod tests {
             Arc::new(CollectingSink(events.clone())),
             4,
         );
-        let journal = Arc::new(Mutex::new(EditJournal::new(dir.path().join("undo"))));
+        let journal = TurnJournal::owned(Arc::new(Mutex::new(EditJournal::new(
+            dir.path().join("undo"),
+        ))));
         let ctx = ToolContext::with_cwd(dir.path().to_path_buf());
 
         let calls = vec![
