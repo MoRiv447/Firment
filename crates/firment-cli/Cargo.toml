@@ -15,7 +15,7 @@ anyhow.workspace = true
 serialport.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
-rumqttc = "0.24"
+rumqttc = { version = "0.25", default-features = false } # no TLS: the broker is plain TCP on the LAN
 clap.workspace = true
 clap_complete.workspace = true
 reqwest.workspace = true
