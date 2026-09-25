@@ -74,7 +74,12 @@ jobs:
         shell: bash
         run: |
           npm ci
-          npm run tauri build
+          # `--bundles nsis` rather than the config's "all": the WiX msi target refuses a
+          # version with a non-numeric pre-release identifier ("must be numeric-only and
+          # cannot be greater than 65535"), so an rc tag would fail the bundle step — and
+          # the msi was never the artifact this job ships. The next step copies the NSIS
+          # setup.exe and nothing else, so asking for exactly that is the honest form.
+          npm run tauri build -- --bundles nsis
       - name: Stage installer artifact
         shell: pwsh
         run: |
