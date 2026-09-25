@@ -72,7 +72,7 @@ Firment separates responsibilities instead of treating the model as a shell scri
 
 - **Multi-provider**: Anthropic-compatible (`/v1/messages`) and OpenAI-compatible (`/chat/completions`, covering DeepSeek / GLM / Qwen / Ollama) streaming tool calls; DeepSeek V4 automatically uses official `thinking` + `reasoning_effort`
 - **Thinking levels**: `off / low / medium / high / xhigh / max`
-- **Built-in tools**: `read_file` (line-numbered pages), `write_file`, `edit_file` (anchor / line-range / hashline edits, unified diff echo), `list_dir`, `glob`, `grep`, `shell`, `web_search` (DuckDuckGo / Tavily / Brave), `web_fetch`, `task` (read-only research subagent), `todo`, `ask_user`, `hil`, `periph_init`, `elf_analyze`, `monitor`, `debug`, `observe`, `la`, `redteam`
+- **Built-in tools** (31 in the registry; `firm tools` prints every name with its schema): `read_file` (line-numbered pages), `write_file`, `edit_file` (anchor / line-range / hashline edits, unified diff echo), `rename_symbol`, `list_dir`, `glob`, `grep`, `symbols`, `shell`, `build`, `verify`, `run`, `flash`, `monitor`, `elf_analyze`, `observe`, `la`, `debug`, `hil`, `periph_init`, `pinmap`, `device_cmd`, `device_log`, `decision`, `models`, `web_search` (DuckDuckGo / Tavily / Brave), `web_fetch`, `task` (research subagent — read-only unless the project turns on `tools.subagents_may_write`), `todo`, `ask_user`, `redteam`
 - **Read-only plan mode**: `--plan` / `/plan` exposes only read tools and requires a decision-complete plan
 - **Parallel tool calls**: independent calls run concurrently; same-file reads/writes and broad tools are ordered automatically
 - **Engineering-grade system prompt**: communication, engineering principles, tool policy, verification, and safety sections, plus `AGENTS.md` / `FIRMENT.md` project instructions
@@ -165,6 +165,19 @@ macOS / Linux:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | sh
+```
+
+**Which release you get.** Both installers resolve `releases/latest`, and GitHub keeps
+pre-releases out of that pointer — so while `v1.0.0-rc` is marked a pre-release, the lines
+above install the last stable one. Name the tag to choose otherwise (the variable belongs to
+the *script*, so on the shell side it goes after the pipe):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | FIRMENT_VERSION=v1.0.0-rc sh
+```
+
+```powershell
+$env:FIRMENT_VERSION = 'v1.0.0-rc'   # then the iex line above
 ```
 
 **Offline or air-gapped machine.** Both installers download a release, so neither works
@@ -297,11 +310,13 @@ cd gui && npm ci && npx tsc --noEmit && npm run build   # + npm run tauri build 
 - TUI command palette (fuzzy finder)
 - SWO/trace streaming deeper into the agent loop
 - Tree-sitter structural edits and completions
-- Plugins / MCP on the unified tool registry
+- MCP servers on the unified tool registry
 - Web backend: containerized Rust agent behind the web frontend
 - Skills: installable tool packs (declarative external-command tools + schemas + prompts)
 
-*(Streaming-token animation shipped in v0.6.3 — time-driven spinners, batched deltas, cached wrapping.)*
+*(Streaming-token animation shipped in v0.6.3 — time-driven spinners, batched deltas, cached wrapping.
+Plugins on the unified registry shipped in v1.0.0-rc: declared capabilities, a registry that refuses to
+let a plugin shadow a built-in tool, and vouching before a plugin can be called.)*
 
 ## 🤝 Contributing
 

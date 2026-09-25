@@ -79,5 +79,7 @@ create. What it takes, exactly:
 3. In the Marketplace listing form, pick the categories; the action needs no build step
    because it installs a released binary.
 4. Keep the `firm review` invocations in sync with the CLI — the drift guard is a test in
-   `crates/firment-cli/src/main.rs` (`the_github_action_only_calls_firm_commands_that_exist`),
-   which reads this file and fails if it names a subcommand the binary does not have.
+   `crates/firment-cli/src/main.rs`
+   (`the_github_action_is_structurally_sound_and_calls_commands_that_exist`), which reads
+   **`action.yml`** (not this file) and fails if it names a subcommand the binary does not
+   have.

@@ -2,7 +2,7 @@
 
 ## v1.0.0-rc (2026-09-25) — rebuilt GUI, self-review, plugins, and measured numbers
 
-The first release candidate. 234 commits since v0.8.1, and they go in two
+The first release candidate. 241 commits since v0.8.1, and they go in two
 directions: the surfaces grew up (the Tauri GUI was rewritten from its primitive
 layer out, and review, plugins, subagent delegation, replay and share all became
 real features), and a full defect audit of the CLI, core and GUI was carried out

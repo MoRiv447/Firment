@@ -172,9 +172,11 @@ Diff colours are their own family rather than reusing the status colours: an add
 line and a passed check are not the same message.
 
 A tool card also shows the counts — `+12 -3` — in this family, right-aligned in the
-header. They are counted the same way the TUI counts them
-(`crates/firment-tui/src/view.rs`): over the diff body only, skipping the
-"Edited `<path>`" line the body drops.
+header. They are counted over the diff body only, skipping the "Edited `<path>`"
+line the body drops, and **not** by borrowing the TUI's number: `lib/diff.ts` records
+that the TUI counts the whole body and so reports one *removed* line too many, which
+makes "match the TUI" the wrong target. The number worth hitting is the one the diff
+actually contains.
 
 ### Interaction
 

@@ -109,7 +109,9 @@ MCU 不带 RTC 或时钟漂移时，一律以 SBC 接收时刻为准；MCU 自�
 
 - SBC 上 `ollama serve` 后即暴露 OpenAI 兼容端点
   `http://<sbc>:11434/v1`；
-- 桌面端 `firm add-provider sbc-ollama http://<sbc>:11434/v1` 一次配置；
+- 桌面端一次配置：TUI 里 `/add-provider sbc-ollama openai http://<sbc>:11434/v1 <model>`
+  （四个参数都要），或跑 `firm config` 从内置目录里挑一个 preset 填 key。CLI 侧**没有**
+  `firm add-provider` 这个子命令。
 - `task` 工具已支持 `provider` + `model` 双覆盖（见
   `feat(tools): task subagent provider override`）：大模型可把翻译/摘要/
   调研类子任务显式派发给 0.8B，主循环保持大模型。

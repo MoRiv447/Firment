@@ -1,9 +1,12 @@
 # Dependency licences — Rust
 
 Firment is MIT. That is a claim about the four crates in this repository, and it
-says nothing about the ~300 crates they are built from, each of which has its own
-terms. This is the inventory, and it exists so a release does not have to take
-"all our dependencies are MIT/Apache" on faith.
+says nothing about the 409 packages the root workspace resolves and the 622 in
+the Tauri application's own lockfile — two independent resolutions that overlap,
+so neither count contains the other
+(`grep -c '^name = ' Cargo.lock gui/src-tauri/Cargo.lock`), each package with its
+own terms. This is the inventory, and it exists so a release does not have to
+take "all our dependencies are MIT/Apache" on faith.
 
 ```bash
 node docs/dependency-licenses.mjs        # reads Cargo.lock + the local registry
@@ -104,10 +107,12 @@ licence from a different version of the same crate, which is the right failure.
 
 ## What this does not cover
 
-* **Security advisories.** This is licences only. The other half of the review is
-  `cargo audit`, which needs the advisory database and therefore the network —
-  it is not installed on this machine. Until it is run, nothing here says
-  anything about known vulnerabilities in the dependency set.
+* **Security advisories.** This document is licences only. The other half of the
+  review is `cargo audit`, which needs the advisory database and therefore a
+  network — this machine has none, so it runs in CI instead (`ci.yml`, job
+  `audit`, against both lockfiles). It first ran on 2026-09-25, found six
+  advisories, and all six are cleared: two by version bumps, four by dropping a
+  TLS stack the MQTT client never used. Re-check it by pushing, not by hand.
 * **The JavaScript side.** `gui/` and `web/` have their own, much larger trees
   (npm). They are covered by neither this document nor this script.
 * **Licences of fonts and assets.** The type stack names JetBrains Mono and

@@ -52,8 +52,13 @@ EOF
 sudo systemctl restart mosquitto && sudo systemctl enable mosquitto
 ```
 
-> 内网明文是有意取舍：节点固件不带 TLS 栈时最简可行。若 broker 需要暴露到
-> VLAN 之外，改用 8883 + 用户名密码并同步修改 PC `[mqtt]` 与固件常量。
+> 内网明文是有意取舍：节点固件不带 TLS 栈时最简可行。**PC 侧没有 TLS 通路**：
+> `[mqtt]` 只有一个 `host:port`，代码里没有任何地方配置 MQTT transport，而
+> `rumqttc` 默认的 `use-rustls` feature 已在 manifest 里关掉——它会把带 4 条公告的
+> `rustls-webpki` 副本拉进一个根本不用它的二进制。所以把 `[mqtt] broker` 指到 8883
+> 不是升级而是连不上：TLS 监听端会直接拒绝明文握手。真要连加密 broker，得同时
+> 重新打开那个 feature **并**在四处连接点（`gui/src-tauri/src/mqtt.rs`、`device_cmd`、
+> `doctor`、guard 订阅）配置 transport，还要在配置里放凭据。这些现在都不存在。
 
 ### 3.2 ollama + 模型
 

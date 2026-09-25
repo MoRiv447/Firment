@@ -49,7 +49,7 @@ user cannot exercise.
 | `web_search` / `web_fetch` | ✗ | by definition | `tools/src/tools/web_{search,fetch}.rs` |
 | Local model probe (`firm doctor`, `firm config`) | ✓ | localhost + LAN, **200 ms** per probe, cached 15 min | `core/src/local.rs` (`PROBE_TIMEOUT`) |
 | Provider probes in `firm doctor` | ✗ | 10 s / 8 s timeouts, reports each as unreachable | `cli/src/doctor.rs:64,930` |
-| Device plane (MQTT: guard alerts, `device_log`, `device_cmd`) | ~ | a **LAN** broker works; the default `broker.emqx.io` does not | `cli/src/main.rs:899`, `tools/src/tools/device_cmd.rs:123` |
+| Device plane (MQTT: guard alerts, `device_log`, `device_cmd`) | ~ | a **LAN** broker works; there is no default broker at all — an empty `[mqtt] broker` turns the plane off rather than falling back to a public one | `config.rs` (`MqttConfig::broker`), `cli/src/main.rs`, `tools/src/tools/device_cmd.rs` |
 | Install / update (`install.sh`, `install.ps1`) | ✗ | downloads a release | `install.sh`, `install.ps1` |
 | CI advisory gate | ✗ | by design — it lives in CI *because* it needs a live feed | `.github/workflows/ci.yml` |
 
@@ -77,7 +77,8 @@ These are defects, not missing features — they are the difference between "wor
 1. **The chat path has no timeout.** `grep -rn '\.timeout(' crates/` finds timeouts in the
    doctor probes (10 s), `list_models` (10 s), the local probe (200 ms), `models` (8 s),
    `web_fetch` (20 s), `monitor` (50 ms) — and **none in `core/src/provider/`**.
-   `http_client()` (`http.rs:47`) builds a client with no timeout, so a **black-holed**
+   `http_client()` — since renamed `provider_client()` in `core/src/http.rs` — built a
+   client with no timeout, so a **black-holed**
    endpoint (a dropped packet, a sleeping laptop, a wifi that is up but not routed) hangs
    until the OS gives up — which is minutes, not seconds. A **refused** connection fails
    instantly, which is why this has not been noticed: this project's failures have all been

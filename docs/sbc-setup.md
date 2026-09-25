@@ -59,9 +59,15 @@ sudo systemctl restart mosquitto && sudo systemctl enable mosquitto
 ```
 
 > Plain text inside the LAN is a deliberate trade-off — simplest path when
-> node firmware carries no TLS stack. If the broker must span VLANs,
-> switch to 8883 + credentials and update the PC `[mqtt]` block and the
-> firmware constants accordingly.
+> node firmware carries no TLS stack. **There is no TLS path on the PC side**: the
+> `[mqtt]` block holds only a `host:port`, nothing in the code configures an MQTT
+> transport, and `rumqttc`'s default `use-rustls` feature is turned off in the
+> manifests — it pulled a `rustls-webpki` copy carrying four advisories into a binary
+> that never uses it. So pointing `[mqtt] broker` at 8883 does not upgrade anything, it
+> fails: a TLS listener rejects a plaintext handshake. Reaching an encrypted broker
+> would mean re-enabling that feature *and* setting the transport in the four places
+> that connect (`gui/src-tauri/src/mqtt.rs`, `device_cmd`, `doctor`, the guard
+> subscription), plus credentials in the config. None of that exists today.
 
 ### 3.2 ollama + models
 

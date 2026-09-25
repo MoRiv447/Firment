@@ -17,7 +17,7 @@ Item 2 reads as if subagents have to be built. They do not:
   (`max_subagent_depth`, enforced in `tools/src/tools/task.rs:38`), and reachable from the
   model as the `task` tool.
 - **The research subagent is given the read-only registry**:
-  `SubagentRunner::new(…, plan_registry(), …)` (`tools/src/assembly.rs:167-169`), and the tool
+  `SubagentRunner::new(…)` (`tools/src/assembly.rs`, the two call sites that pick the read-only and the write-capable registry), and the tool
   says so in its own description: "read-only research subagent … cannot modify the workspace
   or ask the user" (`tools/src/tools/task.rs:15`).
 - There is already a **second** kind of runner with a different registry — the red-team one,
@@ -103,7 +103,7 @@ project has, and building for it now would buy the costs without the case.
    `[ConcurrentChange]` check as the parent's; a scope is a *permission*, not a substitute for
    detection.
 3. **The journal stays single-owner.** `ToolContext { journal: Arc<Mutex<EditJournal>> }`
-   (`core/src/tool.rs:22`) is per-turn state; parallel children sharing it is fine *because* it
+   (`core/src/tool.rs`, `ToolContext`) is per-turn state; parallel children sharing it is fine *because* it
    is a mutex, but the ordering of `begin`/`commit` across children must be defined, not
    incidental. (Today it cannot come up: the research child has no write tools.)
 4. **Sink bracketing stays** (`core/src/subagent.rs:176-181`) — with N children the
@@ -197,7 +197,7 @@ keeps the pre-revert snapshot, so undo has an undo), and the busy guard above.
 
 | §6 step | Status |
 |---|---|
-| 1. Parallel research | **Done** — `3241cb5`. And the finding is that it already worked: a turn's tool calls run as one `join_all` wave (`core/src/agent.rs:1860`), so several `task` calls have always run beside each other. What was missing was **telling the model** (the description hinted at it and never said it) and **bounding it** (`subagent_slots`, four, held for the child's life — and shared by the whole tree rather than per level: `efcb28d` caught that the first version was four *per agent*, which multiplies by depth). The test pins both directions: four children overlap, one slot serialises them. |
+| 1. Parallel research | **Done** — `3241cb5`. And the finding is that it already worked: a turn's tool calls run as one `join_all` wave (`core/src/agent.rs`, the `join_all` wave), so several `task` calls have always run beside each other. What was missing was **telling the model** (the description hinted at it and never said it) and **bounding it** (`subagent_slots`, four, held for the child's life — and shared by the whole tree rather than per level: `efcb28d` caught that the first version was four *per agent*, which multiplies by depth). The test pins both directions: four children overlap, one slot serialises them. |
 | 2. One write-capable child, sequential | **Mostly done** (`f2b512b`): a child can write when `[tools] subagents_may_write` is on — default off — and its edits land in the spawning turn. What is left is step 3's scope (a writing child may touch anything `resolve_within` allows today) and step 5's batch-rollback test. Earlier: §5's journal plumbing landed in `04aabaa` — a child now writes inside the caller's transaction. What is left is the actual step: a registry that lets a child write, the permission story for it, and the batch-rollback test. |
 | 3. Declared scopes | **Done** — `0db4461`: `ToolContext::write_scope`, one gate (`resolve_write_scope`) for the file-edit tools, a `scope` argument on `task` resolved through the workspace boundary, and `shell` dropped from the write-capable registry because a scope cannot constrain one. The scope narrows writes only — reads stay free — and that boundary is asserted, not just documented. |
 | 4. Two children with disjoint scopes | **Mechanism in place, no dedicated test.** Two `task` calls in one turn with different `scope` values *are* the case, and its two primitives are covered separately (the wave-overlap test, the scope-refusal test). A test that runs both together is the honest remaining gap, and it is stated rather than implied. |

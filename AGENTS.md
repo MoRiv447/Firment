@@ -343,9 +343,28 @@ two variables above are the whole available route.
   against `firm tools` output and fails on drift.
 - CHANGELOG.md gets an entry per release; the release workflow extracts
   the `## <tag> ...` section verbatim as GitHub release notes, so keep
-  headings in the exact `## vX.Y.Z (date) — title` format.
+  headings in the exact `## vX.Y.Z (date) — title` format. The heading and the
+  tag must match **character for character** — `awk` looks for `^## <tag> `, so
+  `v1.0.0rc` against a `v1.0.0-rc` tag silently falls back to a link and the
+  notes nobody wrote get published instead.
+- A pre-release tag (`v1.0.0-rc`) is **invisible to `releases/latest`**, and
+  `install.sh` / `install.ps1` resolve that pointer — so an rc never reaches the
+  one-liner install, by design. The Windows installer is also built as NSIS only:
+  the WiX `msi` target rejects a non-numeric pre-release identifier, and that job
+  never shipped the msi anyway.
 - Counts and numbers quoted in changelogs/commit messages must be
   verified (a past entry said "18 unit tests" when there were 17).
+- **Push; do not stockpile.** The v1.0.0-rc tag carries **241 commits** that had never
+  left this machine, so the local gates were the only evidence for weeks — and the
+  first real CI found four things they structurally could not see: two test fixtures
+  that only held on Windows, a bundler version constraint, six dependency
+  advisories, and a drifted tool-spec snapshot. `cargo test` on one platform is not a
+  portability claim.
+- Do not compile a dependency feature the product does not use. `rumqttc`'s
+  default `use-rustls` pulled a `rustls-webpki` copy carrying four advisories into
+  a binary whose only MQTT connection is plain TCP to a LAN broker; turning the
+  default features off removed the vulnerable crates *and* an unmaintained one,
+  and made `audit` green. Check what a feature costs before accepting a default.
 - When borrowing IDEAS from other projects (features, doc structures,
   prompt concepts), implement and word them independently — never
   transplant prose or code from sources with attribution requirements

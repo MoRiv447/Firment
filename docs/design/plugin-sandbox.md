@@ -70,7 +70,7 @@ themselves.
   host's memory.
 - **Against:** a protocol to define (or adopt); a process to supervise (start, timeout, kill,
   orphan); a new class of hang; and the schema has to cross a boundary, so
-  `validate_args` (`core/src/tool.rs:233`) must run on the host side of it, not be trusted to
+  `validate_args` (`core/src/schema.rs`, called by `ToolRegistry::run_measured`) must run on the host side of it, not be trusted to
   the plugin.
 - **Verdict:** **the right boundary for third-party code.** Adopting **MCP** rather than
   inventing a protocol is the honest choice: the ecosystem exists, the shape (initialize,
@@ -115,7 +115,7 @@ quietly undo something already promised:
    a default.
 5. **§16.2's UI constraints still hold**: a plugin's diff renders with the same default-collapsed
    rule, its output is capped, and its card obeys the same collapse behaviour as any other.
-6. **The permission checker stays the gate.** `PermissionChecker` (`core/src/permission.rs:21`)
+6. **The permission checker stays the gate.** `PermissionChecker` (`core/src/permission.rs`)
    is consulted for mutating calls; a plugin call must go through it like any other tool,
    never bypass it because "it is the plugin's own tool".
 

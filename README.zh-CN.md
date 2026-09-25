@@ -72,7 +72,7 @@ Firment 不把模型当 shell 脚本生成器，而是明确分工：
 
 - **多提供商**：Anthropic 兼容（`/v1/messages`）与 OpenAI 兼容（`/chat/completions`，覆盖 DeepSeek / GLM / Qwen / Ollama）流式工具调用；DeepSeek V4 自动使用官方 `thinking` + `reasoning_effort`
 - **思考级别**：`off / low / medium / high / xhigh / max`
-- **内置工具**：`read_file`（带行号分页）、`write_file`、`edit_file`（锚点/行区间/hashline 编辑，回显统一 diff）、`list_dir`、`glob`、`grep`、`shell`、`web_search`（DuckDuckGo / Tavily / Brave）、`web_fetch`、`task`（只读研究子代理）、`todo`、`ask_user`、`hil`、`periph_init`、`elf_analyze`、`monitor`、`debug`、`observe`、`la`、`redteam`
+- **内置工具**（注册表共 31 个；`firm tools` 会打印每个名字及其 schema）：`read_file`（带行号分页）、`write_file`、`edit_file`（锚点/行区间/hashline 编辑，回显统一 diff）、`rename_symbol`、`list_dir`、`glob`、`grep`、`symbols`、`shell`、`build`、`verify`、`run`、`flash`、`monitor`、`elf_analyze`、`observe`、`la`、`debug`、`hil`、`periph_init`、`pinmap`、`device_cmd`、`device_log`、`decision`、`models`、`web_search`（DuckDuckGo / Tavily / Brave）、`web_fetch`、`task`（研究子代理；默认只读，项目打开 `tools.subagents_may_write` 才可写）、`todo`、`ask_user`、`redteam`
 - **只读计划模式**：`--plan` / `/plan` 只暴露只读工具，要求给出可执行的完整计划
 - **并行工具调用**：独立调用并发执行；同文件读写与粗粒度工具自动串行
 - **工程级系统提示词**：沟通、工程原则、工具策略、验证、安全等分节，支持 `AGENTS.md` / `FIRMENT.md` 项目指令
@@ -163,6 +163,18 @@ macOS / Linux：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | sh
+```
+
+**装到的是哪个版本。** 两个安装脚本都解析 `releases/latest`，而 GitHub 的 latest **不含
+pre-release**——所以 `v1.0.0-rc` 挂着 pre-release 期间，上面这行装的是上一个正式版。想装候选版
+就指定 tag（注意变量是给脚本的，shell 那条要写在管道右边，不是 `curl` 前面）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | FIRMENT_VERSION=v1.0.0-rc sh
+```
+
+```powershell
+$env:FIRMENT_VERSION = 'v1.0.0-rc'   # 然后再执行上面的 iex 那行
 ```
 
 **离线 / 物理隔离的机器。** 两个安装脚本都要下载 release，没有网络都用不了。改用这两条路之一：
@@ -293,11 +305,13 @@ cd gui && npm ci && npx tsc --noEmit && npm run build   # + npm run tauri build 
 - TUI 命令面板（模糊查找）
 - SWO/trace 更深地接入 Agent 循环
 - tree-sitter 结构化编辑与补全
-- 基于统一工具注册表的插件 / MCP
+- 统一工具注册表上的 MCP 接入
 - Web 后端：容器化 Rust Agent 支撑 Web 前端
 - 技能包：可安装的工具包（声明式外部命令工具 + schema + 提示词）
 
-*（流式 token 动画已在 v0.6.3 落地——时间驱动 spinner、增量合批、换行缓存。）*
+*（流式 token 动画已在 v0.6.3 落地——时间驱动 spinner、增量合批、换行缓存。
+统一工具注册表上的插件已在 v1.0.0-rc 落地：声明能力、注册表拒绝插件顶替内建工具、
+调用前必须先担保该插件。）*
 
 ## 🤝 贡献
 
