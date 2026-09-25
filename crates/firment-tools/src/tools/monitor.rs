@@ -24,6 +24,14 @@ pub const RECONNECT_DELAY: Duration = Duration::from_millis(300);
 /// loop, short enough that cancellation is noticed promptly.
 pub const PORT_TIMEOUT_MS: u64 = 500;
 
+/// How much captured text one listen may hold.
+///
+/// A target chatting at 921600 baud is roughly 90 KB per second, and the listen timeout is the
+/// caller's to choose — so without a ceiling the bytes were only ever cut on the way out, after
+/// every one of them had been collected. Public because the HIL monitor step reads the same kind
+/// of stream and must not pick a second number for the same problem.
+pub const CAPTURE_CAP_BYTES: usize = 8 * 1024 * 1024;
+
 /// Open a serial port for reading.
 ///
 /// Shared with the CLI so both surfaces open the same way. The timeout is what decides
@@ -222,10 +230,16 @@ fn read_serial_from(
     let mut buf = [0u8; 4096];
     let mut splitter = crate::utf8::LineSplitter::new(crate::utf8::MAX_LINE_BYTES);
     let mut lines: Vec<String> = Vec::new();
+    // A noisy target at 921600 baud is ~90 KB per second, and `timeout_ms` has no ceiling of its
+    // own — so the collected text was only ever cut on the way out, after every byte of it had
+    // been held. Storage stops at the cap; decoding and the expect checks keep running on every
+    // line, because a marker printed after the cap is still a fact worth matching.
+    let mut captured_bytes = 0usize;
+    let mut capped_at = false;
     // Build the symbol index ONCE: decoding used to re-read and re-parse the
     // whole ELF for every hex token in every line.
     let index = elf.and_then(crate::decode::SymbolIndex::from_path);
-    let push_line = |line: &str, lines: &mut Vec<String>, start: Instant, timestamp: bool| {
+    let mut push_line = |line: &str, lines: &mut Vec<String>, start: Instant, timestamp: bool| {
         let decoded = match &index {
             Some(index) => index.decode_line(line),
             None => line.to_string(),
@@ -240,6 +254,20 @@ fn read_serial_from(
         } else {
             decoded
         };
+        if captured_bytes >= CAPTURE_CAP_BYTES {
+            if !capped_at {
+                // Say it once, in the capture: a reader who finds no more lines must be able to
+                // tell "the port went quiet" from "we stopped keeping it".
+                lines.push(format!(
+                    "(monitor: capture reached {} MiB and stopped storing lines — the rest was \
+                     read and discarded)",
+                    CAPTURE_CAP_BYTES / (1024 * 1024)
+                ));
+                capped_at = true;
+            }
+            return;
+        }
+        captured_bytes += with_ts.len();
         lines.push(with_ts);
     };
     loop {
@@ -421,7 +449,7 @@ impl Tool for Monitor {
                 "autodetect": {"type": "boolean", "default": false, "description": "Probe common baud rates (9600..921600) and use the first that yields valid data; overrides baud"},
                 "timestamp": {"type": "boolean", "default": true, "description": "Prefix each line with its arrival time [SS.mmm]"},
                 "elf": {"type": "string", "description": "Optional path to the firmware ELF (inside the workspace) for decoding hex code addresses in log lines"},
-                "timeout_ms": {"type": "integer", "minimum": 1, "default": 10000, "description": "How long to listen before returning captured output"}
+                "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 900000, "default": 10000, "description": "How long to listen before returning captured output (max 15 min). A noisy target is also cut off at 8 MiB of stored text, and the output says so when that happens"}
             }
         })
     }

@@ -343,6 +343,16 @@ fn run_ctags(root: &Path) -> Option<std::process::Output> {
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
+    // Drain the pipe WHILE the child runs. ctags emits one JSON object per symbol, so a big tree
+    // overflows the OS pipe buffer (~64 KB) long before it finishes: the child then blocks on
+    // write, `try_wait` never sees an exit, the deadline expires, and every symbol lookup on that
+    // tree silently degraded to the regex fallback after a full minute of stalling.
+    let mut pipe = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut stdout = Vec::new();
+        let _ = pipe.read_to_end(&mut stdout);
+        stdout
+    });
     let deadline = Instant::now() + Duration::from_secs(60);
     let status = loop {
         match child.try_wait().ok()? {
@@ -350,15 +360,15 @@ fn run_ctags(root: &Path) -> Option<std::process::Output> {
             None if Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
+                // The kill closed the write end, so the reader finishes; wait for it rather than
+                // leaving a thread behind on this process's path.
+                let _ = reader.join();
                 return None;
             }
             None => std::thread::sleep(Duration::from_millis(20)),
         }
     };
-    let mut stdout = Vec::new();
-    if let Some(mut pipe) = child.stdout.take() {
-        let _ = pipe.read_to_end(&mut stdout);
-    }
+    let stdout = reader.join().unwrap_or_default();
     Some(std::process::Output {
         status,
         stdout,

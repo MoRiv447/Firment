@@ -37,6 +37,18 @@ pub struct SubagentCall<'a> {
     pub journal: Arc<std::sync::Mutex<crate::journal::EditJournal>>,
 }
 
+/// Runs its closure when the value is dropped — by return, by `?`, or by the future being
+/// cancelled mid-await. A trailing cleanup statement covers only the first of those.
+pub(crate) struct OnDrop<F: FnOnce()>(Option<F>);
+
+impl<F: FnOnce()> Drop for OnDrop<F> {
+    fn drop(&mut self) {
+        if let Some(f) = self.0.take() {
+            f();
+        }
+    }
+}
+
 #[async_trait]
 pub trait SubagentFactory: Send + Sync {
     /// Run a nested read-only agent and return its final text.
@@ -155,11 +167,16 @@ impl SubagentFactory for SubagentRunner {
         // Captured before `Agent::new` takes ownership: the nested session's id
         // is what the SubagentStart/End pair names it with.
         let subagent_id = session.id.clone();
-        let store = SessionStore::new(
-            std::env::temp_dir()
-                .join("firment-subagents")
-                .join(&session.id),
-        );
+        let temp_dir = std::env::temp_dir()
+            .join("firment-subagents")
+            .join(&session.id);
+        let store = SessionStore::new(temp_dir.clone());
+        // Removed on the way out *and* when this future is dropped: a cancelled wave drops the
+        // tool future mid-await, and a `remove_dir_all` at the end of the success path never
+        // runs — every interrupted `task` used to leave a session directory behind in temp.
+        let _temp_dir = OnDrop(Some(move || {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+        }));
         let mut nested = Agent::new(
             Some(provider),
             self.registry.clone(),
@@ -233,9 +250,8 @@ impl SubagentFactory for SubagentRunner {
             })
             .await;
 
-        // The subagent session is transient bookkeeping: drop its whole
-        // directory when done so long sessions do not accumulate temp junk.
-        let _ = std::fs::remove_dir_all(&store.dir);
+        // The temp directory goes with this function's scope, however it is left: see
+        // `_temp_dir` above.
         result.map_err(|e| e.to_string())
     }
 }

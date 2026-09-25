@@ -1986,8 +1986,12 @@ fn read_serial_with_expect(
 
     let mut reader = open_port(port, resolved_baud)?;
     let mut reopen_attempts: u32 = 0;
-    // The line count at the moment of the last drop: a capture that grew since then is
-    // evidence the port works, and the next drop is a new outage with a fresh budget.
+    // The count of **device** lines at the moment of the last drop: a capture that grew since
+    // then is evidence the port works, and the next drop is a new outage with a fresh budget.
+    // The delivered count is tracked apart from `lines` because `lines` is also where the drop
+    // and reopen notes go, and a budget reset by one's own message is a budget that never runs
+    // out. `monitor`'s loop gets this right by reading its device-only string.
+    let mut delivered: usize = 0;
     let mut lines_at_loss: usize = 0;
 
     let start = Instant::now();
@@ -2013,7 +2017,13 @@ fn read_serial_with_expect(
     // Symbol index built once: per-line per-token ELF re-reads are the
     // dominant cost on address-heavy log streams.
     let symbol_index = elf.and_then(crate::decode::SymbolIndex::from_path);
-    let handle_line = |line: &str, lines: &mut Vec<String>, matched: &mut usize| {
+    // The same ceiling as `monitor`'s loop, from the same constant: a chatty target under a long
+    // step timeout was only ever cut on the way out, after every byte had been collected. The
+    // assertions below keep running on every line either way — cutting the stored text must not
+    // silently decide an expectation.
+    let mut stored_bytes = 0usize;
+    let mut stored_capped = false;
+    let mut handle_line = |line: &str, lines: &mut Vec<String>, matched: &mut usize| {
         let decoded = match &symbol_index {
             Some(index) => index.decode_line(line),
             None => line.to_string(),
@@ -2029,7 +2039,17 @@ fn read_serial_with_expect(
             decoded.clone()
         };
         check_line(&decoded, matched);
-        lines.push(with_ts);
+        if stored_bytes < crate::tools::monitor::CAPTURE_CAP_BYTES {
+            stored_bytes += with_ts.len();
+            lines.push(with_ts);
+        } else if !stored_capped {
+            lines.push(format!(
+                "(hil monitor step: capture reached {} MiB and stopped storing lines — \
+                 expectations were still checked against what followed)",
+                crate::tools::monitor::CAPTURE_CAP_BYTES / (1024 * 1024)
+            ));
+            stored_capped = true;
+        }
     };
 
     loop {
@@ -2050,6 +2070,7 @@ fn read_serial_with_expect(
             // reads would otherwise never match an expect assertion, since
             // the U+FFFD it turns into is not the text the device sent.
             Ok(n) => splitter.feed(&buf[..n], &mut |line| {
+                delivered += 1;
                 handle_line(line, &mut lines, &mut matched)
             }),
             // Silence is an idle port, not a fault.
@@ -2065,10 +2086,10 @@ fn read_serial_with_expect(
                 // device already printed are the evidence for why they were or were not
                 // met. Same policy and budget as `monitor`'s capture, including the
                 // reset on a delivering stretch.
-                if lines.len() > lines_at_loss {
+                if delivered > lines_at_loss {
                     reopen_attempts = 0;
                 }
-                lines_at_loss = lines.len();
+                lines_at_loss = delivered;
                 lines.push(format!("(serial port dropped: {e})"));
                 if budget_spent(&mut reopen_attempts) {
                     lines.push(format!(
