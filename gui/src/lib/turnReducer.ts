@@ -253,6 +253,8 @@ export function turnReducer(state: TurnState, e: TurnFlowEvent): TurnState {
         // Same update as the status, so the duration a card reports and the outcome
         // it reports are one fact instead of two that could drift.
         endedAt: Date.now(),
+        // The person's share of the card's wall time, taken at the same moment.
+        waitedMs: e.waited_ms ?? null,
       });
       const subagents = routeToSubagent(state, e.owner, (steps) =>
         steps.map((t) => (t.seq === e.seq ? patch(t) : t)),

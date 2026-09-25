@@ -223,6 +223,10 @@ export type FrontendEvent =
       detail?: string | null;
       seq: number;
       owner?: string | null;
+      /** How long a person spent at this call's permission gate. Absent or null
+       * means nobody was asked — not that the answer came back in no time. The card
+       * subtracts it, because its own clock spans the gate. */
+      waited_ms?: number | null;
     }
   | { type: 'turn_end'; session_id?: string | null; text: string }
   /**
@@ -419,6 +423,14 @@ export interface ToolCardState {
    * exists to avoid at the row level.
    */
   endedAt?: number;
+  /**
+   * How long a person spent at this call's permission gate, from `tool_end`.
+   *
+   * `startedAt`/`endedAt` span the gate, so without this the card would print the
+   * reader's thinking time as the tool's — and `lib/timing.ts` would teach the next
+   * run to expect it. Absent means nobody was asked, which is not the same as zero.
+   */
+  waitedMs?: number | null;
 }
 
 export interface RunningTurn {

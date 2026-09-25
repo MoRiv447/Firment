@@ -229,3 +229,40 @@ describe('the numbers on a step row', () => {
   });
 });
 
+
+/**
+ * The part of a card's life spent on a dialog rather than on the tool.
+ *
+ * `elapsedMs` is already the tool's own time by the time it reaches here — `lib/timing`
+ * takes the wait off it, and off the sample the next estimate learns from — so the row
+ * has two jobs: keep the tool's number in first place, and account for the missing
+ * minutes next to it. Under a second there is nothing to account for, and printing
+ * `+0.4s waiting` would make the one that matters harder to spot.
+ */
+describe('the waiting time on a step row', () => {
+  it('shows what the tool took and names what the reader took', () => {
+    render(
+      <StepProgress
+        steps={[
+          { key: 'build', label: 'Build', state: 'done', elapsedMs: 8_000, waitedMs: 120_000 },
+        ]}
+      />,
+    );
+    expect(screen.getByText('8.0s +2m 00s waiting')).toBeInTheDocument();
+    expect(screen.getByRole('listitem', { name: /build/i })).toHaveAccessibleName(
+      'Build: done, took 8.0s, after 2m 00s waiting',
+    );
+  });
+
+  it('says nothing about an answer that came back at once', () => {
+    render(
+      <StepProgress
+        steps={[
+          { key: 'flash', label: 'Flash', state: 'done', elapsedMs: 8_000, waitedMs: 400 },
+        ]}
+      />,
+    );
+    expect(screen.getByText('8.0s')).toBeInTheDocument();
+    expect(screen.getByRole('listitem')).toHaveAccessibleName('Flash: done, took 8.0s');
+  });
+});

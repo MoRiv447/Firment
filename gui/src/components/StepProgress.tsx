@@ -47,8 +47,16 @@ export interface StepProgressItem {
   key: string;
   label?: string;
   state: StepState;
-  /** Measured: the whole run for a finished step, so far for a running one. */
+  /** Measured: the tool's own time — the whole run for a finished step, so far for
+   * a running one, and never the reader's time at a permission dialog. */
   elapsedMs?: number;
+  /**
+   * What the permission gate cost the person, or `null` when nobody was asked.
+   * Printed beside `elapsedMs` rather than inside it, and under a second not at all:
+   * a reader who watched three minutes go by needs the other two accounted for, and
+   * a step that was approved instantly has nothing to explain.
+   */
+  waitedMs?: number | null;
   /**
    * What this step is likely to take, from this session's completed runs of the
    * same tool. `null` or absent when there is no such history — the row shows the
@@ -82,56 +90,72 @@ const STATE_WORDS: Record<StepState, string> = {
   failed: 'failed',
 };
 
+/** Below this, a wait explains nothing: an answer that came back at once is not a
+ * gap the reader noticed. */
+const WAIT_NOTE_FLOOR_MS = 1_000;
+
+/** The gate time worth naming, or `null` when there is nothing to say. */
+function notableWait(ms: number | null | undefined): number | null {
+  return ms != null && ms >= WAIT_NOTE_FLOOR_MS ? ms : null;
+}
+
 /**
  * The whole row, spoken.
  *
  * The numbers are as invisible to a screen reader as the glyph is, so they are said
  * out loud here -- and said for what they are: a finished step *took* its duration,
  * a running one has been going that long, and an estimate is prefixed `about` rather
- * than stated.
+ * than stated. The waiting time is named too, because a step that says `8s` after
+ * three minutes on screen otherwise leaves the reader to wonder which number lied.
  */
 function spoken(item: StepProgressItem): string {
   const name = `${item.label ?? item.key}: ${STATE_WORDS[item.state]}`;
   if (item.elapsedMs === undefined) return name;
 
+  const waited = notableWait(item.waitedMs);
+  const waitClause = waited === null ? '' : `, after ${formatStepDuration(waited)} waiting`;
   const elapsed = formatStepDuration(item.elapsedMs);
-  if (item.state !== 'current') return `${name}, took ${elapsed}`;
-  if (item.estimateMs == null) return `${name} for ${elapsed}`;
-  return `${name} for ${elapsed}, about ${formatStepDuration(item.estimateMs)} expected`;
+  if (item.state !== 'current') return `${name}, took ${elapsed}${waitClause}`;
+  if (item.estimateMs == null) return `${name} for ${elapsed}${waitClause}`;
+  return `${name} for ${elapsed}, about ${formatStepDuration(item.estimateMs)} expected${waitClause}`;
 }
 
 export function StepProgress({ steps }: { steps: StepProgressItem[] }) {
   return (
     <div data-ui="step-progress" role="list" className={styles.root}>
-      {steps.map((step) => (
-        <span
-          key={step.key}
-          data-ui="step-item"
-          data-state={step.state}
-          role="listitem"
-          aria-current={step.state === 'current' ? 'step' : undefined}
-          aria-label={spoken(step)}
-          className={styles.step}
-        >
-          <span aria-hidden className={styles.mark}>
-            {glyph(step.state)}
-          </span>
-          <span>{step.label ?? step.key}</span>
-          {/*
-            * A duration only where one was measured, and an estimate only beside a
-            * running step. A step that has not started carries neither: the row
-            * reports, it does not forecast.
-            */}
-          {step.elapsedMs !== undefined && (
-            <span className={styles.time} aria-hidden>
-              {formatStepDuration(step.elapsedMs)}
-              {step.state === 'current' &&
-                step.estimateMs != null &&
-                ` · ~${formatStepDuration(step.estimateMs)}`}
+      {steps.map((step) => {
+        const waited = notableWait(step.waitedMs);
+        return (
+          <span
+            key={step.key}
+            data-ui="step-item"
+            data-state={step.state}
+            role="listitem"
+            aria-current={step.state === 'current' ? 'step' : undefined}
+            aria-label={spoken(step)}
+            className={styles.step}
+          >
+            <span aria-hidden className={styles.mark}>
+              {glyph(step.state)}
             </span>
-          )}
-        </span>
-      ))}
+            <span>{step.label ?? step.key}</span>
+            {/*
+              * A duration only where one was measured, and an estimate only beside a
+              * running step. A step that has not started carries neither: the row
+              * reports, it does not forecast.
+              */}
+            {step.elapsedMs !== undefined && (
+              <span className={styles.time} aria-hidden>
+                {formatStepDuration(step.elapsedMs)}
+                {waited !== null && ` +${formatStepDuration(waited)} waiting`}
+                {step.state === 'current' &&
+                  step.estimateMs != null &&
+                  ` · ~${formatStepDuration(step.estimateMs)}`}
+              </span>
+            )}
+          </span>
+        );
+      })}
     </div>
   );
 }

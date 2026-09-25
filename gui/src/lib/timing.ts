@@ -53,6 +53,26 @@ const RUNS_FOR_ESTIMATE = 2;
 const TENTHS_CEILING_MS = 9_950;
 
 /**
+ * The tool's own time on a card, in ms.
+ *
+ * A card is timed from `tool_start` to `tool_end`, and the permission gate sits between
+ * those two — so the wall difference charges the user's reading time to the tool. A
+ * `flash` that ran eight seconds after two minutes of deliberation would otherwise
+ * report 128s, and teach the next `flash` to expect 128s: one slow answer at a dialog
+ * would quietly become the estimate for the whole session.
+ *
+ * `waitedMs` is `null`/`undefined` when nobody was asked, and then there is nothing to
+ * take off.
+ */
+function workMs(
+  startedAt: number,
+  endedAt: number,
+  waitedMs: number | null | undefined,
+): number {
+  return Math.max(0, endedAt - startedAt - (waitedMs ?? 0));
+}
+
+/**
  * Count every finished run in `tools` that has not been counted yet.
  *
  * Idempotent per `(scope, seq)`, which is what lets a caller run it on every render
@@ -74,7 +94,7 @@ export function recordCompleted(tools: readonly ToolCardState[], scope: string):
     seen.add(tool.seq);
 
     const list = runs.get(tool.name) ?? [];
-    list.push(Math.max(0, endedAt - startedAt));
+    list.push(workMs(startedAt, endedAt, tool.waitedMs));
     if (list.length > RUNS_KEPT) list.splice(0, list.length - RUNS_KEPT);
     runs.set(tool.name, list);
   }
@@ -104,8 +124,12 @@ export function resetRuns(): void {
 }
 
 export interface StepTiming {
-  /** Measured: the whole run for a finished step, so far for a running one. */
+  /** Measured: the tool's own time — the whole run for a finished step, so far for
+   * a running one, and never the reader's time at a permission dialog. */
   elapsedMs: number;
+  /** What the gate cost the human, or `null` when nobody was asked. Reported beside
+   * `elapsedMs` rather than folded into it. */
+  waitedMs: number | null;
   /** Median of this session's runs of the same tool; `null` without history. */
   estimateMs: number | null;
   /** True once the outcome is known, so the elapsed stops moving. */
@@ -126,7 +150,10 @@ export function timingFor(tool: ToolCardState, now: number): StepTiming | null {
   const finished = typeof tool.endedAt === 'number';
   const ended = finished ? (tool.endedAt as number) : now;
   return {
-    elapsedMs: Math.max(0, ended - started),
+    // Same helper the ledger counts with, so the number under a finished card and
+    // the number the next run is estimated from cannot mean different things.
+    elapsedMs: workMs(started, ended, tool.waitedMs),
+    waitedMs: tool.waitedMs ?? null,
     estimateMs: finished ? null : estimateFor(tool.name),
     finished,
   };

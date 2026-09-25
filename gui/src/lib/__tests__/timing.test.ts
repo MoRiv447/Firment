@@ -167,6 +167,47 @@ describe('timingFor', () => {
   });
 });
 
+describe('the permission gate', () => {
+  // A card is timed from `tool_start` to `tool_end`, and the gate sits between those
+  // two. Everything below is the same fact seen from the two places that must agree:
+  // the number under the step, and the sample the next estimate is built from.
+  function gated(seq: number, name: string, wallMs: number, waitedMs: number): ToolCardState {
+    return { ...ran(seq, name, wallMs), waitedMs };
+  }
+
+  it('takes the human time off the step and names it beside the tool', () => {
+    const card = gated(1, 'flash', 128_000, 120_000);
+    expect(timingFor(card, 999_999)).toMatchObject({
+      elapsedMs: 8_000,
+      waitedMs: 120_000,
+    });
+  });
+
+  it('leaves a step nobody asked about at its full length', () => {
+    // `null` is the common case (an auto-approve rule, a read-only tool), and it must
+    // not behave like a zero that was measured — nor shorten anything.
+    expect(timingFor(ran(1, 'build', 4_000), 999_999)).toMatchObject({
+      elapsedMs: 4_000,
+      waitedMs: null,
+    });
+    expect(timingFor(gated(1, 'build', 4_000, 0), 999_999)?.elapsedMs).toBe(4_000);
+  });
+
+  it('learns the tool time rather than the time spent reading a dialog', () => {
+    // The failure this exists to prevent: one long look at a dialog, and every later
+    // `flash` in the session is estimated at two minutes.
+    recordCompleted([gated(1, 'flash', 128_000, 120_000)], 's');
+    recordCompleted([gated(2, 'flash', 130_000, 122_000)], 's');
+    expect(estimateFor('flash')).toBe(8_000);
+  });
+
+  it('cannot be talked into a negative duration by an impossible report', () => {
+    // A wait longer than the card's own life should not exist. If one is ever
+    // reported, the answer is "the tool took no measurable time", not `-2.0s`.
+    expect(timingFor(gated(1, 'build', 1_000, 60_000), 999_999)?.elapsedMs).toBe(0);
+  });
+});
+
 describe('formatStepDuration', () => {
   it('keeps a tenth of a second where a whole one would read as nothing', () => {
     expect(formatStepDuration(0)).toBe('<0.1s');

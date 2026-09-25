@@ -322,3 +322,47 @@ describe('turn_synced (transcript replaces the live copy)', () => {
     expect(state.bg).toBeUndefined();
   });
 });
+
+describe('the gate time a card carries', () => {
+  it('keeps the report with the call that was asked', () => {
+    const state = feed([
+      { type: 'turn_start' },
+      { type: 'tool_start', name: 'flash', args: {}, seq: 3, owner: null },
+      {
+        type: 'tool_end',
+        name: 'flash',
+        ok: true,
+        summary: 'flashed',
+        seq: 3,
+        owner: null,
+        waited_ms: 120_000,
+      },
+    ]);
+    expect(state.turn?.tools[3].waitedMs).toBe(120_000);
+  });
+
+  it('leaves a card nobody asked empty, even when a card of the other agent has a wait', () => {
+    // Two agents, the same `seq`: the report has to land on the call that opened the
+    // dialog and not on its twin. Written as a pair because a patch applied to the
+    // wrong frame is the failure this reducer has already had once.
+    const state = feed([
+      { type: 'turn_start' },
+      { type: 'subagent_start', id: 'a', label: 'which chip variant', depth: 1 },
+      { type: 'tool_start', name: 'build', args: {}, seq: 1, owner: 'a' },
+      { type: 'tool_end', name: 'build', ok: true, summary: 'built', seq: 1, owner: 'a' },
+      { type: 'subagent_end', id: 'a', depth: 1 },
+      { type: 'tool_start', name: 'build', args: {}, seq: 1, owner: null },
+      {
+        type: 'tool_end',
+        name: 'build',
+        ok: true,
+        summary: 'built',
+        seq: 1,
+        owner: null,
+        waited_ms: 5_000,
+      },
+    ]);
+    expect(state.subagents[0].steps[0].waitedMs ?? null).toBeNull();
+    expect(state.turn?.tools[1].waitedMs).toBe(5_000);
+  });
+});

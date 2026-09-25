@@ -69,8 +69,15 @@ export function workflowSteps(
       label: step.label,
       state: tool ? stateFor(tool.status) : 'pending',
       // Only a step with a clock carries one: a reopened card has no `startedAt`,
-      // and a step nobody timed prints nothing rather than `0.0s`.
-      ...(timing ? { elapsedMs: timing.elapsedMs, estimateMs: timing.estimateMs } : {}),
+      // and a step nobody timed prints nothing rather than `0.0s`. `waitedMs` rides
+      // along so the row can name the part that was spent on a dialog.
+      ...(timing
+        ? {
+            elapsedMs: timing.elapsedMs,
+            waitedMs: timing.waitedMs,
+            estimateMs: timing.estimateMs,
+          }
+        : {}),
     };
   });
 }
