@@ -244,6 +244,22 @@ mod tests {
         }
     }
 
+    /// A script that prints `payload` on stdout, quoted the way that shell needs.
+    ///
+    /// `cmd` hands the double quotes in a JSON document through to `echo`; `/bin/sh`
+    /// reads them as quoting operators and drops them, so the child prints
+    /// `{jsonrpc:2.0,…}` — text that looks like a response and is not one. Single
+    /// quotes are what preserve it on the POSIX side, and they are literal text to
+    /// `cmd`, so the branch is not a workaround for a broken test but the same
+    /// difference the product's host already handles.
+    fn echoing(dir: &Path, payload: &str) -> PathBuf {
+        if cfg!(windows) {
+            script(dir, &format!("echo {payload}"))
+        } else {
+            script(dir, &format!("echo '{payload}'"))
+        }
+    }
+
     fn plugin_for(command: &Path, capabilities: &[&str]) -> DeclaredPlugin {
         let config = PluginConfig {
             command: command.to_string_lossy().into_owned(),
@@ -271,9 +287,9 @@ mod tests {
         // The whole path, once: a real child process, the request on its stdin, a response on
         // its stdout, and a result the model is told not to obey.
         let dir = tempfile::tempdir().unwrap();
-        let script = script(
+        let script = echoing(
             dir.path(),
-            r#"echo {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"from the plugin"}]}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"from the plugin"}]}}"#,
         );
         let tool =
             PluginTool::new(plugin_for(&script, &["fs.read"])).expect("a usable declaration");

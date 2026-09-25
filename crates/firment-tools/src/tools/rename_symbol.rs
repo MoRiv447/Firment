@@ -481,28 +481,51 @@ mod tests {
     #[tokio::test]
     async fn a_file_the_rename_cannot_write_puts_every_other_file_back() {
         // The transaction, tested the only way that means anything: force a real failure and
-        // check the earlier writes are gone. The second file is made read-only, so its write
-        // fails after the first file has already been rewritten.
+        // check the earlier writes are gone.
+        //
+        // The failure has to be real on both platforms, and a read-only file stopped being
+        // one of them: the write goes through a temporary created next to the target and a
+        // rename over it, and a rename needs write permission on the **directory**, not on
+        // the file it covers. POSIX honours that and ignores the file attribute; Windows
+        // notices the attribute and refuses. So the second file carries both restrictions —
+        // read-only, inside a directory that cannot be written into — and each system is
+        // stopped by whichever half applies to it.
         let dir = tempdir().unwrap();
+        let nested = dir.path().join("sub");
+        std::fs::create_dir(&nested).unwrap();
         let first = dir.path().join("a.rs");
-        let second = dir.path().join("b.rs");
+        let second = nested.join("b.rs");
         std::fs::write(&first, "foo\n").unwrap();
         std::fs::write(&second, "foo\n").unwrap();
-        let mut permissions = std::fs::metadata(&second).unwrap().permissions();
-        permissions.set_readonly(true);
-        std::fs::set_permissions(&second, permissions).unwrap();
+        // The originals are kept so the cleanup can put back exactly what was
+        // there. `set_readonly(false)` is not a restore: on Unix it widens the
+        // mode to world-writable, which is the footgun clippy names here.
+        let mut restricted = Vec::new();
+        for path in [&second, &nested] {
+            let original = std::fs::metadata(path).unwrap().permissions();
+            let mut locked = original.clone();
+            locked.set_readonly(true);
+            std::fs::set_permissions(path, locked).unwrap();
+            restricted.push((path, original));
+        }
 
         let ctx = ctx(dir.path());
         let result = RenameSymbol
             .run(
-                json!({"from": "foo", "to": "bar", "paths": ["a.rs", "b.rs"]}),
+                json!({"from": "foo", "to": "bar", "paths": ["a.rs", "sub/b.rs"]}),
                 &ctx,
             )
             .await;
 
-        // No restoring step: a read-only file can still be read, and `set_readonly(false)`
-        // is the world-writable footgun clippy names on Unix. The temp directory is removed
-        // with the test.
+        // Restore before asserting anything: removing an entry needs write permission on
+        // its directory and Windows will not unlink a read-only file, so a test that left
+        // the restrictions in place could not clean up after itself — and a leaked
+        // read-only tree under the temp dir makes the next run fail for a reason this one
+        // did not intend.
+        for (path, original) in &restricted {
+            std::fs::set_permissions(path, original.clone()).unwrap();
+        }
+
         assert!(result.is_err(), "the rename should have failed: {result:?}");
         assert_eq!(
             std::fs::read_to_string(&first).unwrap(),
