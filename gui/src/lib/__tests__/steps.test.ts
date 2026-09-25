@@ -123,6 +123,25 @@ describe('workflowSteps timings', () => {
     expect(steps?.[0].estimateMs).toBeNull();
   });
 
+  it('keeps a gate wait out of the duration and still puts it on the row', () => {
+    // Asserted at the mapping and not only inside `timing`, because this is the
+    // seam where the wait could quietly disappear: a row printing eight seconds
+    // after the user watched three minutes would leave the missing two minutes
+    // unaccounted for, and that is the same lie in another shape.
+    const gated = { ...timed(1, 'build', 'ok', 1_000, 129_000), waitedMs: 120_000 };
+    expect(workflowSteps([gated], 99_999)?.[0]).toMatchObject({
+      elapsedMs: 8_000,
+      waitedMs: 120_000,
+    });
+  });
+
+  it('reports no wait for a step nobody was asked about', () => {
+    // `null` rather than `0`: the row's note is about a dialog that happened, and
+    // an auto-approved build never opened one.
+    const steps = workflowSteps([timed(1, 'build', 'ok', 1_000, 5_000)], 99_999);
+    expect(steps?.[0]).toMatchObject({ elapsedMs: 4_000, waitedMs: null });
+  });
+
   it('counts a running step up to the caller\u2019s clock', () => {
     const steps = workflowSteps([timed(1, 'flash', 'running', 10_000)], 13_500);
     expect(steps?.[1]).toMatchObject({ key: 'flash', state: 'current', elapsedMs: 3_500 });
