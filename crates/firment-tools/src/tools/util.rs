@@ -369,6 +369,27 @@ fn lock_sharing(buf: &Mutex<Vec<u8>>) -> std::sync::MutexGuard<'_, Vec<u8>> {
     buf.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Whether `probe-rs` answers `--version`.
+///
+/// Six tools check this before every invocation, and as a blocking spawn it holds a tokio worker
+/// for the length of a process start — tens of milliseconds, or far longer while an AV scanner
+/// has the executable open, and an HIL suite pays it up to three times per run. On the blocking
+/// pool the wait costs nothing else.
+///
+/// Deliberately not memoised: someone who installs probe-rs while the agent is running should be
+/// able to flash with it, not restart first.
+pub(crate) async fn probe_rs_present() -> bool {
+    tokio::task::spawn_blocking(|| {
+        std::process::Command::new("probe-rs")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    })
+    .await
+    .unwrap_or(false)
+}
+
 /// Run a command through the platform shell, capture output, enforce a
 /// timeout. `cancel` (the turn-level cancellation signal) stops the process
 /// tree promptly when the turn is interrupted. Returns (formatted text, exit

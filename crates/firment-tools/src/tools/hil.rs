@@ -915,11 +915,7 @@ pub(crate) async fn run_flash_step(
     let reset = step.reset.unwrap_or(true);
 
     // quick probe-rs check
-    let probe_ok = std::process::Command::new("probe-rs")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    let probe_ok = crate::tools::util::probe_rs_present().await;
     if !probe_ok {
         return Err(
             "[NotFound] probe-rs is not installed or not on PATH: install with `cargo install probe-rs-tools`".to_string(),
@@ -1000,11 +996,7 @@ async fn run_run_step(
     };
     let timeout = step.timeout_ms.unwrap_or(30_000).min(remaining.max(1000));
     // duplicate logic from run.rs but inline to avoid shell
-    let probe_ok = std::process::Command::new("probe-rs")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    let probe_ok = crate::tools::util::probe_rs_present().await;
     if !probe_ok {
         return Err("[NotFound] probe-rs not on PATH".to_string());
     }
@@ -1209,11 +1201,7 @@ async fn run_trace_step(
              with expect_contains instead."
         ));
     }
-    let probe_ok = std::process::Command::new("probe-rs")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    let probe_ok = crate::tools::util::probe_rs_present().await;
     if !probe_ok {
         return Err("[NotFound] probe-rs not on PATH".to_string());
     }

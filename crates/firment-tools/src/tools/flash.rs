@@ -156,11 +156,7 @@ impl Tool for Flash {
             .unwrap_or(180_000);
         let reset = args.get("reset").and_then(|r| r.as_bool()).unwrap_or(true);
 
-        let probe_rs_ok = std::process::Command::new("probe-rs")
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
+        let probe_rs_ok = super::util::probe_rs_present().await;
         if !probe_rs_ok {
             return Err(ToolError::new(
                 "[NotFound] probe-rs is not installed or not on PATH: install it with \
