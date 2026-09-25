@@ -307,3 +307,42 @@ pub fn frontend_event(e: &AgentEvent, session_id: Option<&str>) -> FrontendEvent
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn tool_end(waited_ms: Option<u64>) -> serde_json::Value {
+        let end = AgentEvent::ToolEnd {
+            name: "flash".to_string(),
+            ok: true,
+            summary: "flashed".to_string(),
+            detail: None,
+            seq: 7,
+            owner: None,
+            waited_ms,
+        };
+        serde_json::to_value(frontend_event(&end, Some("sess-1"))).expect("a tool end serialises")
+    }
+
+    #[test]
+    fn a_gate_report_reaches_the_frontend_under_the_name_the_card_reads() {
+        // `gui/src/types.ts` reads `e.waited_ms`. That spelling is a contract across the
+        // boundary, and nothing else on this side checks it: the enum compiles whatever a
+        // field is called, and a renamed one arrives as `undefined` — which the card
+        // reads as "nobody was asked", the quiet direction of the mistake.
+        let wire = tool_end(Some(120_000));
+        assert_eq!(wire["type"], json!("tool_end"));
+        assert_eq!(wire["session_id"], json!("sess-1"));
+        assert_eq!(wire["seq"], json!(7));
+        assert_eq!(wire["waited_ms"], json!(120_000));
+    }
+
+    #[test]
+    fn a_call_that_asked_nobody_arrives_as_null_rather_than_zero() {
+        // The distinction the whole field exists for. Collapsing `None` into `0` on the
+        // wire would make an auto-approved build look like a person answered instantly.
+        assert_eq!(tool_end(None)["waited_ms"], json!(null));
+    }
+}
