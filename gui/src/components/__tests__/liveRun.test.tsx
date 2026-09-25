@@ -84,4 +84,40 @@ describe('LiveRun', () => {
     const { container } = render(<LiveRun tools={[]} />);
     expect(container.textContent).toBe('');
   });
+
+  it('says where the time went, once it is opened', () => {
+    const now = Date.now();
+    const { container } = render(
+      <LiveRun
+        turnStartedAt={now - 130_000}
+        tools={[
+          tool({ seq: 1, name: 'build', startedAt: now - 128_000, endedAt: now - 120_000 }),
+          tool({
+            seq: 2,
+            name: 'flash',
+            startedAt: now - 120_000,
+            endedAt: now,
+            waitedMs: 112_000,
+          }),
+        ]}
+      />,
+    );
+    fireEvent.click(screen.getByText('2 steps'));
+    // The two numbers the reader cannot get from the cards: the wait was most of
+    // the turn, and something ran underneath it.
+    expect(container.textContent).toContain('waiting on you');
+    expect(container.textContent).toContain('tools');
+  });
+
+  it('draws no timeline for a run nobody timed', () => {
+    // A reopened transcript: the cards are real, the clocks are not, and a bar
+    // built from unknowns would be a claim this app has already refused to make
+    // about the per-card durations.
+    const { container } = render(
+      <LiveRun tools={[tool({ seq: 1, name: 'read_file', summary: 'file contents' })]} />,
+    );
+    fireEvent.click(screen.getByText('1 step'));
+    expect(container.textContent).toContain('file contents');
+    expect(container.querySelector('[data-ui="turn-timeline"]')).toBeNull();
+  });
 });

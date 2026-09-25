@@ -1,0 +1,70 @@
+/*
+ * The turn's wall clock, drawn as one bar.
+ *
+ * A 4-pixel rule rather than a chart: the question it answers is "how was this
+ * minute spent", and that reads off proportions without axes, tooltips or a
+ * legend of colours. The numbers next to it are the sentence that carries the
+ * detail, so the bar can stay decoration for anyone who prefers the words.
+ *
+ * The unfilled remainder is the model. It is left as the track rather than
+ * painted, because "no tool was running and nobody was being asked" is the one
+ * part of the turn with no colour to claim — and a fourth hue here would have
+ * to mean something, which it does not.
+ */
+.root {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-1) 0;
+}
+
+.bar {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: var(--sp-3);
+  height: 4px;
+  overflow: hidden;
+  border-radius: var(--r-round);
+  background: var(--line);
+}
+
+/* `--step-rule` is the token this app already uses to paint a shape rather than
+   set text; a text ink here would be a colour chosen for a different job. */
+.work {
+  flex: 0 0 auto;
+  width: var(--share, 0%);
+  background: var(--step-rule);
+}
+
+/* Attention hue, hatched. A solid block of it would read as a bar of bad news,
+   and it is not: nothing was wrong, nothing was running, and a person was
+   deciding. The gaps let the track through, which is the honest picture of the
+   time, and a texture survives a scheme flip that a second colour would not. */
+.wait {
+  flex: 0 0 auto;
+  width: var(--share, 0%);
+  background: repeating-linear-gradient(
+    90deg,
+    var(--warn-ink) 0 3px,
+    transparent 3px 6px
+  );
+}
+
+.legend {
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  /* Narrow column: the bar is the part that stops carrying information first. */
+  .bar {
+    display: none;
+  }
+}

@@ -49,7 +49,34 @@ import {
   useTooltip,
 } from '../ui';
 import type { MenuEntry } from '../ui';
+import { TurnTimeline } from '../components/TurnTimeline';
+import type { ToolCardState } from '../types';
 import styles from './Showcase.module.css';
+
+/**
+ * Three turns that never happened, on a clock that never moves.
+ *
+ * A proportion cannot be judged against data that re-randomises on every render,
+ * and the only thing worth reviewing here is the ratio between the three parts.
+ */
+const SHOWCASE_NOW = 1_700_000_000_000;
+const at = (ms: number) => SHOWCASE_NOW + ms;
+function shown(
+  seq: number,
+  name: string,
+  from: number,
+  to: number,
+  waitedMs?: number,
+): ToolCardState {
+  return { seq, name, args: {}, status: 'ok', startedAt: at(from), endedAt: at(to), waitedMs };
+}
+
+/** A build, then a flash: the bar is nearly all one colour, and that is the boring case. */
+const FLASH_TURN = [shown(1, 'build', 2_000, 42_000), shown(2, 'flash', 42_000, 50_000)];
+/** A flash approved two minutes after it was offered: the wait dominates, the tool did not. */
+const APPROVAL_TURN = [shown(1, 'flash', 2_000, 130_000, 120_000)];
+/** A turn that spent almost all of its time before any call ran — the model's turn. */
+const READING_TURN = [shown(1, 'read_file', 90_000, 95_000)];
 
 /** The four chip states, so a row of them says "this is the vocabulary". */
 const CHIP_STATES = ['ok', 'failed', 'running', 'attention', 'neutral'] as const;
@@ -456,6 +483,14 @@ export function Showcase() {
               }
             />
           </div>
+        </Section>
+
+        <Section title="Turn timeline" note="One wall clock, attributed once: tools, a person at a dialog, and the model.">
+          <span className={styles.half}>
+            <TurnTimeline tools={FLASH_TURN} now={SHOWCASE_NOW} turnStartedAt={SHOWCASE_NOW} />
+            <TurnTimeline tools={APPROVAL_TURN} now={SHOWCASE_NOW} turnStartedAt={SHOWCASE_NOW} />
+            <TurnTimeline tools={READING_TURN} now={SHOWCASE_NOW} turnStartedAt={SHOWCASE_NOW} />
+          </span>
         </Section>
 
         <Section title="Card" note="Head, body, one hairline. The second has no extra, so the head cannot lean on it.">

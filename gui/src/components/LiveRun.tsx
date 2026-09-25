@@ -5,6 +5,7 @@ import type { ToolCardState } from '../types';
 import { Icon, StatusDot } from '../ui';
 import type { ChipStatus } from '../ui';
 import { ToolCard } from './ToolCard';
+import { TurnTimeline } from './TurnTimeline';
 import styles from './LiveRun.module.css';
 
 /**
@@ -37,9 +38,16 @@ function toolCounts(tools: ToolCardState[]): string {
 export function LiveRun({
   tools,
   onAction,
+  turnStartedAt,
 }: {
   tools: ToolCardState[];
   onAction?: (prompt: string) => void;
+  /**
+   * When the turn began, which is earlier than the first card: the stretch between
+   * the two is the model answering, and a timeline that started at the first call
+   * would quietly drop the longest part of some turns.
+   */
+  turnStartedAt?: number;
 }) {
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -94,6 +102,13 @@ export function LiveRun({
       </button>
       {open && (
         <div className={styles.body}>
+          {/*
+            * The summary of where the time went, above the things it was spent on.
+            * Inside the fold rather than on the run line: the line's whole design is
+            * that it costs one row however long the turn gets, and this is a detail
+            * for the moment someone has decided to look.
+            */}
+          <TurnTimeline tools={sorted} now={now} turnStartedAt={turnStartedAt} />
           {sorted.map((t) => (
             <ToolCard key={t.seq} tool={t} onAction={onAction} />
           ))}

@@ -217,7 +217,7 @@ export function ChatView({
               </Callout>
             )}
             {steps && <StepProgress steps={steps} />}
-            <LiveRun tools={toolList} onAction={onSend} />
+            <LiveRun tools={toolList} onAction={onSend} turnStartedAt={turn?.startedAt} />
             {!!turn?.thinking && !turn.text && (
               <div className={styles.thinking}>
                 <Icon src={Brain} tone="muted" />
