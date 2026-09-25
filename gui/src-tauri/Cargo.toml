@@ -1,6 +1,6 @@
 [package]
 name = "firment-gui"
-version = "0.8.1"
+version = "1.0.0-rc"
 description = "Firment GUI - firmware agent desktop client"
 authors = ["Firment"]
 edition = "2021"

@@ -1,7 +1,7 @@
 {
   "name": "firment-gui",
   "private": true,
-  "version": "0.8.1",
+  "version": "1.0.0-rc",
   "type": "module",
   "scripts": {
     "dev": "vite",
