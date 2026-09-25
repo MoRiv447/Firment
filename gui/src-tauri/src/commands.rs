@@ -680,7 +680,7 @@ pub async fn save_settings(
         }
         config.auto_approve = settings.auto_approve;
         config.max_iterations = settings.max_iterations;
-        config.context_budget_chars = settings.context_budget_chars;
+        config.set_context_budget(settings.context_budget_chars);
         config.tools.build_command = settings.build_command;
         config.tools.default_chip = settings.default_chip;
         config.tools.monitor_port = settings.monitor_port;

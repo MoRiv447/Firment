@@ -109,8 +109,9 @@ pub struct ToolContext {
     /// dir; tests inject a temp dir.
     pub device_log_dir: Option<PathBuf>,
     /// OpenAI-compatible endpoints from config.toml [providers], with keys
-    /// already resolved (inline → env → auth.json). Backs the `models`
-    /// discovery tool so the agent can see what each backend serves.
+    /// already resolved through the one product-wide order (inline → auth.json →
+    /// env, blank treated as unset). Backs the `models` discovery tool so the
+    /// agent can see what each backend serves.
     pub providers: Vec<ProviderEndpoint>,
     /// Logic-analyzer defaults from config.toml [tools.la] (sigrok driver,
     /// samplerate, channel spec, sample cap). `None` = not configured; the

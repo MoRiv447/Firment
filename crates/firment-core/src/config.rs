@@ -76,6 +76,14 @@ pub struct Config {
     /// write a repo-controlled fact into the user's own config.toml.
     #[serde(default, skip)]
     pub commands_from_project: CommandProvenance,
+    /// Limits the command line pinned. Derived from the CLI flags, never persisted:
+    /// saving one would turn `firm --context-length 100000` into a permanent setting.
+    #[serde(default, skip)]
+    pub pinned: PinnedLimits,
+    /// What a project-local config file could not be used for. Derived by `merged_for`, never
+    /// persisted: a repository's broken file is not a fact about the user's own config.
+    #[serde(default, skip)]
+    pub config_warnings: Vec<String>,
 }
 
 /// Trust provenance of the two settings that make `verify`/`build` execute an
@@ -87,6 +95,29 @@ pub struct Config {
 pub struct CommandProvenance {
     pub verify: bool,
     pub build: bool,
+}
+
+/// Limits chosen on the command line, which a project's `.firment.toml` must not
+/// overwrite.
+///
+/// `merged_for` applies project values last, so a checkout listing
+/// `context_budget_chars` silently beat `--context-length` — while the code at the
+/// flag's own site said the opposite ("CLI overrides win"). The pin is therefore
+/// re-applied *inside* the merge: any call site that merges later cannot forget it,
+/// which is the whole point of not re-applying the flags at each of them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PinnedLimits {
+    pub context_budget: Option<Pin>,
+    pub max_output_tokens: Option<Pin>,
+}
+
+/// One pinned value: what it is, which flag asked for it, and what the project
+/// file wanted instead (kept so the report can name the value it ignored).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pin {
+    pub value: usize,
+    pub flag: &'static str,
+    pub shadowed: Option<usize>,
 }
 
 /// `[mqtt]` in config.toml.
@@ -603,7 +634,12 @@ impl ToolsConfig {
 }
 
 /// Resolved model endpoints for the `models` discovery tool: base_url
-/// defaulted by provider type, API key resolved inline → env → auth.json.
+/// defaulted by provider type, API key through [`Config::resolve_api_key`] —
+/// inline → auth.json → env, one order for the whole product.
+///
+/// This used to be a second order (inline → env → auth.json, no blank filter), so a
+/// provider with keys in both places made discovery probe with a different key than
+/// the turn it was listing models for.
 pub fn provider_endpoints(config: &Config) -> Vec<crate::tool::ProviderEndpoint> {
     let auth = crate::load_auth();
     config
@@ -621,11 +657,7 @@ pub fn provider_endpoints(config: &Config) -> Vec<crate::tool::ProviderEndpoint>
                     .base_url
                     .clone()
                     .unwrap_or_else(|| default_base.to_string()),
-                api_key: p
-                    .api_key
-                    .clone()
-                    .or_else(|| p.api_key_env.as_ref().and_then(|e| std::env::var(e).ok()))
-                    .or_else(|| auth.get(name).cloned()),
+                api_key: config.resolve_api_key_with(p, name, &auth).0,
             }
         })
         .collect()
@@ -765,6 +797,8 @@ impl Config {
             board: BoardConfig::default(),
             local: LocalConfig::default(),
             commands_from_project: CommandProvenance::default(),
+            pinned: PinnedLimits::default(),
+            config_warnings: Vec::new(),
         }
     }
 
@@ -790,11 +824,14 @@ impl Config {
     }
 
     /// Return a copy with project-local `.firment.toml` / `firment.toml`
-    /// values merged over this config (project wins). Searches cwd and
-    /// ancestors, like AGENTS.md.
+    /// values merged over this config (project wins over the user's config file,
+    /// but never over a command-line pin — see [`Config::pin_context_budget`]).
+    /// Searches cwd and ancestors, like AGENTS.md.
     pub fn merged_for(&self, cwd: &Path) -> Config {
         let mut config = self.clone();
-        let Some(project) = load_project_config(cwd) else {
+        let (project, warnings) = load_project_config(cwd);
+        config.config_warnings = warnings;
+        let Some(project) = project else {
             return config;
         };
         if let Some(value) = project.tools.verify_command {
@@ -913,7 +950,69 @@ impl Config {
         if project.tool_cancel_grace_secs != default_tool_cancel_grace() {
             config.tool_cancel_grace_secs = project.tool_cancel_grace_secs;
         }
+        // The command line outlasts the checkout. Applied inside the merge rather than at each
+        // of its seven call sites, because a value the user typed on every invocation being
+        // overridden by a file in the repository they happened to open is the worst kind of
+        // silence: `main.rs` had a comment saying "CLI overrides win" next to code that lost.
+        if let Some(pin) = config.pinned.context_budget {
+            if project.context_budget_chars != pin.value
+                && project.context_budget_chars != default_context_budget()
+            {
+                config.pinned.context_budget = Some(Pin {
+                    shadowed: Some(project.context_budget_chars),
+                    ..pin
+                });
+            }
+            config.context_budget_chars = pin.value;
+        }
+        if let Some(pin) = config.pinned.max_output_tokens {
+            let asked = pin.value as u32;
+            if project.max_output_tokens.is_some() && project.max_output_tokens != Some(asked) {
+                config.pinned.max_output_tokens = Some(Pin {
+                    shadowed: project.max_output_tokens.map(|v| v as usize),
+                    ..pin
+                });
+            }
+            config.max_output_tokens = Some(asked);
+        }
         config
+    }
+
+    /// Remember that `--context-length` chose this value, so a project config cannot
+    /// overwrite it and `firm doctor` can say which flag is in effect.
+    pub fn pin_context_budget(&mut self, value: usize, flag: &'static str) {
+        self.context_budget_chars = value;
+        self.pinned.context_budget = Some(Pin {
+            value,
+            flag,
+            shadowed: None,
+        });
+    }
+
+    /// [`Config::pin_context_budget`], for `--max-output-tokens`.
+    pub fn pin_max_output_tokens(&mut self, value: u32, flag: &'static str) {
+        self.max_output_tokens = Some(value);
+        self.pinned.max_output_tokens = Some(Pin {
+            value: value as usize,
+            flag,
+            shadowed: None,
+        });
+    }
+
+    /// [`Config::pin_context_budget`], for a change made from inside the app (`/context`, the
+    /// GUI settings).
+    ///
+    /// This also drops any command-line pin on the value: the user has just chosen a newer one,
+    /// and leaving the old pin in place would quietly revert their change at the next merge.
+    pub fn set_context_budget(&mut self, chars: usize) {
+        self.context_budget_chars = chars;
+        self.pinned.context_budget = None;
+    }
+
+    /// [`Config::set_context_budget`], for `/output` and the GUI's token setting.
+    pub fn set_max_output_tokens(&mut self, tokens: u32) {
+        self.max_output_tokens = Some(tokens);
+        self.pinned.max_output_tokens = None;
     }
 
     pub fn save(&self, path: &Path) -> Result<(), ConfigError> {
@@ -989,10 +1088,21 @@ impl Config {
         provider: &ProviderConfig,
         name: &str,
     ) -> (Option<String>, ApiKeySource) {
+        self.resolve_api_key_with(provider, name, &load_auth())
+    }
+
+    /// [`Config::resolve_api_key`] with the auth map already loaded, for a caller that resolves
+    /// for every provider in turn.
+    pub fn resolve_api_key_with(
+        &self,
+        provider: &ProviderConfig,
+        name: &str,
+        auth: &AuthMap,
+    ) -> (Option<String>, ApiKeySource) {
         if let Some(key) = provider.api_key.as_deref().filter(|k| !k.is_empty()) {
             return (Some(key.to_string()), ApiKeySource::Inline);
         }
-        if let Some(key) = load_auth().get(name) {
+        if let Some(key) = auth.get(name) {
             return (Some(key.clone()), ApiKeySource::Auth);
         }
         let Some(env_name) = provider.api_key_env.as_deref() else {
@@ -1350,19 +1460,44 @@ model = "deepseek-v4-flash"
 "#
 }
 
-fn load_project_config(cwd: &Path) -> Option<Config> {
+/// The project-local config that applies to `cwd`, and anything that made a file unusable.
+///
+/// A file that exists and does not parse used to be skipped and the search moved on to the
+/// parent directory: the project's own settings vanished with no word said, a typo'd key looked
+/// exactly like having no key, and a parent checkout's file could then apply where nobody would
+/// think to look. The first file found ends the search either way.
+fn load_project_config(cwd: &Path) -> (Option<Config>, Vec<String>) {
     for dir in cwd.ancestors() {
         for name in [".firment.toml", "firment.toml"] {
             let path = dir.join(name);
-            if path.is_file()
-                && let Ok(text) = fs::read_to_string(&path)
-                && let Ok(config) = toml::from_str::<Config>(&text)
-            {
-                return Some(config);
+            if !path.is_file() {
+                continue;
             }
+            let text = match fs::read_to_string(&path) {
+                Ok(text) => text,
+                Err(e) => {
+                    return (
+                        None,
+                        vec![format!(
+                            "{} exists but could not be read: {e}",
+                            path.display()
+                        )],
+                    );
+                }
+            };
+            return match toml::from_str::<Config>(&text) {
+                Ok(config) => (Some(config), Vec::new()),
+                Err(e) => (
+                    None,
+                    vec![format!(
+                        "{} is not a valid project config and was NOT applied: {e}",
+                        path.display()
+                    )],
+                ),
+            };
         }
     }
-    None
+    (None, Vec::new())
 }
 
 fn default_provider_name() -> String {
@@ -1682,6 +1817,94 @@ mod tests {
         let la = merged.tools.la.expect("la merged");
         assert_eq!(la.max_samples, 500, "a tighter project cap wins");
         assert_eq!(la.max_time_ms, 1000);
+    }
+
+    #[test]
+    fn a_broken_project_config_is_named_and_does_not_fall_through_to_the_parent() {
+        // The file used to be skipped on a parse error and the ancestor search moved on, so the
+        // project's own settings vanished with no word said and a parent checkout's file could
+        // take its place.
+        let outer = tempfile::tempdir().unwrap();
+        let inner = outer.path().join("project");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::write(
+            inner.join(".firment.toml"),
+            "max_iterations = \"not a number\"\n",
+        )
+        .unwrap();
+        std::fs::write(outer.path().join(".firment.toml"), "max_iterations = 99\n").unwrap();
+
+        let base = Config {
+            max_iterations: 7,
+            ..Config::default_config()
+        };
+        let merged = base.merged_for(&inner);
+        assert!(
+            merged
+                .config_warnings
+                .iter()
+                .any(|w| w.contains(".firment.toml") && w.contains("NOT applied")),
+            "the broken file must be named: {:?}",
+            merged.config_warnings
+        );
+        assert_eq!(
+            merged.max_iterations, 7,
+            "neither the broken file nor its parent's may take effect"
+        );
+    }
+
+    #[test]
+    fn a_cli_pin_survives_a_project_file_that_disagrees() {
+        // The flags used to be assigned before the merge and then overwritten by it, at every
+        // call site — while the comment beside the flag claimed the opposite of the code.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".firment.toml"),
+            // Deliberately not `262144`: that is the default budget, so the merge reads the
+            // project as asking for nothing and there is no disagreement left to report.
+            "context_budget_chars = 123456\nmax_output_tokens = 4096\n",
+        )
+        .unwrap();
+        let mut base = Config::default_config();
+        base.pin_context_budget(100_000, "--context-length");
+        base.pin_max_output_tokens(2048, "--max-output-tokens");
+
+        let merged = base.merged_for(dir.path());
+        assert_eq!(merged.context_budget_chars, 100_000, "the flag lost");
+        assert_eq!(merged.max_output_tokens, Some(2048), "the flag lost");
+        // The disagreement is kept to be reported, not swallowed: the project file asked, and
+        // the answer the user gets must say so.
+        assert_eq!(
+            merged.pinned.context_budget.map(|pin| pin.shadowed),
+            Some(Some(123456)),
+            "{:?}",
+            merged.pinned
+        );
+        assert_eq!(
+            merged.pinned.max_output_tokens.map(|pin| pin.shadowed),
+            Some(Some(4096)),
+            "{:?}",
+            merged.pinned
+        );
+    }
+
+    #[test]
+    fn a_project_file_still_wins_for_what_the_command_line_never_asked_for() {
+        // Guard against over-locking: the pin covers the two values a flag named, not the file.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".firment.toml"),
+            "context_budget_chars = 262144\nmax_iterations = 12\n",
+        )
+        .unwrap();
+        let mut base = Config::default_config();
+        base.pin_context_budget(100_000, "--context-length");
+        let merged = base.merged_for(dir.path());
+        assert_eq!(merged.context_budget_chars, 100_000);
+        assert_eq!(
+            merged.max_iterations, 12,
+            "an unpinned key must still merge"
+        );
     }
 
     #[test]

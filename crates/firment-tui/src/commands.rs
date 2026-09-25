@@ -286,7 +286,9 @@ pub(crate) fn spawn_agent_task(
                 AgentCmd::SetContextBudget(chars) => {
                     let mut agent = agent.lock().await;
                     agent.set_context_budget_chars(chars);
-                    task_config.context_budget_chars = chars;
+                    // Through the setter: a `--context-length` from launch would otherwise win
+                    // the next merge and quietly undo what was just typed.
+                    task_config.set_context_budget(chars);
                     let _ = task_config.save(&task_config_path);
                     let _ = agent.save_session();
                     agent
@@ -297,7 +299,7 @@ pub(crate) fn spawn_agent_task(
                 }
                 AgentCmd::SetMaxOutputTokens(tokens) => {
                     let mut agent = agent.lock().await;
-                    task_config.max_output_tokens = Some(tokens);
+                    task_config.set_max_output_tokens(tokens);
                     let _ = task_config.save(&task_config_path);
                     // Rebuild the provider so the new cap applies to the very
                     // next request (max_tokens is fixed at provider creation).

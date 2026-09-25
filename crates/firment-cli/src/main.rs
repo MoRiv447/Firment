@@ -647,15 +647,17 @@ async fn main() -> anyhow::Result<()> {
             "[firm] run `firm config` to add one from the neutral catalog, or `firm doctor` to check what else is missing."
         );
     }
-    // CLI overrides win over config values (and apply to both TUI and
-    // one-shot paths, since both build from this config).
+    // CLI overrides win over config values, INCLUDING a project's `.firment.toml`, and apply to
+    // both the TUI and one-shot paths since both build from this config. Pinned rather than
+    // assigned: every later `merged_for` re-applies the pin, so the seven call sites cannot lose
+    // it by running the merge after this point.
     if let Some(length) = cli.context_length {
-        config.context_budget_chars = length;
+        config.pin_context_budget(length, "--context-length");
     }
     if let Some(tokens) = cli.max_output_tokens {
         // Clamp like the TUI's /output command: values above u32::MAX would
         // otherwise silently wrap around and shrink the budget.
-        config.max_output_tokens = Some(tokens.min(u32::MAX as usize) as u32);
+        config.pin_max_output_tokens(tokens.min(u32::MAX as usize) as u32, "--max-output-tokens");
     }
     let _ = firment_core::kb::ensure_seed_kb();
 
@@ -815,6 +817,11 @@ async fn run_once(
     verbosity: ToolVerbosity,
 ) -> anyhow::Result<()> {
     let config = config.merged_for(&session.cwd);
+    // A project file that exists but cannot be used changes the run's settings silently; it is
+    // printed before any output, on stderr where the diagnostics live.
+    for warning in &config.config_warnings {
+        eprintln!("[firm] ⚠ {warning}");
+    }
     let store = SessionStore::default();
     let auto_approve = one_shot_auto_approve(&config);
     let permission: Arc<dyn PermissionChecker> = Arc::new(CliPermission::new(yes, auto_approve));

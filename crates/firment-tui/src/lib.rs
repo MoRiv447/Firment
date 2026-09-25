@@ -100,6 +100,11 @@ pub async fn run(
         for refusal in &assembly.plugin_refusals {
             hints.push(format!("⚠ {refusal}"));
         }
+        // Same banner again: a `.firment.toml` that exists and does not parse is otherwise
+        // invisible, and the settings it held are simply not in effect.
+        for warning in &config.config_warnings {
+            hints.push(format!("⚠ {warning}"));
+        }
         if hints.is_empty() {
             None
         } else {

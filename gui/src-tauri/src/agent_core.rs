@@ -72,6 +72,18 @@ pub fn build_agent(
         );
     }
 
+    for warning in &merged.config_warnings {
+        // Same reason as above, one layer down: a project file that exists but cannot be used
+        // leaves the turn running on settings the user believes are in effect.
+        let _ = shared.app.emit(
+            "agent-event",
+            FrontendEvent::Info {
+                session_id: Some(session_id.clone()),
+                message: warning.clone(),
+            },
+        );
+    }
+
     if let Some(error) = assembly.provider_error.take() {
         let _ = shared.app.emit(
             "agent-event",

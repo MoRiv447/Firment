@@ -41,6 +41,7 @@ pub(crate) async fn doctor(config: &Config, path: &Path) -> anyhow::Result<Vec<(
     // Before the provider check, and deliberately so: a plugin declaration says nothing about
     // providers, and a config with plugins and no provider would otherwise report neither.
     doctor_plugins(config);
+    doctor_limits(config);
     let mut reachable: Vec<(String, bool)> = Vec::new();
     if config.providers.is_empty() {
         println!("no providers configured");
@@ -95,6 +96,33 @@ pub(crate) async fn doctor(config: &Config, path: &Path) -> anyhow::Result<Vec<(
         }
     }
     Ok(reachable)
+}
+
+/// The two run-shaping limits, and which source decided them.
+///
+/// A report that printed neither made "config says X, behaviour is Y" unfalsifiable: there was
+/// nothing on screen to ask about when a project file and a command-line flag disagreed. A pin is
+/// printed with the flag that set it, and with the value it overrode — the disagreement is the
+/// interesting fact, not an error.
+fn doctor_limits(config: &Config) {
+    let source = |pin: Option<firment_core::config::Pin>, shown: usize| match pin {
+        Some(pin) if pin.shadowed.is_some() => format!(
+            "{shown} (from {}; the project config asked {} and was ignored)",
+            pin.flag,
+            pin.shadowed.unwrap_or_default()
+        ),
+        Some(pin) => format!("{shown} (from {})", pin.flag),
+        None => shown.to_string(),
+    };
+    println!(
+        "context budget: {}",
+        source(config.pinned.context_budget, config.context_budget_chars)
+    );
+    let tokens = match config.max_output_tokens {
+        Some(value) => source(config.pinned.max_output_tokens, value as usize),
+        None => "not set (provider default)".to_string(),
+    };
+    println!("max output tokens: {tokens}");
 }
 
 /// Every declared plugin: the resolved command, whether it exists, and its capabilities.
