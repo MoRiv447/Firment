@@ -332,44 +332,42 @@ async fn run_loop(
                 app.rail_files = files;
                 dirty = true;
             }
-            event = event_rx.recv() => {
-                if let Some(event) = event {
-                    app.on_agent(event);
-                    // Drain whatever is already queued before paying for a
-                    // redraw: a token burst used to trigger one FULL
-                    // transcript re-render per delta.
-                    let mut drained = 0usize;
-                    while drained < 32 {
-                        match event_rx.try_recv() {
-                            Ok(next) => {
-                                app.on_agent(next);
-                                drained += 1;
-                            }
-                            Err(_) => break,
+            Some(event) = event_rx.recv() => {
+                app.on_agent(event);
+                // Drain whatever is already queued before paying for a
+                // redraw: a token burst used to trigger one FULL
+                // transcript re-render per delta.
+                let mut drained = 0usize;
+                while drained < 32 {
+                    match event_rx.try_recv() {
+                        Ok(next) => {
+                            app.on_agent(next);
+                            drained += 1;
                         }
+                        Err(_) => break,
                     }
-                    dirty = true;
                 }
+                dirty = true;
             }
-            request = perm_rx.recv() => {
-                if let Some(request) = request {
-                    app.on_permission(request);
-                    dirty = true;
-                }
+            Some(request) = perm_rx.recv() => {
+                app.on_permission(request);
+                dirty = true;
             }
-            question = ask_rx.recv() => {
-                if let Some(question) = question {
-                    app.on_question(question);
-                    dirty = true;
-                }
+            Some(question) = ask_rx.recv() => {
+                app.on_question(question);
+                dirty = true;
             }
             ui_event = ui_rx.recv() => {
-                if let Some(ui_event) = ui_event {
-                    let quit = app.on_ui(ui_event);
-                    dirty = true;
-                    if quit {
-                        break;
-                    }
+                let Some(ui_event) = ui_event else {
+                    // No input source left: the terminal closed, or the parent that
+                    // fed us (`firm < file`, a dying console) is gone. Re-polling a
+                    // closed channel would spin the loop at full tilt forever.
+                    break;
+                };
+                let quit = app.on_ui(ui_event);
+                dirty = true;
+                if quit {
+                    break;
                 }
             }
             _ = ticker.tick() => {
@@ -2500,6 +2498,93 @@ mod tests {
             event: firment_core::progress::ProgressEvent::phase("nowhere"),
         });
         assert_eq!(app.items.len(), 1);
+    }
+
+    #[test]
+    fn undo_is_refused_while_a_turn_is_running() {
+        // `/undo` takes the agent lock the running turn holds, so it does not fail — it waits,
+        // and then rolls back the files that turn has just written, after the transcript has
+        // already promised "Undoing…". Both forms, same reason.
+        for cmd in ["undo", "undo 2", "undo --before 3"] {
+            let mut app = test_app();
+            app.busy = true;
+            app.run_command(cmd);
+            let last = app
+                .items
+                .last()
+                .unwrap_or_else(|| panic!("{cmd} left nothing on screen"));
+            assert!(
+                matches!(last, Item::System(t) if t.contains("Agent is busy")),
+                "{cmd} was accepted while a turn runs"
+            );
+            assert!(
+                !app.items.iter().any(|item| matches!(
+                    item,
+                    Item::System(t) if t.contains("Undoing") || t.contains("Rewinding")
+                )),
+                "{cmd} promised an undo it has not done yet"
+            );
+        }
+    }
+
+    #[test]
+    fn a_new_session_inherits_no_claims_from_the_last_one() {
+        let mut app = test_app();
+        // A turn that built, flashed and read a logic analyser.
+        for (name, seq) in [("build", 1u64), ("flash", 2), ("la", 3)] {
+            app.on_agent(AgentEvent::ToolStart {
+                name: name.to_string(),
+                args: serde_json::json!({}),
+                seq,
+                owner: None,
+            });
+            app.on_agent(AgentEvent::ToolEnd {
+                name: name.to_string(),
+                ok: true,
+                summary: format!("{name} done"),
+                detail: None,
+                seq,
+                owner: None,
+            });
+        }
+        app.la_reading = Some(crate::la::LaReading {
+            channel: "D0".to_string(),
+            low_hz: Some(998.0),
+            high_hz: Some(1002.0),
+            duty_pct: Some(50.0),
+            rising_edges: Some(8),
+            confidence: Some("high".to_string()),
+        });
+        // Two runs of `build`, so the estimate exists and can be checked for survival.
+        let took = std::time::Duration::from_secs(4);
+        for _ in 0..2 {
+            crate::step_time::record(&mut app.tool_runs, "build", took);
+        }
+        assert!(
+            app.evidence.highest().is_some(),
+            "the fixture proved nothing"
+        );
+
+        app.on_agent(AgentEvent::SessionLoaded(firment_core::Session::new(
+            std::env::temp_dir(),
+            "provider",
+            "model",
+        )));
+
+        assert_eq!(
+            app.evidence.highest(),
+            None,
+            "a new session opened wearing the last one's ✓"
+        );
+        assert!(app.la_reading.is_none(), "stale analyser reading survived");
+        assert!(app.active_tools.is_empty(), "rows still marked running");
+        assert!(app.selection.is_none(), "a selection into deleted rows");
+        // The estimates are the one thing that carries over: how long a build takes
+        // is a property of the tool and the board, not of the conversation.
+        assert!(
+            crate::step_time::estimate(&app.tool_runs, "build").is_some(),
+            "the step-time ledger was cleared with the session"
+        );
     }
 
     #[test]

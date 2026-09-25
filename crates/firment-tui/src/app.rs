@@ -267,6 +267,24 @@ impl App {
         }
     }
 
+    /// Forget what the previous conversation proved.
+    ///
+    /// The EVIDENCE ladder, the logic-analyser reading and the live tool rows describe the
+    /// session being replaced: leaving them set made a brand-new session open showing
+    /// ✓ code / ✓ build / ✓ deploy, with the frame title still quoting the old session's sample
+    /// rate — the false completion claim `evidence.rs` exists to prevent. A leftover `selection`
+    /// kept highlighting rows of the new transcript that were never clicked.
+    ///
+    /// The step-time estimates are deliberately NOT cleared: how long `build` takes is a property
+    /// of the tool and the board, not of the conversation, and a session boundary does not
+    /// change it — that was the decision behind the 2026-09-18 ledger fix.
+    fn forget_session_view_state(&mut self) {
+        self.evidence = Evidence::default();
+        self.la_reading = None;
+        self.active_tools.clear();
+        self.selection = None;
+    }
+
     /// Invalidate the wrapped-row cache. Every transcript mutation that
     /// escapes `on_agent` (user answers, permission resolution, interrupt
     /// notices, clipboard echoes) must call this or the view keeps showing
@@ -530,6 +548,7 @@ impl App {
                     Vec::new()
                 };
                 self.items.clear();
+                self.forget_session_view_state();
                 self.provider = session.provider.clone();
                 self.model = session.model.clone();
                 self.thinking = session.thinking;
@@ -1017,15 +1036,38 @@ impl App {
         }
     }
 
-    /// Queue a command for the agent task. If the channel is full, surface
-    /// the loss instead of silently dropping the user's action.
-    pub(crate) fn send_cmd(&mut self, cmd: AgentCmd) {
-        if self.cmd_tx.try_send(cmd).is_err() {
-            self.items.push(Item::Error(
-                "command channel is full; please retry".to_string(),
-            ));
-            self.touch_rows();
+    /// Refuse a command that would otherwise be queued behind a running turn.
+    ///
+    /// `/undo` and `/ledger --export` take the agent lock, which a running turn holds: the
+    /// command does not fail, it *waits* and then acts on the turn that has just finished
+    /// writing — after the transcript already said "Undoing the last committed edit…". The
+    /// files it rolls back are the ones the user watched being written a moment ago.
+    fn refuse_while_busy(&mut self) -> bool {
+        if !self.busy {
+            return false;
         }
+        self.items.push(Item::System(
+            "Agent is busy; wait for it to finish. (An undo queued now would run AFTER this turn \
+             and roll back the files it is still writing.)"
+                .to_string(),
+        ));
+        true
+    }
+
+    /// Queue a command for the agent task. If the channel is full, surface
+    /// the loss instead of silently dropping the user's action — and return
+    /// `false`, so a caller that has already set `busy` for a turn that will
+    /// never start can undo that. (`busy` itself is not touched here: a dropped
+    /// command during a real turn must not make the UI believe it ended.)
+    pub(crate) fn send_cmd(&mut self, cmd: AgentCmd) -> bool {
+        if self.cmd_tx.try_send(cmd).is_ok() {
+            return true;
+        }
+        self.items.push(Item::Error(
+            "command channel is full; please retry".to_string(),
+        ));
+        self.touch_rows();
+        false
     }
 
     pub(crate) fn request_interrupt(&mut self) {
@@ -1834,7 +1876,12 @@ impl App {
         self.ai_thinking = true;
         self.follow = true;
         self.scroll = 0;
-        self.send_cmd(AgentCmd::User(text));
+        if !self.send_cmd(AgentCmd::User(text)) {
+            // No turn is coming, so nothing will ever send the `TurnEnd` that clears this. Esc
+            // only fires cancel handles, so an unrecovered flag strands the UI.
+            self.busy = false;
+            self.ai_thinking = false;
+        }
     }
 
     /// `/review-last`: have the model review the newest change in this session.
@@ -1905,7 +1952,10 @@ impl App {
         self.scroll = 0;
         self.busy = true;
         self.ai_thinking = true;
-        self.send_cmd(AgentCmd::RetryLast);
+        if !self.send_cmd(AgentCmd::RetryLast) {
+            self.busy = false;
+            self.ai_thinking = false;
+        }
     }
 
     pub(crate) fn run_command(&mut self, command: &str) {
@@ -1939,6 +1989,7 @@ impl App {
                 // the agent task processes the fresh session.
                 let was_busy = self.busy;
                 self.items.clear();
+                self.forget_session_view_state();
                 self.busy = false;
                 self.ai_thinking = false;
                 self.interrupting = false;
@@ -2090,6 +2141,9 @@ impl App {
                 // Stripped once, not repeatedly: `trim_start_matches` would also eat
                 // `--before --before 12` and quietly call it 12.
                 let raw = arg.trim().strip_prefix("--before").unwrap_or("").trim();
+                if self.refuse_while_busy() {
+                    return;
+                }
                 if raw.is_empty() {
                     self.items.push(Item::System(
                         "`/undo --before` needs a tool-call number — the `#12` on a card, or \
@@ -2122,6 +2176,9 @@ impl App {
                 // the only argument because the *files* are the only thing that moves: the
                 // transcript is not rewritten, so a user who went back two turns can still see
                 // what they went back from (see `EditJournal::undo_turns`).
+                if self.refuse_while_busy() {
+                    return;
+                }
                 let turns = match arg.trim() {
                     "" => 1,
                     other => match other.parse::<usize>() {
@@ -2239,6 +2296,9 @@ impl App {
             }
             "clear" => {
                 self.items.clear();
+                // The rows a selection refers to are gone; the session's own proof is not, so
+                // `/clear` clears the highlight and nothing else.
+                self.selection = None;
                 // Paired with the `pending_new_baseline = items.len()` in
                 // `/new`: the baseline indexes into `items`, so emptying them
                 // has to invalidate it.
