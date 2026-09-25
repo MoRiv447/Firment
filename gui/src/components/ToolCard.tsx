@@ -126,7 +126,11 @@ export function ToolCard({
   // §16.2: nothing is shown for a run under two seconds — a line that appears and vanishes while
   // you are reading the one above it is worse than silence. The card's own start time is the
   // clock, and the gate lives here rather than in the reducer because the reducer is pure.
+  //
+  // A finished card has no "now" to report: the phase means *currently doing*, so it goes with
+  // `running` and not with the elapsed rule.
   const showProgress =
+    tool.status === 'running' &&
     tool.progress !== undefined &&
     tool.startedAt !== undefined &&
     Date.now() - tool.startedAt >= 2000;

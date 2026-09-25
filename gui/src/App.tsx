@@ -468,7 +468,15 @@ export default function App() {
           // device_frame / guard_status are consumed by the WorkbenchView's
           // own subscriber (the card is self-contained and stays mounted);
           // App-level aggregation was dead weight.
+          //
+          // Still handed to the reducer rather than dropped. It returns its input
+          // untouched for anything it does not model, and `turnsReducer` keeps the
+          // same object in that case, so a no-op here costs nothing. Dropping by
+          // default is how `progress`, `review` and `subagent_*` shipped with a
+          // working reducer and no caller: a branch only exercised by a unit test
+          // that calls the reducer directly cannot fail anything in this file.
           default:
+            dispatchTurn(e);
             break;
         }
       }),

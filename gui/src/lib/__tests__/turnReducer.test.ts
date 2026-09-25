@@ -41,6 +41,20 @@ describe('turnReducer (IDE event->UI contract)', () => {
     expect(later.turn?.tools[5].progress).toBe('verifying');
   });
 
+  it('drops the phase when the tool ends', () => {
+    // "downloading" describes a present tense. Left set, it would sit under the result mark for
+    // the rest of the turn — and the renderer's two-second rule cannot help, because the card has
+    // long since passed it.
+    const done = feed([
+      { type: 'turn_start' },
+      { type: 'tool_start', name: 'flash', args: {}, seq: 5 },
+      { type: 'progress', tool: 'flash', seq: 5, phase: 'downloading', current: 0, total: 0 },
+      { type: 'tool_end', name: 'flash', ok: true, summary: 'flash passed', seq: 5 },
+    ]);
+    expect(done.turn?.tools[5].status).toBe('ok');
+    expect(done.turn?.tools[5].progress).toBeUndefined();
+  });
+
   it("routes a nested agent's phase to its step, and drops one with no card", () => {
     // Each agent numbers its own calls, so the turn and the subagent can both hold a `#6`.
     // The phase says which one it belongs to, and only that card changes.

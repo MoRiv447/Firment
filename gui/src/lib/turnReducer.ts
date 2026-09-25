@@ -223,6 +223,9 @@ export function turnReducer(state: TurnState, e: FrontendEvent): TurnState {
         status: e.ok ? 'ok' : 'failed',
         summary: e.summary,
         detail: e.detail,
+        // The phase means "what it is doing now", so a finished tool has none: leaving it set
+        // would keep an earlier sentence on screen next to the result mark.
+        progress: undefined,
         // Same update as the status, so the duration a card reports and the outcome
         // it reports are one fact instead of two that could drift.
         endedAt: Date.now(),
