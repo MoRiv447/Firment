@@ -4,10 +4,11 @@
 
 use async_trait::async_trait;
 use firment_core::{
-    AgentEvent, Asker, EventSink, PermissionChecker, PermissionError, QuestionRequest,
+    AgentEvent, Approval, Asker, EventSink, PermissionChecker, PermissionError, QuestionRequest,
 };
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tokio::sync::{mpsc, oneshot};
 pub(crate) struct ChannelSink {
     pub(crate) tx: mpsc::Sender<AgentEvent>,
@@ -33,30 +34,42 @@ pub(crate) struct TuiPermission {
 
 #[async_trait]
 impl PermissionChecker for TuiPermission {
-    async fn confirm(
-        &self,
-        tool: &str,
-        _args: &serde_json::Value,
-        reason: &str,
-    ) -> Result<(), PermissionError> {
+    async fn confirm(&self, tool: &str, _args: &serde_json::Value, reason: &str) -> Approval {
         if self.already_approved(tool) {
-            return Ok(());
+            // Nobody was asked this time, so this call has no waiting time — even
+            // though the answer arrived as instantly as one that did.
+            return Approval::auto(Ok(()));
         }
         let (reply, rx) = oneshot::channel();
-        self.req_tx
+        if self
+            .req_tx
             .send(PermissionRequest {
                 tool: tool.to_string(),
                 reason: reason.to_string(),
                 reply,
             })
             .await
-            .map_err(|_| PermissionError::denied("TUI closed while asking for approval"))?;
+            .is_err()
+        {
+            return Approval::auto(Err(PermissionError::denied(
+                "TUI closed while asking for approval",
+            )));
+        }
+        // From here the request is on screen: whatever comes back cost the user
+        // some of their attention, and that time is not the tool's.
+        let asked = Instant::now();
         match rx.await {
-            Ok(true) => Ok(()),
-            Ok(false) => Err(PermissionError::denied("denied by user")),
-            Err(_) => Err(PermissionError::denied(
-                "TUI closed while waiting for approval",
-            )),
+            Ok(true) => Approval::human(asked.elapsed(), Ok(())),
+            Ok(false) => Approval::human(
+                asked.elapsed(),
+                Err(PermissionError::denied("denied by user")),
+            ),
+            Err(_) => Approval::human(
+                asked.elapsed(),
+                Err(PermissionError::denied(
+                    "TUI closed while waiting for approval",
+                )),
+            ),
         }
     }
 }

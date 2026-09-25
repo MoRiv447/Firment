@@ -257,8 +257,8 @@ mod tests {
             _tool: &str,
             _args: &serde_json::Value,
             _reason: &str,
-        ) -> Result<(), firment_core::PermissionError> {
-            Ok(())
+        ) -> firment_core::Approval {
+            firment_core::Approval::auto(Ok(()))
         }
     }
 

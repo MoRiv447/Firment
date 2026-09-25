@@ -2,12 +2,13 @@ use crate::ask::Asker;
 use crate::cancel::Cancellable;
 use crate::journal::EditJournal;
 use crate::subagent::SubagentFactory;
-use crate::{PermissionChecker, PermissionError, ToolSpec};
+use crate::{Approval, PermissionChecker, PermissionError, ToolSpec};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// How many subagents may run at once (plan §5, item 2).
 ///
@@ -323,39 +324,70 @@ impl ToolRegistry {
         specs
     }
 
-    pub async fn run(
+    /// Run a tool, and report how much of the call was a person rather than work.
+    ///
+    /// The second value comes from the permission gate: `Some(..)` when a human
+    /// was shown the request — whatever they answered, because a "no" after two
+    /// minutes of reading spent those two minutes just as well — and `None` when
+    /// a rule decided it or no approval was needed at all. A UI cannot recover
+    /// this from its own clock: the card opens at `ToolStart`, which is before
+    /// either kind of wait, so wall time alone charges the human's reading time
+    /// to the tool.
+    ///
+    /// `ask_user` is the one call whose whole job is to ask a person, and it
+    /// reports no wait: the time on its card is the question, not a delay in
+    /// front of some work.
+    pub async fn run_measured(
         &self,
         name: &str,
         args: Value,
         ctx: &ToolContext,
-    ) -> Result<ToolOutput, ToolError> {
-        let tool = self
-            .get(name)
-            .ok_or_else(|| ToolError::new(format!("unknown tool: {name}")))?;
-        crate::schema::validate_args(&tool.owned_name(), &tool.input_schema(), &args)
-            .map_err(ToolError::new)?;
+    ) -> (Result<ToolOutput, ToolError>, Option<Duration>) {
+        let tool = match self.get(name) {
+            Some(tool) => tool,
+            None => {
+                return (Err(ToolError::new(format!("unknown tool: {name}"))), None);
+            }
+        };
+        if let Err(e) =
+            crate::schema::validate_args(&tool.owned_name(), &tool.input_schema(), &args)
+        {
+            return (Err(ToolError::new(e)), None);
+        }
         let mut reason = tool.approval(&args);
         if let Some(preview) = tool.preview(&args, ctx)
             && let Some(reason) = reason.as_mut()
         {
             reason.push_str(&format!("\n{preview}"));
         }
-        if let Some(reason) = reason {
-            match ctx
-                .permission
-                .confirm(&tool.owned_name(), &args, &reason)
-                .await
-            {
-                Ok(()) => {}
-                Err(PermissionError::Denied(message)) => {
-                    return Err(ToolError::denied(format!("Permission denied: {message}")));
+        let Some(reason) = reason else {
+            return (tool.run(args, ctx).await, None);
+        };
+        let Approval { decision, asked } = ctx
+            .permission
+            .confirm(&tool.owned_name(), &args, &reason)
+            .await;
+        if let Err(e) = decision {
+            let denied = match e {
+                PermissionError::Denied(message) => {
+                    ToolError::denied(format!("Permission denied: {message}"))
                 }
-                Err(PermissionError::Io(e)) => {
-                    return Err(ToolError::denied(format!("Permission check failed: {e}")));
+                PermissionError::Io(e) => {
+                    ToolError::denied(format!("Permission check failed: {e}"))
                 }
-            }
+            };
+            return (Err(denied), asked);
         }
-        tool.run(args, ctx).await
+        (tool.run(args, ctx).await, asked)
+    }
+
+    pub async fn run(
+        &self,
+        name: &str,
+        args: Value,
+        ctx: &ToolContext,
+    ) -> Result<ToolOutput, ToolError> {
+        self.run_measured(name, args, ctx).await.0
     }
 }
 
@@ -600,5 +632,107 @@ mod tests {
             "the refusal must name what it refused, got: {}",
             err.message
         );
+    }
+
+    /// A checker that consulted a person and says how long they took.
+    struct HumanGate {
+        waited: Duration,
+        allow: bool,
+    }
+
+    #[async_trait]
+    impl PermissionChecker for HumanGate {
+        async fn confirm(&self, _tool: &str, _args: &Value, _reason: &str) -> Approval {
+            let decision = if self.allow {
+                Ok(())
+            } else {
+                Err(PermissionError::denied("the person said no"))
+            };
+            Approval::human(self.waited, decision)
+        }
+    }
+
+    fn guarded() -> ToolRegistry {
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(GuardedNamed("sensor".to_string())));
+        registry
+    }
+
+    #[tokio::test]
+    async fn a_call_answered_by_a_rule_reports_no_wait() {
+        // The distinction the whole field exists for. `AutoApprove` answers instantly, and so does
+        // a person who clicks "allow" without reading — a measured duration alone would call both
+        // "waited 0 ms", and a UI charging that to the tool would be inventing a wait that never
+        // happened.
+        let ctx = ToolContext {
+            permission: Arc::new(crate::AutoApprove::everything()),
+            ..ToolContext::default()
+        };
+        let (out, waited) = guarded()
+            .run_measured("sensor", serde_json::json!({}), &ctx)
+            .await;
+        out.expect("the rule allows everything");
+        assert!(
+            waited.is_none(),
+            "a rule answered, so no person waited: {waited:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_persons_time_comes_back_apart_from_the_tools() {
+        let ctx = ToolContext {
+            permission: Arc::new(HumanGate {
+                waited: Duration::from_secs(120),
+                allow: true,
+            }),
+            ..ToolContext::default()
+        };
+        let (out, waited) = guarded()
+            .run_measured("sensor", serde_json::json!({}), &ctx)
+            .await;
+        out.expect("the person allowed it");
+        assert_eq!(waited, Some(Duration::from_secs(120)));
+    }
+
+    #[tokio::test]
+    async fn a_denial_keeps_the_time_it_took_to_read_the_request() {
+        // Refusing is not instant, and the card that shows "denied" spent two minutes getting
+        // there. Dropping the wait on this path would leave the most common interactive case
+        // still charging a human's reading time to a tool that never ran.
+        let ctx = ToolContext {
+            permission: Arc::new(HumanGate {
+                waited: Duration::from_secs(120),
+                allow: false,
+            }),
+            ..ToolContext::default()
+        };
+        let (out, waited) = guarded()
+            .run_measured("sensor", serde_json::json!({}), &ctx)
+            .await;
+        assert!(
+            out.expect_err("the person denied it").denied,
+            "a denial must still read as a denial"
+        );
+        assert_eq!(waited, Some(Duration::from_secs(120)));
+    }
+
+    #[tokio::test]
+    async fn a_tool_that_asks_for_nothing_never_opens_the_gate() {
+        // `Stub` reports no approval reason, so the checker is not called at all — even one that
+        // would have reported a person. An unasked question cannot have a waiting time.
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(Stub("plain")));
+        let ctx = ToolContext {
+            permission: Arc::new(HumanGate {
+                waited: Duration::from_secs(120),
+                allow: true,
+            }),
+            ..ToolContext::default()
+        };
+        let (out, waited) = registry
+            .run_measured("plain", serde_json::json!({}), &ctx)
+            .await;
+        out.expect("the tool ran");
+        assert!(waited.is_none(), "the gate never opened: {waited:?}");
     }
 }

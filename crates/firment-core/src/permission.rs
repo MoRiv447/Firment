@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PermissionError {
@@ -17,9 +18,43 @@ impl PermissionError {
     }
 }
 
+/// What came back from the permission gate, and how much of it was a person.
+///
+/// The two fields are separate on purpose. A wall clock cannot tell them
+/// apart: a rule that approves instantly and a human who answers instantly
+/// measure the same zero, and the number a UI wants — how long the **tool**
+/// took — is the one that gets distorted by the difference. `asked` is `Some`
+/// only for a checker that actually showed the request to someone, and it stays
+/// `Some` when that person said no or never answered, because their reading time
+/// is not the tool's execution time either.
+#[derive(Debug)]
+pub struct Approval {
+    pub decision: Result<(), PermissionError>,
+    /// How long a person took, or `None` when no person was involved.
+    pub asked: Option<Duration>,
+}
+
+impl Approval {
+    /// Decided by a rule, without a human in the loop.
+    pub fn auto(decision: Result<(), PermissionError>) -> Self {
+        Self {
+            decision,
+            asked: None,
+        }
+    }
+
+    /// A person answered — or did not answer within the checker's own window.
+    pub fn human(asked: Duration, decision: Result<(), PermissionError>) -> Self {
+        Self {
+            decision,
+            asked: Some(asked),
+        }
+    }
+}
+
 #[async_trait]
 pub trait PermissionChecker: Send + Sync {
-    async fn confirm(&self, tool: &str, args: &Value, reason: &str) -> Result<(), PermissionError>;
+    async fn confirm(&self, tool: &str, args: &Value, reason: &str) -> Approval;
 }
 
 /// Permission checker that approves a fixed set of tools (or everything).
@@ -53,18 +88,13 @@ impl AutoApprove {
 
 #[async_trait]
 impl PermissionChecker for AutoApprove {
-    async fn confirm(
-        &self,
-        tool: &str,
-        _args: &Value,
-        _reason: &str,
-    ) -> Result<(), PermissionError> {
+    async fn confirm(&self, tool: &str, _args: &Value, _reason: &str) -> Approval {
         if self.allow_all || self.allow_names.contains(tool) {
-            Ok(())
+            Approval::auto(Ok(()))
         } else {
-            Err(PermissionError::denied(format!(
+            Approval::auto(Err(PermissionError::denied(format!(
                 "tool '{tool}' requires approval and no auto-approve rule matches"
-            )))
+            ))))
         }
     }
 }
@@ -84,11 +114,11 @@ impl PlanModePermission {
 
 #[async_trait]
 impl PermissionChecker for PlanModePermission {
-    async fn confirm(&self, tool: &str, args: &Value, reason: &str) -> Result<(), PermissionError> {
+    async fn confirm(&self, tool: &str, args: &Value, reason: &str) -> Approval {
         if matches!(tool, "write_file" | "edit_file" | "shell") {
-            return Err(PermissionError::denied(
+            return Approval::auto(Err(PermissionError::denied(
                 "plan mode: read-only mode, write_file/edit_file/shell are disabled",
-            ));
+            )));
         }
         self.inner.confirm(tool, args, reason).await
     }
@@ -115,7 +145,7 @@ impl TargetLockPermission {
 
 #[async_trait]
 impl PermissionChecker for TargetLockPermission {
-    async fn confirm(&self, tool: &str, args: &Value, reason: &str) -> Result<(), PermissionError> {
+    async fn confirm(&self, tool: &str, args: &Value, reason: &str) -> Approval {
         // The attacker must not stop the target and then "discover" a hang it
         // manufactured. Deliberate stops are refused outright: poking memory
         // (`write`) and the control-flow actions that park the core
@@ -133,12 +163,12 @@ impl PermissionChecker for TargetLockPermission {
             )
         {
             let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("?");
-            return Err(PermissionError::denied(format!(
+            return Approval::auto(Err(PermissionError::denied(format!(
                 "red team target lock: debug action={action} is not allowed for the campaign — \
                  the attacker observes the firmware's behaviour, it does not stop the target \
                  into a hang it then 'discovers' (allowed: regs, mem, analyze, forensic, \
                  backtrace, trace, continue)"
-            )));
+            ))));
         }
         let (key, what) = match tool {
             "monitor" => ("port", "serial port"),
@@ -150,19 +180,19 @@ impl PermissionChecker for TargetLockPermission {
             // and a needless exact-match denial just burns a campaign turn.
             Some(value) if self.ports.iter().any(|p| p.eq_ignore_ascii_case(value)) => {}
             Some(value) => {
-                return Err(PermissionError::denied(format!(
+                return Approval::auto(Err(PermissionError::denied(format!(
                     "red team target lock: {what} '{value}' is not one of the suite's declared \
                      interfaces ({:?}) — the attacker may only touch what the approved suite \
                      named",
                     self.ports
-                )));
+                ))));
             }
             None => {
-                return Err(PermissionError::denied(format!(
+                return Approval::auto(Err(PermissionError::denied(format!(
                     "red team target lock: {tool} without an explicit {key} (e.g. auto-detect) \
                      could reach an unapproved target — pass {key} explicitly, one of {:?}",
                     self.ports
-                )));
+                ))));
             }
         }
         self.inner.confirm(tool, args, reason).await
@@ -180,14 +210,9 @@ mod tests {
 
     #[async_trait]
     impl PermissionChecker for Recorder {
-        async fn confirm(
-            &self,
-            tool: &str,
-            _args: &Value,
-            _reason: &str,
-        ) -> Result<(), PermissionError> {
+        async fn confirm(&self, tool: &str, _args: &Value, _reason: &str) -> Approval {
             self.seen.lock().unwrap().push(tool.to_string());
-            Ok(())
+            Approval::auto(Ok(()))
         }
     }
 
@@ -206,6 +231,7 @@ mod tests {
         let (p, rec) = lock(&["COM3"]);
         p.confirm("monitor", &json!({"port": "COM3"}), "r")
             .await
+            .decision
             .unwrap();
         assert_eq!(*rec.seen.lock().unwrap(), vec!["monitor"]);
     }
@@ -216,6 +242,7 @@ mod tests {
         let err = p
             .confirm("monitor", &json!({"port": "COM9"}), "r")
             .await
+            .decision
             .unwrap_err();
         assert!(err.to_string().contains("target lock"), "got {err}");
         assert!(
@@ -230,9 +257,15 @@ mod tests {
         assert!(
             p.confirm("monitor", &json!({"port": "auto"}), "r")
                 .await
+                .decision
                 .is_err()
         );
-        assert!(p.confirm("monitor", &json!({}), "r").await.is_err());
+        assert!(
+            p.confirm("monitor", &json!({}), "r")
+                .await
+                .decision
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -244,10 +277,12 @@ mod tests {
             "r",
         )
         .await
+        .decision
         .unwrap();
         assert!(
             p.confirm("device_cmd", &json!({"node": "other", "command": "x"}), "r")
                 .await
+                .decision
                 .is_err()
         );
     }
@@ -259,9 +294,11 @@ mod tests {
         // fall through to the inner checker like any other non-target tool.
         p.confirm("debug", &json!({"action": "regs"}), "r")
             .await
+            .decision
             .unwrap();
         p.confirm("read_file", &json!({"path": "x"}), "r")
             .await
+            .decision
             .unwrap();
         assert_eq!(rec.seen.lock().unwrap().len(), 2);
     }
@@ -273,6 +310,7 @@ mod tests {
         let (p, _) = lock(&["COM3"]);
         p.confirm("monitor", &json!({"port": "com3"}), "r")
             .await
+            .decision
             .unwrap();
     }
 
@@ -289,6 +327,7 @@ mod tests {
                     "r",
                 )
                 .await
+                .decision
                 .unwrap_err();
             assert!(
                 err.to_string().contains("target lock") && err.to_string().contains(action),
@@ -312,6 +351,7 @@ mod tests {
         ] {
             p.confirm("debug", &json!({"action": action}), "r")
                 .await
+                .decision
                 .unwrap_or_else(|e| panic!("action={action} must stay allowed: {e}"));
         }
     }

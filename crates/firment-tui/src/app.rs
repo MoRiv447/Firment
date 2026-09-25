@@ -254,6 +254,9 @@ impl App {
                         summary: content.clone(),
                         started_at: None,
                         ended_at: None,
+                        // No clock, no gate report: the transcript recorded the call and
+                        // its text, and nothing about who was asked.
+                        waited: None,
                         // A card restored from a stored transcript carries no review:
                         // reviews are session state, and inventing one would be worse
                         // than saying nothing.
@@ -375,6 +378,9 @@ impl App {
                     progress: None,
                     started_at: Some(Instant::now()),
                     ended_at: None,
+                    // Nothing has been asked of anyone at the moment the card opens;
+                    // `ToolEnd` is what reports a wait, if there was one.
+                    waited: None,
                     review: None,
                 });
             }
@@ -385,6 +391,7 @@ impl App {
                 detail,
                 seq,
                 owner,
+                waited_ms,
             } => {
                 if let Some(pos) = self.active_tools.iter().position(|(n, _)| n == &name) {
                     self.active_tools.remove(pos);
@@ -418,6 +425,7 @@ impl App {
                         progress,
                         started_at,
                         ended_at: current_end,
+                        waited: card_waited,
                         // The review arrives on its own event, not with the tool's end.
                         review: _,
                     } = item
@@ -438,7 +446,13 @@ impl App {
                         // duration arrived in a later update could disagree with
                         // the mark next to it.
                         *current_end = Some(ended_at);
-                        took = started_at.map(|s| ended_at.saturating_duration_since(s));
+                        let gate = waited_ms.map(Duration::from_millis);
+                        *card_waited = gate;
+                        // Through `step_time`, not by hand: the duration the card prints and
+                        // the sample the next estimate is built from must be one fact, or the
+                        // `8s` beside a card contradicts the `~2m` offered for the next run.
+                        took =
+                            crate::step_time::measured(*started_at, Some(ended_at), gate, ended_at);
                         break;
                     }
                 }
@@ -2395,6 +2409,10 @@ pub(crate) enum Item {
         /// Wall-clock end, set in the same update that clears `running`, so the
         /// duration a card shows and the mark beside it are one fact.
         ended_at: Option<Instant>,
+        /// How long a person spent at this call's permission gate, as the core
+        /// reported it. `None` means nobody was asked — not that they answered at
+        /// once. It comes off the card's duration, and the card says so beside it.
+        waited: Option<Duration>,
         /// What the self-review of this change found (plan §4-A), when one ran.
         ///
         /// Arrives *after* the card is drawn — a review takes seconds — which is why it is

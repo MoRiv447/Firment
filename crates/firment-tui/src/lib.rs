@@ -1350,6 +1350,7 @@ mod tests {
             summary: "built".to_string(),
             detail: None,
             seq: 1,
+            waited_ms: None,
         });
         let Some(Item::Tool {
             running,
@@ -1373,6 +1374,73 @@ mod tests {
     }
 
     #[test]
+    fn a_gate_report_lands_on_the_card_that_was_asked() {
+        // The wiring between the core's report and the card `step_time` does the
+        // arithmetic on. Both calls finish within a microsecond of their start here, so
+        // this cannot show a subtraction — `step_time`'s own test does that with real
+        // clocks. What it pins is the part that can silently go wrong: the number
+        // arriving on the right card, and `None` staying `None` rather than becoming a
+        // zero-second wait nobody was asked for.
+        let mut app = test_app();
+        app.on_agent(AgentEvent::ToolStart {
+            owner: None,
+            name: "build".to_string(),
+            args: serde_json::json!({}),
+            seq: 1,
+        });
+        app.on_agent(AgentEvent::ToolEnd {
+            owner: None,
+            name: "build".to_string(),
+            ok: true,
+            summary: "built".to_string(),
+            detail: None,
+            seq: 1,
+            waited_ms: None,
+        });
+        let Some(Item::Tool { waited, .. }) = app.items.last() else {
+            panic!("the card should still be there");
+        };
+        assert_eq!(*waited, None, "an unasked question is not a zero wait");
+
+        app.on_agent(AgentEvent::ToolStart {
+            owner: None,
+            name: "flash".to_string(),
+            args: serde_json::json!({}),
+            seq: 2,
+        });
+        app.on_agent(AgentEvent::ToolEnd {
+            owner: None,
+            name: "flash".to_string(),
+            ok: true,
+            summary: "flashed".to_string(),
+            detail: None,
+            seq: 2,
+            waited_ms: Some(30_000),
+        });
+        let Some(Item::Tool {
+            name, waited, seq, ..
+        }) = app.items.last()
+        else {
+            panic!("the second card should be the last one");
+        };
+        assert_eq!(name, "flash");
+        assert_eq!(*seq, 2);
+        assert_eq!(*waited, Some(std::time::Duration::from_secs(30)));
+        // The first card keeps its own answer: a later call cannot rewrite it.
+        let Some(Item::Tool {
+            waited: first_waited,
+            ..
+        }) = app
+            .items
+            .iter()
+            .find(|i| matches!(i, Item::Tool { seq: 1, .. }))
+        else {
+            panic!("the first card is gone");
+        };
+        assert_eq!(*first_waited, None);
+    }
+
+    #[test]
     fn the_estimate_needs_two_real_runs() {
         let mut app = test_app();
         for seq in 1..=2u64 {
@@ -1389,6 +1457,7 @@ mod tests {
                 summary: String::new(),
                 detail: None,
                 seq,
+                waited_ms: None,
             });
         }
         assert_eq!(app.tool_runs["flash"].len(), 2);
@@ -1411,6 +1480,7 @@ mod tests {
                     .to_string(),
             ),
             seq: 1,
+            waited_ms: None,
         });
         let rows = app.la_rows();
         // The range, not a midpoint: it is what the tool is willing to claim.
@@ -1443,6 +1513,7 @@ mod tests {
                 "[la] capture capture=pwm channels=0,1 samples=8000\n  saved: x.sr\n".to_string(),
             ),
             seq: 1,
+            waited_ms: None,
         });
         // Nothing was measured, so the block gains no measured rows.
         assert!(
@@ -1569,6 +1640,7 @@ mod tests {
             summary: String::new(),
             detail: None,
             seq: 1,
+            waited_ms: None,
         });
         app.on_agent(AgentEvent::ToolEnd {
             owner: None,
@@ -1577,6 +1649,7 @@ mod tests {
             summary: String::new(),
             detail: None,
             seq: 2,
+            waited_ms: None,
         });
         let rows = evidence_rows(&app);
         assert!(rows[0].starts_with(" ✓ code"), "got {rows:?}");
@@ -1596,6 +1669,7 @@ mod tests {
             summary: String::new(),
             detail: None,
             seq: 1,
+            waited_ms: None,
         });
         // A build that failed proves nothing about the build rung.
         assert!(evidence_rows(&app)[1].contains('○'));
@@ -1864,6 +1938,7 @@ mod tests {
             // label has to render as nothing rather than `0.0s`.
             started_at: None,
             ended_at: None,
+            waited: None,
             review: None,
         });
 
@@ -1997,6 +2072,7 @@ mod tests {
             summary: String::new(),
             detail: None,
             seq: 2,
+            waited_ms: None,
         });
         assert_eq!(app.status_text(), "working · searching fn main…");
 
@@ -2007,6 +2083,7 @@ mod tests {
             summary: String::new(),
             detail: None,
             seq: 1,
+            waited_ms: None,
         });
         assert_eq!(app.status_text(), "working");
     }
@@ -2331,6 +2408,7 @@ mod tests {
                 summary: "Edited a.c".to_string(),
                 detail: Some("@@ -1 +1 @@\n-a\n+b\n".to_string()),
                 seq,
+                waited_ms: None,
             });
         }
 
@@ -2414,6 +2492,7 @@ mod tests {
             summary: "read 12 lines".to_string(),
             detail: None,
             seq: 1,
+            waited_ms: None,
         });
         let running: Vec<Option<String>> = app
             .items
@@ -2545,6 +2624,7 @@ mod tests {
                 detail: None,
                 seq,
                 owner: None,
+                waited_ms: None,
             });
         }
         app.la_reading = Some(crate::la::LaReading {

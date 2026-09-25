@@ -66,18 +66,29 @@ pub(crate) fn estimate(runs: &Runs, name: &str) -> Option<Duration> {
 
 /// The measured time for one card: so far while it runs, in total once it has ended.
 ///
+/// `waited` is the time a person spent at this call's permission gate, which is
+/// subtracted because the number on screen answers "how long did the tool take",
+/// not "how long was this card on screen". A running card has no `waited` yet —
+/// the person has not answered — so it counts wall time until it ends and corrects
+/// to the tool's own time in the same update that clears `running`.
+///
 /// `None` for a card with no clock at all -- a tool reopened from a stored
 /// transcript, which records that it was called and nothing about how long it took.
 pub(crate) fn measured(
     started: Option<Instant>,
     ended: Option<Instant>,
+    waited: Option<Duration>,
     now: Instant,
 ) -> Option<Duration> {
     let started = started?;
-    Some(match ended {
+    let wall = match ended {
         Some(end) => end.saturating_duration_since(started),
         None => now.saturating_duration_since(started),
-    })
+    };
+    // `saturating` because a wait cannot outlast its own call; if a report ever
+    // says it did, the honest answer is "the tool took no measurable time", not a
+    // panic and not a negative duration.
+    Some(wall.saturating_sub(waited.unwrap_or_default()))
 }
 
 /// A step's duration, at the precision its reader needs.
@@ -178,18 +189,62 @@ mod tests {
     #[test]
     fn a_card_with_no_clock_has_no_duration() {
         let now = Instant::now();
-        assert_eq!(measured(None, None, now), None, "reopened transcript card");
+        assert_eq!(
+            measured(None, None, None, now),
+            None,
+            "reopened transcript card"
+        );
         let started = now;
         assert_eq!(
-            measured(Some(started), None, now + Duration::from_secs(3)),
+            measured(Some(started), None, None, now + Duration::from_secs(3)),
             Some(Duration::from_secs(3))
         );
         // Once it has ended, the clock stops mattering: asking again later gives the
         // same answer rather than a growing one.
         let ended = now + Duration::from_secs(4);
         assert_eq!(
-            measured(Some(started), Some(ended), now + Duration::from_secs(90)),
+            measured(
+                Some(started),
+                Some(ended),
+                None,
+                now + Duration::from_secs(90)
+            ),
             Some(Duration::from_secs(4))
+        );
+    }
+
+    #[test]
+    fn a_persons_reading_time_belongs_to_nobody_on_the_card() {
+        // Two minutes of the user deciding, eight seconds of `flash`. The card has to
+        // say eight seconds, because that is the number the next `flash` will be
+        // estimated from and the number that says whether the tool was slow.
+        let now = Instant::now();
+        let started = now;
+        let ended = now + Duration::from_secs(128);
+        assert_eq!(
+            measured(
+                Some(started),
+                Some(ended),
+                Some(Duration::from_secs(120)),
+                now
+            ),
+            Some(Duration::from_secs(8))
+        );
+        // No report, no subtraction: an auto-approved call keeps its whole clock.
+        assert_eq!(
+            measured(Some(started), Some(ended), None, now),
+            Some(Duration::from_secs(128))
+        );
+        // A report that cannot be true (the wait longer than the call) still cannot
+        // produce a negative duration on screen.
+        assert_eq!(
+            measured(
+                Some(started),
+                Some(ended),
+                Some(Duration::from_secs(600)),
+                now
+            ),
+            Some(Duration::ZERO)
         );
     }
 

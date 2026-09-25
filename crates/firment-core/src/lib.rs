@@ -36,7 +36,8 @@ pub use context::{default_system_prompt, delegation_section, system_prompt_for};
 pub use http::{http_builder, provider_client, provider_client_with};
 pub use journal::{EditJournal, Ledger, LedgerChange, UndoSummary};
 pub use permission::{
-    AutoApprove, PermissionChecker, PermissionError, PlanModePermission, TargetLockPermission,
+    Approval, AutoApprove, PermissionChecker, PermissionError, PlanModePermission,
+    TargetLockPermission,
 };
 pub use provider::{
     AnthropicProvider, ChatRequest, OpenAIProvider, Provider, ProviderError, ProviderEvent,

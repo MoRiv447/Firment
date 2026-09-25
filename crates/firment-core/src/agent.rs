@@ -67,6 +67,19 @@ pub enum AgentEvent {
         /// The agent the matching [`AgentEvent::ToolStart`] belonged to. The two must agree, or a
         /// card one agent opened gets closed by another and the first one spins forever.
         owner: Option<String>,
+        /// How long a person spent at this call's permission gate, or `None`
+        /// when no person was asked.
+        ///
+        /// Not derivable from the two events around it: the card opens at
+        /// `ToolStart`, before the gate, so wall time alone charges reading a
+        /// dialog to the tool. Subtract it before labelling the call or feeding
+        /// the elapsed estimate — a `flash` that took eight seconds after two
+        /// minutes of approval does not predict an eight-second flash *or* a
+        /// two-minute one. `None` is not zero: nobody was consulted, which is a
+        /// different fact and the common case.
+        ///
+        /// The value survives a denial, because the time was still spent.
+        waited_ms: Option<u64>,
     },
     TurnEnd {
         text: String,
@@ -1371,6 +1384,9 @@ impl Agent {
                             detail: None,
                             seq,
                             owner: self.event_owner(),
+                            // This call goes to the tool directly, not through the registry, so
+                            // it meets no permission gate and asks no one.
+                            waited_ms: None,
                         })
                         .await;
                     self.session.push(ChatMessage::Tool {
@@ -2093,7 +2109,7 @@ async fn execute_tool_calls(
                 let registry = agent.registry.clone();
                 async move {
                     registry
-                        .run(&call.name, call.arguments.clone(), &call_ctx)
+                        .run_measured(&call.name, call.arguments.clone(), &call_ctx)
                         .await
                 }
             })
@@ -2170,6 +2186,9 @@ async fn execute_tool_calls(
                         detail: None,
                         seq: call_seqs[k],
                         owner: owner.clone(),
+                        // The future was dropped, maybe with a dialog still open on it.
+                        // Nothing was measured, which is not the same as nothing waited.
+                        waited_ms: None,
                     })
                     .await;
                 agent.session.push(ChatMessage::Tool {
@@ -2219,6 +2238,9 @@ async fn execute_tool_calls(
                         detail: None,
                         seq: call_seqs[k],
                         owner: owner.clone(),
+                        // Same shape as the cancel path: the future never returned, so
+                        // there is no measurement to report.
+                        waited_ms: None,
                     })
                     .await;
                 agent.session.push(ChatMessage::Tool {
@@ -2246,6 +2268,13 @@ async fn execute_tool_calls(
                 timed_out: true,
             };
         }
+
+        // Each future answered with the tool's result and the time its gate spent
+        // with a person. Split them here so the loop below can read `results[k]`
+        // as it always has and name the wait separately — both lists are in
+        // `ready` order, and both are the wave's length by now, since the cancel
+        // and timeout paths returned above.
+        let (results, waits): (Vec<_>, Vec<_>) = results.into_iter().unzip();
 
         // A denied mutation call (user said no) executes nothing and must not
         // roll the batch back. Only real execution failures do — and only
@@ -2343,6 +2372,7 @@ async fn execute_tool_calls(
                     detail,
                     seq: call_seqs[k],
                     owner: owner.clone(),
+                    waited_ms: waits[k].map(|d| d.as_millis() as u64),
                 })
                 .await;
             agent.session.push(ChatMessage::Tool {

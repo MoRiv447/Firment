@@ -49,6 +49,11 @@ pub enum FrontendEvent {
         seq: u64,
         /// See [`FrontendEvent::ToolStart`]'s `owner`.
         owner: Option<String>,
+        /// How long a person spent at this call's permission gate, or `None` when nobody
+        /// was asked. This frontend times a card from `tool_start` to `tool_end` and the
+        /// gate sits between those two, so the card has to subtract this to print the
+        /// tool's own time.
+        waited_ms: Option<u64>,
     },
     /// A self-review of one tool's change finished (plan §4-A). Carries the same `Finding`
     /// shape every review capability uses, so the card can render a badge and a list
@@ -221,6 +226,7 @@ pub fn frontend_event(e: &AgentEvent, session_id: Option<&str>) -> FrontendEvent
             detail,
             seq,
             owner,
+            waited_ms,
         } => FrontendEvent::ToolEnd {
             session_id: sid,
             name: name.clone(),
@@ -229,6 +235,7 @@ pub fn frontend_event(e: &AgentEvent, session_id: Option<&str>) -> FrontendEvent
             detail: detail.clone(),
             seq: *seq,
             owner: owner.clone(),
+            waited_ms: *waited_ms,
         },
         AgentEvent::TurnEnd { text } => FrontendEvent::TurnEnd {
             session_id: sid,

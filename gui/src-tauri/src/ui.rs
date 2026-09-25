@@ -1,12 +1,13 @@
 use async_trait::async_trait;
 use firment_core::AgentEvent;
+use firment_core::Approval;
 use firment_core::Asker;
 use firment_core::EventSink;
 use firment_core::PermissionChecker;
 use firment_core::PermissionError;
 use serde_json::json;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::Emitter;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
@@ -81,12 +82,7 @@ pub struct GuiPermission {
 
 #[async_trait]
 impl PermissionChecker for GuiPermission {
-    async fn confirm(
-        &self,
-        tool: &str,
-        args: &serde_json::Value,
-        reason: &str,
-    ) -> Result<(), PermissionError> {
+    async fn confirm(&self, tool: &str, args: &serde_json::Value, reason: &str) -> Approval {
         let always = {
             let config = self
                 .shared
@@ -96,7 +92,8 @@ impl PermissionChecker for GuiPermission {
             config.auto_approve.to_vec()
         };
         if always.iter().any(|t| t == tool) {
-            return Ok(());
+            // A rule answered this one, so no person spent any time on it.
+            return Approval::auto(Ok(()));
         }
         let id = next_seq();
         let (tx, rx) = oneshot::channel();
@@ -109,6 +106,9 @@ impl PermissionChecker for GuiPermission {
             "permission-request",
             json!({ "id": id, "tool": tool, "args": args, "reason": reason, "session_id": self.session_id }),
         );
+        // The person's clock starts here, with the dialog on screen — not at the top of
+        // this function, which the auto-approve check above reached without asking anyone.
+        let asked = Instant::now();
         // Registered before the await: every way out of it has to leave the same state behind,
         // and being cancelled is not a return.
         let waiters = self.shared.perm_waiters.clone();
@@ -122,24 +122,38 @@ impl PermissionChecker for GuiPermission {
             // pretend it approved anything.
             let _ = app.emit("permission-expired", json!({ "id": id }));
         });
-        match timeout(PERMISSION_TIMEOUT, rx).await {
+        let answered = timeout(PERMISSION_TIMEOUT, rx).await;
+        let waited = asked.elapsed();
+        match answered {
             Ok(Ok(true)) => {
                 guard.disarm();
-                Ok(())
+                Approval::human(waited, Ok(()))
             }
             Ok(Ok(false)) => {
                 guard.disarm();
-                Err(PermissionError::denied(format!(
-                    "user denied tool '{tool}'"
-                )))
+                Approval::human(
+                    waited,
+                    Err(PermissionError::denied(format!(
+                        "user denied tool '{tool}'"
+                    ))),
+                )
             }
             // The sender went away without answering — a dialog still open is a dialog the
             // guard should close.
-            Ok(Err(_)) => Err(PermissionError::denied("permission dialog closed")),
-            Err(_) => Err(PermissionError::denied(format!(
-                "permission request for tool '{tool}' timed out after {}s",
-                PERMISSION_TIMEOUT.as_secs()
-            ))),
+            Ok(Err(_)) => Approval::human(
+                waited,
+                Err(PermissionError::denied("permission dialog closed")),
+            ),
+            // Nobody answered within the window. The reading time was still theirs, which is
+            // why this reports a wait rather than nothing: the card it belongs to spent the
+            // whole window on screen.
+            Err(_) => Approval::human(
+                waited,
+                Err(PermissionError::denied(format!(
+                    "permission request for tool '{tool}' timed out after {}s",
+                    PERMISSION_TIMEOUT.as_secs()
+                ))),
+            ),
         }
     }
 }

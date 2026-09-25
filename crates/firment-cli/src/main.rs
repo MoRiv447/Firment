@@ -5,15 +5,15 @@ use async_trait::async_trait;
 use clap::Parser;
 use firment_core::config::{config_path, parse_size};
 use firment_core::{
-    AgentEvent, Config, EventSink, PermissionChecker, PermissionError, Session, SessionMode,
-    SessionStore, ThinkingLevel, ToolVerbosity,
+    AgentEvent, Approval, Config, EventSink, PermissionChecker, PermissionError, Session,
+    SessionMode, SessionStore, ThinkingLevel, ToolVerbosity,
 };
 use std::collections::HashSet;
 use std::env;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Diff lines a one-shot run prints at the default verbosity before it says
 /// "… N more". Enough to recognize the change; short enough that a build log
@@ -1177,12 +1177,7 @@ impl CliPermission {
 
 #[async_trait]
 impl PermissionChecker for CliPermission {
-    async fn confirm(
-        &self,
-        tool: &str,
-        _args: &serde_json::Value,
-        reason: &str,
-    ) -> Result<(), PermissionError> {
+    async fn confirm(&self, tool: &str, _args: &serde_json::Value, reason: &str) -> Approval {
         if self.yes
             || self.auto.contains(tool)
             || self
@@ -1191,28 +1186,38 @@ impl PermissionChecker for CliPermission {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .contains(tool)
         {
-            return Ok(());
+            // A flag, a rule or a remembered answer asked nobody this time.
+            return Approval::auto(Ok(()));
         }
         if !self.interactive {
-            return Err(PermissionError::denied(format!(
+            return Approval::auto(Err(PermissionError::denied(format!(
                 "tool '{tool}' requires approval; rerun with -y or add it to auto_approve"
-            )));
+            ))));
         }
         eprintln!("\n⚠ {tool}: {reason}");
         eprint!("Approve? [y/N/a] ");
-        std::io::stderr().flush()?;
+        if let Err(e) = std::io::stderr().flush() {
+            return Approval::auto(Err(PermissionError::Io(e)));
+        }
+        // From here the question is on the screen, so the clock is the person's —
+        // whatever they type, and whatever the read itself does.
+        let asked = Instant::now();
         let mut line = String::new();
-        std::io::stdin().read_line(&mut line)?;
-        match line.trim().to_lowercase().as_str() {
-            "y" => Ok(()),
-            "a" => {
-                self.always
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .insert(tool.to_string());
-                Ok(())
-            }
-            _ => Err(PermissionError::denied("denied by user")),
+        let read = std::io::stdin().read_line(&mut line);
+        let waited = asked.elapsed();
+        match read {
+            Err(e) => Approval::human(waited, Err(PermissionError::Io(e))),
+            Ok(_) => match line.trim().to_lowercase().as_str() {
+                "y" => Approval::human(waited, Ok(())),
+                "a" => {
+                    self.always
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .insert(tool.to_string());
+                    Approval::human(waited, Ok(()))
+                }
+                _ => Approval::human(waited, Err(PermissionError::denied("denied by user"))),
+            },
         }
     }
 }

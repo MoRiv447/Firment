@@ -422,6 +422,7 @@ mod tests {
                 detail: None,
                 seq: 3,
                 owner: None,
+                waited_ms: None,
             },
             AgentEvent::Review {
                 seq: 3,
@@ -447,6 +448,7 @@ mod tests {
                 detail: None,
                 seq: 3,
                 owner: Some("sub-1".to_string()),
+                waited_ms: None,
             },
             5,
         )
@@ -480,6 +482,7 @@ mod tests {
                 detail: None,
                 seq: 3,
                 owner: None,
+                waited_ms: None,
             },
             5,
         )

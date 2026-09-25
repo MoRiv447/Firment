@@ -1,13 +1,15 @@
 use async_trait::async_trait;
 use firment_core::{
-    Agent, AgentError, AgentEvent, AutoApprove, ChatMessage, ChatRequest, ElfConfig, EventSink,
-    PlanModePermission, Provider, ProviderError, ProviderEvent, ProviderStream, Session,
-    SessionMode, SessionStore, StopReason, Tool, ToolContext, ToolError, ToolOutput, ToolRegistry,
+    Agent, AgentError, AgentEvent, Approval, AutoApprove, ChatMessage, ChatRequest, ElfConfig,
+    EventSink, PermissionChecker, PlanModePermission, Provider, ProviderError, ProviderEvent,
+    ProviderStream, Session, SessionMode, SessionStore, StopReason, Tool, ToolContext, ToolError,
+    ToolOutput, ToolRegistry,
 };
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tempfile::tempdir;
 
 #[derive(Clone)]
@@ -897,6 +899,90 @@ async fn permission_denied_is_reported_to_model() {
         })
         .unwrap();
     assert!(tool_message.starts_with("Permission denied"));
+}
+
+/// A gate that spends real time, the way a person reading a dialog does.
+struct SlowGate;
+
+#[async_trait]
+impl PermissionChecker for SlowGate {
+    async fn confirm(&self, _tool: &str, _args: &Value, _reason: &str) -> Approval {
+        let waited = Duration::from_millis(60);
+        tokio::time::sleep(waited).await;
+        Approval::human(waited, Ok(()))
+    }
+}
+
+#[tokio::test]
+async fn only_the_call_that_woke_a_person_reports_a_wait() {
+    // One wave, two calls: `guarded` opens the gate and `echo` never reaches one. The loop splits
+    // each future's result from its gate time and pairs them back up by position, so a pair that
+    // went astride each other would put 60ms of human time on a tool that asked nobody — and take
+    // it off the one that did. Both directions are asserted because both are silent.
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_1".to_string(),
+                    name: "echo".to_string(),
+                    arguments: json!({"message": "hi"}),
+                }),
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_2".to_string(),
+                    name: "guarded".to_string(),
+                    arguments: json!({}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            vec![
+                ProviderEvent::Text("ok".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+        ]))),
+        model: "fake".to_string(),
+    };
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let dir = tempdir().unwrap();
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(vec![Arc::new(GuardedTool), Arc::new(EchoTool)]),
+        Session::new(dir.path().to_path_buf(), "default", "fake"),
+        SessionStore::new(dir.path().to_path_buf()),
+        Arc::new(SlowGate),
+        Arc::new(CollectSink(events.clone())),
+        10,
+    );
+
+    agent.run_turn("go").await.unwrap();
+
+    let ends: Vec<(String, Option<u64>)> = events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::ToolEnd {
+                name, waited_ms, ..
+            } => Some((name.clone(), *waited_ms)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ends.len(), 2, "both calls report an end: {ends:?}");
+    let guarded = ends
+        .iter()
+        .find(|(name, _)| name == "guarded")
+        .expect("the guarded call ended");
+    let echo = ends
+        .iter()
+        .find(|(name, _)| name == "echo")
+        .expect("the echo call ended");
+    assert!(
+        guarded.1.unwrap_or(0) >= 60,
+        "the person's time belongs on the call that asked them: {guarded:?}"
+    );
+    assert_eq!(
+        echo.1, None,
+        "a call that never opened a gate must not inherit one: {echo:?}"
+    );
 }
 
 #[tokio::test]

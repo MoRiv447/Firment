@@ -288,6 +288,7 @@ impl App {
                 progress,
                 started_at,
                 ended_at,
+                waited,
                 review,
             } => {
                 // The card's number is what `/undo --before <N>` asks the user for, so it has to
@@ -331,21 +332,36 @@ impl App {
                 // and every card restored from a stored transcript is one -- prints
                 // nothing rather than `0.0s`, and only a RUNNING card may carry an
                 // estimate, because a finished one has nothing left to predict.
-                let elapsed = crate::step_time::measured(*started_at, *ended_at, Instant::now())
-                    .map(|took| {
-                        let mut text = format!(" {}", crate::step_time::format_step_duration(took));
-                        if *running
-                            && let Some(expected) =
-                                crate::step_time::estimate(&self.tool_runs, name)
-                        {
-                            text.push_str(&format!(
-                                " ~{}",
-                                crate::step_time::format_step_duration(expected)
-                            ));
-                        }
-                        text
-                    })
-                    .unwrap_or_default();
+                let elapsed =
+                    crate::step_time::measured(*started_at, *ended_at, *waited, Instant::now())
+                        .map(|took| {
+                            let mut text =
+                                format!(" {}", crate::step_time::format_step_duration(took));
+                            // The person's time is named rather than hidden: a reader who
+                            // watched three minutes go by on a card printing `8s` needs the
+                            // two minutes accounted for, not the eight seconds inflated.
+                            // Under a second there is nothing to explain, so an answer that
+                            // came instantly adds no note.
+                            if let Some(waited) =
+                                (*waited).filter(|w| *w >= std::time::Duration::from_secs(1))
+                            {
+                                text.push_str(&format!(
+                                    " +{} waiting",
+                                    crate::step_time::format_step_duration(waited)
+                                ));
+                            }
+                            if *running
+                                && let Some(expected) =
+                                    crate::step_time::estimate(&self.tool_runs, name)
+                            {
+                                text.push_str(&format!(
+                                    " ~{}",
+                                    crate::step_time::format_step_duration(expected)
+                                ));
+                            }
+                            text
+                        })
+                        .unwrap_or_default();
                 // The badge the plan asks for (§4-A): the count on the card, the findings
                 // themselves when the body is open. Worst-first, so the first line under
                 // the diff is the one that matters.
