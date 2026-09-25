@@ -809,16 +809,30 @@ impl Tool for Debug {
                 )
                 .await
                 .map_err(probe_err)?;
-                let fault_words = if fault_code == Some(0) {
-                    parse_hex_words(&fault_text)
-                } else {
-                    Vec::new()
-                };
                 let mut fault_regs = [0u64; 5];
-                for (i, w) in fault_words.iter().take(5).enumerate() {
-                    fault_regs[i] = *w;
-                }
-                let cfsr_lines = fault_analysis(&fault_regs).unwrap_or_default();
+                // A failed read is not a clean fault scene: the zeros that would be analysed here
+                // print "CFSR = 0x00000000 (no configurable fault flags set)", which reads as a
+                // statement about the target and is really a statement about the probe. The
+                // `analyze` path avoids this by carrying a Vec and saying when there is none.
+                let cfsr_lines = if fault_code == Some(0) {
+                    for (i, w) in parse_hex_words(&fault_text).iter().take(5).enumerate() {
+                        fault_regs[i] = *w;
+                    }
+                    fault_analysis(&fault_regs).unwrap_or_else(|| {
+                        vec![
+                            "  fault registers: the block did not parse as five words — read \
+                              again or check the probe-rs version"
+                                .to_string(),
+                        ]
+                    })
+                } else {
+                    vec![format!(
+                        "  fault registers: UNREADABLE (exit {fault_code:?}). No fault flag is \
+                         confirmed either way; the register state above is the only fault \
+                         evidence in this report. Output was:\n{}",
+                        crate::tools::util::truncate(&fault_text, 500)
+                    )]
+                };
 
                 // 3. Stack window: exception frame + call-chain candidates.
                 let (stack_words, stack_addr) = match run_probe_rs_retry(

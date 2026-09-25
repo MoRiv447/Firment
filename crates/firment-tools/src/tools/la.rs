@@ -300,13 +300,15 @@ impl La {
             .await
             .map_err(|e| ToolError::new(la_cmd::sigrok_err_hint(&e)))?;
         if code != Some(0) {
-            return Ok(ToolOutput {
-                text: format!(
-                    "[la] sigrok-cli probe failed (exit {:?}):\n{}",
-                    code,
-                    truncate(&ver_text, 4000)
-                ),
-            });
+            // Not a detection result to report — the probe failed. The three sibling actions
+            // (`info`, `capture`, `decode`) all return `Err` here; `detect` alone returned `Ok`
+            // with the failure in its text, and `ok` is what advances the verification ladder, so
+            // a bench with no analyzer attached reached "physical evidence".
+            return Err(ToolError::new(la_cmd::sigrok_err_hint(&format!(
+                "sigrok-cli probe failed (exit {:?}):\n{}",
+                code,
+                truncate(&ver_text, 4000)
+            ))));
         }
         let version = parse_sigrok_version(&ver_text);
         let (drv_text, _) = self
@@ -619,7 +621,7 @@ impl La {
         })
     }
 
-    fn run_measure(&self, args: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+    async fn run_measure(&self, args: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let capture = args
             .get("capture")
             .and_then(|v| v.as_str())
@@ -631,7 +633,21 @@ impl La {
         let channel = args.get("channel").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         // Shared loader: has_binary + size sanity + unpack in one place, so
         // `la measure` and the HIL `la` step read exactly the same bytes.
-        let cap = load_capture_waves(ctx, capture).map_err(ToolError::new)?;
+        //
+        // On the blocking pool: the read plus the unpack is bounded by `MAX_WAVE_BYTES` — which
+        // is still hundreds of megabytes — and running it on this future occupies a runtime worker
+        // for the whole of it, so unrelated tool futures on that worker stall and the card's phase
+        // row never repaints. The measurement math below stays here: it walks a buffer in memory.
+        if let Some(progress) = ctx.progress.as_ref() {
+            progress.phase("reading the capture");
+        }
+        let blocking_ctx = ctx.clone();
+        let capture_arg = capture.to_string();
+        let cap =
+            tokio::task::spawn_blocking(move || load_capture_waves(&blocking_ctx, &capture_arg))
+                .await
+                .map_err(|e| ToolError::new(format!("[Io] the capture reader died: {e}")))?
+                .map_err(ToolError::new)?;
         if channel >= cap.channel_count {
             return Err(ToolError::new(format!(
                 "[InvalidInput] channel {channel} out of range — capture has {} channel(s)",
@@ -916,7 +932,7 @@ impl Tool for La {
             "detect" => self.run_detect(&cfg, &args, ctx).await,
             "info" => self.run_info(&cfg, &args, ctx).await,
             "list_captures" => self.run_list_captures(ctx),
-            "measure" => self.run_measure(&args, ctx),
+            "measure" => self.run_measure(&args, ctx).await,
             "decode" => {
                 // The two long actions report what kind of wait this is (plan item 7). `run`
                 // dispatches, so this is where the phase belongs; the backend seam below it has

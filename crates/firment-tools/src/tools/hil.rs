@@ -843,17 +843,26 @@ async fn run_build_step(
         ));
     }
     let timeout = step.timeout_ms.unwrap_or(600_000).min(remaining.max(1000));
-    let (text, code) =
+    let (text, code, end) =
         crate::tools::util::run_command(&command, &work_dir, timeout, None, Some(&ctx.cancel))
             .await
             .map_err(|e| format!("[Io] build spawn failed: {e}"))?;
-    match code {
-        Some(0) => Ok(format!("{note}build passed (exit 0)\n{text}")),
-        Some(c) => Err(format!(
+    match (code, end) {
+        (Some(0), _) => Ok(format!("{note}build passed (exit 0)\n{text}")),
+        (_, crate::tools::util::End::Cancelled) => Err(format!(
+            "[Cancelled] build step was interrupted by turn cancellation\n{note}{text}"
+        )),
+        (_, crate::tools::util::End::TimedOut) => Err(format!(
+            "[Timeout] build timed out after {timeout} ms\n{note}{text}"
+        )),
+        (_, crate::tools::util::End::Killed) => Err(format!(
+            "[Io] build step's process was killed by a signal (not by us)\n{note}{text}"
+        )),
+        (Some(c), _) => Err(format!(
             "[CompileError] build failed (exit {c})\n{note}{text}"
         )),
-        None => Err(format!(
-            "[Timeout] build timed out after {timeout} ms\n{note}{text}"
+        (None, _) => Err(format!(
+            "[Io] build step reported no exit code\n{note}{text}"
         )),
     }
 }
@@ -1229,6 +1238,48 @@ async fn run_trace_step(
         Err(e) if e.contains("[Timeout]") => (String::new(), None),
         Err(e) => return Err(crate::tools::util::probe_rs_err(e).message),
     };
+    // Expectations are read once, and graded whichever way the capture window closed.
+    let expect_contains = step
+        .expect_contains
+        .clone()
+        .or_else(|| step.expect.as_ref().and_then(|e| e.contains.clone()));
+    let expect_regex = step
+        .expect_regex
+        .clone()
+        .or_else(|| step.expect.as_ref().and_then(|e| e.regex.clone()));
+    let expect_count = step
+        .expect_count
+        .or_else(|| step.expect.as_ref().and_then(|e| e.count))
+        .unwrap_or(1)
+        // Same clamp as the monitor step: expect_count = 0 would pass
+        // vacuously before any byte arrives.
+        .max(1);
+    // The note used to be built only inside the exit-0 arm below. A target that never writes ITM
+    // ends its window through the timeout arm — the normal shape of a dead or quiet trace stream —
+    // and there the expectation was never checked: no `[HIL_EXPECT:FAIL]` marker, so
+    // `expect_failed` stayed false and the suite reported level 4 (runtime) as reached while the
+    // firmware had printed nothing at all.
+    let expect_note = if expect_contains.is_some() || expect_regex.is_some() {
+        let regex_obj = if let Some(rx) = &expect_regex {
+            Some(
+                regex::Regex::new(rx)
+                    .map_err(|e| format!("[InvalidInput] expect_regex invalid: {e}"))?,
+            )
+        } else {
+            None
+        };
+        let (matched, _) = evaluate_expect(&text, expect_contains.as_deref(), regex_obj.as_ref());
+        Some(format!(
+            "\n[HIL_EXPECT:{}] trace expect matched {matched}/{expect_count} — wanted contains={expect_contains:?} regex={expect_regex:?}",
+            if matched >= expect_count {
+                "PASS"
+            } else {
+                "FAIL"
+            }
+        ))
+    } else {
+        None
+    };
     match code {
         Some(0) => {
             let summary = if text.trim().is_empty() {
@@ -1239,44 +1290,20 @@ async fn run_trace_step(
             let mut out = format!(
                 "trace captured {duration} ms (clk {clk_hz} Hz, baud {baud}) (exit 0)\n{summary}{text}"
             );
-            // honor monitor-style expectations if provided
-            let expect_contains = step
-                .expect_contains
-                .clone()
-                .or_else(|| step.expect.as_ref().and_then(|e| e.contains.clone()));
-            let expect_regex = step
-                .expect_regex
-                .clone()
-                .or_else(|| step.expect.as_ref().and_then(|e| e.regex.clone()));
-            let expect_count = step
-                .expect_count
-                .or_else(|| step.expect.as_ref().and_then(|e| e.count))
-                .unwrap_or(1)
-                // Same clamp as the monitor step: expect_count = 0 would pass
-                // vacuously before any byte arrives.
-                .max(1);
-            if expect_contains.is_some() || expect_regex.is_some() {
-                let regex_obj = if let Some(rx) = &expect_regex {
-                    Some(
-                        regex::Regex::new(rx)
-                            .map_err(|e| format!("[InvalidInput] expect_regex invalid: {e}"))?,
-                    )
-                } else {
-                    None
-                };
-                let (matched, _) =
-                    evaluate_expect(&text, expect_contains.as_deref(), regex_obj.as_ref());
-                let ok = matched >= expect_count;
-                let marker = if ok { "PASS" } else { "FAIL" };
-                out.push_str(&format!(
-                    "\n[HIL_EXPECT:{marker}] trace expect matched {matched}/{expect_count} — wanted contains={expect_contains:?} regex={expect_regex:?}"
-                ));
+            if let Some(note) = expect_note {
+                out.push_str(&note);
             }
             Ok(out)
         }
-        None => Ok(format!(
-            "trace: capture window closed after {outer} ms on an idle SWO stream (no ITM packets — firmware must write ITM ports, e.g. ITM_SendChar)\n{text}"
-        )),
+        None => {
+            let mut out = format!(
+                "trace: capture window closed after {outer} ms on an idle SWO stream (no ITM packets — firmware must write ITM ports, e.g. ITM_SendChar)\n{text}"
+            );
+            if let Some(note) = expect_note {
+                out.push_str(&note);
+            }
+            Ok(out)
+        }
         Some(c) => Err(format!("[Io] probe-rs trace failed (exit {c})\n{text}")),
     }
 }

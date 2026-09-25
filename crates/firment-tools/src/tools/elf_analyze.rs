@@ -492,6 +492,83 @@ fn baseline_path(ctx: &ToolContext, elf: &Path) -> Result<Option<PathBuf>, ToolE
     Ok(Some(dir.join("elf-baseline").join(format!("{key}.elf"))))
 }
 
+/// Where the stack depths behind a baseline ELF are kept, so a diff can see them.
+fn stack_sidecar(elf: &Path) -> PathBuf {
+    let mut name = elf.file_name().unwrap_or_default().to_os_string();
+    name.push(".stack.json");
+    elf.with_file_name(name)
+}
+
+/// Attach per-function stack depth from `-fstack-usage` `.su` files beside `elf`.
+///
+/// `analyze()` reads an ELF `.stack_usage` section that GCC and Clang do not emit, so on its own
+/// it leaves `stack: None` everywhere — which is fine for the report and fatal for a diff.
+fn with_su_files(mut report: ElfReport, elf: &Path) -> ElfReport {
+    let su = discover_su_files(elf.parent().unwrap_or_else(|| Path::new(".")));
+    if !su.is_empty() {
+        let matched = parse_su_files(&su, &mut report);
+        report.su_records = matched;
+        if matched > 0 {
+            report.stack_section_missing = false;
+        }
+    }
+    report
+}
+
+/// Save what this run resolved, next to the ELF just cached as the next run's baseline.
+fn save_stack_sidecar(cache: &Path, report: &ElfReport) {
+    let rows: Vec<(&str, Option<u32>, bool)> = report
+        .functions
+        .iter()
+        .map(|f| (f.name.as_str(), f.stack, f.stack_dynamic))
+        .collect();
+    if rows
+        .iter()
+        .all(|(_, depth, dynamic)| depth.is_none() && !dynamic)
+    {
+        // Nothing was resolved. A sidecar would only re-say "unknown" and cost a write.
+        return;
+    }
+    if let Ok(text) = serde_json::to_string(&rows) {
+        let _ = std::fs::write(stack_sidecar(cache), text);
+    }
+}
+
+/// Put saved depths back onto a baseline report.
+///
+/// The baseline is a **copy** of the ELF inside the session directory, while the `.su` files that
+/// produced the depths stay next to the build tree — so a baseline read back had `stack: None`
+/// for every function, `diff_reports` skipped every function present in both builds, and the
+/// between-builds stack delta never existed. Neither did the stack threshold that reads it, while
+/// the tool's own description promises both: "Pass the same file again after rebuilding to get a
+/// diff against the previous build".
+fn apply_stack_sidecar(mut report: ElfReport, elf: &Path) -> ElfReport {
+    let Ok(text) = std::fs::read_to_string(stack_sidecar(elf)) else {
+        return report;
+    };
+    let Ok(rows) = serde_json::from_str::<Vec<(String, Option<u32>, bool)>>(&text) else {
+        return report;
+    };
+    let saved: std::collections::HashMap<&str, (Option<u32>, bool)> = rows
+        .iter()
+        .map(|(name, depth, dynamic)| (name.as_str(), (*depth, *dynamic)))
+        .collect();
+    let mut resolved = 0usize;
+    for f in &mut report.functions {
+        if let Some((depth, dynamic)) = saved.get(f.name.as_str()) {
+            if f.stack.is_none() {
+                f.stack = *depth;
+                resolved += usize::from(depth.is_some());
+            }
+            f.stack_dynamic |= dynamic;
+        }
+    }
+    if resolved > 0 {
+        report.stack_section_missing = false;
+    }
+    report
+}
+
 /// Gate verdict against thresholds: `Some(true)` when the diff exceeds a
 /// threshold (blocking), `Some(false)` when benign, `None` when unchanged or
 /// when no baseline was available.
@@ -572,18 +649,11 @@ impl Tool for ElfAnalyze {
                 elf.display()
             )));
         }
-        let mut current = analyze(&elf)?;
+        let current = analyze(&elf)?;
         // Per-function stack depth comes from `-fstack-usage` `.su` files in
         // the real world (GCC/Clang do not emit an ELF `.stack_usage`
         // section); scan the ELF tree and attach the records.
-        let su_files = discover_su_files(elf.parent().unwrap_or_else(|| Path::new(".")));
-        if !su_files.is_empty() {
-            let matched = parse_su_files(&su_files, &mut current);
-            current.su_records = matched;
-            if matched > 0 {
-                current.stack_section_missing = false;
-            }
-        }
+        let current = with_su_files(current, &elf);
 
         // Explicit baseline argument wins; otherwise use the cached baseline.
         // Threshold args are used by the harness's binary-analysis gate;
@@ -598,7 +668,7 @@ impl Tool for ElfAnalyze {
         if let Some(baseline) = baseline_arg {
             let old_path =
                 resolve_within(&ctx.cwd, baseline, &ctx.allowed_roots).map_err(ToolError::new)?;
-            let old = analyze(&old_path)?;
+            let old = apply_stack_sidecar(with_su_files(analyze(&old_path)?, &old_path), &old_path);
             let diff = diff_reports(&old, &current);
             let mut out = gate_marker(
                 Some(&diff),
@@ -619,7 +689,7 @@ impl Tool for ElfAnalyze {
         let mut baseline_text = String::new();
         let cached_diff = if let Some(cache) = baseline_path(ctx, &elf)? {
             if cache.exists() {
-                let old = analyze(&cache)?;
+                let old = apply_stack_sidecar(with_su_files(analyze(&cache)?, &cache), &cache);
                 baseline_text.push_str(&format_diff(&cache, &old, &current));
                 baseline_text.push('\n');
                 Some(diff_reports(&old, &current))
@@ -647,6 +717,8 @@ impl Tool for ElfAnalyze {
                     "\n(no baseline drawn: cannot cache {}: {e})",
                     cache.display()
                 ));
+            } else {
+                save_stack_sidecar(&cache, &current);
             }
         }
         baseline_text.push_str(&format_analyze(&elf, &current));
@@ -662,6 +734,78 @@ mod tests {
     use firment_core::{AutoApprove, EditJournal};
     use std::sync::{Arc, Mutex};
     use tempfile::tempdir;
+
+    fn fn_info(name: &str, stack: Option<u32>) -> FunctionInfo {
+        FunctionInfo {
+            name: name.to_string(),
+            size: 16,
+            address: 0x1000,
+            stack,
+            stack_dynamic: false,
+        }
+    }
+
+    #[test]
+    fn a_baseline_sidecar_carries_the_stack_depth_the_copy_lacks() {
+        // The baseline is a *copy* of the ELF inside the session directory; the `-fstack-usage`
+        // files that produced the depths stay next to the build tree. Without the sidecar every
+        // function on the baseline read back as `stack: None`, `diff_reports` skipped it, and the
+        // stack threshold had nothing to compare — so "rebuild and analyse again" could never show
+        // a stack regression, which is the one thing the tool's description promises for stack.
+        let dir = tempdir().unwrap();
+        let cache = dir.path().join("base.elf");
+
+        let mut resolved = ElfReport::default();
+        resolved.functions.push(fn_info("main", Some(300)));
+        save_stack_sidecar(&cache, &resolved);
+
+        let mut baseline = ElfReport::default();
+        baseline.functions.push(fn_info("main", None));
+        let old = apply_stack_sidecar(baseline, &cache);
+        assert_eq!(
+            old.functions[0].stack,
+            Some(300),
+            "the sidecar did not restore the baseline's depth"
+        );
+        assert!(!old.stack_section_missing);
+
+        let mut current = ElfReport::default();
+        current.functions.push(fn_info("main", Some(900)));
+        let diff = diff_reports(&old, &current);
+        assert!(
+            diff.stack_deltas
+                .iter()
+                .any(|(name, was, now)| name == "main" && *was == 300 && *now == 900),
+            "the grown function is missing from the diff: {:?}",
+            diff.stack_deltas
+        );
+        assert_eq!(
+            gate_blocks(Some(&diff), 400, 0, 0),
+            Some(true),
+            "a 600-byte stack growth must block a 400-byte threshold"
+        );
+    }
+
+    #[test]
+    fn a_baseline_without_a_sidecar_still_reports_no_stack_change_rather_than_a_fake_one() {
+        // Absent data must stay absent: a baseline cached before the sidecar existed, or an
+        // explicit `baseline=` file with no `.su` beside it, must not read as "stack unchanged".
+        let dir = tempdir().unwrap();
+        let cache = dir.path().join("old.elf");
+        let mut baseline = ElfReport::default();
+        baseline.functions.push(fn_info("main", None));
+        let old = apply_stack_sidecar(baseline, &cache);
+        assert_eq!(old.functions[0].stack, None);
+
+        let mut current = ElfReport::default();
+        current.functions.push(fn_info("main", Some(900)));
+        let diff = diff_reports(&old, &current);
+        assert!(
+            diff.stack_deltas.is_empty(),
+            "no baseline depth means no claim about growth: {:?}",
+            diff.stack_deltas
+        );
+    }
 
     fn ctx(dir: &Path, session: bool) -> ToolContext {
         ToolContext {

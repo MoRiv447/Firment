@@ -499,6 +499,16 @@ pub fn sigrok_err_hint(raw: &str) -> String {
              what this device and decoder accept.\n{raw}"
         );
     }
+    if lower.contains("no suitable device")
+        || lower.contains("no device found")
+        || lower.contains("no controllers found")
+    {
+        return format!(
+            "[NotFound] no logic analyzer is attached, or sigrok-cli cannot open it: connect the \
+             device, install its driver, and close PulseView if it holds the USB session. `la` \
+             action=info lists what sigrok-cli sees.\n{raw}"
+        );
+    }
     format!("[Io] {raw}")
 }
 
