@@ -2255,6 +2255,43 @@ mod tests {
     }
 
     #[test]
+    fn undo_before_refuses_arguments_that_cannot_name_a_call() {
+        // Three ways to type this wrong, none of which should reach the journal.
+        let said = |cmd: &str| {
+            let mut app = test_app();
+            app.run_command(cmd);
+            match app.items.last() {
+                Some(Item::System(t)) => t.clone(),
+                // `Item` has no Debug, so the failure says what happened in words.
+                _ => panic!("{cmd} left no system line at all"),
+            }
+        };
+
+        // A flag with nothing after it used to fall into `/undo <n>` and be answered as a count.
+        let bare = said("undo --before");
+        assert!(
+            bare.contains("needs a tool-call number"),
+            "a missing value must say what is missing: {bare}"
+        );
+
+        // `#0` names no call — cards start at 1 — and every recorded turn reaches 0, so
+        // forwarding it would have meant rewinding the whole session.
+        let zero = said("undo --before 0");
+        assert!(
+            zero.contains("numbered from #1"),
+            "0 must be refused, not obeyed: {zero}"
+        );
+
+        // And a repeated flag is a typo, not a number: `trim_start_matches` would have stripped
+        // both and quietly sent 12.
+        let doubled = said("undo --before --before 12");
+        assert!(
+            doubled.contains("is not a tool-call number"),
+            "the second --before must not be swallowed: {doubled}"
+        );
+    }
+
+    #[test]
     fn review_without_a_path_says_how_to_use_it() {
         // `/review` with no argument must not silently do nothing, and it must not fall
         // through to some other command's branch.

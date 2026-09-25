@@ -177,9 +177,10 @@ pub fn default_system_prompt(cwd: &Path) -> String {
          - Batch independent tool calls in parallel to save round trips; dependent calls \
          (editing then reading the same file) are ordered automatically.\n\
          - Tool errors carry type tags such as [NotFound], [CompileError], [Timeout], \
-         [Permission], [ConcurrentChange], [InvalidInput] and [Io]. Adjust your strategy based \
-         on the tag: fix the anchor for [InvalidInput], re-run after fixing code for \
-         [CompileError], and never retry a [Permission] denial.\n\
+         [Cancelled], [Permission], [ConcurrentChange], [InvalidInput] and [Io]. Adjust your \
+         strategy based on the tag: fix the anchor for [InvalidInput], re-run after fixing code \
+         for [CompileError], and never retry a [Permission] denial. [Cancelled] means the user \
+         interrupted the turn — do not retry the call as if it had timed out.\n\
          - When a tool fails, read the error and fix the root cause; do not blindly retry the \
          identical call. In particular, do not resubmit the same command with different shell \
          syntax (cmd /c vs powershell -Command vs quoting) — a syntax error is a shell \

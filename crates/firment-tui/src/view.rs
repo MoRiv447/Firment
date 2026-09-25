@@ -278,8 +278,8 @@ impl App {
             }
             Item::Tool {
                 name,
-                seq: _,
-                owner: _,
+                seq,
+                owner,
                 running,
                 ok,
                 summary,
@@ -290,6 +290,17 @@ impl App {
                 ended_at,
                 review,
             } => {
+                // The card's number is what `/undo --before <N>` asks the user for, so it has to
+                // be on the card it names. A delegated call is numbered from its own session, so
+                // its card says so: the same bare number can mean two cards in one turn. A
+                // restored card was never numbered live and prints nothing.
+                let card_id = if *seq == u64::MAX {
+                    String::new()
+                } else if owner.is_some() {
+                    format!(" #{seq} (sub)")
+                } else {
+                    format!(" #{seq}")
+                };
                 // Finished cards dim into the background: the eye should go
                 // to what is RUNNING, not to a wall of bright history.
                 let dim = !running;
@@ -360,7 +371,7 @@ impl App {
                     .map(|phase| format!("  · {phase}"))
                     .unwrap_or_default();
                 let line = format!(
-                    "{symbol} {name}{elapsed} {marker} {}{}{badge}{phase}",
+                    "{symbol} {name}{card_id}{elapsed} {marker} {}{}{badge}{phase}",
                     truncate_chars(summary, 120),
                     counts.unwrap_or_default()
                 );

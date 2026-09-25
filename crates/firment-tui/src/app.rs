@@ -2094,12 +2094,31 @@ impl App {
             "session" => {
                 self.open_session_picker();
             }
-            "undo" if arg.trim().starts_with("--before ") => {
-                // `/undo --before <seq>`: the seq is printed on every card (`#12`), so a finding's
-                // own step is something the user can name — which is the whole point of the review
-                // linkage ("rewind to before the step where this was found").
-                let raw = arg.trim().trim_start_matches("--before").trim();
+            "undo" if arg.trim().starts_with("--before") => {
+                // `/undo --before <seq>`: the number is printed on every card (`#12`, or
+                // `#12 (sub)` for a delegated call), so a finding's own step is something the
+                // user can name — which is the whole point of the review linkage ("rewind to
+                // before the step where this was found").
+                //
+                // Stripped once, not repeatedly: `trim_start_matches` would also eat
+                // `--before --before 12` and quietly call it 12.
+                let raw = arg.trim().strip_prefix("--before").unwrap_or("").trim();
+                if raw.is_empty() {
+                    self.items.push(Item::System(
+                        "`/undo --before` needs a tool-call number — the `#12` on a card, or \
+                         `/undo <n>` to go back n turns"
+                            .to_string(),
+                    ));
+                    return;
+                }
                 match raw.parse::<u64>() {
+                    // Numbers start at 1, so 0 names a call that cannot exist — and every
+                    // recorded turn reaches 0, which would have meant "rewind the whole session".
+                    Ok(0) => self.items.push(Item::System(
+                        "`/undo --before 0` is not a tool call: cards are numbered from #1. Use \
+         `/undo <n>` with a turn count to go back through the session."
+                            .to_string(),
+                    )),
                     Ok(seq) => {
                         self.send_cmd(AgentCmd::UndoBefore { seq });
                         self.items.push(Item::System(format!(
@@ -2107,7 +2126,7 @@ impl App {
                         )));
                     }
                     Err(_) => self.items.push(Item::System(format!(
-                        "`/undo --before {raw}` needs a tool-call number — the `#12` on a card"
+                        "`/undo --before {raw}` is not a tool-call number — the `#12` on a card"
                     ))),
                 }
             }

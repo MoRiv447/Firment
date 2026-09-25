@@ -178,19 +178,31 @@ impl Tool for Build {
         if let Some(progress) = ctx.progress.as_ref() {
             progress.phase("compiling");
         }
-        let (text, code) =
+        let (text, code, end) =
             super::util::run_command(&command, &work_dir, timeout_ms, None, Some(&ctx.cancel))
                 .await
                 .map_err(ToolError::new)?;
-        match code {
-            Some(0) => Ok(ToolOutput {
+        match (code, end) {
+            (Some(0), _) => Ok(ToolOutput {
                 text: format!("{note}build passed (exit 0)\n{text}\n[evidence: build]"),
             }),
-            Some(code) => Err(ToolError::new(format!(
+            // `code: None` was three facts wearing one tag, and the model is taught that
+            // `[Timeout]` means the wait was too short — so a build stopped with Esc came back
+            // as "retry with a bigger timeout".
+            (_, super::util::End::Cancelled) => Err(ToolError::new(format!(
+                "[Cancelled] build was interrupted by turn cancellation\n{note}{text}"
+            ))),
+            (_, super::util::End::TimedOut) => Err(ToolError::new(format!(
+                "[Timeout] build timed out\n{note}{text}"
+            ))),
+            (_, super::util::End::Killed) => Err(ToolError::new(format!(
+                "[Io] build's process was killed by a signal (not by us)\n{note}{text}"
+            ))),
+            (Some(code), _) => Err(ToolError::new(format!(
                 "[CompileError] build failed (exit {code})\n{note}{text}"
             ))),
-            None => Err(ToolError::new(format!(
-                "[Timeout] build timed out\n{note}{text}"
+            (None, _) => Err(ToolError::new(format!(
+                "[Io] build: no exit code\n{note}{text}"
             ))),
         }
     }

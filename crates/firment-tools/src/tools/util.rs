@@ -387,13 +387,28 @@ pub(crate) fn shell_command(command: &str, cwd: &Path, env: Option<EnvPolicy<'_>
     cmd
 }
 
+/// How the child stopped. `code: None` covers three different facts — our timeout, the user's
+/// interrupt, a signal from elsewhere — and a tool that reports them under one tag sends the model
+/// off to fix the wrong thing (an Esc read as `[Timeout]` makes it retry with a longer timeout).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum End {
+    /// The process ran to completion; `code` is its exit code.
+    Exited,
+    /// The tool's own `timeout_ms` elapsed and the tree was killed.
+    TimedOut,
+    /// Turn cancellation interrupted it.
+    Cancelled,
+    /// It died on a signal (`code` is `None`, and it was neither of the above).
+    Killed,
+}
+
 pub(crate) async fn run_command(
     command: &str,
     cwd: &Path,
     timeout_ms: u64,
     env: Option<EnvPolicy<'_>>,
     cancel: Option<&Cancellable>,
-) -> Result<(String, Option<i32>), String> {
+) -> Result<(String, Option<i32>, End), String> {
     let mut cmd = shell_command(command, cwd, env);
 
     let mut child = cmd
@@ -426,6 +441,7 @@ pub(crate) async fn run_command(
     // what an already-killed process had printed (e.g. a timed-out build's
     // compiler errors) was half of the original pipe bug.
     let mut interrupted: Option<String> = None;
+    let mut end = End::Exited;
     let mut exit: Option<std::io::Result<std::process::ExitStatus>> = None;
     if timeout_ms == 0 {
         match cancel_fut {
@@ -441,6 +457,7 @@ pub(crate) async fn run_command(
                         )
                         .await;
                         interrupted = Some(text);
+                        end = End::Cancelled;
                     }
                 }
             }
@@ -461,6 +478,7 @@ pub(crate) async fn run_command(
                 )
                 .await;
                 interrupted = Some(text);
+                end = End::TimedOut;
             }
             _ = async {
                 if let Some(c) = cancel.as_ref() {
@@ -477,6 +495,7 @@ pub(crate) async fn run_command(
                 )
                 .await;
                 interrupted = Some(text);
+                end = End::Cancelled;
             }
         }
     };
@@ -486,7 +505,11 @@ pub(crate) async fn run_command(
     // truncation instead of hanging.
     let (out_buf, err_buf, drain_timed_out) = drain.finish(Duration::from_secs(15)).await;
     let drain_note = if drain_timed_out {
-        "\n[output truncated: the process finished but output was still streaming after 15s]"
+        // Not "the process finished": on the kill paths below it did not. What is known is that
+        // the pipe was still open a quarter-minute later, which is a grandchild holding the
+        // write-end — the caller still has everything captured up to here.
+        "\n[output truncated: the output pipe was still open 15s later — a child process may \
+         still be running; what is shown is everything captured up to the deadline]"
     } else {
         ""
     };
@@ -499,6 +522,7 @@ pub(crate) async fn run_command(
                 "{reason}\n--- partial stdout ---\n{stdout}\n--- partial stderr ---\n{stderr}{drain_note}"
             ),
             None,
+            end,
         ));
     }
 
@@ -516,6 +540,12 @@ pub(crate) async fn run_command(
             "command: {command}\nexit code: {status_text}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}{drain_note}"
         ),
         code,
+        // No code and no interrupt of ours means the OS finished it: a signal, not our doing.
+        if code.is_some() {
+            End::Exited
+        } else {
+            End::Killed
+        },
     ))
 }
 
@@ -950,9 +980,10 @@ mod tests {
         } else {
             "echo [$PLUGIN_ONLY]"
         };
-        let (text, code) = run_command(probe, dir.path(), 5_000, Some(EnvPolicy::Only(&env)), None)
-            .await
-            .expect("run_command returns Ok");
+        let (text, code, _end) =
+            run_command(probe, dir.path(), 5_000, Some(EnvPolicy::Only(&env)), None)
+                .await
+                .expect("run_command returns Ok");
         assert_eq!(code, Some(0), "got: {text}");
         assert!(
             text.contains("[yes]"),
@@ -968,7 +999,7 @@ mod tests {
             // The assertion is about the parent's *value*, not about how the shell renders an
             // undefined variable: cmd.exe prints `%HOME%` literally when it is unset, so
             // comparing against "[]" would have been testing cmd's habits. (It did, and failed.)
-            let (text, _) =
+            let (text, _, _) =
                 run_command(&probe, dir.path(), 5_000, Some(EnvPolicy::Only(&env)), None)
                     .await
                     .unwrap();
@@ -979,7 +1010,7 @@ mod tests {
 
             // And under `Inherit` the same value does arrive — the two policies are not one
             // behaviour with a nicer name.
-            let (text, _) = run_command(&probe, dir.path(), 5_000, None, None)
+            let (text, _, _) = run_command(&probe, dir.path(), 5_000, None, None)
                 .await
                 .unwrap();
             assert!(
@@ -1000,10 +1031,13 @@ mod tests {
             "echo build-ok; sleep 30"
         };
         let started = std::time::Instant::now();
-        let (text, code) = run_command(slow, dir.path(), 400, None, None)
+        let (text, code, end) = run_command(slow, dir.path(), 400, None, None)
             .await
             .expect("run_command returns Ok");
         assert!(code.is_none(), "timeout must report a killed process");
+        // The reason is the half a caller turns into a tag. `code: None` alone cannot tell a
+        // timeout from an interrupt, and the two mean opposite things to the model.
+        assert_eq!(end, End::TimedOut, "got {end:?} in:\n{text}");
         assert!(text.contains("timed out"), "got: {text}");
         assert!(
             text.contains("build-ok"),
@@ -1031,10 +1065,11 @@ mod tests {
             c.cancel();
         });
         let started = std::time::Instant::now();
-        let (text, code) = run_command(slow, dir.path(), 0, None, Some(&cancel))
+        let (text, code, end) = run_command(slow, dir.path(), 0, None, Some(&cancel))
             .await
             .expect("run_command returns Ok");
         assert!(code.is_none(), "cancel must report a killed process");
+        assert_eq!(end, End::Cancelled, "got {end:?} in:\n{text}");
         assert!(text.contains("cancelled"), "got: {text}");
         assert!(
             started.elapsed() < std::time::Duration::from_secs(5),

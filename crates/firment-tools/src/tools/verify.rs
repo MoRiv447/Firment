@@ -51,20 +51,30 @@ impl Tool for Verify {
         if let Some(progress) = ctx.progress.as_ref() {
             progress.phase("verifying");
         }
-        let (text, code) =
+        let (text, code, end) =
             super::util::run_command(&command, &ctx.cwd, timeout_ms, None, Some(&ctx.cancel))
                 .await
                 .map_err(ToolError::new)?;
-        match code {
-            Some(0) => Ok(ToolOutput {
+        match (code, end) {
+            (Some(0), _) => Ok(ToolOutput {
                 text: format!("verify passed (exit 0)\n{text}\n[evidence: build]"),
             }),
-            Some(code) => Err(ToolError::new(format!(
-                "[CompileError] verify failed (exit {code})\n{text}"
+            // Three different facts used to share one "[Timeout]" tag. The model is taught that
+            // `[Timeout]` means the wait was too short, so an interrupted verify came back as
+            // "run it again with a bigger timeout".
+            (_, super::util::End::Cancelled) => Err(ToolError::new(format!(
+                "[Cancelled] verify was interrupted by turn cancellation\n{text}"
             ))),
-            None => Err(ToolError::new(format!(
+            (_, super::util::End::TimedOut) => Err(ToolError::new(format!(
                 "[Timeout] verify timed out\n{text}"
             ))),
+            (_, super::util::End::Killed) => Err(ToolError::new(format!(
+                "[Io] verify's process was killed by a signal (not by us)\n{text}"
+            ))),
+            (Some(code), _) => Err(ToolError::new(format!(
+                "[CompileError] verify failed (exit {code})\n{text}"
+            ))),
+            (None, _) => Err(ToolError::new(format!("[Io] verify: no exit code\n{text}"))),
         }
     }
 }

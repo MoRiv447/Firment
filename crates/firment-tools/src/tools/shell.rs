@@ -331,7 +331,7 @@ impl Tool for Shell {
         if let Some(progress) = ctx.progress.as_ref() {
             progress.phase("running the command");
         }
-        let (text, _code) =
+        let (text, _code, _end) =
             // `Inherit`: the shell tool runs the user's own commands, and a command that cannot see
         // the environment it would see in a terminal is a broken shell. The plugin host is the
         // one caller that must not inherit (see `EnvPolicy`).
