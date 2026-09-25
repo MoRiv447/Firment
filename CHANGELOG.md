@@ -1,6 +1,144 @@
 # Changelog
 
-## v0.8.2 (unreleased) — web client
+## v1.0.0-rc (2026-09-25) — rebuilt GUI, self-review, plugins, and measured numbers
+
+The first release candidate. 234 commits since v0.8.1, and they go in two
+directions: the surfaces grew up (the Tauri GUI was rewritten from its primitive
+layer out, and review, plugins, subagent delegation, replay and share all became
+real features), and a full defect audit of the CLI, core and GUI was carried out
+and fixed — 51 fixes, most of them the specific kind where a number or a status
+on screen said something the code had not established.
+
+Everything below is what changed since v0.8.1. The release candidate is cut
+locally: these commits have not been pushed, so CI has not run against any of
+them yet. See *Verification* and *Known gaps* at the end.
+
+### The GUI is a different program
+
+- `antd` and `@ant-design/icons` are gone — not wrapped, not themed, gone. The
+  primitive layer (`Button`, `Card`, `Chip`, `Field`, `Menu`, `Modal`, `Select`,
+  `MultiSelect`, `NumberField`, `Slider`, `Tabs`, `Tooltip`, …) is written here,
+  on CSS Modules.
+- The palette is CSS custom properties decided before first paint, with a real
+  light scheme beside the dark one, an elevation ladder, radius tiers, a tracking
+  token and a reading size separate from the chrome size. Tests enforce the layer:
+  a literal colour, a literal radius, a font stack of one's own, a dangling `var()`
+  or an antd preset name anywhere in `gui/src` fails the suite.
+- The shell is three panels and a status bar instead of five tabs: session rail,
+  chat, workbench, plus an inspector whose panes hold the agent's todo list, the
+  session's changes, the device cluster, and the nested agents.
+- A run of tool work folds into one line while it happens — the line names the
+  tool in flight and counts the seconds, so a forty-step turn costs one row.
+  Subagent activity is visible at last: which nested agent is running, what it
+  called, and which card belongs to it.
+- Every device and workbench card subscribes to its own data, so a failed burn or
+  a refused bind says why instead of resetting what you typed.
+
+### Every number on screen is measured
+
+- Tool output verbosity is a setting, not a fixed choice: an explicit flag
+  outranks `[ui] tool_verbosity`, which outranks the automatic downgrade when no
+  terminal is attached; the TUI changes it live with `/verbosity`.
+- A finished step reports what it took, and an estimate (`~4.0s`) appears only
+  when this session has watched the same tool finish at least twice — a median of
+  real runs, never a table of "typical" durations. Both surfaces use one rule.
+- **A card's duration is the tool's, not the reader's.** The permission gate now
+  reports how long a person took, separately from the decision, and both UIs take
+  it off the elapsed label *and* off the sample the next estimate learns from.
+  `None` (nobody was asked) stays distinct from `Some(0)` (asked, answered at
+  once), and a refusal keeps its reading time.
+- A turn's whole wall clock is attributed once — tools, waiting on you, model —
+  in a timeline that accounts for concurrent calls instead of summing them.
+- Long tools report phases, and the two that can be counted are: `flash` shows
+  probe-rs's real download percentage, `la` its window. The rest say what they are
+  doing and refuse to invent a percentage.
+- A cancelled call no longer reports as a timeout, in either direction, and the
+  TUI's evidence column shows how far up the ladder a session actually got.
+
+### Reviews that reach the card
+
+- A shared findings vocabulary (`severity`, `category`, `evidence`, `steps`) that
+  every review capability now speaks.
+- **Self-review of a change**, with a policy that decides when it runs and
+  `/review-last` to ask for it; the automatic trigger ships off.
+- **Hardware-behaviour review**, from a HIL run's own log — what the target
+  proved, not what the code claims.
+- **Static rules** and a **dependency review** (`firm review deps`: licences
+  always, advisories when `cargo-audit` is installed, and the age of the advisory
+  database behind a clean report).
+- The result lands on the card that earned it: a badge in the TUI, the same
+  findings list in the GUI.
+
+### Plugins, subagents, and what they may touch
+
+- Plugins declare capabilities, and the registry refuses to let one shadow a
+  built-in tool. A plugin must be vouched for before it can be called, and plan
+  mode is not a way around itself: a declared read-only session stays read-only
+  for plugins too.
+- A subprocess tool runs with an environment that is a list, not an inheritance.
+- `task` runs several research children in parallel with a bound on how many, and
+  a slot pool shared by the whole tree rather than one per level.
+- A child that writes needs a declared scope, so two writers cannot claim one
+  tree; a write-capable child is off unless the project asks for it; and a child's
+  edits belong to the turn that spawned it, so undo takes them back with it.
+
+### Sessions you can inspect, replay, and take back
+
+- `/undo` walks back more than one turn and says which number ran out;
+  `/undo --before <seq>` names a step by the number printed on its card.
+- The session event log, `firm replay` — turns, tools, reviews and errors in the
+  order they happened, with `--at` stopping at the n-th event — and `firm share`:
+  a session as a document someone can read without Firment, with recognisable
+  secrets masked.
+- `/ledger --export` writes the session's changes as a patch, and says what is
+  missing rather than pretending the diff is complete.
+- Board profiles (`firm board list|show|use`) are what `periph_init` and the pin
+  tables fall back to; `/retry-last` re-asks without retyping; ADRs reach the
+  prompt and the command line; `firm doctor` answers "can I work right now?" with
+  a fix hint per gap, and local model servers are probed only when asked.
+
+### The audit: what was wrong
+
+A full pass over the CLI, core, TUI and GUI, every finding re-read against the
+code before it was believed. The classes it turned up are worth naming, because
+each survived a green test suite:
+
+- **An identity narrower than its consumers assumed.** The tool-call counter lived
+  on the `Agent`, which the GUI recreates per turn, so cards collided, `/undo`
+  pointed at the wrong call, and nested agents overwrote each other. It moved to
+  the `Session` and is persisted; every event that addresses a card names the
+  agent that owns it, and the journal refuses a store whose numbering restarted.
+- **A guard at one door and not its sibling.** The end-of-turn verify gate called
+  the tool directly and so ran a command the permission gate would have asked
+  about; a plugin's real name was used in some paths and a placeholder in others;
+  the same reconnect policy existed for the CLI and not for HIL.
+- **`Ok` carrying a failure in its text.** A logic-analyzer measurement reported
+  success while the body said no device was attached — and the evidence ladder
+  keys on the flag, so that lit the "physical evidence" rung.
+- **A feature whose producer never fired.** Phases, progress, subagent events and
+  reviews all had working reducers and no dispatcher: half the GUI's event types
+  were never delivered. An unwired event kind is now a compile error, and the wire
+  field names are pinned by a test.
+- **Unbounded resources.** An interrupt left the compiler's process tree alive
+  (and an orphaned probe-rs kept the debug probe locked for every later flash);
+  a chatty child could grow the capture without limit; a serial cable flapping
+  could grow the line buffer; a subagent's temp dir leaked; a closed event
+  channel spun. All bounded, all with a case.
+- **Files and configuration.** Source files are written atomically; hashline
+  anchors survive a BOM; an empty replacement contributes no lines; a read that
+  had to guess an encoding says so. The command line outranks a checked-in
+  project config, a project file that cannot be parsed is named rather than
+  silently skipped, and one resolver answers where a key came from.
+
+### Serial and hardware
+
+A port that drops mid-capture reconnects and the lines survive, with the same
+budget and the same rule everywhere it applies (a stretch that delivered lines is
+a new outage) — CLI, monitor, and the HIL capture loop. `probe-rs` presence is
+checked without blocking the async workers, and a debugger read that cannot be
+made reports `UNREADABLE` rather than a plausible zero.
+
+### Web client
 
 The web client re-implements the agent loop, and the guards the Rust core has
 were missing or degraded here. Each item was reproduced against the running app.
@@ -37,6 +175,44 @@ were missing or degraded here. Each item was reproduced against the running app.
 
 Web unit tests go from 10 to 45; the compaction, cancellation, argument and
 storage paths each have a case that fails against the previous code.
+
+### Verification
+
+Measured on this tree, on the machine that builds it:
+
+| Gate | Result |
+|---|---|
+| `cargo fmt --all --check` | clean |
+| `cargo clippy --workspace --all-targets -- -D warnings` | clean |
+| `cargo test --workspace` | **895 passed**, 0 failed, 1 ignored |
+| `gui/src-tauri` fmt + clippy + check + test | clean — **7 passed** |
+| GUI `tsc --noEmit` / `vitest run` / `build` | 0 errors / **584 passed** / builds |
+| tool-spec snapshot vs `firm tools` | in sync — 31 tools, `diff` empty |
+
+The fixes are not only covered by new tests; several of those were checked by
+breaking the rule they guard and watching the test fail.
+
+### Known gaps
+
+Stated so nobody discovers them as surprises:
+
+- **CI has never run against these commits.** They are unpushed, so the advisory
+  job, the web build and the release workflow are still claims, not gates.
+- **Three numbers need real hardware** and have not been watched on any: the
+  `flash` download percentage, the `la` window estimate, and the HIL capture
+  reconnect budget. The code that produces them is tested; the source is not.
+- The Tauri GUI's serial monitor has **no reconnect** — the CLI, monitor and HIL
+  paths do, and the panel's write handle needs a designed answer first.
+- A mistyped **top-level key in `.firment.toml` is still ignored silently**; a
+  broken file is named, and `[tools.la]`'s sub-keys are named, but the top level
+  is not.
+- There is **no App-level GUI render test** (it needs a `@tauri-apps/api` mock):
+  the event-to-state reducer and the wire field names are pinned, the final paint
+  is not.
+- The TUI still represents "this card was restored from a transcript and has no
+  live number" as an internal sentinel rather than an optional value.
+- `settings` and `models` are emitted by the backend and read by nobody in the
+  GUI; they should be wired or deleted, not left as a claim about a feature.
 
 ## v0.8.1 (2026-09-07) — post-release audit hardening
 
