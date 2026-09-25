@@ -9,9 +9,11 @@ real features), and a full defect audit of the CLI, core and GUI was carried out
 and fixed — 51 fixes, most of them the specific kind where a number or a status
 on screen said something the code had not established.
 
-Everything below is what changed since v0.8.1. The release candidate is cut
-locally: these commits have not been pushed, so CI has not run against any of
-them yet. See *Verification* and *Known gaps* at the end.
+Everything below is what changed since v0.8.1. The candidate was cut, pushed and
+released as a **pre-release**, so it does not hold the "Latest" slot; CI ran the
+check jobs on Linux and Windows, both advisory audits, the GUI and web builds, and
+the release build for four CLI targets plus the Windows installer. See
+*Verification* and *Known gaps* at the end.
 
 ### The GUI is a different program
 
@@ -189,6 +191,11 @@ Measured on this tree, on the machine that builds it:
 | GUI `tsc --noEmit` / `vitest run` / `build` | 0 errors / **584 passed** / builds |
 | tool-spec snapshot vs `firm tools` | in sync — 31 tools, `diff` empty |
 
+CI then ran the same checks on `ubuntu-22.04` and `windows-latest`, both advisory
+audits, the web build and the GUI build, and every job was green — which is how the
+two Windows-only test fixtures and the six advisories above were found in the first
+place.
+
 The fixes are not only covered by new tests; several of those were checked by
 breaking the rule they guard and watching the test fail.
 
@@ -196,8 +203,10 @@ breaking the rule they guard and watching the test fail.
 
 Stated so nobody discovers them as surprises:
 
-- **CI has never run against these commits.** They are unpushed, so the advisory
-  job, the web build and the release workflow are still claims, not gates.
+- **CI covers the code, not the artifacts.** The installer has not been run on a machine
+  here, and `firm install` / `firm update` — which write to `%USERPROFILE%\.firment\bin`
+  and the user PATH — are exercised only by whoever runs them. A green build is not the
+  same claim as "it ran".
 - **Three numbers need real hardware** and have not been watched on any: the
   `flash` download percentage, the `la` window estimate, and the HIL capture
   reconnect budget. The code that produces them is tested; the source is not.
