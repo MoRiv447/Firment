@@ -16,7 +16,6 @@ import {
 import type {
   AskRequest,
   ContextUsageDto,
-  FrontendEvent,
   MonitorLine,
   NotificationEntry,
   PermissionRequest,
@@ -24,6 +23,7 @@ import type {
   SessionSummaryDto,
   SettingsDto,
   TodoDto,
+  TurnFlowEvent,
 } from './types';
 import { AskDialog, PermissionDialog } from './components/Dialogs';
 import { ChatView } from './views/ChatView';
@@ -317,7 +317,7 @@ export default function App() {
     // flush as one batched dispatch, so a fast stream costs ~20 renders/s
     // instead of one full re-render per delta. Non-text events flush the
     // buffer first to preserve ordering.
-    const deltaBuffer: FrontendEvent[] = [];
+    const deltaBuffer: TurnFlowEvent[] = [];
     let deltaTimer: number | null = null;
     const flushDeltas = () => {
       if (deltaTimer !== null) {
@@ -465,16 +465,25 @@ export default function App() {
               return [...prev.slice(-8), { id, sid, text: e.message, ts: Date.now() }];
             });
             break;
-          // device_frame / guard_status are consumed by the WorkbenchView's
-          // own subscriber (the card is self-contained and stays mounted);
-          // App-level aggregation was dead weight.
+          // The rest of the shell kinds. `guard_status` is read by the workbench
+          // card's own subscriber (`views/workbench/useDeviceTraffic.ts`), same
+          // as `device_frame` above, so aggregating it here would only duplicate
+          // state that is already rendered.
           //
-          // Still handed to the reducer rather than dropped. It returns its input
-          // untouched for anything it does not model, and `turnsReducer` keeps the
-          // same object in that case, so a no-op here costs nothing. Dropping by
-          // default is how `progress`, `review` and `subagent_*` shipped with a
-          // working reducer and no caller: a branch only exercised by a unit test
-          // that calls the reducer directly cannot fail anything in this file.
+          // `settings` and `models` have no reader anywhere: SettingsView loads
+          // both through `api.settings()` / `api.fetchModels()`. They are ignored
+          // out loud rather than forwarded to a reducer that would drop them,
+          // because an emitted event nobody consumes is a claim about a feature.
+          case 'guard_status':
+          case 'settings':
+          case 'models':
+            break;
+          // Everything left is a turn kind — the ones `TURN_FLOW_KINDS` names —
+          // and this is the only door to the reducer. Classifying a new kind is
+          // now something the build enforces: leave it out of the list and it
+          // arrives here with no case to run, instead of being swallowed the way
+          // `progress`, `review` and `subagent_*` were when they shipped with a
+          // working reducer and no caller.
           default:
             dispatchTurn(e);
             break;

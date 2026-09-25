@@ -278,6 +278,39 @@ export type FrontendEvent =
   | { type: 'session_loaded'; session: SessionDto }
   | { type: 'error'; session_id?: string | null; message: string };
 
+/**
+ * Which of those kinds describe a running turn, as opposed to the shell around
+ * it (a settings refresh, a device frame, a session list). This list is the
+ * source of truth — `TurnFlowEvent` is derived from it — so a kind added to
+ * `FrontendEvent` lands on the shell side unless it is named here.
+ *
+ * Both directions then fail the build rather than the eye: an unlisted turn kind
+ * reaches `App`'s switch, whose residual arm has nothing to hand the reducer,
+ * and a turn kind that is listed but never cased hits `turnReducer`'s `never`
+ * check. Before this split both roads ended in `default: return state`, which is
+ * how `progress`, `review` and `subagent_*` shipped with a working reducer and
+ * no caller.
+ */
+export const TURN_FLOW_KINDS = [
+  'turn_start',
+  'text_delta',
+  'thinking',
+  'tool_start',
+  'tool_end',
+  'progress',
+  'review',
+  'subagent_start',
+  'subagent_end',
+  'turn_end',
+  'turn_synced',
+  'error',
+] as const;
+
+export type TurnFlowKind = (typeof TURN_FLOW_KINDS)[number];
+
+/** The subset of `FrontendEvent` the turn reducer is responsible for. */
+export type TurnFlowEvent = Extract<FrontendEvent, { type: TurnFlowKind }>;
+
 export interface PermissionRequest {
   id: number;
   tool: string;

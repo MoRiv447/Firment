@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { initialTurnState, turnReducer } from '../turnReducer';
 import type { TurnState } from '../turnReducer';
-import type { FrontendEvent } from '../../types';
+import type { TurnFlowEvent } from '../../types';
 
 /**
  * Subagent attribution.
@@ -16,29 +16,29 @@ import type { FrontendEvent } from '../../types';
  * running side by side, an author this UI never heard of, and a run that never reports back.
  */
 
-function apply(events: FrontendEvent[], from: TurnState = initialTurnState()): TurnState {
+function apply(events: TurnFlowEvent[], from: TurnState = initialTurnState()): TurnState {
   return events.reduce(turnReducer, from);
 }
 
-const start = (id: string, depth = 1): FrontendEvent => ({
+const start = (id: string, depth = 1): TurnFlowEvent => ({
   type: 'subagent_start',
   id,
   label: '研究 STM32F4 EXTI',
   depth,
 });
-const end = (id: string, depth = 1): FrontendEvent => ({
+const end = (id: string, depth = 1): TurnFlowEvent => ({
   type: 'subagent_end',
   id,
   depth,
 });
-const toolStart = (seq: number, name: string, owner?: string): FrontendEvent => ({
+const toolStart = (seq: number, name: string, owner?: string): TurnFlowEvent => ({
   type: 'tool_start',
   name,
   args: {},
   seq,
   owner: owner ?? null,
 });
-const toolEnd = (seq: number, name: string, ok = true, owner?: string): FrontendEvent => ({
+const toolEnd = (seq: number, name: string, ok = true, owner?: string): TurnFlowEvent => ({
   type: 'tool_end',
   name,
   ok,
@@ -46,7 +46,7 @@ const toolEnd = (seq: number, name: string, ok = true, owner?: string): Frontend
   seq,
   owner: owner ?? null,
 });
-const turnStart: FrontendEvent = { type: 'turn_start' };
+const turnStart: TurnFlowEvent = { type: 'turn_start' };
 
 describe('subagent attribution', () => {
   it('routes a nested tool call to the subagent, not the turn', () => {

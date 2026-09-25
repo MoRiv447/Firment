@@ -1,4 +1,4 @@
-import type { FrontendEvent, RunningTurn, ToolCardState } from '../types';
+import type { RunningTurn, ToolCardState, TurnFlowEvent } from '../types';
 
 /**
  * Event -> UI state reducer for a running agent turn.
@@ -99,7 +99,7 @@ function closeAll(state: TurnState): Pick<TurnState, 'subagents' | 'stack'> {
   };
 }
 
-export function turnReducer(state: TurnState, e: FrontendEvent): TurnState {
+export function turnReducer(state: TurnState, e: TurnFlowEvent): TurnState {
   switch (e.type) {
     case 'turn_start':
       // A new turn starts a new run: the previous turn's subagents are no longer
@@ -329,8 +329,17 @@ export function turnReducer(state: TurnState, e: FrontendEvent): TurnState {
         ...closeAll(state),
       };
 
-    default:
+    default: {
+      // Reaching this arm means a kind is in `TURN_FLOW_KINDS` with no case
+      // above: `e` is not `never`, so the annotation below is the compile
+      // error. At runtime the event came from a Rust process whose idea of the
+      // union may be ahead of ours, so it is reported and dropped rather than
+      // turned into state — a silent drop here is what an unwired event looks
+      // like, and that is the bug this arm exists to make impossible.
+      const unwired: never = e;
+      console.error('turnReducer: unwired event kind', unwired);
       return state;
+    }
   }
 }
 
@@ -343,8 +352,8 @@ export function turnReducer(state: TurnState, e: FrontendEvent): TurnState {
  */
 export type TurnMap = Record<string, TurnState>;
 
-export function turnsReducer(state: TurnMap, e: FrontendEvent): TurnMap {
-  const sid = (e as { session_id?: string | null }).session_id || undefined;
+export function turnsReducer(state: TurnMap, e: TurnFlowEvent): TurnMap {
+  const sid = e.session_id || undefined;
   if (!sid) return state;
   const current = state[sid] ?? initialTurnState();
   const next = turnReducer(current, e);

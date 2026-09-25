@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { initialTurnState, turnReducer, turnsReducer, type TurnState } from '../turnReducer';
-import type { FrontendEvent, ReviewFinding } from '../../types';
+import type { ReviewFinding, TurnFlowEvent } from '../../types';
 
-function feed(events: FrontendEvent[], start: TurnState = initialTurnState()): TurnState {
+function feed(events: TurnFlowEvent[], start: TurnState = initialTurnState()): TurnState {
   return events.reduce(turnReducer, start);
 }
 
@@ -239,10 +239,10 @@ describe('turnReducer (IDE event->UI contract)', () => {
 });
 
 describe('turnsReducer (multi-session routing)', () => {
-  const start: FrontendEvent = { type: 'turn_start', session_id: 'a' };
-  const deltaA: FrontendEvent = { type: 'text_delta', session_id: 'a', text: 'hi' };
-  const startB: FrontendEvent = { type: 'turn_start', session_id: 'b' };
-  const endA: FrontendEvent = { type: 'turn_end', session_id: 'a', text: '' };
+  const start: TurnFlowEvent = { type: 'turn_start', session_id: 'a' };
+  const deltaA: TurnFlowEvent = { type: 'text_delta', session_id: 'a', text: 'hi' };
+  const startB: TurnFlowEvent = { type: 'turn_start', session_id: 'b' };
+  const endA: TurnFlowEvent = { type: 'turn_end', session_id: 'a', text: '' };
 
   it('routes events to per-session slots independently', () => {
     let state = turnsReducer({}, start);
@@ -274,7 +274,7 @@ describe('turnsReducer (multi-session routing)', () => {
   });
 
   it('ignores events without a session id (legacy/global)', () => {
-    const orphan: FrontendEvent = { type: 'turn_start' };
+    const orphan: TurnFlowEvent = { type: 'turn_start' };
     expect(turnsReducer({}, orphan)).toEqual({});
   });
 });
