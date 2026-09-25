@@ -83,6 +83,33 @@ describe('turnReducer (IDE event->UI contract)', () => {
     expect(orphan.turn?.tools[9]).toBeUndefined();
   });
 
+  it('resolves a card that never got its result when the turn ends', () => {
+    // Every agent path emits `tool_end`, so a card still running at `turn_end` means the event
+    // was lost. Leaving it says "still working" forever; the summary names the absence instead
+    // of inventing an outcome.
+    const state = feed([
+      { type: 'turn_start' },
+      { type: 'tool_start', name: 'build', args: {}, seq: 7 },
+      { type: 'subagent_start', id: 's1', label: 'research', depth: 1 },
+      { type: 'tool_start', name: 'grep', args: {}, seq: 1, owner: 's1' },
+      { type: 'turn_end', text: 'done' },
+    ]);
+    expect(state.turn?.tools[7].status).toBe('failed');
+    expect(state.turn?.tools[7].summary).toContain('no result reported');
+    // The nested list survives as the record of what ran — with its own dangling card closed.
+    expect(state.subagents[0].steps[0].status).toBe('failed');
+
+    // A card that did report is left exactly as it was.
+    const reported = feed([
+      { type: 'turn_start' },
+      { type: 'tool_start', name: 'build', args: {}, seq: 8 },
+      { type: 'tool_end', name: 'build', ok: true, summary: 'exit 0', seq: 8 },
+      { type: 'turn_end', text: 'done' },
+    ]);
+    expect(reported.turn?.tools[8].status).toBe('ok');
+    expect(reported.turn?.tools[8].summary).toBe('exit 0');
+  });
+
   it('attaches a self-review to the card it names, by seq', () => {
     // Plan §4-A: the review runs a beat after the tool, so a card cannot be final at
     // tool_end. The join is `seq` — the same key the card is filed under — which is what

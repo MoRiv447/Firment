@@ -109,13 +109,21 @@ pub async fn start_turn(
         drop(agent);
         drop(_reservation); // clears running on success AND on panic unwind
         if let Err(e) = result {
-            let _ = shared.app.emit(
-                "agent-event",
-                FrontendEvent::Error {
-                    session_id: Some(session_id),
-                    message: e.to_string(),
-                },
-            );
+            // A provider failure has already been emitted by the agent through its sink, with the
+            // same message: emitting here too showed two identical banners for one failure, and
+            // the "rolled back this turn's edits" note appeared under only the first — so the pair
+            // read as two events rather than one, described twice. Everything else (max
+            // iterations, a transcript that would not save) reaches the user from here alone.
+            let surfaced_by_agent = matches!(e, firment_core::AgentError::Provider(_));
+            if !surfaced_by_agent {
+                let _ = shared.app.emit(
+                    "agent-event",
+                    FrontendEvent::Error {
+                        session_id: Some(session_id),
+                        message: e.to_string(),
+                    },
+                );
+            }
             // No TurnEnd on error: the frontend's error handler already
             // resets `running` and keeps the error text visible in the turn
             // until the next turn_start. Success paths emit TurnEnd inside

@@ -115,6 +115,19 @@ export function ChatView({
     };
   }, [session?.messages.length, turn?.text, turn?.tools]);
 
+  // A different chat is a different scroll position. `stickRef` and `detached`
+  // describe how the READER sits in this conversation, so carrying them across a
+  // switch opened the new chat at the old offset — with following off and
+  // "Jump to bottom" showing, which reads as the app ignoring a reply it is not
+  // ignoring. Keyed on the id, not the message count: two chats can have the same
+  // number of messages, and nothing else here changes.
+  useEffect(() => {
+    stickRef.current = true;
+    setDetached(false);
+    followIfStuck();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.id]);
+
   const jumpToBottom = () => {
     stickRef.current = true;
     setDetached(false);

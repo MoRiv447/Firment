@@ -68,11 +68,35 @@ function routeToSubagent(
   return state.subagents.map((s) => (s.id === owner ? { ...s, steps: update(s.steps) } : s));
 }
 
+/** Resolve a card that is still running when its turn ends.
+ *
+ * Every path through the agent emits a `tool_end` — normal, cancelled and wave-timeout — so
+ * reaching `turn_end` with a card still running means the event was lost, not that the tool is
+ * still working. Saying so is better than a spinner that never stops, and worse than lying about
+ * what it did, so the summary names the absence rather than a result.
+ */
+function closeRunning(t: ToolCardState): ToolCardState {
+  return t.status === 'running'
+    ? {
+        ...t,
+        status: 'failed',
+        progress: undefined,
+        endedAt: Date.now(),
+        summary: 'no result reported before the turn ended',
+      }
+    : t;
+}
+
 /** Close every open frame. Used on the paths where the turn ends without the
  *  nested agents having reported back: a frame left open would attribute the
  *  NEXT turn's first tool calls to an agent that had already returned. */
 function closeAll(state: TurnState): Pick<TurnState, 'subagents' | 'stack'> {
-  return { subagents: state.subagents.map((s) => (s.done ? s : { ...s, done: true })), stack: [] };
+  return {
+    subagents: state.subagents.map((s) =>
+      s.done ? s : { ...s, done: true, steps: s.steps.map(closeRunning) },
+    ),
+    stack: [],
+  };
 }
 
 export function turnReducer(state: TurnState, e: FrontendEvent): TurnState {
@@ -256,7 +280,15 @@ export function turnReducer(state: TurnState, e: FrontendEvent): TurnState {
       // parent that spawned it.
       return {
         running: false,
-        turn: state.turn ? { ...state.turn, finished: true } : null,
+        turn: state.turn
+          ? {
+              ...state.turn,
+              finished: true,
+              tools: Object.fromEntries(
+                Object.entries(state.turn.tools).map(([seq, t]) => [seq, closeRunning(t)]),
+              ),
+            }
+          : null,
         ...closeAll(state),
       };
 
