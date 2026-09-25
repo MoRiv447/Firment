@@ -1,9 +1,34 @@
-use super::util::{probe_rs_err, resolve_within, run_probe_rs, shell_quote, token_arg};
+use super::util::{
+    LineObserver, probe_rs_err, resolve_within, run_probe_rs, run_probe_rs_watching, shell_quote,
+    token_arg,
+};
 use async_trait::async_trait;
 use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+/// probe-rs's own download percentage, when this line carries one.
+///
+/// This is the only honest progress a flash can report: the tool cannot count bytes it has not
+/// put into a target it is not talking to. Reading probe-rs's number means the card shows a
+/// transfer that actually happened rather than an extrapolation from elapsed time, and when the
+/// line has no percentage the card says the phase and nothing about how far along it is.
+fn parse_probe_percent(line: &str) -> Option<u64> {
+    let at = line.rfind('%')?;
+    let digits: Vec<char> = line[..at]
+        .chars()
+        .rev()
+        .skip_while(|c| c.is_whitespace())
+        .take_while(char::is_ascii_digit)
+        .collect();
+    if digits.is_empty() {
+        return None;
+    }
+    let pct: u64 = digits.into_iter().rev().collect::<String>().parse().ok()?;
+    (pct <= 100).then_some(pct)
+}
 
 /// Append one flash outcome to `<cwd>/.firment/work/flash-history.jsonl`
 /// (the project's burn history). Best-effort: a logging failure never
@@ -175,11 +200,44 @@ impl Tool for Flash {
 
         // The phase the plan asks for (item 7): the download is the long part, and a card that
         // says "flashing" for ninety seconds tells the user nothing they cannot guess.
+        //
+        // `total` is the firmware's size — the thing being transferred — and `current` is read
+        // from probe-rs's own percentage, so the number is a transfer that happened rather than a
+        // guess from elapsed time. No reporter, or no percentage in the output, means the card
+        // gets the phase and says nothing about how far along it is.
+        let firmware_bytes = std::fs::metadata(&resolved).map(|m| m.len()).unwrap_or(0);
+        let download_watch = ctx.progress.as_ref().and_then(|reporter| {
+            if firmware_bytes == 0 {
+                return None;
+            }
+            let reporter = reporter.clone();
+            let started = Instant::now();
+            let total = firmware_bytes;
+            Some(Arc::new(move |line: &str| {
+                let Some(pct) = parse_probe_percent(line) else {
+                    return;
+                };
+                reporter.counted(
+                    "downloading to the target",
+                    total.saturating_mul(pct) / 100,
+                    total,
+                    started.elapsed().as_millis() as u64,
+                );
+            }) as LineObserver)
+        });
+
         if let Some(progress) = ctx.progress.as_ref() {
             progress.phase("downloading to the target");
         }
-        let result =
-            run_probe_rs(dl_args, &ctx.cwd, timeout_ms, Some(ctx.cancel.clone()), &[]).await;
+        let result = run_probe_rs_watching(
+            dl_args,
+            &ctx.cwd,
+            timeout_ms,
+            Some(ctx.cancel.clone()),
+            &[],
+            download_watch,
+        )
+        .await;
         let outcome: Result<ToolOutput, ToolError> = match result {
             Ok((text, Some(0))) if !reset => Ok(ToolOutput {
                 text: format!("flash passed (exit 0)\n{text}"),
@@ -190,6 +248,11 @@ impl Tool for Flash {
                 if let Some(probe) = probe {
                     reset_args.push("--probe".to_string());
                     reset_args.push(probe);
+                }
+                // A second probe-rs session with its own timeout: without its own phase the card
+                // keeps saying "downloading" for the whole of it.
+                if let Some(progress) = ctx.progress.as_ref() {
+                    progress.phase("resetting the target");
                 }
                 match run_probe_rs(
                     reset_args,
@@ -260,6 +323,20 @@ mod tests {
             allowed_roots: Vec::new(),
             ..ToolContext::default()
         }
+    }
+
+    #[test]
+    fn the_percentage_comes_from_probe_rs_and_not_from_a_guess() {
+        // The forms probe-rs has printed for the download step, plus the shapes that must not
+        // produce a count. A card claiming 140% is worse than a card saying nothing.
+        assert_eq!(
+            parse_probe_percent("Writing 107 of 107 KiB (100%)"),
+            Some(100)
+        );
+        assert_eq!(parse_probe_percent("       42%"), Some(42));
+        assert_eq!(parse_probe_percent("erasing flash"), None);
+        assert_eq!(parse_probe_percent("%"), None);
+        assert_eq!(parse_probe_percent("load 140% of memory"), None);
     }
 
     #[test]

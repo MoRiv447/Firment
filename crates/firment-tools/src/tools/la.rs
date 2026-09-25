@@ -62,7 +62,7 @@ impl CaptureBackend for SigrokCli {
         timeout_ms: u64,
         cancel: Option<Cancellable>,
     ) -> Result<(String, Option<i32>), String> {
-        run_argv(bin, argv.to_vec(), cwd, timeout_ms, cancel, &[]).await
+        run_argv(bin, argv.to_vec(), cwd, timeout_ms, cancel, &[], None).await
     }
 }
 
@@ -477,11 +477,35 @@ impl La {
         let cli_bin = cfg.bin.as_deref().unwrap_or("sigrok-cli");
         let timeout = exec_timeout(cfg, time_ms);
 
-        let (text, code) = match self
+        // A timed capture has one figure that is genuinely known: the window. Counting elapsed
+        // against it gives a real "seconds left"; a capture bounded by sample count has no
+        // wall-clock total (the device's realised rate decides), so it keeps the phase alone —
+        // a percentage nobody can know is worse than no percentage, per `progress`'s own rule.
+        let ticking = match (time_ms, ctx.progress.as_ref()) {
+            (Some(window), Some(reporter)) => {
+                let reporter = reporter.clone();
+                let started = std::time::Instant::now();
+                Some(tokio::spawn(async move {
+                    let mut tick = tokio::time::interval(std::time::Duration::from_millis(500));
+                    loop {
+                        tick.tick().await;
+                        let elapsed = started.elapsed().as_millis() as u64;
+                        reporter.counted("capturing", elapsed.min(window), window, elapsed);
+                    }
+                }))
+            }
+            _ => None,
+        };
+        let exec_result = self
             .backend
             .exec(cli_bin, &argv, &ctx.cwd, timeout, Some(ctx.cancel.clone()))
-            .await
-        {
+            .await;
+        // Stopped before anything is reported: a ticker outliving the capture would keep
+        // advancing a progress bar for a run that already ended.
+        if let Some(task) = ticking {
+            task.abort();
+        }
+        let (text, code) = match exec_result {
             Ok(pair) => pair,
             Err(e) => {
                 // A spawn/timeout failure can still leave a half-written .sr

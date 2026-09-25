@@ -248,14 +248,45 @@ pub(crate) struct PipeDrain {
     task: tokio::task::JoinHandle<()>,
 }
 
+/// Called once per complete line of a child's output, from the drain task, while the child is
+/// still running.
+pub(crate) type LineObserver = Arc<dyn Fn(&str) + Send + Sync>;
+
+/// How much un-terminated output the line splitter keeps before giving up on it. A progress
+/// observer must not become the thing that grows memory: a binary stream with no newlines is
+/// dropped rather than held.
+const LINE_TAIL_CAP: usize = 8 * 1024;
+
 impl PipeDrain {
     pub(crate) fn start(stdout: ChildStdout, stderr: ChildStderr) -> Self {
+        Self::starting(stdout, stderr, None)
+    }
+
+    /// [`start`](Self::start), plus a witness: `observe` sees every complete line of either
+    /// stream as it arrives.
+    ///
+    /// Without this there is no way to report progress at all — a tool only gets the child's
+    /// output once the child is gone, so `current` could never grow while the wait was still
+    /// happening, and every counted phase the core can carry stayed unwired.
+    pub(crate) fn with_lines(
+        stdout: ChildStdout,
+        stderr: ChildStderr,
+        observe: LineObserver,
+    ) -> Self {
+        Self::starting(stdout, stderr, Some(observe))
+    }
+
+    fn starting(stdout: ChildStdout, stderr: ChildStderr, observe: Option<LineObserver>) -> Self {
         let out: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let err: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let task = {
             let (out_handle, err_handle) = (out.clone(), err.clone());
+            let err_observed = observe.clone();
             tokio::spawn(async move {
-                tokio::join!(read_into(stdout, out_handle), read_into(stderr, err_handle));
+                tokio::join!(
+                    read_into(stdout, out_handle, observe),
+                    read_into(stderr, err_handle, err_observed)
+                );
             })
         };
         Self {
@@ -282,17 +313,50 @@ impl PipeDrain {
     }
 }
 
-async fn read_into<R: AsyncRead + Unpin>(mut reader: R, buf: Arc<Mutex<Vec<u8>>>) {
+async fn read_into<R: AsyncRead + Unpin>(
+    mut reader: R,
+    buf: Arc<Mutex<Vec<u8>>>,
+    observe: Option<LineObserver>,
+) {
     let mut chunk = [0u8; 16 * 1024];
+    let mut tail: Vec<u8> = Vec::new();
     loop {
         match reader.read(&mut chunk).await {
             Ok(0) => break,
             Ok(n) => {
                 // Lock only across the copy, never across an await.
                 lock_sharing(&buf).extend_from_slice(&chunk[..n]);
+                let Some(observe) = &observe else { continue };
+                let mut start = 0usize;
+                for i in 0..n {
+                    // A progress bar redraws with `\r` rather than emitting a line per update,
+                    // so both are terminators here — splitting on `\n` alone would never fire.
+                    if chunk[i] != b'\n' && chunk[i] != b'\r' {
+                        continue;
+                    }
+                    let mut line = std::mem::take(&mut tail);
+                    line.extend_from_slice(&chunk[start..i]);
+                    if !line.is_empty() {
+                        observe(String::from_utf8_lossy(&line).trim());
+                    }
+                    start = i + 1;
+                }
+                tail.extend_from_slice(&chunk[start..n]);
+                if tail.len() > LINE_TAIL_CAP {
+                    // Not a line, and never will be. Stop accumulating for the observer's sake;
+                    // the captured bytes above are unaffected.
+                    tail.clear();
+                }
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(_) => break,
+        }
+    }
+    if let Some(observe) = &observe {
+        let last = std::mem::take(&mut tail);
+        if !last.is_empty() {
+            // The final line of a stream that ends without a terminator is still a line.
+            observe(String::from_utf8_lossy(&last).trim());
         }
     }
 }
@@ -581,13 +645,30 @@ pub(crate) async fn run_probe_rs(
     cancel: Option<Cancellable>,
     envs: &[(String, String)],
 ) -> Result<(String, Option<i32>), String> {
-    run_argv("probe-rs", args, cwd, timeout_ms, cancel, envs).await
+    run_argv("probe-rs", args, cwd, timeout_ms, cancel, envs, None).await
+}
+
+/// [`run_probe_rs`], watching each line of the child's output as it arrives.
+///
+/// Only needed where a progress figure exists to be read: probe-rs prints its own
+/// download percentage, and that is the difference between a card that can say how far
+/// through a flash it is and one that can only say a flash started.
+pub(crate) async fn run_probe_rs_watching(
+    args: Vec<String>,
+    cwd: &Path,
+    timeout_ms: u64,
+    cancel: Option<Cancellable>,
+    envs: &[(String, String)],
+    on_line: Option<LineObserver>,
+) -> Result<(String, Option<i32>), String> {
+    run_argv("probe-rs", args, cwd, timeout_ms, cancel, envs, on_line).await
 }
 
 /// Generalization of [`run_probe_rs`] to any external CLI invoked with an
 /// argv array and no shell — probe-rs today, sigrok-cli for the `la` tool.
 /// The program name appears in timeout/cancel messages so the user can tell
 /// which binary was killed.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_argv(
     program: &str,
     args: Vec<String>,
@@ -595,6 +676,7 @@ pub(crate) async fn run_argv(
     timeout_ms: u64,
     cancel: Option<Cancellable>,
     envs: &[(String, String)],
+    on_line: Option<LineObserver>,
 ) -> Result<(String, Option<i32>), String> {
     let mut cmd = Command::new(program);
     cmd.args(&args)
@@ -626,7 +708,10 @@ pub(crate) async fn run_argv(
     // Drain CONCURRENTLY with wait(): probe-rs emits progress/log lines the
     // whole run; without a concurrent reader, output beyond the OS pipe
     // buffer blocks the child and turns real runs into spurious timeouts.
-    let drain = PipeDrain::start(stdout, stderr);
+    let drain = match on_line {
+        Some(observe) => PipeDrain::with_lines(stdout, stderr, observe),
+        None => PipeDrain::start(stdout, stderr),
+    };
 
     let status = tokio::select! {
         status = child.wait() => status,
@@ -1109,6 +1194,81 @@ mod tests {
             "the pipes were not drained while the child ran: {:?}",
             started.elapsed()
         );
+    }
+
+    #[tokio::test]
+    async fn a_line_observer_sees_each_line_without_eating_the_bytes() {
+        // The seam counted progress comes through. A tool only sees a child's output once the
+        // child is gone, so this is what lets a flash say how far through it is while it runs.
+        let input = b"erasing 10%\rwriting 55%\nwriting 90%\ntrailing line, no terminator";
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let observe = {
+            let seen = seen.clone();
+            Arc::new(move |line: &str| {
+                seen.lock().unwrap().push(line.to_string());
+            }) as LineObserver
+        };
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        read_into(
+            std::io::Cursor::new(input.to_vec()),
+            buf.clone(),
+            Some(observe),
+        )
+        .await;
+
+        // `\r` is a terminator because a progress bar redraws with it; the final fragment
+        // counts as a line even though the stream never ended with one.
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [
+                "erasing 10%",
+                "writing 55%",
+                "writing 90%",
+                "trailing line, no terminator"
+            ]
+        );
+        assert_eq!(
+            buf.lock().unwrap().as_slice(),
+            input.as_slice(),
+            "observing must not consume what the caller captures"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unterminated_stream_cannot_grow_the_observer_buffer() {
+        // `cat /dev/urandom` on the stdout of a watched child must not turn the line splitter
+        // into a second unbounded buffer. What it may do is hand over at most one remainder —
+        // the cap is the promise, not silence. The captured bytes are unaffected either way.
+        let noise = vec![b'x'; 40 * 1024];
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let observe = {
+            let seen = seen.clone();
+            Arc::new(move |line: &str| {
+                seen.lock().unwrap().push(line.to_string());
+            }) as LineObserver
+        };
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        read_into(
+            std::io::Cursor::new(noise.clone()),
+            buf.clone(),
+            Some(observe),
+        )
+        .await;
+        let lines = seen.lock().unwrap();
+        for line in lines.iter() {
+            assert!(
+                line.len() <= LINE_TAIL_CAP,
+                "a line of {} bytes means the cap is not holding",
+                line.len()
+            );
+        }
+        assert!(
+            lines.len() <= 1,
+            "no line ending was ever seen, so at most the EOF remainder: {}",
+            lines.len()
+        );
+        drop(lines);
+        assert_eq!(buf.lock().unwrap().len(), noise.len());
     }
 
     #[tokio::test]
