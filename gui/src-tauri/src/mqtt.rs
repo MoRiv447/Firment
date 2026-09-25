@@ -169,13 +169,20 @@ async fn run(shared: Arc<Shared>, broker: String) {
                     // spam the chat with the same error every cycle.
                     if !error_announced {
                         error_announced = true;
+                        // Name what it is waiting for and where that came from. A bare
+                        // "link error" reads as a bug in the app to someone who set a
+                        // broker months ago and has not thought about it since — and
+                        // the one thing that would end the notice, blanking the key, is
+                        // invisible from here.
                         emit(
                             &shared,
                             FrontendEvent::Info {
                                 session_id: None,
                                 message: format!(
-                                    "[mqtt] link error: {e} — retrying in 3s (will stop \
-                                     announcing until it recovers)"
+                                    "[mqtt] cannot reach broker {broker}: {e} — retrying in \
+                                     3s, announced once per outage. Not using the SBC? set \
+                                     broker = \"\" in {}",
+                                    firment_core::config::config_path().display()
                                 ),
                             },
                         );
