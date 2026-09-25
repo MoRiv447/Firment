@@ -1,4 +1,4 @@
-use super::util::{read_text, resolve_within};
+use super::util::{read_text_report, resolve_within};
 use async_trait::async_trait;
 use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
@@ -59,7 +59,7 @@ impl Tool for ReadFile {
             });
         let resolved =
             resolve_within(&ctx.cwd, path, &ctx.allowed_roots).map_err(ToolError::new)?;
-        let content = read_text(&resolved).map_err(|e| {
+        let (content, lossy) = read_text_report(&resolved).map_err(|e| {
             if resolved.exists() {
                 ToolError::new(format!("[Io] {e}"))
             } else {
@@ -87,8 +87,13 @@ impl Tool for ReadFile {
                 .map(|line| {
                     // CubeMX/Keil files are CRLF; strip the CR so displayed
                     // lines and hashline anchors match what edit_file compares
-                    // against (LF-normalized).
-                    let line = line.trim_end_matches('\r');
+                    // against (LF-normalized). The BOM goes too: `edit_file`
+                    // strips it before hashing, so leaving it here printed an
+                    // anchor for line 1 that the very next call rejected.
+                    let line = line
+                        .strip_prefix('\u{FEFF}')
+                        .unwrap_or(line)
+                        .trim_end_matches('\r');
                     format!("[{}] {}", crate::tools::util::line_hash_prefix(line), line)
                 })
                 .collect::<Vec<_>>()
@@ -117,6 +122,18 @@ impl Tool for ReadFile {
             text.push_str(&format!(
                 "\n[truncated: file has {effective_total} lines; pass offset={end} to read the next chunk]"
             ));
+        }
+        if lossy {
+            // The bytes were not valid UTF-8, so what follows has a replacement character where
+            // the file had a byte the decoder could not read. Saying nothing lets the model quote
+            // text that is not in the file — and the hash below is of the bytes, not of the
+            // displayed text. Same tag and remedy as `edit_file`'s refusal, so the pair reads as
+            // one policy: convert the file, do not fight the encoding.
+            text.push_str(
+                "\n[Encoding] this file is not valid UTF-8; the U+FFFD characters above are the \
+                 decoder's, not the file's, so an `old_text` copied from here will not match. \
+                 edit_file refuses such a file: convert it to UTF-8 first.",
+            );
         }
         let digest = firment_core::hash::sha256_hex(
             &fs::read(&resolved).map_err(|e| ToolError::new(format!("[Io] {e}")))?,
@@ -152,6 +169,40 @@ mod tests {
             allowed_roots: Vec::new(),
             ..ToolContext::default()
         }
+    }
+
+    #[tokio::test]
+    async fn a_non_utf8_file_is_read_and_says_so() {
+        // GBK comment bytes decode to U+FFFD. Reading the file is still useful; presenting the
+        // substitutions as the file's own text is not — `old_text` copied from here cannot match.
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("gbk.c"),
+            b"// \xC4\xE3\xC3\xFB int main(void)\n",
+        )
+        .unwrap();
+        let out = ReadFile
+            .run(json!({"path": "gbk.c"}), &ctx(dir.path()))
+            .await
+            .expect("the file is still readable");
+        assert!(
+            out.text.contains("[Encoding]"),
+            "the reader must mark what it replaced: {}",
+            out.text
+        );
+        assert!(out.text.contains("int main(void)"), "{}", out.text);
+
+        // And a clean file gets no such note.
+        fs::write(dir.path().join("ok.c"), b"int main(void)\n").unwrap();
+        let clean = ReadFile
+            .run(json!({"path": "ok.c"}), &ctx(dir.path()))
+            .await
+            .unwrap();
+        assert!(
+            !clean.text.contains("[Encoding]"),
+            "no encoding warning for UTF-8: {}",
+            clean.text
+        );
     }
 
     #[tokio::test]

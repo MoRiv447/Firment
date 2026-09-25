@@ -855,6 +855,20 @@ fn migrate_legacy_model(model: &str) -> String {
     }
 }
 
+/// Write `content` to `path` through a temp file and a rename, so a failure in the middle leaves
+/// the previous file whole.
+///
+/// The session store has done this for its own files all along. The source-file writers in
+/// `firment-tools` did not: they truncate the target and then write, so an ENOSPC, a killed
+/// process or an AV scanner holding the new file leaves the user's source shorter than it was —
+/// with the diff already reported as applied.
+pub fn write_atomic(path: &Path, content: &str) -> std::io::Result<()> {
+    atomic_write(path, content).map_err(|e| match e {
+        SessionError::Io(inner) => inner,
+        other => std::io::Error::other(other.to_string()),
+    })
+}
+
 fn atomic_write(path: &Path, content: &str) -> Result<(), SessionError> {
     let parent = path.parent().ok_or_else(|| {
         SessionError::Io(std::io::Error::other(format!(

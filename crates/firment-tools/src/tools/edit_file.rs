@@ -139,7 +139,7 @@ impl Tool for EditFile {
                 resolved.display()
             )));
         }
-        fs::write(&resolved, &new_content)
+        firment_core::session::write_atomic(&resolved, &new_content)
             .map_err(|e| ToolError::new(format!("[Io] write failed: {e}")))?;
         let old_lines = original.lines().count();
         let new_lines = new_content.lines().count();
@@ -309,7 +309,12 @@ fn apply_edit_spec(
     let _ = resolved;
     let mut out: Vec<&str> = Vec::new();
     out.extend_from_slice(&lines[..start - 1]);
-    out.extend(new_norm.split('\n'));
+    // An empty replacement contributes no lines. `"".split('\n')` yields one empty item, which
+    // joined back as a blank line the caller never asked for — so "delete lines 2 through 4"
+    // left the file with an extra empty line where the range had been.
+    if !new_norm.is_empty() {
+        out.extend(new_norm.split('\n'));
+    }
     out.extend_from_slice(&lines[end..]);
     let mut joined = out.join("\n");
     if trailing_newline {
@@ -793,6 +798,65 @@ mod tests {
             "BOM must survive the edit: {content:?}"
         );
         assert_eq!(content, "\u{FEFF}int app_main(void)\n{\n}\n");
+    }
+
+    #[tokio::test]
+    async fn deleting_a_range_removes_it_without_leaving_a_blank_line() {
+        // `new_text: ""` means "these lines go away". The range splice put the split of an
+        // empty string in their place, which is one empty line — so the file came back with a
+        // blank where three lines had been, and the model had to delete that too.
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "one\ntwo\nthree\nfour\nfive\n").unwrap();
+        EditFile
+            .run(
+                json!({"path": "a.txt", "start_line": 2, "end_line": 4, "new_text": ""}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "one\nfive\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_anchor_read_file_prints_edits_line_one_of_a_bom_file() {
+        // The seam between two tools: `read_file` prints the anchor, `edit_file` resolves it. If
+        // one hashes the BOM and the other does not, line 1 of every Visual Studio / CubeMX
+        // source becomes uneditable by the anchor the tool itself just printed — and the
+        // rejection blames a concurrent change the user never made.
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("bom.c"), "\u{FEFF}int main(void)\n{\n}\n").unwrap();
+
+        let listing = crate::tools::read_file::ReadFile
+            .run(
+                json!({"path": "bom.c", "hashlines": true}),
+                &ctx(dir.path()),
+            )
+            .await
+            .expect("read_file runs");
+        let line = listing
+            .text
+            .lines()
+            .find(|l| l.contains("int main(void)"))
+            .expect("the listing shows line 1");
+        let anchor = &line
+            [line.find('[').expect("an anchor bracket") + 1..line.find(']').expect("anchor end")];
+
+        let out = EditFile
+            .run(
+                json!({"path": "bom.c", "hashline": anchor, "new_text": "int app_main(void)"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .expect("the anchor read_file printed must resolve");
+        assert!(out.text.contains("Edited"), "got: {}", out.text);
+        let content = std::fs::read_to_string(dir.path().join("bom.c")).unwrap();
+        assert!(
+            content.starts_with('\u{FEFF}'),
+            "the BOM must survive: {content:?}"
+        );
     }
 
     #[tokio::test]

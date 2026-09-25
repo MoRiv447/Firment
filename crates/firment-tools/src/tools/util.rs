@@ -121,6 +121,16 @@ fn canonicalize_for_check(path: &Path) -> std::io::Result<PathBuf> {
 pub(crate) const MAX_TEXT_FILE_BYTES: u64 = 32 * 1024 * 1024;
 
 pub(crate) fn read_text(path: &Path) -> Result<String, String> {
+    read_text_report(path).map(|(text, _lossy)| text)
+}
+
+/// [`read_text`], plus whether the bytes were not valid UTF-8 to begin with.
+///
+/// The lossy decode is deliberate — a GBK-commented source file is still worth reading — but it
+/// rewrites the text it hands back: every undecodable byte becomes U+FFFD. A caller that says
+/// nothing lets the model quote characters that are not in the file, and the `[file-sha256]`
+/// footer a reader prints is the hash of the **bytes**, not of what was shown.
+pub(crate) fn read_text_report(path: &Path) -> Result<(String, bool), String> {
     let size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     if size > MAX_TEXT_FILE_BYTES {
         return Err(format!(
@@ -139,7 +149,8 @@ pub(crate) fn read_text(path: &Path) -> Result<String, String> {
             bytes.len()
         ));
     }
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    let lossy = std::str::from_utf8(&bytes).is_err();
+    Ok((String::from_utf8_lossy(&bytes).into_owned(), lossy))
 }
 
 pub(crate) fn rel_str(root: &Path, path: &Path) -> String {

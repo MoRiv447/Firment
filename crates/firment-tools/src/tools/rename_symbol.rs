@@ -31,6 +31,9 @@ struct FilePlan {
     resolved: PathBuf,
     label: String,
     count: usize,
+    /// The file as it was read, kept for the diff in the result: without it the "reviewable
+    /// change" is computed against nothing and renders the whole file as additions.
+    original: String,
     updated: String,
 }
 
@@ -159,6 +162,7 @@ impl Tool for RenameSymbol {
                 resolved,
                 label,
                 count,
+                original: text,
                 updated,
             });
         }
@@ -230,7 +234,7 @@ impl Tool for RenameSymbol {
                         plan.label
                     )));
                 }
-                if let Err(e) = std::fs::write(&plan.resolved, &plan.updated) {
+                if let Err(e) = firment_core::session::write_atomic(&plan.resolved, &plan.updated) {
                     let rolled_back = journal.rollback();
                     return Err(ToolError::new(format!(
                         "[Io] writing {} failed: {e}{}",
@@ -255,7 +259,7 @@ impl Tool for RenameSymbol {
         for plan in &plans {
             text.push_str(&format!(
                 "\n{}",
-                simple_diff(&plan.resolved, "", &plan.updated, 400)
+                simple_diff(&plan.resolved, &plan.original, &plan.updated, 400)
             ));
         }
         Ok(ToolOutput { text })
@@ -383,6 +387,25 @@ mod tests {
             )
             .await
             .unwrap();
+
+        // The result is supposed to be reviewable without re-reading the files: an empty
+        // "before" rendered every touched file as `+` lines and hid the rename itself.
+        assert!(
+            result
+                .text
+                .lines()
+                .any(|l| l.starts_with('-') && l.contains("foo")),
+            "no removed line naming the old symbol: {}",
+            result.text
+        );
+        assert!(
+            result
+                .text
+                .lines()
+                .any(|l| l.starts_with('+') && l.contains("bar")),
+            "no added line naming the new symbol: {}",
+            result.text
+        );
 
         assert_eq!(
             std::fs::read_to_string(dir.path().join("a.rs")).unwrap(),

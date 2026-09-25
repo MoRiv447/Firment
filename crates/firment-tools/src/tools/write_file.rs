@@ -96,7 +96,7 @@ impl Tool for WriteFile {
             fs::create_dir_all(parent)
                 .map_err(|e| ToolError::new(format!("[Io] create dirs: {e}")))?;
         }
-        fs::write(&resolved, content)
+        firment_core::session::write_atomic(&resolved, content)
             .map_err(|e| ToolError::new(format!("[Io] write failed: {e}")))?;
         // Echo the change for an OVERWRITE, like `edit_file` does: the model
         // sees what it replaced and the UI has a diff to render. A brand-new
