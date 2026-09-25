@@ -129,3 +129,10 @@ jobs:
           files: artifacts/*
           body_path: RELEASE_NOTES.md
           generate_release_notes: true
+          # A tag with a dash is a pre-release (`v1.0.0-rc`, `v2.0.0-beta.3`). Without this the
+          # action files an ordinary release and the rc takes the "Latest" slot — which is what
+          # someone clicking "latest" installs, and it is not what a candidate is for. Decided
+          # from the ref name rather than by the action's own `auto` heuristic, so the rule is
+          # readable here instead of living inside a dependency.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ !contains(github.ref_name, '-') }}
