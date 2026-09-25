@@ -160,10 +160,14 @@ pub async fn monitor_stop(shared: Arc<Shared>, port: &str) {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .remove(port);
     if let Some(m) = monitor {
-        // Setting the flag makes the reader loop exit; the read timeout
-        // (100ms) bounds how long the blocked read can delay that.
+        // Setting the flag makes the reader loop exit at its next check; the 100 ms read timeout
+        // is what bounds that, because the loop cannot see the flag while blocked in `read`.
         m.stop.store(true, Ordering::Relaxed);
-        // Dropping the write port closes the device, unblocking the reader.
+        // This only gives up OUR handle. The reader task holds a clone of the same `Monitor`, so
+        // the write port — and therefore the device — stays open until that loop exits, which the
+        // timeout above bounds at ~100 ms. So `monitor_start` immediately after a stop can still
+        // find the port busy for a moment; closing that gap needs the reader's join handle awaited
+        // here, which is the design step this function deliberately leaves for later.
         drop(m);
     }
 }

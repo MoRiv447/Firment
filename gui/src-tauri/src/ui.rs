@@ -22,6 +22,38 @@ const PERMISSION_TIMEOUT: Duration = Duration::from_secs(120);
 /// dialog must not stall the turn past this.
 const ASK_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// Runs a cleanup on the way out of an awaited dialog — including the way that is not a return.
+///
+/// A cancelled turn DROPS the tool's future mid-`.await`. The permission or question was never
+/// answered and never would be, yet its sender stayed in the map and the dialog stayed on screen,
+/// where a later click answers a request nothing is waiting for. Cleaning up on the timeout arm
+/// alone covered the least likely way to leave a dialog behind.
+struct WaiterGuard {
+    cleanup: Option<Box<dyn FnOnce() + Send + 'static>>,
+}
+
+impl WaiterGuard {
+    fn with(cleanup: impl FnOnce() + Send + 'static) -> Self {
+        WaiterGuard {
+            cleanup: Some(Box::new(cleanup)),
+        }
+    }
+
+    /// The dialog was answered: there is nothing to clean, and emitting "expired" would dismiss
+    /// a dialog the user has already decided.
+    fn disarm(&mut self) {
+        self.cleanup = None;
+    }
+}
+
+impl Drop for WaiterGuard {
+    fn drop(&mut self) {
+        if let Some(cleanup) = self.cleanup.take() {
+            cleanup();
+        }
+    }
+}
+
 /// Forwards agent events onto the Tauri event bus ("agent-event") and the
 /// collaboration bus. Mirrors the TUI's `ChannelSink`, exchanging the mpsc
 /// channel for `AppHandle::emit`. Each sink is bound to one session so
@@ -77,29 +109,37 @@ impl PermissionChecker for GuiPermission {
             "permission-request",
             json!({ "id": id, "tool": tool, "args": args, "reason": reason, "session_id": self.session_id }),
         );
+        // Registered before the await: every way out of it has to leave the same state behind,
+        // and being cancelled is not a return.
+        let waiters = self.shared.perm_waiters.clone();
+        let app = self.shared.app.clone();
+        let mut guard = WaiterGuard::with(move || {
+            waiters
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(&id);
+            // Tell the frontend to drop the stale dialog: a later Allow click must not
+            // pretend it approved anything.
+            let _ = app.emit("permission-expired", json!({ "id": id }));
+        });
         match timeout(PERMISSION_TIMEOUT, rx).await {
-            Ok(Ok(true)) => Ok(()),
-            Ok(Ok(false)) => Err(PermissionError::denied(format!(
-                "user denied tool '{tool}'"
-            ))),
-            Ok(Err(_)) => Err(PermissionError::denied("permission dialog closed")),
-            Err(_) => {
-                self.shared
-                    .perm_waiters
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .remove(&id);
-                // Tell the frontend so it drops the stale dialog: a later
-                // Allow click must not pretend it approved anything.
-                let _ = self
-                    .shared
-                    .app
-                    .emit("permission-expired", json!({ "id": id }));
+            Ok(Ok(true)) => {
+                guard.disarm();
+                Ok(())
+            }
+            Ok(Ok(false)) => {
+                guard.disarm();
                 Err(PermissionError::denied(format!(
-                    "permission request for tool '{tool}' timed out after {}s",
-                    PERMISSION_TIMEOUT.as_secs()
+                    "user denied tool '{tool}'"
                 )))
             }
+            // The sender went away without answering — a dialog still open is a dialog the
+            // guard should close.
+            Ok(Err(_)) => Err(PermissionError::denied("permission dialog closed")),
+            Err(_) => Err(PermissionError::denied(format!(
+                "permission request for tool '{tool}' timed out after {}s",
+                PERMISSION_TIMEOUT.as_secs()
+            ))),
         }
     }
 }
@@ -126,22 +166,29 @@ impl Asker for GuiAsker {
             "ask-request",
             json!({ "id": id, "question": question, "options": options, "session_id": self.session_id }),
         );
+        let waiters = self.shared.ask_waiters.clone();
+        let app = self.shared.app.clone();
+        let mut guard = WaiterGuard::with(move || {
+            waiters
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(&id);
+            let _ = app.emit("ask-expired", json!({ "id": id }));
+        });
         match timeout(ASK_TIMEOUT, rx).await {
-            Ok(Ok(Some(answer))) => Ok(answer),
-            Ok(Ok(None)) => Err("user dismissed the question".to_string()),
-            Ok(Err(e)) => Err(e.to_string()),
-            Err(_) => {
-                self.shared
-                    .ask_waiters
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .remove(&id);
-                let _ = self.shared.app.emit("ask-expired", json!({ "id": id }));
-                Err(format!(
-                    "question timed out after {}s",
-                    ASK_TIMEOUT.as_secs()
-                ))
+            Ok(Ok(Some(answer))) => {
+                guard.disarm();
+                Ok(answer)
             }
+            Ok(Ok(None)) => {
+                guard.disarm();
+                Err("user dismissed the question".to_string())
+            }
+            Ok(Err(e)) => Err(e.to_string()),
+            Err(_) => Err(format!(
+                "question timed out after {}s",
+                ASK_TIMEOUT.as_secs()
+            )),
         }
     }
 }
