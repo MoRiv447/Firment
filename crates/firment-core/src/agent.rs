@@ -2117,7 +2117,19 @@ async fn execute_tool_calls(
             results = &mut wave => results,
             _ = agent.cancel.cancelled() => {
                 wave_cancelled = true;
-                Vec::new()
+                // The tools hold the only mechanism that terminates a child's whole tree (their
+                // cancel arms call `kill_process_tree`). Dropping the wave here left `kill_on_drop`
+                // to do the job, which kills the shell wrapper and nothing below it: the compiler
+                // it spawned keeps running, still holding the output pipe — and an orphaned
+                // probe-rs keeps the debug probe locked for every later flash. The timeout arm
+                // below already waited for exactly this reason; the user's interrupt did not.
+                let grace = tokio::time::sleep(agent.tool_cancel_grace);
+                tokio::pin!(grace);
+                let out = tokio::select! {
+                    results = &mut wave => results,
+                    _ = &mut grace => Vec::new(),
+                };
+                out
             }
             _ = tokio::time::sleep(agent.tool_wave_timeout) => {
                 wave_timed_out = true;
@@ -2142,7 +2154,11 @@ async fn execute_tool_calls(
         let _ = drain_done_tx.send(());
         let _ = drain.await;
 
-        if wave_cancelled {
+        // Only fabricate when the tools never answered for themselves. Results that arrived
+        // inside the grace window already carry the tool's own `[Cancelled]` reason and their
+        // own `ToolEnd`, which is a truer sentence than "cancelled" — and the iteration
+        // checkpoint in `run_turn` still performs the rollback either way.
+        if wave_cancelled && results.is_empty() {
             for (k, &i) in ready.iter().enumerate() {
                 let call = &tool_calls[i];
                 agent

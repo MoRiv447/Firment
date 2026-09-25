@@ -313,6 +313,19 @@ impl PipeDrain {
     }
 }
 
+/// What one stream may hold in memory before the rest is discarded.
+///
+/// `truncate` already caps what the *model* is shown, but it ran on the collected bytes — so a
+/// command that prints without end (`cat /dev/urandom`, a build script that spews) could push
+/// gigabytes into the agent's memory before any of that applied. The ceiling belongs here, where
+/// the bytes arrive. Generous enough that no real compiler log is cut short, small enough that
+/// two streams cannot sink the session.
+const CAPTURE_CAP_BYTES: usize = 8 * 1024 * 1024;
+
+/// Written into the capture once, where storage stops, so a reader of the text knows the rest is
+/// missing rather than believing the command fell silent.
+const CAP_SENTINEL: &[u8] = b"\n[... output beyond the 8 MiB capture limit was discarded ...]\n";
+
 async fn read_into<R: AsyncRead + Unpin>(
     mut reader: R,
     buf: Arc<Mutex<Vec<u8>>>,
@@ -320,13 +333,31 @@ async fn read_into<R: AsyncRead + Unpin>(
 ) {
     let mut chunk = [0u8; 16 * 1024];
     let mut tail: Vec<u8> = Vec::new();
+    let mut seen = 0usize;
+    let mut marked = false;
     loop {
         match reader.read(&mut chunk).await {
             Ok(0) => break,
             Ok(n) => {
-                // Lock only across the copy, never across an await.
-                lock_sharing(&buf).extend_from_slice(&chunk[..n]);
+                // Lock only across the copy, never across an await. The ceiling is reached
+                // exactly on a chunk boundary more often than not, so "did this chunk fit" cannot
+                // be the signal that output was lost — the mark goes in the first time a byte has
+                // nowhere to go.
+                let room = CAPTURE_CAP_BYTES.saturating_sub(seen);
+                let keep_n = n.min(room);
+                seen += n;
+                let mut keep = lock_sharing(&buf);
+                if keep_n > 0 {
+                    keep.extend_from_slice(&chunk[..keep_n]);
+                }
+                if keep_n < n && !marked {
+                    keep.extend_from_slice(CAP_SENTINEL);
+                    marked = true;
+                }
+                drop(keep);
                 let Some(observe) = &observe else { continue };
+                // Observed whether or not it was stored: a program that prints a lot is exactly
+                // the program whose progress matters.
                 let mut start = 0usize;
                 for i in 0..n {
                     // A progress bar redraws with `\r` rather than emitting a line per update,
@@ -634,6 +665,22 @@ pub(crate) async fn run_command(
     ))
 }
 
+/// Kill the direct child **and its tree**, then reap it.
+///
+/// `Child::kill` reaches the direct process only. The programs behind these calls spawn children
+/// of their own (a compiler, a flash algorithm helper), and an orphan keeps the output pipe
+/// write-end open and — on a bench — the debug probe locked, so the next flash fails with
+/// "port busy" and nobody knows why. This is the same reason `run_command` goes through
+/// [`kill_tree_and_report`]; the argv runners were doing it with a bare `kill`.
+async fn kill_tree(child: &mut tokio::process::Child) {
+    if let Some(pid) = child.id() {
+        kill_process_tree(pid);
+    }
+    let _ = child.kill().await;
+    // Without wait() the dead child lingers as a zombie on Unix until this process exits.
+    let _ = child.wait().await;
+}
+
 /// Kill the direct child plus its whole tree (timeout or cancellation) and
 /// report the interruption. `exit code: None` tells the caller the process did
 /// not finish on its own.
@@ -737,15 +784,13 @@ pub(crate) async fn run_argv(
     let status = tokio::select! {
         status = child.wait() => status,
         _ = tokio::time::sleep(Duration::from_millis(timeout_ms)) => {
-            // Kill then wait: without wait() the dead child lingers as a
-            // zombie on Unix until this process exits.
-            let _ = child.kill().await;
-            let _ = child.wait().await;
+            kill_tree(&mut child).await;
             // Whatever the program printed before it was killed IS the
             // diagnostic; a bare timeout message leaves the agent guessing.
             let (out_buf, err_buf, _) = drain.finish(Duration::ZERO).await;
             return Err(format!(
-                "[Timeout] {program} timed out after {timeout_ms} ms and was killed{}",
+                "[Timeout] {program} timed out after {timeout_ms} ms and was killed (with its \
+                 child processes){}",
                 captured_note(&out_buf, &err_buf)
             ));
         }
@@ -756,11 +801,11 @@ pub(crate) async fn run_argv(
                 std::future::pending::<()>().await;
             }
         } => {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
+            kill_tree(&mut child).await;
             let (out_buf, err_buf, _) = drain.finish(Duration::ZERO).await;
             return Err(format!(
-                "[Cancelled] {program} was interrupted by turn cancellation{}",
+                "[Cancelled] {program} was interrupted by turn cancellation (killed with its \
+                 child processes){}",
                 captured_note(&out_buf, &err_buf)
             ));
         }
@@ -796,8 +841,9 @@ fn captured_note(stdout: &[u8], stderr: &[u8]) -> String {
 
 /// Run a long-lived program with an argv array, streaming its output until it
 /// exits, `timeout_ms` elapses (0 = wait forever), or the turn is cancelled.
-/// Returns (captured output, exit code, cancelled); exit code `None` means the
-/// process was killed.
+/// Returns (captured output, exit code, why it stopped); exit code `None` means
+/// the process never reported one, and the third element says whose doing that
+/// was — ours on a deadline, the user's on an interrupt, nobody's on a signal.
 ///
 /// Split out of the `run` tool so the drain/wait race is testable with any
 /// program — probe-rs itself is not installed on CI runners.
@@ -807,7 +853,7 @@ pub(crate) async fn run_streaming(
     cwd: &Path,
     timeout_ms: u64,
     cancel: &Cancellable,
-) -> Result<(String, Option<i32>, bool), String> {
+) -> Result<(String, Option<i32>, End), String> {
     let mut cmd = Command::new(program);
     cmd.args(args);
     #[cfg(windows)]
@@ -842,8 +888,7 @@ pub(crate) async fn run_streaming(
         tokio::select! {
             status = child.wait() => Outcome::Status(status),
             _ = cancel.cancelled() => {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
+                kill_tree(&mut child).await;
                 Outcome::Cancelled
             }
         }
@@ -851,30 +896,53 @@ pub(crate) async fn run_streaming(
         tokio::select! {
             status = child.wait() => Outcome::Status(status),
             _ = tokio::time::sleep(Duration::from_millis(timeout_ms)) => {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
+                kill_tree(&mut child).await;
                 Outcome::TimedOut
             }
             _ = cancel.cancelled() => {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
+                kill_tree(&mut child).await;
                 Outcome::Cancelled
             }
         }
     };
-    let (out_buf, err_buf, drain_timed_out) = drain.finish(Duration::from_secs(15)).await;
+    // How long to wait for the pipes depends on whether the writer is still alive. After
+    // `wait()` it is gone and a late grandchild is worth waiting for; after our own kill the
+    // tree is already down, and holding the tool for another fifteen seconds to discover that
+    // would be a stall with no information at the end of it.
+    let killed = !matches!(outcome, Outcome::Status(_));
+    let (out_buf, err_buf, drain_timed_out) = drain
+        .finish(if killed {
+            Duration::from_secs(1)
+        } else {
+            Duration::from_secs(15)
+        })
+        .await;
 
     let mut text = String::from_utf8_lossy(&out_buf).to_string();
     text.push_str(&String::from_utf8_lossy(&err_buf));
     if drain_timed_out {
-        text.push_str("\n[output truncated: still streaming after 15s]");
+        text.push_str(if killed {
+            "\n[output truncated: the pipe was still open 1s after the process was killed — \
+             something it spawned may still be running]"
+        } else {
+            "\n[output truncated: the process exited but its output was still arriving 15s \
+             later — a child process may still hold the pipe]"
+        });
     }
     match outcome {
-        Outcome::Cancelled => Ok((text, None, true)),
-        Outcome::TimedOut => Ok((text, None, false)),
+        Outcome::Cancelled => Ok((text, None, End::Cancelled)),
+        Outcome::TimedOut => Ok((text, None, End::TimedOut)),
         Outcome::Status(s) => {
             let code = s.map_err(|e| format!("wait failed: {e}"))?.code();
-            Ok((text, code, false))
+            Ok((
+                text,
+                code,
+                if code.is_some() {
+                    End::Exited
+                } else {
+                    End::Killed
+                },
+            ))
         }
     }
 }
@@ -1198,12 +1266,12 @@ mod tests {
         };
         let program = if cfg!(windows) { "cmd" } else { "sh" };
         let started = std::time::Instant::now();
-        let (text, code, cancelled) =
+        let (text, code, end) =
             run_streaming(program, &args, dir.path(), 30_000, &Cancellable::new())
                 .await
                 .expect("child runs");
         assert_eq!(code, Some(0), "child exited abnormally: {text}");
-        assert!(!cancelled);
+        assert_eq!(end, End::Exited, "the child ran to completion");
         assert_eq!(
             text.matches('x').count(),
             2 * 256 * 1024,
@@ -1290,6 +1358,52 @@ mod tests {
         );
         drop(lines);
         assert_eq!(buf.lock().unwrap().len(), noise.len());
+    }
+
+    #[tokio::test]
+    async fn a_chatty_child_cannot_grow_the_capture_without_bound() {
+        // `truncate` caps what the model is shown, and it ran *after* collection — so the memory
+        // belonged to whoever wrote the bytes. The ceiling has to sit where they arrive, and the
+        // reader of the text has to be able to tell that the output continued past it.
+        // ~12 MiB delivered as 1 KiB lines: enough to blow past the ceiling many times over,
+        // and line-terminated so the observer's half of the contract is testable too.
+        let line = format!("{}\n", "y".repeat(1024));
+        let input = line.repeat(12 * 1024).into_bytes();
+        let seen = Arc::new(Mutex::new(0usize));
+        let observe = {
+            let seen = seen.clone();
+            Arc::new(move |_line: &str| {
+                *seen.lock().unwrap() += 1;
+            }) as LineObserver
+        };
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        read_into(
+            std::io::Cursor::new(input.clone()),
+            buf.clone(),
+            Some(observe),
+        )
+        .await;
+
+        assert!(
+            input.len() > CAPTURE_CAP_BYTES,
+            "the fixture no longer exceeds the ceiling"
+        );
+        let captured = buf.lock().unwrap();
+        let text = String::from_utf8_lossy(&captured).into_owned();
+        assert!(
+            captured.len() <= CAPTURE_CAP_BYTES + CAP_SENTINEL.len() + 1,
+            "stored {} bytes, past the ceiling",
+            captured.len()
+        );
+        assert!(
+            text.contains("discarded"),
+            "the capture must say it was cut, not go silent"
+        );
+        drop(captured);
+        assert!(
+            *seen.lock().unwrap() > 4096,
+            "the observer keeps working past the cap; progress must not die with the buffer"
+        );
     }
 
     #[tokio::test]

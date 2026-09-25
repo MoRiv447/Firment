@@ -25,8 +25,7 @@ pub fn run_command_line(chip: &str, file: &str, probe: Option<&str>) -> String {
 /// timeout elapses and then kill the tree, returning whatever was captured.
 /// A turn cancellation (Esc) also kills the child: an orphaned probe-rs keeps
 /// the debug probe locked and blocks every later flash/debug until it exits on
-/// its own — with timeout_ms = 0, forever. Returns (text, exit code,
-/// cancelled).
+/// its own — with timeout_ms = 0, forever. Returns (text, exit code, why it stopped).
 async fn run_probe_rs_run(
     chip: &str,
     file: &Path,
@@ -34,7 +33,7 @@ async fn run_probe_rs_run(
     cwd: &Path,
     timeout_ms: u64,
     cancel: &firment_core::Cancellable,
-) -> Result<(String, Option<i32>, bool), String> {
+) -> Result<(String, Option<i32>, super::util::End), String> {
     let mut args: Vec<std::ffi::OsString> = vec!["run".into(), "--chip".into(), chip.into()];
     if let Some(probe) = probe {
         args.extend(["--probe".into(), probe.into()]);
@@ -130,16 +129,31 @@ impl Tool for Run {
             Ok((text, Some(code), _)) => Err(ToolError::new(format!(
                 "[Io] run failed (exit {code})\ncommand: {command}\n{text}"
             ))),
-            Ok((text, None, true)) => Err(ToolError::new(format!(
+            Ok((text, _, super::util::End::Cancelled)) => Err(ToolError::new(format!(
                 "[Cancelled] run interrupted by turn cancellation (probe-rs killed so it does \
                  not hold the debug probe); captured output:\n{text}"
             ))),
-            Ok((text, None, false)) => Ok(ToolOutput {
+            // A bounded `run` is the normal case for this tool, so a deadline expiring is a
+            // result rather than an error — but only when a deadline was set. A nil exit code
+            // from a signal used to fall in here too and print "timed out after N ms" for a
+            // timeout that never fired.
+            Ok((text, _, super::util::End::TimedOut)) if timeout_ms > 0 => Ok(ToolOutput {
                 text: format!(
                     "run timed out after {timeout_ms} ms; captured output:\n{}",
                     crate::forensic::append_fault_marker(text)
                 ),
             }),
+            Ok((text, _, super::util::End::TimedOut)) => Err(ToolError::new(format!(
+                "[Io] run stopped with no exit code, and no timeout was set\ncommand: \
+                 {command}\n{text}"
+            ))),
+            Ok((text, _, super::util::End::Killed)) => Err(ToolError::new(format!(
+                "[Io] run's process was killed by a signal, not by this tool's timeout\ncommand: \
+                 {command}\n{text}"
+            ))),
+            Ok((text, _, super::util::End::Exited)) => Err(ToolError::new(format!(
+                "[Io] run ended without an exit code\ncommand: {command}\n{text}"
+            ))),
             Err(e) => Err(probe_rs_err(e)),
         }
     }
