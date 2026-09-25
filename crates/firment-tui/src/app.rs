@@ -313,32 +313,19 @@ impl App {
             AgentEvent::Progress {
                 seq, owner, event, ..
             } => {
-                // §16.2: nothing is shown for a run under two seconds, because a line that
-                // appears and vanishes is worse than silence. The gate is applied *here*, where
-                // the card's own clock is, rather than in the core: the core reports, the card
-                // decides what deserves drawing.
-                let running = self.items.iter().rev().find_map(|item| match item {
-                    Item::Tool {
-                        seq: s,
-                        owner: o,
-                        started_at,
-                        ..
-                    } if *s == seq && *o == owner => Some(*started_at),
-                    _ => None,
-                });
-                let long_enough = running
-                    .flatten()
-                    .is_some_and(|started| started.elapsed() >= std::time::Duration::from_secs(2));
-                if !long_enough {
-                    return;
-                }
+                // Stored, not filtered: §16.2's two seconds is a decision about *drawing*, and
+                // only the drawer has the card's clock in front of it. The first version dropped
+                // the event here when the card was younger than two seconds — and because every
+                // tool reports its phase once, just before the long part starts, that threw away
+                // the only phase a five-minute build ever emits.
                 if let Some(Item::Tool { progress, .. }) =
                     self.items.iter_mut().rev().find(|item| {
                         matches!(item, Item::Tool { seq: s, owner: o, .. }
                             if *s == seq && *o == owner)
                     })
                 {
-                    *progress = Some(event.phase);
+                    *progress = Some(crate::util::format_progress(&event));
+                    self.touch_rows();
                 }
             }
             AgentEvent::ToolStart {
@@ -2338,9 +2325,9 @@ pub(crate) enum Item {
         /// Whether this card's diff body is open. Per card, and always reset
         /// to the small-diff default when the card is (re)built.
         expanded: bool,
-        /// What the tool is doing now, from `AgentEvent::Progress`. Only ever set for a *running*
-        /// card that has already been going long enough to matter — the two-second rule is applied
-        /// where the event arrives, not here (see the arm in `on_agent`).
+        /// What the tool is doing *now*, as reported by `AgentEvent::Progress`. Cleared when the
+        /// tool ends. Whether it is *drawn* is the renderer's decision (§16.2's two seconds),
+        /// because a phase always arrives in the call's first milliseconds.
         progress: Option<String>,
         /// Wall-clock start, for the card's elapsed label. `None` for a card
         /// restored from a stored transcript: the tool ran, but nobody timed it.

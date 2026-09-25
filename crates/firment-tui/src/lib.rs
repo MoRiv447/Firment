@@ -2461,6 +2461,43 @@ mod tests {
     }
 
     #[test]
+    fn a_phase_reported_at_the_start_of_a_call_is_kept_by_its_card() {
+        // Every tool reports its phase once, just before the long part starts, while the card is
+        // milliseconds old. The gate used to discard exactly those events, so a five-minute build
+        // showed no phase at all; whether to draw it is the renderer's decision, not the store's.
+        let mut app = test_app();
+        app.on_agent(AgentEvent::ToolStart {
+            name: "build".to_string(),
+            args: serde_json::json!({}),
+            seq: 4,
+            owner: None,
+        });
+        app.on_agent(AgentEvent::Progress {
+            tool: "build".to_string(),
+            seq: 4,
+            owner: None,
+            event: firment_core::progress::ProgressEvent::counted("compiling", 40, 100, 4_000),
+        });
+        let Some(Item::Tool { progress, .. }) = app.items.last() else {
+            panic!("the card the phase names is gone");
+        };
+        let shown = progress.as_deref().unwrap_or_default();
+        assert!(
+            shown.contains("compiling") && shown.contains("40%"),
+            "the card kept nothing: {shown:?}"
+        );
+
+        // And a phase for a card that is not there invents nothing.
+        app.on_agent(AgentEvent::Progress {
+            tool: "ghost".to_string(),
+            seq: 99,
+            owner: None,
+            event: firment_core::progress::ProgressEvent::phase("nowhere"),
+        });
+        assert_eq!(app.items.len(), 1);
+    }
+
+    #[test]
     fn review_last_is_refused_while_a_turn_is_running() {
         // A review of a change that is still being written is a review of half a change,
         // and the agent lock it takes is the one the running turn holds.

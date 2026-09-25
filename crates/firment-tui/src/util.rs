@@ -5,6 +5,25 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use std::path::Path;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+/// The card's progress line: the phase, and the numbers only where the tool knows them.
+///
+/// A percentage the tool cannot know is worse than no percentage (see
+/// [`firment_core::progress`]), so `current`/`total` render only when the event carried a real
+/// total and the remaining time only when the tool could extrapolate one.
+pub(crate) fn format_progress(event: &firment_core::progress::ProgressEvent) -> String {
+    let mut text = event.phase.clone();
+    if event.total > 0 && event.current <= event.total {
+        text.push_str(&format!(" {}%", event.current * 100 / event.total));
+    }
+    if let Some(eta) = event.eta_ms {
+        text.push_str(&format!(
+            " · ~{} left",
+            crate::step_time::format_step_duration(std::time::Duration::from_millis(eta))
+        ));
+    }
+    text
+}
+
 /// Branch + working-tree change count shown in the status bar.
 pub(crate) struct GitInfo {
     pub(crate) branch: String,
@@ -248,6 +267,25 @@ pub(crate) async fn git_info(cwd: &Path) -> Option<GitInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_progress_line_shows_only_the_numbers_the_tool_knows() {
+        // The phase half is always safe to print; the count only when the tool carried one.
+        assert_eq!(
+            format_progress(&firment_core::progress::ProgressEvent::phase("erasing")),
+            "erasing"
+        );
+        let line = format_progress(&firment_core::progress::ProgressEvent::counted(
+            "capturing",
+            50,
+            200,
+            10_000,
+        ));
+        assert!(
+            line.contains("capturing") && line.contains("25%") && line.contains("left"),
+            "{line}"
+        );
+    }
 
     #[test]
     fn porcelain_paths_survive_the_two_column_prefix() {

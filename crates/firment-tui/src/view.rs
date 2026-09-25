@@ -364,12 +364,18 @@ impl App {
                         }
                     })
                     .unwrap_or_default();
-                // What the tool is doing *now*. Only ever set once the card has been running for
-                // more than §16.2's two seconds, so this cannot add a line that comes and goes.
-                let phase = progress
-                    .as_deref()
-                    .map(|phase| format!("  · {phase}"))
-                    .unwrap_or_default();
+                // What the tool is doing *now*. §16.2's two-second rule is decided here because
+                // this is where the card's clock is readable: the phase event itself arrives in
+                // the call's first milliseconds, so a rule applied when it arrives hides every
+                // phase there is. A finished card has none — `ToolEnd` clears it.
+                let phase = match (progress.as_deref(), running, started_at) {
+                    (Some(phase), true, Some(started))
+                        if started.elapsed() >= std::time::Duration::from_secs(2) =>
+                    {
+                        format!("  · {phase}")
+                    }
+                    _ => String::new(),
+                };
                 let line = format!(
                     "{symbol} {name}{card_id}{elapsed} {marker} {}{}{badge}{phase}",
                     truncate_chars(summary, 120),
