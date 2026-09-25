@@ -313,7 +313,7 @@ impl ToolRegistry {
             .tools
             .values()
             .map(|t| ToolSpec {
-                name: t.name().to_string(),
+                name: t.owned_name().to_string(),
                 description: t.description().to_string(),
                 input_schema: t.input_schema(),
             })
@@ -331,7 +331,7 @@ impl ToolRegistry {
         let tool = self
             .get(name)
             .ok_or_else(|| ToolError::new(format!("unknown tool: {name}")))?;
-        crate::schema::validate_args(tool.name(), &tool.input_schema(), &args)
+        crate::schema::validate_args(&tool.owned_name(), &tool.input_schema(), &args)
             .map_err(ToolError::new)?;
         let mut reason = tool.approval(&args);
         if let Some(preview) = tool.preview(&args, ctx)
@@ -340,7 +340,11 @@ impl ToolRegistry {
             reason.push_str(&format!("\n{preview}"));
         }
         if let Some(reason) = reason {
-            match ctx.permission.confirm(tool.name(), &args, &reason).await {
+            match ctx
+                .permission
+                .confirm(&tool.owned_name(), &args, &reason)
+                .await
+            {
                 Ok(()) => {}
                 Err(PermissionError::Denied(message)) => {
                     return Err(ToolError::denied(format!("Permission denied: {message}")));
@@ -413,6 +417,39 @@ mod tests {
 
         fn input_schema(&self) -> Value {
             serde_json::json!({"type": "object"})
+        }
+
+        async fn run(&self, _args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput {
+                text: String::new(),
+            })
+        }
+    }
+
+    /// Like [`Named`], but every call needs approval — so the permission layer's key can be
+    /// observed rather than assumed.
+    struct GuardedNamed(String);
+
+    #[async_trait]
+    impl Tool for GuardedNamed {
+        fn name(&self) -> &'static str {
+            "plugin-tool"
+        }
+
+        fn owned_name(&self) -> Arc<str> {
+            Arc::from(self.0.as_str())
+        }
+
+        fn description(&self) -> &'static str {
+            "a guarded runtime-named stub"
+        }
+
+        fn input_schema(&self) -> Value {
+            serde_json::json!({"type": "object"})
+        }
+
+        fn approval(&self, _args: &Value) -> Option<String> {
+            Some("writes outside the session".to_string())
         }
 
         async fn run(&self, _args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
@@ -498,5 +535,69 @@ mod tests {
         // behaviour so changing it is a deliberate act.
         registry.register(Arc::new(Stub("alpha")));
         assert_eq!(registry.names().len(), 2);
+    }
+
+    #[test]
+    fn a_runtime_named_tool_is_advertised_under_the_name_that_resolves() {
+        // The plugin case, and the reason `specs()` cannot use `name()`: a plugin tool has no
+        // compile-time name, so it returns a placeholder there and the real one through
+        // `owned_name()`. Advertising the placeholder showed the model a tool that then failed
+        // `get()` as "unknown tool" — no plugin was ever callable — and two plugins produced two
+        // identical entries. The stub above cannot express this, because its two names are equal.
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(Stub("build")));
+        registry
+            .register_plugin(Arc::new(Named("sensor".to_string())))
+            .unwrap();
+        registry
+            .register_plugin(Arc::new(Named("camera".to_string())))
+            .unwrap();
+
+        let specs = registry.specs();
+        let advertised: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(advertised, ["build", "camera", "sensor"]);
+        assert!(
+            !advertised.contains(&"plugin-tool"),
+            "the placeholder reached the model: {advertised:?}"
+        );
+        for name in ["sensor", "camera"] {
+            assert!(
+                registry.get(name).is_some(),
+                "{name} advertised but not resolvable"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn approval_is_decided_per_plugin_rather_than_for_all_of_them() {
+        // The same key decides `auto_approve` matching and the `[a] always allow` answer. Read
+        // off the placeholder, one approval on any plugin approved every plugin for the session —
+        // including one declared `fs.write` — and `auto_approve = ["sensor"]` never matched.
+        let mut registry = ToolRegistry::new();
+        registry
+            .register_plugin(Arc::new(GuardedNamed("sensor".to_string())))
+            .unwrap();
+        registry
+            .register_plugin(Arc::new(GuardedNamed("camera".to_string())))
+            .unwrap();
+
+        let ctx = ToolContext {
+            permission: Arc::new(crate::AutoApprove::new(false, ["sensor".to_string()])),
+            ..ToolContext::default()
+        };
+
+        registry
+            .run("sensor", serde_json::json!({}), &ctx)
+            .await
+            .expect("the named plugin is allowed by name");
+        let err = registry
+            .run("camera", serde_json::json!({}), &ctx)
+            .await
+            .expect_err("a different plugin must not inherit that allowance");
+        assert!(
+            err.message.contains("camera"),
+            "the refusal must name what it refused, got: {}",
+            err.message
+        );
     }
 }
