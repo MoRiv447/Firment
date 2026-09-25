@@ -1363,16 +1363,17 @@ impl Agent {
                             owner: self.event_owner(),
                         })
                         .await;
-                    let result = self
-                        .registry
-                        .get("verify")
-                        .expect("checked above")
-                        .run(json!({}), &ctx)
-                        .await;
+                    // Through the registry, not straight at the tool. `verify` declares an
+                    // approval reason, so calling it directly asked nothing of the user: the
+                    // same command needed a yes when the model requested it and ran unasked
+                    // when the agent did — one guard applied at one of two doors.
+                    let (result, gate) =
+                        self.registry.run_measured("verify", json!({}), &ctx).await;
                     let (ok, text) = match &result {
                         Ok(output) => (true, output.text.clone()),
                         Err(e) => (false, e.message.clone()),
                     };
+                    let denied = result.as_ref().err().is_some_and(|e| e.denied);
                     self.sink
                         .event(AgentEvent::ToolEnd {
                             name: "verify".to_string(),
@@ -1384,9 +1385,7 @@ impl Agent {
                             detail: None,
                             seq,
                             owner: self.event_owner(),
-                            // This call goes to the tool directly, not through the registry, so
-                            // it meets no permission gate and asks no one.
-                            waited_ms: None,
+                            waited_ms: gate.map(|d| d.as_millis() as u64),
                         })
                         .await;
                     self.session.push(ChatMessage::Tool {
@@ -1400,6 +1399,23 @@ impl Agent {
                         self.session.messages.pop();
                         self.session.push(plain_assistant);
                         mutations_since_verify = 0;
+                    } else if denied {
+                        // A person said no. That is an answer, not a compile error: the
+                        // retry below would ask again on every iteration and land in the
+                        // max-iteration exit, which rolls the turn's edits back as if the
+                        // *code* had failed — punishing the user's refusal by deleting
+                        // their work. Finish the turn, keep the files, and leave the
+                        // refusal in the transcript where the model can read it.
+                        self.session.messages.pop();
+                        self.session.messages.pop();
+                        self.session.push(plain_assistant);
+                        self.sink
+                            .event(AgentEvent::Info(
+                                "verify was declined, so nothing was checked; this turn's \
+                                 changes are kept as they are"
+                                    .to_string(),
+                            ))
+                            .await;
                     } else {
                         self.sink
                             .event(AgentEvent::Info(

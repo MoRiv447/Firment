@@ -256,6 +256,38 @@ impl Tool for FakeVerifyTool {
     }
 }
 
+/// Like [`FakeVerifyTool`], except it declares an approval reason — which is what the
+/// real `verify` does, and what makes the permission gate open in front of it.
+struct GuardedVerifyTool {
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl Tool for GuardedVerifyTool {
+    fn name(&self) -> &'static str {
+        "verify"
+    }
+
+    fn description(&self) -> &'static str {
+        "fake verify tool that asks first"
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+
+    fn approval(&self, _args: &Value) -> Option<String> {
+        Some("run configured verify command".to_string())
+    }
+
+    async fn run(&self, _args: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(ToolOutput {
+            text: "verify passed (exit 0)".to_string(),
+        })
+    }
+}
+
 struct FailingVerifyTool;
 
 #[async_trait]
@@ -1560,6 +1592,140 @@ async fn verify_hard_gate_runs_after_mutations_and_allows_completion() {
     );
     assert!(
         matches!(agent.session().messages.last(), Some(ChatMessage::Assistant { content, .. }) if content == "done")
+    );
+}
+
+#[tokio::test]
+async fn the_turn_end_verify_gate_asks_before_it_runs_the_command() {
+    // One guard, two doors. A `verify` the model asked for goes through the permission
+    // gate; the automatic one at the end of the turn used to call the tool directly and
+    // so ran the configured command on a user who had just refused it.
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_write".to_string(),
+                    name: "write_file".to_string(),
+                    arguments: json!({"path": "c.txt", "content": "x"}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            vec![
+                ProviderEvent::Text("done".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+        ]))),
+        model: "fake".to_string(),
+    };
+    let calls = Arc::new(AtomicUsize::new(0));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let dir = tempdir().unwrap();
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(vec![
+            Arc::new(JournalingWriteTool),
+            Arc::new(GuardedVerifyTool {
+                calls: calls.clone(),
+            }),
+        ]),
+        Session::new(dir.path().to_path_buf(), "default", "fake"),
+        SessionStore::new(dir.path().join("sessions")),
+        // The edit gets its yes; the verification does not. Approving nothing at all
+        // would refuse the write too, and the turn would never reach this gate — the
+        // assertions below would then hold for a reason that has nothing to do with it.
+        Arc::new(AutoApprove::new(false, ["write_file".to_string()])),
+        Arc::new(CollectSink(events.clone())),
+        10,
+    );
+    agent.set_verify_command(Some("fake-verify".to_string()));
+
+    let text = agent.run_turn("write then finish").await.unwrap();
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "a refused approval must not run the command"
+    );
+    // A refusal is an answer, not a build error: retrying it every iteration would end
+    // the turn in the max-iteration path and roll the edits back as if the code had
+    // failed — the user's own "no" deleting their own work.
+    assert_eq!(text, "done", "the turn finishes on a refusal");
+    assert!(
+        dir.path().join("c.txt").exists(),
+        "the refusal is not the edits' fault; they stay on disk"
+    );
+    let said = events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::Info(message) => Some(message.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        said.contains("declined"),
+        "the reader is told nothing was checked: {said}"
+    );
+}
+
+#[tokio::test]
+async fn an_answered_gate_still_gates_and_reports_no_waiting() {
+    // The other side of the same door: a rule that answers for the user keeps the hard
+    // gate's meaning (verify still runs, completion still depends on it), and the card
+    // reports no human time — because there was none.
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::from([
+            vec![
+                ProviderEvent::ToolCall(firment_core::ToolCall {
+                    id: "call_write".to_string(),
+                    name: "write_file".to_string(),
+                    arguments: json!({"path": "d.txt", "content": "x"}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            vec![
+                ProviderEvent::Text("done".to_string()),
+                ProviderEvent::Stop(StopReason::EndTurn),
+            ],
+        ]))),
+        model: "fake".to_string(),
+    };
+    let calls = Arc::new(AtomicUsize::new(0));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let dir = tempdir().unwrap();
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(vec![
+            Arc::new(JournalingWriteTool),
+            Arc::new(GuardedVerifyTool {
+                calls: calls.clone(),
+            }),
+        ]),
+        Session::new(dir.path().to_path_buf(), "default", "fake"),
+        SessionStore::new(dir.path().join("sessions")),
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(events.clone())),
+        10,
+    );
+    agent.set_verify_command(Some("fake-verify".to_string()));
+
+    agent.run_turn("write then finish").await.unwrap();
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "an approved gate still runs the verification"
+    );
+    let waited = events.lock().unwrap().iter().find_map(|e| match e {
+        AgentEvent::ToolEnd {
+            name, waited_ms, ..
+        } if name == "verify" => Some(*waited_ms),
+        _ => None,
+    });
+    assert_eq!(
+        waited,
+        Some(None),
+        "a rule answered, so the verify card carries no human time"
     );
 }
 
