@@ -153,6 +153,20 @@ fn drop_cur_dir_components(path: &Path) -> PathBuf {
     }
 }
 
+/// The directory a relative plugin `command` resolves against: the one holding the config that
+/// declares it.
+///
+/// Deliberately **not** the session's working directory. `[plugins.<name>]` and its `trusted =
+/// true` vouch live in the user's config, while the cwd is whichever checkout is open — resolved
+/// there, `command = "plugins/sensor.exe"` would run a binary supplied by a cloned repository under
+/// a vouch given at home, and a plugin declaring no mutating capability never even prompts.
+///
+/// `firm doctor` and the assembly both take the base from here so the path in the report is the
+/// path that executes; one answer is the point of printing it at all.
+pub fn plugin_command_base() -> PathBuf {
+    crate::config::config_dir()
+}
+
 /// Every declared plugin, resolved and checked, ready to print.
 ///
 /// Returns them sorted by name so a doctor report is stable across runs — a diff of two

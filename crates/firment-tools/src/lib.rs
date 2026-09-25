@@ -146,7 +146,23 @@ pub fn session_registry(
             ));
             continue;
         }
-        if let Err(e) = registry.register_plugin(tool) {
+        if plan && tool.is_mutating() {
+            // The read-only registry is the first line of defence, and it was only ever true of
+            // built-ins: a plugin declaring `fs.write` joined it and wrote anyway, because the
+            // plan-mode permission wrapper names write_file/edit_file/shell and has no idea what
+            // a plugin declares. Refusing here is what makes the registry mean what its name says.
+            refusals.push(format!(
+                "plugin {name:?} is not available in plan mode — it declares {} and plan mode is \
+                 read-only; switch the session back to agent mode to use it",
+                tool.capabilities()
+                    .iter()
+                    .map(|c| c.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+            continue;
+        }
+        if let Err(e) = registry.register_plugin(tool as Arc<dyn firment_core::Tool>) {
             refusals.push(e);
         }
     }
@@ -314,6 +330,67 @@ mod tests {
             "plan mode must not acquire a write tool through a plugin"
         );
         assert_eq!(plan_refusals.len(), 2, "{plan_refusals:?}");
+    }
+
+    #[test]
+    fn plan_mode_refuses_a_mutating_plugin_under_its_own_name() {
+        // The half the test above misses. Checking *names* keeps `write_file` out of plan mode,
+        // but a plugin called `logger` that declares `fs.write` has no name to collide with — it
+        // joined the read-only registry and wrote anyway, because the plan-mode permission wrapper
+        // matches the built-in write tools by name and knows nothing about declared capabilities.
+        let dir = tempfile::tempdir().unwrap();
+        let mut plugins = std::collections::HashMap::new();
+        for (name, capability) in [
+            ("logger", "fs.write"),
+            ("prober", "hardware"),
+            ("runner", "exec"),
+            ("watcher", "fs.read"),
+        ] {
+            plugins.insert(
+                name.to_string(),
+                firment_core::plugin::PluginConfig {
+                    command: name.to_string(),
+                    args: vec![],
+                    capabilities: vec![capability.to_string()],
+                    trusted: true,
+                },
+            );
+        }
+
+        let (agent_mode, refusals) = session_registry(false, &plugins, dir.path());
+        assert!(
+            refusals.is_empty(),
+            "nothing to refuse in agent mode: {refusals:?}"
+        );
+        for name in ["logger", "prober", "runner", "watcher"] {
+            assert!(
+                agent_mode.get(name).is_some(),
+                "{name} missing in agent mode"
+            );
+        }
+
+        let (plan, plan_refusals) = session_registry(true, &plugins, dir.path());
+        assert!(
+            plan.get("watcher").is_some(),
+            "a read-only plugin belongs in a read-only mode"
+        );
+        for name in ["logger", "prober", "runner"] {
+            assert!(
+                plan.get(name).is_none(),
+                "{name} declares a mutating capability and must not be callable in plan mode"
+            );
+        }
+        assert_eq!(plan_refusals.len(), 3, "{plan_refusals:?}");
+        assert!(
+            plan_refusals.iter().all(|r| r.contains("plan mode")),
+            "the refusal must say why the plugin vanished: {plan_refusals:?}"
+        );
+        assert!(
+            plan_refusals
+                .iter()
+                .any(|r| r.contains("fs.write") && r.contains("logger")),
+            "and name the capability it refused: {plan_refusals:?}"
+        );
     }
 
     #[test]

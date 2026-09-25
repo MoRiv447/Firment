@@ -56,6 +56,16 @@ impl PluginTool {
         &self.capabilities
     }
 
+    /// Whether this plugin declares a capability that changes something outside the process.
+    ///
+    /// Plan mode asks the registry, not the user: a plugin is not a door around a read-only
+    /// session, and `fs.write` on a plugin means the same thing it means on `edit_file`.
+    pub fn is_mutating(&self) -> bool {
+        [Capability::FsWrite, Capability::Exec, Capability::Hardware]
+            .iter()
+            .any(|c| self.capabilities.contains(c))
+    }
+
     /// The command line: the config's path and args, quoted, and nothing else.
     ///
     /// The model's arguments never reach this string — they go to the child on stdin as JSON —
@@ -108,10 +118,7 @@ impl Tool for PluginTool {
         // Built from the *declared* capabilities, never from anything the plugin says (review §4
         // invariant 3): a plugin that could write its own approval prompt would be writing the
         // text the user decides on.
-        let mutating = [Capability::FsWrite, Capability::Exec, Capability::Hardware]
-            .iter()
-            .any(|c| self.capabilities.contains(c));
-        if !mutating {
+        if !self.is_mutating() {
             return None;
         }
         Some(format!(
@@ -203,12 +210,10 @@ impl Tool for PluginTool {
 pub fn plugin_tools(
     plugins: &std::collections::HashMap<String, firment_core::plugin::PluginConfig>,
     base: &std::path::Path,
-) -> Vec<Arc<dyn Tool>> {
+) -> Vec<Arc<PluginTool>> {
     firment_core::plugin::declared_plugins(plugins, base)
         .into_iter()
-        .filter_map(|declared| {
-            PluginTool::new(declared).map(|tool| Arc::new(tool) as Arc<dyn Tool>)
-        })
+        .filter_map(|declared| PluginTool::new(declared).map(Arc::new))
         .collect()
 }
 

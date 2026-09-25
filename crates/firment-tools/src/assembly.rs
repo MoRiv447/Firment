@@ -66,7 +66,15 @@ pub fn assemble_agent(
     let plan = session.mode == SessionMode::Plan;
     // Plugins are part of the registry a session gets, added through the door that refuses a
     // shadowing name. A refusal is reported below rather than dropped here.
-    let (registry, plugin_refusals) = session_registry(plan, &merged.plugins, &session.cwd);
+    //
+    // The base is the config directory, not `session.cwd`: the declaration and the `trusted` vouch
+    // for it are both the user's, and resolving a relative command against whichever checkout is
+    // open lets that checkout supply the binary that runs under a vouch given at home.
+    let (registry, plugin_refusals) = session_registry(
+        plan,
+        &merged.plugins,
+        &firment_core::plugin::plugin_command_base(),
+    );
     let agent_permission: Arc<dyn PermissionChecker> = if plan {
         Arc::new(PlanModePermission::new(permission.clone()))
     } else {

@@ -36,15 +36,11 @@ pub(crate) fn doctor_key(
 /// The return value is what `firm doctor`'s closing summary is built from: a reader who runs
 /// doctor wants one answer to "can I work right now?", and computing it from the probes that
 /// have already happened costs nothing.
-pub(crate) async fn doctor(
-    config: &Config,
-    path: &Path,
-    cwd: &Path,
-) -> anyhow::Result<Vec<(String, bool)>> {
+pub(crate) async fn doctor(config: &Config, path: &Path) -> anyhow::Result<Vec<(String, bool)>> {
     println!("config file: {}", path.display());
     // Before the provider check, and deliberately so: a plugin declaration says nothing about
     // providers, and a config with plugins and no provider would otherwise report neither.
-    doctor_plugins(config, cwd);
+    doctor_plugins(config);
     let mut reachable: Vec<(String, bool)> = Vec::new();
     if config.providers.is_empty() {
         println!("no providers configured");
@@ -107,15 +103,17 @@ pub(crate) async fn doctor(
 /// someone wrote once; a plugin is a path that will be executed. Showing both makes "which file
 /// is `./plugins/x.sh`" answerable without reading the config parser, and makes a change to
 /// either visible before anything runs.
-fn doctor_plugins(config: &Config, base: &Path) {
+fn doctor_plugins(config: &Config) {
     if config.plugins.is_empty() {
         return;
     }
-    // `base` is the session's cwd, the same directory the merged config was read for and the
-    // same one `session_registry` resolves against. One answer, not two: a doctor report that
-    // disagreed with what the agent would run would be worse than no report.
+    // The same base `session_registry` is given, from the same function: what this prints is the
+    // path that will be executed. A report resolving against the session's cwd while the agent
+    // resolved against the config directory would be two answers to one question — and the
+    // difference would decide *which* file a vouched-for plugin runs.
+    let base = firment_core::plugin::plugin_command_base();
     println!("\nplugins:");
-    for plugin in firment_core::plugin::declared_plugins(&config.plugins, base) {
+    for plugin in firment_core::plugin::declared_plugins(&config.plugins, &base) {
         println!(
             "  {} -> {}{}{}",
             plugin.name,

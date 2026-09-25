@@ -40,6 +40,10 @@ pub fn build_agent(
         session_id: session.id.clone(),
     });
 
+    // Captured before `session` moves into the assembly: everything reported here belongs to
+    // this chat, and `App.tsx` routes an unstamped event to whichever chat happens to be open.
+    let session_id = session.id.clone();
+
     // The GUI permission dialog is the decision point, so dangerous shell
     // commands may reach it (the frontend labels them ⚠).
     let mut assembly = firment_tools::assembly::assemble_agent(
@@ -56,11 +60,23 @@ pub fn build_agent(
         true,
     );
 
+    for refusal in assembly.plugin_refusals.drain(..) {
+        // A plugin the user configured that quietly does nothing is a plugin they believe is
+        // working. The CLI prints these and the TUI emits them; the GUI showed neither.
+        let _ = shared.app.emit(
+            "agent-event",
+            FrontendEvent::Info {
+                session_id: Some(session_id.clone()),
+                message: refusal,
+            },
+        );
+    }
+
     if let Some(error) = assembly.provider_error.take() {
         let _ = shared.app.emit(
             "agent-event",
             FrontendEvent::Error {
-                session_id: None,
+                session_id: Some(session_id.clone()),
                 message: error,
             },
         );

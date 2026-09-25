@@ -58,8 +58,6 @@ pub async fn run(
     let tool_verbosity = base_config.ui.tool_verbosity;
     let config = base_config.clone().merged_for(&session.cwd);
     let store = SessionStore::default();
-    let default_registry = firment_tools::default_registry();
-    let plan_registry = firment_tools::plan_registry();
 
     let (event_tx, event_rx) = mpsc::channel(256);
     let (perm_tx, perm_rx) = mpsc::channel(16);
@@ -143,8 +141,6 @@ pub async fn run(
         store.clone(),
         task_config,
         task_config_path,
-        plan_registry.clone(),
-        default_registry.clone(),
         plan_permission.clone(),
         tui_permission.clone(),
     );
@@ -2137,8 +2133,6 @@ mod tests {
                 },
             ),
             std::env::temp_dir().join("firment-tui-stall.toml"),
-            firment_tools::plan_registry(),
-            firment_tools::default_registry(),
             Arc::new(firment_core::AutoApprove::everything()),
             Arc::new(firment_core::AutoApprove::everything()),
         );

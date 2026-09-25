@@ -6,11 +6,52 @@
 
 use firment_core::{
     Agent, AgentEvent, Cancellable, Config, PermissionChecker, ProviderConfig, Session,
-    SessionMode, SessionStore, ThinkingLevel, ToolRegistry, ToolVerbosity,
+    SessionMode, SessionStore, ThinkingLevel, ToolVerbosity,
 };
 use futures::FutureExt;
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
+/// Install the tool set for `mode` and report what it refused.
+///
+/// Built here, per switch, through the same door the CLI and the GUI use. It used to be two
+/// registries chosen once at startup from the built-in sets — `plan_registry()` and
+/// `default_registry()` — which contain no plugins at all, so `/plan`, `/new` and `/session` each
+/// dropped every plugin the user had configured, without a message, and the plugin came back only
+/// on restart. A plugin's declared path is also relative to the session's directory, which a
+/// registry built before `/session` moved the session would resolve against the wrong checkout.
+async fn apply_mode(
+    agent: &mut Agent,
+    config: &Config,
+    mode: SessionMode,
+    planning_permission: Arc<dyn PermissionChecker>,
+    normal_permission: Arc<dyn PermissionChecker>,
+) -> Vec<String> {
+    let planning = mode == SessionMode::Plan;
+    let (registry, refusals) = firment_tools::session_registry(
+        planning,
+        &config.plugins,
+        &firment_core::plugin::plugin_command_base(),
+    );
+    agent.set_mode(
+        mode,
+        registry,
+        if planning {
+            planning_permission
+        } else {
+            normal_permission
+        },
+    );
+    refusals
+}
+
+/// Say what the registry refused. A plugin that is absent without an explanation is a plugin the
+/// user believes is working, and the CLI and the GUI already print these.
+async fn emit_refusals(agent: &mut Agent, refusals: Vec<String>) {
+    for refusal in refusals {
+        agent.emit(AgentEvent::Info(refusal)).await;
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_agent_task(
     mut cmd_rx: mpsc::Receiver<AgentCmd>,
@@ -21,8 +62,6 @@ pub(crate) fn spawn_agent_task(
     store: SessionStore,
     mut task_config: Config,
     task_config_path: std::path::PathBuf,
-    plan_registry: Arc<ToolRegistry>,
-    default_registry: Arc<ToolRegistry>,
     plan_permission: Arc<dyn PermissionChecker>,
     tui_permission: Arc<dyn PermissionChecker>,
 ) -> tokio::task::JoinHandle<()> {
@@ -318,17 +357,15 @@ pub(crate) fn spawn_agent_task(
                 }
                 AgentCmd::SetMode(mode) => {
                     let mut agent = agent.lock().await;
-                    let registry = if mode == SessionMode::Plan {
-                        plan_registry.clone()
-                    } else {
-                        default_registry.clone()
-                    };
-                    let permission: Arc<dyn PermissionChecker> = if mode == SessionMode::Plan {
-                        plan_permission.clone()
-                    } else {
-                        tui_permission.clone()
-                    };
-                    agent.set_mode(mode, registry, permission);
+                    let refusals = apply_mode(
+                        &mut agent,
+                        &task_config,
+                        mode,
+                        plan_permission.clone(),
+                        tui_permission.clone(),
+                    )
+                    .await;
+                    emit_refusals(&mut agent, refusals).await;
                     let _ = agent.save_session();
                     agent
                         .emit(AgentEvent::Info(format!(
@@ -397,10 +434,16 @@ pub(crate) fn spawn_agent_task(
                         agent.session().provider.clone(),
                         agent.session().model.clone(),
                     );
-                    let registry = default_registry.clone();
-                    let permission: Arc<dyn PermissionChecker> = tui_permission.clone();
                     agent.replace_session(fresh.clone());
-                    agent.set_mode(SessionMode::Agent, registry, permission);
+                    let refusals = apply_mode(
+                        &mut agent,
+                        &task_config,
+                        SessionMode::Agent,
+                        plan_permission.clone(),
+                        tui_permission.clone(),
+                    )
+                    .await;
+                    emit_refusals(&mut agent, refusals).await;
                     let _ = agent.save_session();
                     agent
                         .emit(AgentEvent::Info(
@@ -434,17 +477,15 @@ pub(crate) fn spawn_agent_task(
                                     .await;
                             }
                         }
-                        let registry = if mode == SessionMode::Plan {
-                            plan_registry.clone()
-                        } else {
-                            default_registry.clone()
-                        };
-                        let permission: Arc<dyn PermissionChecker> = if mode == SessionMode::Plan {
-                            plan_permission.clone()
-                        } else {
-                            tui_permission.clone()
-                        };
-                        agent.set_mode(mode, registry, permission);
+                        let refusals = apply_mode(
+                            &mut agent,
+                            &task_config,
+                            mode,
+                            plan_permission.clone(),
+                            tui_permission.clone(),
+                        )
+                        .await;
+                        emit_refusals(&mut agent, refusals).await;
                         let _ = agent.save_session();
                         agent
                             .emit(AgentEvent::Info(format!(
