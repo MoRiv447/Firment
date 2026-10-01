@@ -29,7 +29,7 @@
 }
 
 .board[aria-pressed='true'] {
-  border-color: var(--outline);
+  border-color: var(--border-strong);
   background: var(--success-bg);
   color: var(--success-ink);
 }

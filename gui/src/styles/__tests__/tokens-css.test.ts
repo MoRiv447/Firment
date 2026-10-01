@@ -91,7 +91,15 @@ describe('tokens.css structure', () => {
     // makes adding one a decision instead of a slip. The texture is not part of the
     // count -- it lives outside both blocks, because it is the same in both schemes
     // and only its strength is declared per scheme.
-    expect(customProps(dark).length).toBe(41);
+    //
+    // 41 -> 46 on 2026-10-01, when the ramp went olive. `--outline` became
+    // `--border-strong` (same role, a name that says which tier it is) and five
+    // keys were added: two more text levels (`ink-soft`, `dim` -- the palette only
+    // had two, so a path and a heading had to be told apart by size alone), two
+    // more edge weights (`border`, `border-active` -- the second carries a
+    // selection, which a fill cannot), and `code-bg`, the surface a code block
+    // nested inside a card sits on.
+    expect(customProps(dark).length).toBe(46);
   });
 
   it('has a light scheme whose raise step is real', () => {
@@ -139,15 +147,42 @@ describe('tokens.css number scales', () => {
     // Zed's buffer size, and its UI is 14 -- the same two-role split, from an
     // external ruler rather than from a preference.
     expect(shared.get('--fs-read')).toBe('15px');
+    // The rung that was missing. Before this the scale ran 10-15 and then jumped
+    // straight to 28, so a card title had nowhere to go and the tool card shipped
+    // its title at `--fs-minor` -- smaller than the body text beside it. 17px is
+    // the landing page's card-heading size; its panel heading is 20-21, which at
+    // app density is this.
+    expect(shared.get('--fs-title')).toBe('17px');
   });
 
-  it('bundles Geist and JetBrains Mono, and never names Inter', () => {
+  it('names a CJK face instead of leaving Chinese to system-ui', () => {
+    // The complaint this answers was "the font is not right", and the cause was
+    // measurable: Latin rendered in a bundled face while Chinese fell through to
+    // whatever `system-ui` resolved to, so one line of mixed text had two faces in
+    // it. Leaving that implicit is the bug, so the faces are asserted, not the
+    // rendering. No CJK face is bundled -- the system has one and shipping it would
+    // add megabytes.
+    expect(shared.get('--ff-sans')).toContain('Microsoft YaHei UI');
+    expect(shared.get('--ff-sans')).toContain('PingFang SC');
+    expect(shared.get('--ff-mono')).toContain('Microsoft YaHei UI');
+  });
+
+  it('tracks Latin labels out and never tracks CJK the same way', () => {
+    // 0.16em is designed for uppercase Latin: narrow, evenly spaced glyphs that
+    // open up well. CJK glyphs are already full-width, so the same value reads as
+    // a line of separated characters. The landing page cannot settle this -- all
+    // of its micro-labels are Latin -- so the two values have to both exist.
+    expect(shared.get('--tracking-label')).toBe('0.16em');
+    expect(shared.get('--tracking-cjk')).toBe('0.02em');
+  });
+
+  it('bundles DM Sans and IBM Plex Mono, and never names Inter', () => {
     // Inter was declared for two redesigns and never shipped, so for a while the
     // app rendered the system font while its tokens claimed otherwise. Naming a
     // font is not loading one, and the answer is not a comment: it is a test that
     // fails when someone reaches for the familiar name again.
-    expect(shared.get('--ff-sans')).toContain('Geist Variable');
-    expect(shared.get('--ff-mono')).toContain('JetBrains Mono Variable');
+    expect(shared.get('--ff-sans')).toContain('DM Sans');
+    expect(shared.get('--ff-mono')).toContain('IBM Plex Mono');
     expect(shared.get('--ff-sans')).not.toMatch(/Inter/i);
     expect(shared.get('--ff-mono')).not.toMatch(/Inter/i);
   });
@@ -173,6 +208,14 @@ describe('tokens.css number scales', () => {
     expect(shared.get('--t-std')).toBe('200ms');
     expect(shared.get('--t-out')).toBe('120ms');
     expect(shared.get('--ease')).toBe('cubic-bezier(0.2, 0.8, 0.2, 1)');
+  });
+
+  it('declares the one amount a disabled control dims by', () => {
+    // A token rather than a literal because the tree had three spellings of it --
+    // `Switch` 0.55, `SessionTree` 0.5, and seven controls with no dimming at all.
+    // It is load-bearing now rather than cosmetic: `--muted` is olive like every
+    // other neutral, so colour cannot carry "disabled" on its own.
+    expect(shared.get('--disabled-opacity')).toBe('0.55');
   });
 
   it('keeps exactly one z-index ladder', () => {

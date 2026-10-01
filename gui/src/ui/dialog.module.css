@@ -23,7 +23,7 @@
   box-sizing: border-box;
   max-height: calc(100vh - var(--sp-8) * 2);
   background: var(--surface);
-  border: 1px solid var(--outline);
+  border: 1px solid var(--border-strong);
   border-radius: var(--r-panel);
   box-shadow: var(--shadow-lg);
   color: var(--ink);

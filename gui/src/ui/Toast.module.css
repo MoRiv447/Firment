@@ -25,7 +25,7 @@
   box-sizing: border-box;
   padding: var(--sp-2) var(--sp-3);
   background: var(--surface-raised);
-  border: 1px solid var(--outline);
+  border: 1px solid var(--border-strong);
   border-inline-start: 2px solid var(--tone);
   border-radius: var(--r-control);
   box-shadow: var(--shadow-md);

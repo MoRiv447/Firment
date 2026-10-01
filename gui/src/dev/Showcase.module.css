@@ -170,7 +170,7 @@
 
 .emptyBox {
   height: 200px;
-  border: 1px dashed var(--outline);
+  border: 1px dashed var(--border-strong);
   border-radius: var(--r-control);
 }
 

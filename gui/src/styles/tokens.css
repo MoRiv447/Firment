@@ -14,64 +14,117 @@
  * Naming is kebab-case, matching web/src/styles/tokens.css so the two files
  * can be compared line by line.
  *
- * One deliberate merge outlived the JS era: `lineStrong` and `outline` held
- * identical values in BOTH schemes, so there is one token here, and the name that
- * survived is `--outline` -- it is what the call sites meant by it.
+ * ---------------------------------------------------------------------------
+ * The olive palette (2026-10-01).
+ *
+ * Every neutral here sits at about **hue 88** -- yellow-green. That is not a
+ * preference; it is what the project's own landing page does, measured: its
+ * `#414a35` is 86deg, `#647257` 91deg, `#a0b28a` 87deg, and its one bright colour
+ * `#b4f779` is 92deg. The app previously used a perfectly neutral grey ramp
+ * (`--line: #3a3a3a`), which is why the interface and its own logo -- which has
+ * been this green all along -- read as two different products.
+ *
+ * The two schemes each match a logo that already existed:
+ *   dark  --brand-acid #b4f779 == gui/public/icons/logo-*.png
+ *   light --brand-acid #4d7c0f == gui/public/icons/logo-w-*.png
+ *
+ * Two consequences that used to be handled the other way round, both deliberate:
+ *
+ * * **`--muted` is olive now.** It used to carry `Never olive: reads as disabled.`
+ *   That was true while the rest of the ramp was neutral -- an olive grey among
+ *   neutral greys is the only one that looks switched off. With every neutral
+ *   olive there is nothing left for it to stand out against, so the *colour* can
+ *   no longer say "disabled" and the second signal has to be opacity: see the
+ *   `:disabled` rules in each component. Do not re-add a colour-only disabled
+ *   state here.
+ * * **Fill and text are separate values again.** `--brand-acid` is the fill
+ *   (`#4d7c0f` light == the logo) and `--brand-ink` is the text (`#476f0e`
+ *   light). They are the same colour only in the dark scheme. In light, the
+ *   logo's own green as text on a card ground is 4.33:1 -- under AA -- which is
+ *   the trap the old cyan palette also had (`#107d98` on `--raised` was 4.18:1).
+ *
+ * Contrast is arithmetic, so every ratio quoted below is asserted in
+ * `styles/__tests__/tokens.test.ts` rather than trusted.
  */
 
 /* ------------------------------------------------------------------ */
-/* Colour and elevation. Both blocks carry the same 37 keys -- the test
+/* Colour and elevation. Both blocks carry the same 47 keys -- the test
    that checks this also checks the count, so a key added to one scheme
    and forgotten in the other cannot land.                        */
 /* ------------------------------------------------------------------ */
 
 :root[data-scheme="dark"] {
-  /* Grounds and text. */
-  --bg: #111111;
-  --surface: #191919;
-  --surface-raised: #222222;
-  --ink: #eeeeee;                    /* 15.08:1 on bg */
-  --muted: #b4b4b4;                  /* 7.47:1 on bg. Never olive: reads as disabled. */
-  --line: #3a3a3a;                   /* a hairline, not a 3:1 non-text line */
-  --outline: #484848;                /* control edges; also lineStrong */
+  /* Grounds. Four steps, each one tinted rather than merely lighter: a flat
+     grey ramp is what "no texture" looked like before. */
+  --bg: #090b09;
+  --surface: #0d130a;
+  --surface-raised: #10160c;         /* cards, rows, the base of a control */
+  /* Code and log bodies sit INSIDE a card, so they go one step darker rather
+     than lighter -- the landing page's nesting (.screenshot-showcase #10160c >
+     .screenshot-stage #0d130a > .evidence-output #0a0f07). */
+  --code-bg: #0a0e07;
 
-  /* Brand. Acid is a highlighter, never text: ~1.8:1 on a light ground. */
-  --brand-acid: #11809c;
-  --on-acid: #ffffff;                /* 4.57:1 on cyan-8; white on cyan-9 is 3.00 */
-  --brand-ink: #4ccce6;              /* green that is readable AS text */
+  /* Edges. Three weights, and the middle one is the one that carries a
+     selection -- a fill alone cannot, see `--selection`. */
+  --line: #242c1e;                   /* hairline, inside a card */
+  --border: #2f3c25;                 /* a card's own edge: 1.61:1 on surface */
+  --border-strong: #3a472e;          /* a panel, a window, a field: 1.99:1 on bg */
+  --border-active: #88b366;          /* 7.79:1 on surface. Measured off the
+                                        landing page's selected choice:
+                                        border rgb(136,179,102) on rgb(26,38,19). */
 
-  /* Status green: a different hue from the brand on purpose (145deg vs 85deg). */
-  --success-bg: #132d21;
-  --success-ink: #b1f1cb;            /* 6.49:1 on success-bg */
-  --success-border: #28684a;
-  --info-bg: #0d2847;
-  --info-ink: #c2e6ff;
-  --warn-bg: #302008;
-  --warn-ink: #ffe7b3;
+  /* Text, four levels. The old palette had two (ink + muted), which is why a
+     path and a heading had to be told apart by size alone. */
+  --ink: #eef1e8;                    /* 17.29:1 on bg -- headings, prose, tool names */
+  --ink-soft: #d3d9c9;               /* 13.04:1 on surface -- secondary prose */
+  --muted: #a9b09f;                  /* 8.43:1 on surface. Olive now; see header. */
+  --dim: #828f70;                    /* 5.48:1 on surface -- paths, times, counters.
+                                        Not a decorative tint: it is the 4th rung
+                                        and it still clears AA on every ground. */
 
-  /* Diff. */
-  --diff-added-bg: #113b29;
-  --diff-added-ink: #b1f1cb;
-  --diff-removed-bg: #500f1c;
-  --diff-removed-ink: #ffd1d9;
-  --diff-meta-ink: #b4b4b4;
+  /* Brand. Acid is the fill, brand-ink is the text. */
+  --brand-acid: #b4f779;
+  --on-acid: #15200d;                /* 13.28:1 on acid */
+  --brand-ink: #b4f779;              /* 14.82:1 on surface -- the same value as the
+                                        fill here, because a lime ground is dark
+                                        enough for lime text. Light cannot: see
+                                        the light block. */
+
+  /* Status. Success keeps a cooler hue than the brand on purpose -- 151deg vs
+     92deg, which is 59deg of separation. That is MORE than the cyan brand it
+     replaces had against its own success green (190deg vs 144deg = 46deg), so
+     going lime does not blur "brand" and "passed". */
+  --success-bg: #16240f;
+  --success-ink: #5fd39b;            /* 8.72:1 on success-bg, 9.87:1 on raised */
+  --success-border: #3f6b4a;         /* 2.64:1 on success-bg */
+  --info-bg: #0e1c2a;
+  --info-ink: #9fd0f5;               /* 10.52:1 on info-bg */
+  --warn-bg: #2a2008;
+  --warn-ink: #ffd98a;               /* 11.88:1 on warn-bg */
+
+  /* Diff. Same two families as the step states below -- one green, one red. */
+  --diff-added-bg: #16230d;
+  --diff-added-ink: #c9e8a2;         /* 12.14:1 on its own fill */
+  --diff-removed-bg: #2e1216;
+  --diff-removed-ink: #ffbcc2;       /* 10.89:1 on its own fill */
+  --diff-meta-ink: #a9b09f;          /* = muted: a hunk header is not a diff line */
 
   /* Elevation. The SECOND separator: a hairline separates first, so these stay soft.
    *
    * In the DARK scheme there is no ladder at all: these are `none`, and separation
    * is the hairline plus the surface step. A black shadow on a near-black ground is
    * invisible and still costs a composited layer, so it is not a subtle choice, it
-   * is a free one. The light scheme keeps real values -- there a shadow is the only
-   * thing that can say "above" when every surface is white.
+   * is a free one. The landing page declares one anyway (`0 20px 80px rgba(0,0,0,.467)`)
+   * and measurement says the same thing: it moves the ground by about 1/255. What
+   * actually draws the edge there is the bright olive border, which is why this
+   * palette has three of them. The light scheme keeps real values -- there a shadow
+   * is the only thing that can say "above" when every surface is near-white.
    *
    * Three levels, and each one means something rather than "bigger":
    *   sm -- a surface inside the page (cards, a selected row, a control thumb)
    *   md -- a transient overlay above the page (menu, popover, tooltip, toast)
    *   lg -- what dims the page behind it (the modal)
-   *
-   * In the light scheme this ladder IS the elevation: the surfaces are white and
-   * `surface-raised` is white too, so a shadow plus a hairline is the only thing
-   * that can say "above". */
+   */
   --shadow-sm: none;
   --shadow-md: none;
   --shadow-lg: none;
@@ -80,8 +133,9 @@
      is the same in both schemes, and only how strong it is differs. */
   --grain-opacity: 0.03;
 
-  /* States. Hover is neutral so that only selection is green. */
-  --hover: #ffffff1b;            /* the alpha step: a wash, not a grey */
+  /* States. Hover is a translucent white rather than a grey: on a near-black
+     ground an opaque grey is mud, because no light passes through it. */
+  --hover: #ffffff24;            /* the alpha step: a wash, not a grey */
   /*
    * A resting wash, for a control that has no other chrome to sit on a bar with.
    *
@@ -90,7 +144,7 @@
    * give it an edge. That difference is a value rather than a branch: light is
    * `transparent`, and every call site stays one rule.
    */
-  --wash-resting: #ffffff1b;
+  --wash-resting: #ffffff14;
   /*
    * Field backgrounds.
    *
@@ -101,81 +155,128 @@
    * like on paper.
    */
   --field-bg: #ffffff0f;
-  --selection: #004558;
-  --on-selection: #eeeeee;           /* 13.28:1 on selection; ink is 1.01:1 on acid */
+
+  /*
+   * Selection is a SURFACE, and the fill is auxiliary.
+   *
+   * The value is the landing page's own selected fill (`#1a2613`). It is not
+   * darker-on-purpose: it is the darkest fill that still holds all four text
+   * levels at AA on top of it -- ink 13.82, ink-soft 10.93, muted 7.06, dim 4.59.
+   * A more visible fill (`#26370f`, 1.43:1 against the row ground instead of 1.17)
+   * drops dim to 3.74 and fails.
+   *
+   * What marks a selection is `--border-active` at 7.79:1. This token is used by
+   * selected rows, the running tool card, the verdict band and a pressed icon
+   * button, so "what gets painted on it" is a longer list than "what a selected
+   * row contains" -- check all of them before changing it.
+   */
+  --selection: #1a2613;
+  --on-selection: #eef1e8;
 
   /* The three step states, derived so a step never invents a fourth green. */
-  --step-done-bg: #113b29;
-  --step-done-ink: #b1f1cb;
-  --step-current-ink: #4ccce6;
-  --step-rule: #00a2c7;              /* a shape, not text */
-  --step-pending-ink: #eeeeee;
-  --step-failed-bg: #3b1219;         /* the removed-diff family: same message, other size */
-  --step-failed-ink: #ffd1d9;
+  --step-done-bg: #16230d;           /* = diff-added: same message, two sizes */
+  --step-done-ink: #c9e8a2;
+  --step-current-ink: #b4f779;
+  --step-rule: #8fce5a;              /* a shape, not text: 10.48:1 on bg */
+  --step-pending-ink: #828f70;       /* = dim: "not yet" reads as the quietest rung */
+  --step-failed-bg: #2e1216;         /* = diff-removed */
+  --step-failed-ink: #ffbcc2;
 
-  /* Keyboard focus. Dark can afford the acid ring (15.06:1); light cannot. */
-  --focus-ring: #11809c;
+  /* Keyboard focus. Dark can afford the lime ring (15.54:1); light cannot. */
+  --focus-ring: #b4f779;
 
-  /* Scrollbar. The thumb is `outline`; the hover shade exists nowhere else
-     and is kept at the value that shipped. */
-  --scroll-thumb: #484848;
-  --scroll-thumb-hover: #6e6e6e;
+  /* Scrollbar. Olive, and stronger than a hairline: a scrollbar is a control.
+     The thumb is inset inside a 10px gutter (see base.css) so only 6px of this
+     is painted -- which is why 2.74:1 rather than the old 1.92:1. */
+  --scroll-thumb: #4f5f42;
+  --scroll-thumb-hover: #7d8f6a;
 
   color-scheme: dark;
 }
 
 :root[data-scheme="light"] {
-  --bg: #fcfcfc;
-  --surface: #f9f9f9;                /* 1.07:1 vs bg: separation is the hairline, not the fill */
-  --surface-raised: #f0f0f0;         /* told apart by border and shadow */
-  --ink: #202020;                    /* 17.72:1 on surface, 16.52:1 on bg */
-  --muted: #646464;                  /* 5.28 / 4.92 / 4.55 on surface / bg / hover */
-  --line: #d9d9d9;
-  --outline: #cecece;
+  --bg: #fbfcf8;                     /* warm off-white: the same hue, turned up */
+  --surface: #f5f7f0;
+  --surface-raised: #edf0e6;         /* 1.07:1 vs bg: separation is the hairline */
+  --code-bg: #e9ede1;                /* one step down, as in dark */
 
-  --brand-acid: #107d98;             /* 1.27:1 here: a fill, never text */
-  --on-acid: #ffffff;
-  --brand-ink: #107d98;              /* 6.21:1 on surface: green text uses this */
+  --line: #e2e6da;
+  --border: #c8d0b9;                 /* 1.48:1 on surface -- matches what the token
+                                        this replaced (`--outline` #cecece)
+                                        achieved, so a card edge reads the same
+                                        weight as before at a different hue */
+  --border-strong: #bcc4ab;          /* 1.75:1 on bg -- a panel's edge, not a card's.
+                                        This is the renamed `--outline`: same role,
+                                        a name that says which tier it is. */
+  --border-active: #6d8c4a;          /* 3.54:1 on surface: this is the signal */
 
-  --success-bg: #e6f6eb;
-  --success-ink: #193b2d;            /* 4.57:1 on success-bg */
-  --success-border: #8eceaa;
-  --info-bg: #e6f4fe;
-  --info-ink: #113264;               /* 5.17:1 on its own fill */
-  --warn-bg: #fff7c2;
-  --warn-ink: #4f3422;               /* 4.51:1 on its own fill */
+  --ink: #1a1e15;                    /* 16.43:1 on bg */
+  --ink-soft: #3a4230;               /* 9.71:1 on surface */
+  --muted: #5c6353;                  /* 5.78:1 on surface */
+  --dim: #656c58;                    /* 5.06:1 on surface, 4.74:1 on raised.
+                                        Light has less room than dark here: the
+                                        4th rung has to stay below `--muted` in
+                                        contrast while clearing AA. */
 
-  --diff-added-bg: #d6f1df;
-  --diff-added-ink: #193b2d;
-  --diff-removed-bg: #ffdbdc;
-  --diff-removed-ink: #641723;       /* 6.56:1 on diff-removed-bg */
-  --diff-meta-ink: #646464;
+  --brand-acid: #4d7c0f;             /* = the light logo's own green */
+  --on-acid: #ffffff;                /* 4.99:1 on acid */
+  --brand-ink: #476f0e;              /* NOT the fill: the logo green as text on a
+                                        card ground is 4.33:1, under AA. This is
+                                        5.48:1 on surface, 5.13:1 on raised. */
+  --success-bg: #dff0d8;
+  --success-ink: #1f6b41;            /* 5.43:1 on success-bg, 5.62:1 on raised, and
+                                        5.37:1 on `--selection` -- which is the
+                                        binding constraint, see the note there. */
+  --success-border: #8ec8a4;
+  --info-bg: #e6f0f8;
+  --info-ink: #14456b;               /* 8.69:1 on its own fill */
+  --warn-bg: #fdf3d2;
+  --warn-ink: #6b4a06;               /* 7.26:1 on its own fill */
+
+  --diff-added-bg: #e4f3d5;
+  --diff-added-ink: #24400f;         /* 9.96:1 on its own fill */
+  --diff-removed-bg: #fbe0e3;
+  --diff-removed-ink: #6d1a20;       /* 9.28:1 on its own fill */
+  --diff-meta-ink: #5c6353;
 
   --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06);
   --shadow-md: 0 4px 12px rgba(16, 24, 40, 0.08);
   --shadow-lg: 0 12px 32px rgba(16, 24, 40, 0.12);
 
-  --hover: #e8e8e8;
-  --wash-resting: transparent;
-  --field-bg: var(--surface);
-  --selection: #b5e9f0;              /* acid is 1.19:1 on this ground: not a highlight */
   /* Lighter than the dark scheme: white goes grey, and reads as dirty, long
      before black does. */
   --grain-opacity: 0.018;
-  --on-selection: #202020;           /* white, not on-acid: acid on dark green is 4.89 */
 
-  --step-done-bg: #d6f1df;
-  --step-done-ink: #193b2d;
-  --step-current-ink: #107d98;
-  --step-rule: #0797b9;              /* a 2px rule needs 3:1; acid here is 1.19 */
-  --step-pending-ink: #202020;
-  --step-failed-bg: #feebec;
-  --step-failed-ink: #641723;
+  --hover: #e6ebdc;
+  --wash-resting: transparent;
+  --field-bg: var(--surface);
 
-  --focus-ring: #0797b9;             /* NOT the acid: 1.27:1 is invisible to a keyboard user */
+  /*
+   * `#dff0c2`, chosen by elimination rather than by eye.
+   *
+   * The fill has to be light enough for four text levels AND for the brand, which
+   * is painted on it by a pressed icon button. `#cfe6a4` separates from the row
+   * ground far better (1.17 vs 1.05) and drops brand-ink to 4.37 and dim to 4.04 --
+   * both under AA. So the fill stays pale and the border does the work; that is
+   * also what the landing page does, at the same magnitude of fill separation.
+   */
+  --selection: #dff0c2;
+  --on-selection: #1a1e15;           /* 14.01:1 */
 
-  --scroll-thumb: #cecece;
-  --scroll-thumb-hover: #8d8d8d;
+  --step-done-bg: #e4f3d5;
+  --step-done-ink: #24400f;
+  --step-current-ink: #476f0e;
+  --step-rule: #6d8c4a;              /* a 2px rule needs 3:1: 3.71:1 on bg */
+  --step-pending-ink: #1a1e15;
+  --step-failed-bg: #fbe0e3;
+  --step-failed-ink: #6d1a20;
+
+  --focus-ring: #476f0e;             /* NOT the acid: 4.99:1 is a fill, and a 2px
+                                        ring in it on white is 2.5:1, invisible to a
+                                        keyboard user. This is 5.92:1 on #FFFFFF. */
+
+  --scroll-thumb: #b0ba9d;
+  --scroll-thumb-hover: #7f8c6b;
 
   color-scheme: light;
 }
@@ -185,48 +286,92 @@
 /* ------------------------------------------------------------------ */
 
 :root {
-  /* Stacks. Prose and code are separate on purpose -- setting UI text in a
-     monospace was making every label shout. */
-  --ff-sans: 'Geist Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --ff-mono: 'JetBrains Mono Variable', 'Cascadia Code', Consolas, monospace;
   /*
-   * No CJK face in either stack, on purpose: `system-ui` resolves Chinese to the
-   * platform font (Microsoft YaHei here), which is free, and bundling one would add
-   * megabytes to an installer for glyphs the system already has. The cost is that
-   * Chinese renders slightly differently on each platform.
+   * Stacks. Prose and code are separate on purpose -- setting UI text in a
+   * monospace was making every label shout.
+   *
+   * That reason still holds, and it is narrower than it used to be read: what
+   * shouts is monospace for *prose and headings*. Monospace for the things the
+   * MACHINE says -- a tool name, a path, a duration, a counter, a tab label, the
+   * status bar -- is the opposite of shouting: it is how a report from the
+   * machine is told apart from a sentence written by a person. The landing page
+   * does exactly that split (every one of its micro-labels, tool rows, counters
+   * and tabs is mono; only headings, prose and buttons are sans), and this is the
+   * one token both voices read from.
+   *
+   * CJK is named explicitly rather than left to `system-ui`. Leaving it implicit
+   * is what produced the actual complaint: Latin rendered in Geist and Chinese in
+   * whatever the platform picked, so a single line of mixed text had two
+   * different faces in it. Naming `'Microsoft YaHei UI'` is the standard Windows
+   * answer -- `YaHei UI` hints better at small sizes than plain `YaHei` -- with
+   * PingFang for macOS and Noto Sans CJK SC for Linux. No CJK face is bundled:
+   * the system already has one and shipping it would add megabytes.
    *
    * Neither stack names Inter. That is a decision, not an oversight -- see the test
    * in `styles/__tests__/tokens-css.test.ts`, which exists so it stays one.
    */
+  --ff-sans: 'DM Sans', 'MiSans', 'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', system-ui, 'Segoe UI', sans-serif;
+  --ff-mono: 'IBM Plex Mono', 'Sarasa Mono SC', 'Microsoft YaHei UI', 'Cascadia Mono', Consolas, monospace;
 
   /*
-   * Type. Six steps named by role, so nobody picks a size "between" two and
+   * Type. Seven steps named by role, so nobody picks a size "between" two and
    * the 137 hardcoded fontSize values in the old tree have exactly one home
    * each. `--fs-body` is the default: an element that sets nothing is body.
    */
   --fs-micro: 10px;    /* uppercase micro-labels, counters */
-  /* Tracking. A label is tracked OUT and the wordmark is tracked IN -- two
-     decisions, not one value used twice. 0.12em is Supabase's micro-label
-     spacing, which is where the "instrument panel" reading comes from. */
-  --tracking-label: 0.12em;
-  --tracking-display: -0.02em;
   --fs-meta: 11px;     /* chips, tags, tab labels, timestamps, mono paths */
   --fs-minor: 12px;    /* secondary text: tool args, session meta, status bar */
   --fs-body: 13px;     /* DEFAULT: prose, inputs, log lines, card titles */
-  --fs-read: 15px;     /* text you READ: the transcript. Deliberately larger
-                          than --fs-ui: chrome is scanned, prose is read, and
-                          those are the two sizes Zed ships (buffer 15, UI 14). */
   --fs-ui: 14px;       /* control labels, the active inspector tab */
+  --fs-read: 15px;     /* text you READ: the transcript */
+  /*
+   * The rung that was missing.
+   *
+   * The scale used to run 10, 11, 12, 13, 14, 15 and then jump to 28 -- so
+   * there was no size a card title or a panel heading could take, and the tool
+   * card put its title at `--fs-minor` (12px), SMALLER than the body text around
+   * it. The landing page's card heading is 17px (tracked -0.45px), which is what
+   * this is. A panel heading wants 20-21 there; 17 is the app's version of the
+   * same idea at app density.
+   */
+  --fs-title: 17px;
   --fs-display: 28px;  /* the wordmark, and nothing else */
 
+  /* Tracking. A label is tracked OUT and the wordmark is tracked IN -- two
+     decisions, not one value used twice.
+     Was 0.12em; the landing page tracks its micro-labels 1.0-1.9px at 6-9px, which
+     is about 0.16-0.22em. Only for uppercase Latin -- see `--tracking-cjk`. */
+  --tracking-label: 0.16em;
+  /*
+   * Chinese does not take that.
+   *
+   * 0.16em is designed for uppercase Latin: those glyphs are narrow and evenly
+   * spaced, and opening them up is what makes a 10px label legible. CJK glyphs
+   * are full-width and already evenly spaced, so the same value reads as a line
+   * of separated characters. The landing page cannot settle this -- all 128 of its
+   * micro-labels are Latin -- so it is decided here. This is also why type in this
+   * app is labelled by role rather than by language: the call site knows which it
+   * has.
+   */
+  --tracking-cjk: 0.02em;
+  --tracking-display: -0.02em;
+  /* Heading tracking: the landing page runs -0.45px at 17px and -0.5px at 20px. */
+  --tracking-title: -0.4px;
+  --lh-tight: 1.35;
+  /* Prose leading, measured off the landing page (`.hero-description` 14/25.9,
+     `.feature-card p` 11/20.35, `.section-heading > p` 12/22.8 -- all 1.85-1.9).
+     This is the one value in the new palette that is inherited rather than
+     derived; 1.75 is the usual Chinese answer if this ever reads too loose. */
+  --lh-body: 1.85;
+  --lh-mono: 1.6;      /* diff and log lines */
+
   --fw-book: 400;
+  /* Left as it was. The landing page looked like a 400/500-only palette at first
+     read, but its h1 is 550 and its wordmark 700, so it is not evidence for
+     flattening this ramp -- and the token is read by 22 component files. */
   --fw-label: 600;
   --fw-strong: 700;
   --fw-hero: 800;
-
-  --lh-tight: 1.35;
-  --lh-body: 1.6;
-  --lh-mono: 1.6;      /* diff and log lines */
 
   /* Spacing, 4px base. */
   --sp-05: 2px;
@@ -258,18 +403,43 @@
   --h-row: 40px;
   --h-input: 36px;
 
-  /* Radius. Three tiers; `tile: 8` is gone -- it only ever fed an antd
-     component token, and a rounded 16px tile next to a 12px cut corner is
-     the "five competing boxes" problem again. */
-  --r-chip: 4px;
-  --r-control: 6px;
-  /* Cards and panels. 12px on a dense panel reads as loose; 8 matches the logo
+  /*
+   * How far a switched-off control dims.
+   *
+   * A token because the alternative is what the tree already had: `Switch` said
+   * 0.55, `SessionTree` said 0.5, and seven other controls said nothing at all --
+   * so a disabled ghost button was pixel-identical to an enabled one (both use
+   * `--muted` and neither draws a border, so only the cursor changed).
+   *
+   * It exists *because* the ramp went olive. While the neutrals were grey,
+   * `--muted` could carry "disabled" by itself; now that every neutral is the same
+   * family, colour cannot say it and a second signal has to. 0.55 is the value
+   * `Switch` had already shipped.
+   */
+  --disabled-opacity: 0.55;
+
+  /*
+   * Radius. Five tiers, which is one more than before, and the reason is that
+   * "a card" and "a control" are different objects that happened to share 6px:
+   * measured off the landing page they are 6 and 5, with the tags at 3 and the
+   * windows at 8. Keeping the names apart means a change to one cannot drag the
+   * other.
+   */
+  --r-chip: 3px;       /* tags, counters, the phase pill */
+  --r-inset: 4px;      /* a code block nested inside a card */
+  --r-btn: 5px;        /* buttons, selected rows, icon squares */
+  --r-card: 6px;       /* a card's own corner */
+  --r-control: 6px;    /* inputs and other controls */
+  /* Panels. 12px on a dense panel reads as loose; 8 matches the logo
      tile, and a panel and a tile are the two shapes that share this corner. */
   --r-panel: 8px;
   --r-round: 999px;
 
 
-  /* Motion. This group had five keys and zero call sites; it is now load-bearing. */
+  /* Motion. This group had five keys and zero call sites; it is now load-bearing.
+     Unchanged by the restyle: the landing page's own motion is three keyframes and
+     a flat 200ms, which is coarser than this ramp, not finer -- so there was
+     nothing here to adopt. */
   --t-in: 160ms;
   --t-std: 200ms;
   --t-out: 120ms;

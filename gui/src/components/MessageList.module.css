@@ -156,7 +156,7 @@
   gap: var(--sp-2);
   width: 100%;
   padding: var(--sp-1) var(--sp-2);
-  border: 1px solid var(--outline);
+  border: 1px solid var(--border-strong);
   border-radius: var(--r-control);
   background: var(--surface);
   color: var(--muted);

@@ -19,7 +19,7 @@
   min-height: var(--h-input);
   padding: 0 var(--sp-3);
   background: var(--field-bg);
-  border: 1px solid var(--outline);
+  border: 1px solid var(--border-strong);
   border-radius: var(--r-control);
   color: var(--ink);
   font-family: var(--ff-sans);

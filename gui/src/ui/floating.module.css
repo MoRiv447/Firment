@@ -27,7 +27,7 @@
   overflow: auto;
   overscroll-behavior: contain;
   background: var(--surface-raised);
-  border: 1px solid var(--outline);
+  border: 1px solid var(--border-strong);
   border-radius: var(--r-panel);
   /* `md`, not `lg`: a menu is a transient overlay like a tooltip or a toast, and
      those two take `md`. `lg` is for what dims the page behind it. */

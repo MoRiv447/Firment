@@ -281,6 +281,49 @@ describe('Primitive layer and shell conventions', () => {
     expect(read('../Button.tsx')).toContain('NativeButton');
   });
 
+  it('dims every disabled control by the one shared amount', () => {
+    // Colour stopped being able to say "switched off" when the ramp went olive:
+    // `--muted` is now the same family as everything else, and a disabled ghost
+    // Button was pixel-identical to an enabled one. So dimming is the second
+    // signal, and it is one value.
+    //
+    // The file list is closed for the same reason the `data-ui` list is: a
+    // component that grows a disabled state has to say so here, which is a cheaper
+    // conversation than a control that silently has no disabled signal at all.
+    const dimmed = cssFiles
+      .filter((path) => {
+        // Comments and `:not(:disabled)` are not disabled states. Stripping the
+        // negations first is what keeps a hover rule from counting itself.
+        const source = read(path).replace(/\/\*[\s\S]*?\*\//g, '').replace(/:not\([^)]*\)/g, '');
+        return /\[disabled\]|:disabled/.test(source);
+      })
+      .map((path) => path.slice(path.lastIndexOf('/') + 1))
+      .sort();
+    expect(dimmed).toEqual([
+      'Button.module.css',
+      'Checkbox.module.css',
+      'Hardware.module.css',
+      'MultiSelect.module.css',
+      'Radio.module.css',
+      'Segmented.module.css',
+      'SessionTree.module.css',
+      'Switch.module.css',
+      'Tabs.module.css',
+    ]);
+    for (const path of cssFiles) {
+      const source = read(path).replace(/\/\*[\s\S]*?\*\//g, '').replace(/:not\([^)]*\)/g, '');
+      if (!/\[disabled\]|:disabled/.test(source)) continue;
+      expect(source, `${path} has a disabled state but does not dim it`).toContain(
+        'opacity: var(--disabled-opacity)',
+      );
+      // And nobody invents a second value at a call site, which is how the tree
+      // ended up with 0.55 here and 0.5 there.
+      expect(source, `${path} hardcodes a disabled opacity`).not.toMatch(
+        /opacity:\s*0?\.\d+\s*;/,
+      );
+    }
+  });
+
   it('exports every component from the barrel, so a file can be split without a diff', () => {
     const barrel = read('../index.ts');
     /** Not a primitive a view is meant to reach for; it is a dialog's backdrop. */

@@ -1,7 +1,7 @@
 /*
  * The card: one hairline, one head, one body.
  *
- * Same separation vocabulary as the tool card in the transcript -- `--outline`
+ * Same separation vocabulary as the tool card in the transcript -- `--border`
  * around the outside, `--line` under the head -- because a panel and a card are
  * the same kind of object at two sizes, and two spellings of "this is a box" is
  * how the old workbench read as a set of unrelated widgets.
@@ -15,7 +15,7 @@
   flex-direction: column;
   box-sizing: border-box;
   min-width: 0;
-  border: 1px solid var(--outline);
+  border: 1px solid var(--border-strong);
   border-radius: var(--r-panel);
   /* The hairline separates first and the shadow only lifts, which is why `sm` is
      soft: a screen of cards each throwing a hard shadow is the loudest thing on

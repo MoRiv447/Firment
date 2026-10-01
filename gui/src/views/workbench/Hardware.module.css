@@ -33,6 +33,9 @@
 .chipButton:disabled {
   cursor: default;
   color: var(--muted);
+  /* The second disabled signal. `--muted` is olive now, so colour alone
+     cannot say "switched off" any more -- see the header of tokens.css. */
+  opacity: var(--disabled-opacity);
 }
 
 /* chip · save · cancel — the field takes the room the buttons do not. */

@@ -31,7 +31,7 @@
   flex: none;
   width: var(--sw-w);
   height: var(--sw-h);
-  border: 1px solid var(--outline);
+  border: 1px solid var(--border-strong);
   border-radius: var(--r-round);
   background: transparent;
   transition:
@@ -76,7 +76,9 @@
 .root:disabled {
   color: var(--muted);
   cursor: not-allowed;
-  opacity: 0.55;
+  /* The second disabled signal. `--muted` is olive now, so colour alone
+     cannot say "switched off" any more -- see the header of tokens.css. */
+  opacity: var(--disabled-opacity);
 }
 
 .root:disabled .pill {

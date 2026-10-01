@@ -73,6 +73,9 @@
 .tab[disabled] {
   color: var(--muted);
   cursor: not-allowed;
+  /* The second disabled signal. `--muted` is olive now, so colour alone
+     cannot say "switched off" any more -- see the header of tokens.css. */
+  opacity: var(--disabled-opacity);
 }
 
 .label {

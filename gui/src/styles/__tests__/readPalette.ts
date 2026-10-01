@@ -29,7 +29,5 @@ export function named(name: 'dark' | 'light'): Record<string, string> {
   const camel = (key: string) => key.replace(/^--/, '').replace(/-([a-z0-9])/g, (_, c: string) => c.toUpperCase());
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(raw)) out[camel(key)] = value;
-  // the JS palette merged lineStrong into `outline`; the CSS keeps both names
-  out.outline = raw['--outline'];
   return out;
 }

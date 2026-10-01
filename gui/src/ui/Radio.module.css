@@ -27,7 +27,7 @@
   width: var(--rd-size);
   height: var(--rd-size);
   margin: 0;
-  border: 1px solid var(--outline);
+  border: 1px solid var(--border-strong);
   border-radius: var(--r-round);
   background: var(--surface);
   cursor: inherit;
@@ -53,6 +53,9 @@
   border-color: var(--line);
   background: transparent;
   cursor: not-allowed;
+  /* The second disabled signal. `--muted` is olive now, so colour alone
+     cannot say "switched off" any more -- see the header of tokens.css. */
+  opacity: var(--disabled-opacity);
 }
 
 .input:checked:disabled {

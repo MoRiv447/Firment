@@ -31,7 +31,9 @@
 
 .reload:disabled {
   cursor: default;
-  opacity: 0.5;
+  /* The second disabled signal. `--muted` is olive now, so colour alone
+     cannot say "switched off" any more -- see the header of tokens.css. */
+  opacity: var(--disabled-opacity);
 }
 
 .empty {

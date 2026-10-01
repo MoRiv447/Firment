@@ -6,6 +6,18 @@ const dark = named('dark');
 const light = named('light');
 
 /**
+ * Short aliases for the table below.
+ *
+ * The cases list went from 19 rows to 51 when the palette gained two text levels
+ * and three edge weights, and at that length `light.` and `dark.` on every row are
+ * most of what you scroll past. The rows name the palette so they cannot read one
+ * scheme's colour while claiming to be the other; these are only shorter names for
+ * the same two objects.
+ */
+const D = dark;
+const Lt = light;
+
+/**
  * The palette, held to the two rules that cannot be reviewed by eye.
  *
  * Contrast is arithmetic, so it is checked here rather than trusted: the values
@@ -42,11 +54,11 @@ describe('the palette cannot drift between schemes', () => {
 
 describe('text is readable on every ground it is used on', () => {
   it('gives the light scheme a focus ring a keyboard user can see', () => {
-    // Radix's step 8 is documented as the focus-ring step, and cyan-8 on white is
-    // 2.32:1 -- under the 3:1 a focus ring needs. The light ring is cyan-10
-    // (3.34:1); the dark one keeps cyan-8, which clears the same floor easily on a
-    // near-black ground. It is no longer required to equal `brandInk`: that was a
-    // convention of the old palette, and the measurement is the part that matters.
+    // A focus ring is a shape, so 3:1 is the floor, not 4.5. The light ring cannot
+    // be the acid: `#4d7c0f` is a fill, and the same green as a 2px ring on white
+    // is too weak. The dark ring is the lime, which clears the floor fifteen times
+    // over. They are not required to equal `brandInk`: the measurement is the part
+    // that matters, and the two schemes reach it two different ways.
     expect(contrast(light.focusRing, '#FFFFFF')).toBeGreaterThanOrEqual(3);
     expect(contrast(dark.focusRing, dark.bg)).toBeGreaterThan(3);
   });
@@ -55,25 +67,69 @@ describe('text is readable on every ground it is used on', () => {
   // palette rather than a quote from a document -- rows name the palette so they
   // cannot read one scheme's colour while claiming to be the other].
   const cases: Array<[string, string, string, number]> = [
-    ['light ink on surface', light.ink, light.surface, 15.48],
-    ['light ink on bg', light.ink, light.bg, 15.88],
-    ['light muted on surface', light.muted, light.surface, 5.62],
-    ['light muted on bg', light.muted, light.bg, 5.77],
-    ['light brandInk on surface', light.brandInk, light.surface, 4.52],
-    ['light successInk on successBg', light.successInk, light.successBg, 11],
-    ['light diffAddedInk on diffAddedBg', light.diffAddedInk, light.diffAddedBg, 10.27],
-    ['light diffRemovedInk on diffRemovedBg', light.diffRemovedInk, light.diffRemovedBg, 9.72],
-    ['light stepDoneInk on stepDoneBg', light.stepDoneInk, light.stepDoneBg, 10.27],
-    ['light stepFailedInk on stepFailedBg', light.stepFailedInk, light.stepFailedBg, 10.84],
-    ['dark stepFailedInk on stepFailedBg', dark.stepFailedInk, dark.stepFailedBg, 11.95],
-    ['light stepPendingInk on bg', light.stepPendingInk, light.bg, 15.88],
-    ['dark ink on bg', dark.ink, dark.bg, 16.28],
-    ['dark muted on bg', dark.muted, dark.bg, 9.11],
-    ['dark successInk on successBg', dark.successInk, dark.successBg, 11.45],
-    ['onAcid on brandAcid light', light.onAcid, light.brandAcid, 4.76],
-    ['onAcid on brandAcid dark', dark.onAcid, dark.brandAcid, 4.57],
-    ['selection ink on selection light', light.onSelection, light.selection, 12.32],
-    ['selection ink on selection dark', dark.onSelection, dark.selection, 9.09],
+    // Grounds and edges -- the four text levels, each on every surface it can
+    // land on. `dim` is the one that binds: it is the quietest rung and it still
+    // has to clear AA on a card, on the code block inside it, and on a selection.
+    ['light ink on bg', Lt.ink, Lt.bg, 16.43],
+    ['light ink on surface', Lt.ink, Lt.surface, 15.68],
+    ['light ink on raised', Lt.ink, Lt.surfaceRaised, 14.68],
+    ['light inkSoft on surface', Lt.inkSoft, Lt.surface, 9.71],
+    ['light inkSoft on raised', Lt.inkSoft, Lt.surfaceRaised, 9.10],
+    ['light muted on bg', Lt.muted, Lt.bg, 6.06],
+    ['light muted on surface', Lt.muted, Lt.surface, 5.78],
+    ['light muted on raised', Lt.muted, Lt.surfaceRaised, 5.41],
+    ['light dim on surface', Lt.dim, Lt.surface, 5.06],
+    ['light dim on raised', Lt.dim, Lt.surfaceRaised, 4.74],
+    ['light dim on codeBg', Lt.dim, Lt.codeBg, 4.60],
+    ['dark ink on bg', D.ink, D.bg, 17.29],
+    ['dark ink on surface', D.ink, D.surface, 16.49],
+    ['dark inkSoft on raised', D.inkSoft, D.surfaceRaised, 12.73],
+    ['dark muted on bg', D.muted, D.bg, 8.84],
+    ['dark muted on surface', D.muted, D.surface, 8.43],
+    ['dark dim on surface', D.dim, D.surface, 5.48],
+    ['dark dim on raised', D.dim, D.surfaceRaised, 5.35],
+    ['dark dim on codeBg', D.dim, D.codeBg, 5.67],
+    // Brand, and where the two values that make it up are not interchangeable.
+    ['light brandInk on surface', Lt.brandInk, Lt.surface, 5.48],
+    ['light brandInk on raised', Lt.brandInk, Lt.surfaceRaised, 5.13],
+    ['dark brandInk on surface', D.brandInk, D.surface, 14.82],
+    ['onAcid on brandAcid light', Lt.onAcid, Lt.brandAcid, 4.99],
+    ['onAcid on brandAcid dark', D.onAcid, D.brandAcid, 13.28],
+    // Status and the two diff families -- the step states share their values
+    // with the diff one, so these also pin that they stay shared.
+    ['light successInk on successBg', Lt.successInk, Lt.successBg, 5.43],
+    ['dark successInk on successBg', D.successInk, D.successBg, 8.72],
+    ['light infoInk on infoBg', Lt.infoInk, Lt.infoBg, 8.69],
+    ['dark infoInk on infoBg', D.infoInk, D.infoBg, 10.52],
+    ['light warnInk on warnBg', Lt.warnInk, Lt.warnBg, 7.26],
+    ['dark warnInk on warnBg', D.warnInk, D.warnBg, 11.88],
+    ['light diffAddedInk on diffAddedBg', Lt.diffAddedInk, Lt.diffAddedBg, 9.96],
+    ['dark diffAddedInk on diffAddedBg', D.diffAddedInk, D.diffAddedBg, 12.14],
+    ['light diffRemovedInk on diffRemovedBg', Lt.diffRemovedInk, Lt.diffRemovedBg, 9.28],
+    ['dark diffRemovedInk on diffRemovedBg', D.diffRemovedInk, D.diffRemovedBg, 10.89],
+    ['light stepDoneInk on stepDoneBg', Lt.stepDoneInk, Lt.stepDoneBg, 9.96],
+    ['dark stepDoneInk on stepDoneBg', D.stepDoneInk, D.stepDoneBg, 12.14],
+    ['light stepFailedInk on stepFailedBg', Lt.stepFailedInk, Lt.stepFailedBg, 9.28],
+    ['dark stepFailedInk on stepFailedBg', D.stepFailedInk, D.stepFailedBg, 10.89],
+    ['light stepPendingInk on bg', Lt.stepPendingInk, Lt.bg, 16.43],
+    ['dark stepPendingInk on bg', D.stepPendingInk, D.bg, 5.75],
+    // Everything that can be painted ON a selection. `--selection` is not only a
+    // selected row: the running tool card, the verdict band and a pressed icon
+    // button all use it, so the list is longer than "what a row contains".
+    ['light ink on selection', Lt.ink, Lt.selection, 14.01],
+    ['dark ink on selection', D.ink, D.selection, 13.82],
+    ['light muted on selection', Lt.muted, Lt.selection, 5.17],
+    ['dark muted on selection', D.muted, D.selection, 7.06],
+    ['light dim on selection', Lt.dim, Lt.selection, 4.53],
+    ['dark dim on selection', D.dim, D.selection, 4.59],
+    ['light brandInk on selection', Lt.brandInk, Lt.selection, 4.90],
+    ['dark brandInk on selection', D.brandInk, D.selection, 12.42],
+    ['light successInk on selection', Lt.successInk, Lt.selection, 5.37],
+    ['dark successInk on selection', D.successInk, D.selection, 8.48],
+    // `onSelection` exists so a call site never reaches for `ink` and gets the
+    // wrong one when a scheme makes them differ. They happen to agree now.
+    ['selection ink on selection light', Lt.onSelection, Lt.selection, 14.01],
+    ['selection ink on selection dark', D.onSelection, D.selection, 13.82],
   ];
 
   for (const [label, fg, bg, quoted] of cases) {
@@ -88,25 +144,65 @@ describe('text is readable on every ground it is used on', () => {
 
 
   it('keeps the hover wash from sinking the muted label', () => {
-    // The wash is only a wash if a label on top of it still passes. `muted` is
-    // dark enough now that a neutral ground holds it, which is what let the
-    // light hover stop being a second green state. (Dark is skipped: its wash is
-    // a translucent overlay, and the luminance helper reads hexes.)
+    // The wash is only a wash if a label on top of it still passes. (Dark is
+    // skipped: its wash is a translucent overlay, and the luminance helper reads
+    // hexes.) What the wash IS changed with the restyle -- a warm neutral became a
+    // green one -- so this is the case that says it is still a wash and not a
+    // second surface.
     const p = light;
-    expect(contrast(p.muted, p.hover)).toBeGreaterThanOrEqual(AA);
-    expect(contrast(p.ink, p.hover)).toBeGreaterThanOrEqual(AA);
+    expect(contrast(p.muted, p.hover)).toBeGreaterThanOrEqual(AA); // 5.14
+    expect(contrast(p.ink, p.hover)).toBeGreaterThanOrEqual(AA); // 13.93
   });
 
 
   it('keeps a 2px brand mark visible on the ground it is drawn on', () => {
     // stepRule is a shape, not text -- the current-step underline, the live
-    // inspector tab, the todo progress bar. Acid on a light ground is 1.19:1,
-    // which is why the light scheme cannot borrow the dark scheme's answer.
+    // inspector tab, the todo progress bar. Acid on a light ground is a fill, so
+    // the light scheme gets a deeper green for the same mark rather than borrowing
+    // the dark scheme's answer.
     expect(contrast(dark.stepRule, dark.bg)).toBeGreaterThanOrEqual(3);
     expect(
       contrast(light.stepRule, light.surface),
     ).toBeGreaterThanOrEqual(3);
     expect(contrast(light.stepRule, light.bg)).toBeGreaterThanOrEqual(3);
+  });
+});
+
+/**
+ * The edges.
+ *
+ * This palette has four weights where the last one had two, and it has them
+ * because the *fill* stopped being able to signal anything: in the light scheme a
+ * selection is 1.05:1 against the row it sits on, so `--border-active` is the whole
+ * signal. A ramp whose order is only in the author's head is not a ramp, so the
+ * order is asserted -- and it is the one property here that a diff cannot show.
+ */
+describe('the edges, which carry what a fill cannot', () => {
+  const on = (p: Record<string, string>, key: string, ground: string) => contrast(p[key], ground);
+
+  it('ranks hairline < card edge < panel edge, in both schemes', () => {
+    // Measured: dark 1.30 < 1.61 < 1.99, light 1.17 < 1.48 < 1.75. Each step means
+    // a different containment -- inside a card, around a card, around a panel --
+    // and two of them collapsing to one value is what makes nesting unreadable.
+    expect(on(dark, 'line', dark.surface)).toBeLessThan(on(dark, 'border', dark.surface));
+    expect(on(dark, 'border', dark.surface)).toBeLessThan(on(dark, 'borderStrong', dark.bg));
+    expect(on(light, 'line', light.surface)).toBeLessThan(on(light, 'border', light.surface));
+    expect(on(light, 'border', light.surface)).toBeLessThan(on(light, 'borderStrong', light.bg));
+  });
+
+  it('keeps a card edge above the hairline it is drawn next to', () => {
+    // The failure mode this catches is a card that reads as a divider: an edge
+    // indistinguishable from the rule inside it. Measured: 1.61 dark, 1.48 light.
+    expect(contrast(dark.border, dark.surface)).toBeGreaterThan(1.4);
+    expect(contrast(light.border, light.surface)).toBeGreaterThan(1.4);
+  });
+
+  it('keeps the active edge above the 3:1 a control needs', () => {
+    // 7.79:1 dark, 3.54:1 light. Light is the tight one and it is the reason the
+    // selected fill is so pale: a deeper fill would drop `dim` and `brandInk` under
+    // AA on top of it.
+    expect(contrast(dark.borderActive, dark.surface)).toBeGreaterThanOrEqual(3);
+    expect(contrast(light.borderActive, light.surface)).toBeGreaterThanOrEqual(3);
   });
 });
 

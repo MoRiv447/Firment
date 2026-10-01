@@ -50,7 +50,7 @@
   width: var(--sl-thumb);
   height: var(--sl-thumb);
   margin-top: calc((var(--sl-track) - var(--sl-thumb)) / 2);
-  border: 1px solid var(--outline);
+  border: 1px solid var(--border-strong);
   border-radius: var(--r-round);
   background: var(--surface);
   box-shadow: var(--shadow-sm);

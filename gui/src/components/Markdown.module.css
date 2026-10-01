@@ -94,7 +94,7 @@
 .quote {
   margin: 0 0 var(--sp-2);
   padding-left: var(--sp-3);
-  border-left: 2px solid var(--outline);
+  border-left: 2px solid var(--border-strong);
   color: var(--muted);
 }
 
