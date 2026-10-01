@@ -88,24 +88,52 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Scrollbars. WebView2/WebKit only; `color-scheme` in tokens.css handles the
-   native form controls and the overlay scrollbars that ignore these. */
+/*
+ * Scrollbars. WebView2/WebKit only; `color-scheme` in tokens.css handles the
+ * native form controls and the overlay scrollbars that ignore these.
+ *
+ * Two things here are not obvious, and both are the kind that look like a style
+ * choice until they break:
+ *
+ * * **`scrollbar-color` / `scrollbar-width` are deliberately absent.** The
+ *   standard properties are the modern way to colour a scrollbar, and setting
+ *   either of them makes Chromium ignore this whole `::-webkit-scrollbar` block --
+ *   so adding "just the two standard lines for Firefox" would silently cost the
+ *   rounded inset thumb. WebView2 and WebKit are the only engines this app is
+ *   ever rendered by.
+ * * **The inset is a transparent border, not padding.** `background-clip:
+ *   content-box` paints only the inside of that border, which gives a thumb
+ *   floating in its gutter rather than a block welded to the pane edge. The radius
+ *   then has to be large: `border-radius` rounds the border box, so the inner
+ *   corner is `radius - border-width`, and `--r-chip` (3px) against a 2px border
+ *   would come out square.
+ *
+ * 10px of gutter, 6px of paint, 2px of air on each side. The gutter is wider than
+ * the 8px it replaces while looking lighter, because the part you aim at is the
+ * gutter and the part you see is the thumb.
+ */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
 }
 
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 ::-webkit-scrollbar-thumb {
-  background: var(--scroll-thumb);
-  border-radius: var(--r-chip);
+  background-color: var(--scroll-thumb);
+  border: 2px solid transparent;
+  background-clip: content-box;
+  border-radius: var(--r-round);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--scroll-thumb-hover);
+  background-color: var(--scroll-thumb-hover);
 }
 
 /*
