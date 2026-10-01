@@ -1,33 +1,54 @@
 /*
  * The tool card.
  *
- * `--r-panel` and one hairline: the transcript is a column of prose with
- * machinery in it, and a card that drew three borders, a shadow and a 16px
- * radius was the loudest thing on the page. Elevation is the hairline plus the surface step -- see the note in tokens.css
- * about why the dark scheme has no shadow ladder at all.
- * `tokens.css` says a hairline separates first, so shadows stay soft.
+ * A card, now, rather than a bare surface: one `--border`, one `--r-card`, on the
+ * raised ground. It used to be deliberately borderless -- "a tool call is a line of
+ * machinery in a column of prose, so it gets a surface and nothing else" -- and
+ * that was the right read of a transcript with no other structure in it. What
+ * changed is that the transcript now has structure to sit in: a tool call is one
+ * discrete object among others, and an object with no edge is indistinguishable
+ * from the prose around it once both are on the same tinted ramp.
+ *
+ * The state is the edge, not a colour wash. A running card takes `--border-active`
+ * and the selection surface; a failed one takes the danger family. That leaves the
+ * fill free to mean "this is the live one", which is the fact a reader scanning the
+ * column is looking for.
  */
 .card {
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
   width: 100%;
-  /* No border and no radius: a rounded outlined box the height of an input reads
-     as a field, and the transcript is not a form. A tool call is a line of
-     machinery in a column of prose, so it gets a surface and nothing else -- the
-     reference for this is Zed, where tool calls are quiet one-liners. */
-  border: 0;
-  border-radius: 0;
-  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--surface-raised);
   color: var(--ink);
   font-family: var(--ff-sans);
   font-size: var(--fs-body);
+}
+
+.card[data-status='running'] {
+  border-color: var(--border-active);
+  background: var(--selection);
+}
+
+.card[data-status='failed'] {
+  /* The failed ink rather than the failed fill: `--step-failed-bg` is what
+     `Button` uses as its danger edge, and on a raised card it is too close to the
+     ground to read as an edge at all -- measured 1.06:1 dark. The ink is the same
+     message at a weight that shows (11.58:1 dark, 10.01:1 light). */
+  border-color: var(--step-failed-ink);
 }
 
 /*
  * The header is a `<button>` when the card folds and a `<div>` when it does not,
  * and both of them get this one rule -- so the reset below is what makes the two
  * elements land at the same height, the same text alignment and the same type.
+ *
+ * Monospace, and the whole row: the tool's name, the path it was given, its
+ * sequence number and its counts are all things the machine reports. `.path`,
+ * `.seq` and `.counts` used to each ask for the face themselves, which is how a
+ * row ends up half in one voice.
  */
 .head {
   display: flex;
@@ -38,10 +59,11 @@
   min-height: var(--h-input);
   padding: var(--sp-1) var(--sp-2);
   border: 0;
-  border-radius: var(--r-panel) var(--r-panel) 0 0;
+  border-radius: var(--r-card) var(--r-card) 0 0;
   background: transparent;
   color: inherit;
   font: inherit;
+  font-family: var(--ff-mono);
   font-size: var(--fs-minor);
   text-align: left;
 }
@@ -71,12 +93,12 @@
 }
 
 /* The subject of the call: a path, a pattern, a command. Mono because it is a
-   literal the agent used, not a sentence about it. */
+   literal the agent used, not a sentence about it -- and inherited from `.head`
+   now rather than asked for here, so the row cannot end up half in one voice. */
 .path {
   min-width: 0;
   overflow: hidden;
   color: var(--ink);
-  font-family: var(--ff-mono);
   font-size: var(--fs-minor);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -85,7 +107,6 @@
 .seq {
   flex: 0 0 auto;
   color: var(--muted);
-  font-family: var(--ff-mono);
   font-size: var(--fs-meta);
   font-variant-numeric: tabular-nums;
 }
@@ -110,7 +131,6 @@
   display: inline-flex;
   gap: var(--sp-2);
   margin-inline-start: auto;
-  font-family: var(--ff-mono);
   font-size: var(--fs-minor);
   font-variant-numeric: tabular-nums;
   font-weight: var(--fw-label);
@@ -127,15 +147,24 @@
   color: var(--diff-removed-ink);
 }
 
+/*
+ * A block nested inside the card, and one step darker than it.
+ *
+ * `--code-bg` rather than `--bg`: the nesting runs ground < panel < card < code, so
+ * a code block inside a card goes DOWN rather than back to the page. It is the same
+ * order the landing page builds its showcase in (its showcase, its stage and its
+ * output block are three steps of one ramp), and it is why this block keeps its own
+ * edge and its own smaller radius instead of running to the card's.
+ */
 .diff,
 .raw {
   box-sizing: border-box;
   max-height: 260px;
   margin: 0;
   overflow: auto;
-  border: 1px solid var(--line);
-  border-radius: var(--r-control);
-  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-inset);
+  background: var(--code-bg);
   color: var(--ink);
   font-family: var(--ff-mono);
   font-size: var(--fs-minor);
@@ -165,14 +194,22 @@
   font-weight: var(--fw-label);
 }
 
-/* The action row under a finished edit. `--sp-1` of top margin is the only
-   spacing that is not a `gap`, because this row is the last thing in the body
-   and wants to sit further from the diff than the body's own rhythm. */
+/*
+ * The action row under a finished edit: the card's footer band.
+ *
+ * A hairline above it rather than only a margin, because the band and the diff are
+ * different kinds of thing -- the diff is the card's content and this is what you
+ * can do about it. The landing page ends its cards the same way (a rule, the state
+ * on the left, the way out on the right), and it is the one place a card is allowed
+ * to end without a gap.
+ */
 .actions {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   margin-top: var(--sp-1);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border);
 }
 
 /*

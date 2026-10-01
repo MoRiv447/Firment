@@ -1,18 +1,21 @@
 /*
  * The session rail.
  *
- * Two decisions shape everything else in this file.
- *
- * * **The selected row is a surface, not a state.** It used to paint
- *   `--selection`, which is the layer's *on* state for controls -- a checked box,
- *   a switch, a slider fill -- and borrowing it turned the whole rail acid on a
- *   click. It is `--surface-raised` plus a small shadow now, so the row lifts
- *   and the ink does not have to move. `Tabs.module.css` still keeps the active
- *   tab a rule rather than a block, for the same reason as before: a filled tab
- *   would compete with the selected row.
- * * **Depth is padding, not a guide line.** The rail is 248px and a session
- *   title is a sentence, so a level costs one spacing token and the `↳` on the
- *   branch chip is what actually says "this one is underneath".
+ * * **A row is a card, and the selected one is edged.** It used to be a flat row
+ *   that painted `--surface-raised` plus a shadow when selected, on the argument
+ *   that `--selection` is a *state* -- a checked box, a switch, a slider fill --
+ *   and that borrowing it "turned the whole rail acid on a click". The objection
+ *   was to the acid, not to the borrowing: with the ramps now olive, `--selection`
+ *   is a deep tint rather than a highlighter, and the rail reads as a column of
+ *   discrete objects the way the rest of the interface now does. Selection is
+ *   carried by `--border-active` (7.79:1 dark, 3.54:1 light); the fill only
+ *   corroborates it, which is why the fill can stay this quiet.
+ * * **Gaps, not dividers.** Rows are separate bordered cards with air between
+ *   them. A hairline between two rows says "one list"; a gap says "two things",
+ *   and the second is what a session rail is.
+ * * **Depth is padding, not a guide line.** A session title is a sentence, so a
+ *   level costs one spacing token and the `↳` on the branch chip is what actually
+ *   says "this one is underneath".
  */
 
 .root {
@@ -42,7 +45,7 @@
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: var(--sp-05);
+  gap: var(--sp-1);
   box-sizing: border-box;
   min-width: 0;
   min-height: 0;
@@ -81,44 +84,41 @@
   box-sizing: border-box;
   min-width: 0;
   padding: var(--sp-2);
-  border: 0;
-  border-radius: var(--r-control);
-  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--r-btn);
+  background: var(--surface-raised);
   color: inherit;
   font: inherit;
   text-align: start;
   cursor: pointer;
-  transition: background var(--t-out) var(--ease);
+  /* Border as well as fill: the border is what moves when the row is selected, so
+     it cannot be the one property that jumps. */
+  transition:
+    background var(--t-out) var(--ease),
+    border-color var(--t-out) var(--ease);
 }
 
 .select:hover {
   background: var(--hover);
+  border-color: var(--border-strong);
 }
 
 /* Outranks the hover rule above, so a selected row keeps its surface under the
    pointer instead of flashing at the moment you are looking at it.
  *
- * It is a surface, not a state: `--selection` is what the layer paints when a
- * control is *on* (a checked box, a switch, the filled part of a slider), and the
- * row was borrowing it -- which is why the whole sidebar went acid when all that
- * had happened was that you clicked a session.
+ * **The edge carries the selection, the fill corroborates it.** In the light
+ * scheme the fill is 1.05:1 against the untinted row -- it cannot be stronger than
+ * that without dropping `dim` and `brandInk` under AA on top of it, which is
+ * checked in `styles/__tests__/tokens.test.ts`. What a reader actually sees is the
+ * bright green border; the tint is what keeps a row from looking like an outline
+ * with nothing in it.
  *
- * **Not `--surface-raised`.** That was the first attempt and it was invisible: in
- * the light scheme it *was* white, the same value as `--surface`, so a "raised"
- * row on a `--surface` ground is the same colour as the thing it is raised from.
- * It looked correct in dark, which is how it got through -- the exact failure the
- * design doc describes as "only accidentally correct in one of the two". The
- * Radix palette gave the two steps different values and
- * `styles/__tests__/tokens-css.test.ts` now pins that they differ, so the trap is
- * gone -- the rule below is still the right one, because a selected row is a
- * surface and not a state.
- *
- * `--hover` is a wash in both schemes (`#e8e8e8` on the light ground, a
- * translucent white on the dark one), and the two things that outrank a hover do
- * the rest: the shadow, and the label weight the title already takes when the row
- * is selected. */
+ * The shadow this rule used to carry is gone with it. It was there to lift the row
+ * off a flat ground, and a bordered card on a gapped list is already off it.
+ */
 .item[data-selected='true'] .select {
-  background: var(--hover);
+  background: var(--selection);
+  border-color: var(--border-active);
 }
 
 .top {

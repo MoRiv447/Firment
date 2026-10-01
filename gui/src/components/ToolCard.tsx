@@ -151,7 +151,9 @@ export function ToolCard({
       {collapsible && (
         <Icon src={collapsible.open ? ChevronDown : ChevronRight} size="sm" tone="muted" />
       )}
-      <Chip status={status} icon={mark ?? undefined} size="sm">
+      {/* `mono`: a tool name is the machine's own vocabulary -- the same call the
+          rest of the header makes, one level up. */}
+      <Chip status={status} icon={mark ?? undefined} size="sm" mono>
         {tool.name}
       </Chip>
       {path && <span className={styles.path}>{path}</span>}
@@ -186,7 +188,16 @@ export function ToolCard({
   );
 
   return (
-    <article data-ui="tool-card" data-open={open ? 'true' : 'false'} className={styles.card}>
+    <article
+      data-ui="tool-card"
+      data-open={open ? 'true' : 'false'}
+      /* What the card looks like is what the call did, so the state is an explicit
+         hook rather than a class the caller appends. `unknown` is in the union on
+         purpose: a reopened session gets the plain card, because nothing was
+         measured and the edge should not claim otherwise. */
+      data-status={tool.status}
+      className={styles.card}
+    >
       {collapsible ? (
         <button
           type="button"
