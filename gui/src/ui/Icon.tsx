@@ -13,11 +13,18 @@ import styles from './Icon.module.css';
  *   purely to make a chevron small enough to sit next to an 11px label. An icon
  *   measured in `em` takes the size of the type step it is in and no call site
  *   needs a number.
- * * **There is no brand tone.** `tokens.md` says the acid green is identity, not
- *   feedback, and it is ~1.8:1 on a light ground -- an acid icon is invisible
- *   there and shouting on dark. So `tone` offers the ink colours and the status
- *   colours, and a call site that wants acid has to go through `Chip` or
- *   `Button`, where the fill and its text were measured as a pair.
+ * * **`tone` offers the ink colours, the status colours, and a brand tone that
+ *   only became usable when the palette changed.** The rule used to be "there is
+ *   no brand tone", on the measurement that the old acid was ~1.8:1 on a light
+ *   ground -- invisible there and shouting on dark -- so a call site that wanted
+ *   acid went through `Chip` or `Button`, where a fill and its text were measured
+ *   as a pair.
+ *
+ *   That measurement belongs to the palette this replaced. The brand has two
+ *   values now and the text one is `--brand-ink`: 14.82:1 on the dark surface and
+ *   5.48:1 on the light one. Both are comfortable for a 1.75px stroke, so `brand`
+ *   resolves to `--brand-ink` rather than to the fill, and the old rule is written
+ *   down as superseded instead of quietly disappearing.
  *
  * `className` is allowed here (and in `KeyValue`) because an icon's placement is
  * its parent's business: `gap` and `align-items` are what position it, and a
@@ -38,6 +45,7 @@ export function Icon({
     | 'inherit'
     | 'muted'
     | 'ink'
+    | 'brand'
     | 'on-selection'
     | 'ok'
     | 'failed'

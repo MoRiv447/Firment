@@ -36,7 +36,7 @@ export function EmptyState({
     <div data-ui="empty-state" className={styles.root}>
       {Glyph ? (
         <span className={styles.glyph}>
-          <Icon src={Glyph} size="lg" tone="muted" />
+          <Icon src={Glyph} size="lg" tone="brand" />
         </span>
       ) : null}
       <p className={styles.title}>{title}</p>

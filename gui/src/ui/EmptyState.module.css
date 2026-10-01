@@ -16,24 +16,54 @@
   text-align: center;
 }
 
+/*
+ * The icon sits in a tile.
+ *
+ * A bare icon centred over two lines of text reads as decoration; a 34px square
+ * with a 1px edge, a small radius and the brand glyph in it reads as the thing
+ * this state is about. It is the same shape the interface uses for every other
+ * entry point (see `--r-btn` in tokens.css), so an empty state and a panel's
+ * header are recognisably the same kind of object.
+ *
+ * `font-size` is set here rather than on the icon because `Icon` measures itself in
+ * `em`: `size="lg"` is 1.5em of this, which is what puts a 21px glyph in a 34px box.
+ */
 .glyph {
-  display: inline-flex;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: 34px;
+  height: 34px;
   margin-bottom: var(--sp-2);
-  color: var(--muted);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-btn);
+  font-size: var(--fs-ui);
 }
 
+/*
+ * The title takes the heading rung, not a chrome size.
+ *
+ * It is the largest thing in an empty pane and it used to be `--fs-ui` (14px) --
+ * the same size as a control's label, which left an empty state looking like a
+ * form that had lost its fields. `--fs-title` is the rung this component was one
+ * of the reasons for adding.
+ */
 .title {
   margin: 0;
   color: var(--ink);
-  font-size: var(--fs-ui);
+  font-size: var(--fs-title);
   font-weight: var(--fw-label);
+  letter-spacing: var(--tracking-title);
   line-height: var(--lh-tight);
 }
 
+/* The quietest text rung, and this is the one place it is allowed to carry a
+   sentence: an empty state's second line is an aside, and at `--muted` it competed
+   with the title it is explaining. */
 .hint {
   margin: 0;
   max-width: 46ch;
-  color: var(--muted);
+  color: var(--dim);
   font-size: var(--fs-minor);
   line-height: var(--lh-body);
 }

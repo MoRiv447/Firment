@@ -2,7 +2,50 @@
  * The button.
  *
  * Three tiers and three heights, all of them a token. The mechanism worth
+ * knowing is below.
+ *
+ * ---------------------------------------------------------------------------
+ * The base rule, which did not exist until it was measured.
+ *
+ * `Button.tsx` composes `styles.root` and this file only ever had `[data-size]`
+ * and `[data-tier]` variants -- so there was no base at all, and every button in
+ * the app was a native `<button>` with a tier's fill and ink painted into it.
+ * Rendered and measured rather than read (the showcase page, then the app):
+ *
+ *     border: 2px outset rgb(0, 0, 0)   border-radius: 0px   display: block
+ *
+ * Chrome's own button box, in other words -- the platform's raised 2px bezel,
+ * square corners, `buttonface` behind it -- with the design system's colours
+ * layered on top. It survived review because it is almost invisible in the dark
+ * scheme, where the bezel is black on a near-black ground and a 28px square with
+ * no radius is close enough to a rounded one; in the light scheme, on the showcase
+ * page, the buttons are unmistakably Windows controls.
+ *
+ * So the reset lives here, and the border is part of it rather than absent: every
+ * tier draws a 1px transparent one, so a tier that adds a border changes its
+ * colour rather than its size. `padding` reads `--pad-x`, which the size rules set,
+ * with a fallback because a caller that passes no size sets no `--pad-x` and a
+ * declaration that resolves to nothing fails silently.
+ */
 
+.root {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  max-width: 100%;
+  border: 1px solid transparent;
+  border-radius: var(--r-btn);
+  padding: 0 var(--pad-x, var(--sp-3));
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--ff-sans);
+  font-size: var(--fs-body);
+  line-height: var(--lh-tight);
+  text-align: center;
+  white-space: nowrap;
+  cursor: pointer;
+}
 
 /* One line so a size change moves the height and the padding together, and
    nobody has to remember which of the two a tier was tuned against. */
@@ -142,10 +185,18 @@
  * control cannot look switched on without also saying so. The button this
  * replaces set `style={{ color }}` from React state, so the workbench looked open
  * to the eye and closed to a screen reader.
+ *
+ * It took the hover wash, which meant "open" and "under the pointer" were the same
+ * picture -- with the workbench open the only thing saying so was a slightly
+ * lighter square, and moving the pointer away said nothing. It takes the active
+ * edge and the selection surface now: the same pair a selected session row uses,
+ * so "this is on" looks the same wherever it appears, and it survives the pointer
+ * leaving.
  */
 .root:not(:disabled)[aria-pressed='true'] {
-  color: var(--ink);
-  background: var(--hover);
+  color: var(--brand-ink);
+  background: var(--selection);
+  border-color: var(--border-active);
 }
 
 .root[data-tier='danger']:not(:disabled):hover {

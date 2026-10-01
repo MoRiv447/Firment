@@ -374,6 +374,25 @@ describe('Primitive layer and shell conventions', () => {
     expect(offenders).toEqual([]);
   });
 
+  it('gives the button a box of its own instead of the platform one', () => {
+    // Found by rendering, not by reading. `Button.tsx` composes `styles.root` and
+    // Button.module.css had only `[data-size]` and `[data-tier]` variants, so every
+    // button in the app was a native `<button>` with a tier's fill painted into it:
+    // measured on the showcase page and again in the app,
+    //
+    //     border: 2px outset rgb(0, 0, 0)  border-radius: 0px  display: block
+    //
+    // It survived because it is nearly invisible in the dark scheme -- a black
+    // bezel on a near-black ground -- and obvious in the light one. A convention
+    // test is the only thing that would have caught it without a browser, and it is
+    // the only thing that will stop it coming back.
+    const button = read('../Button.module.css');
+    expect(button).toMatch(/^\.root \{/m);
+    expect(button).toContain('border: 1px solid transparent');
+    expect(button).toContain('border-radius: var(--r-btn)');
+    expect(button).toContain('display: inline-flex');
+  });
+
   it('exports every component from the barrel, so a file can be split without a diff', () => {
     const barrel = read('../index.ts');
     /** Not a primitive a view is meant to reach for; it is a dialog's backdrop. */

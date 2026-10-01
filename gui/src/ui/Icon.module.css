@@ -30,6 +30,12 @@
 .icon[data-tone='ink'] {
   color: var(--ink);
 }
+/* `--brand-ink`, never `--brand-acid`: the fill is a highlighter and this is a
+   1.75px stroke, so it needs the value that was measured as text. See the note in
+   Icon.tsx for why this tone did not exist before. */
+.icon[data-tone='brand'] {
+  color: var(--brand-ink);
+}
 .icon[data-tone='on-selection'] {
   color: var(--on-selection);
 }
