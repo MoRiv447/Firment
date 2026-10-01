@@ -89,6 +89,19 @@ const codeFiles = [...tsxFiles, ...tsFiles];
 
 const read = (path: string) => SOURCES[path] ?? '';
 const nameOf = (path: string) => path.slice(path.lastIndexOf('/') + 1, -'.tsx'.length);
+/**
+ * A glob key as a path you can name in a list.
+ *
+ * The keys are relative to this file, so a primitive is `../Chip.module.css` and
+ * everything else is `../../shell/…`. Counting the `..` segments is what turns both
+ * into `ui/Chip.module.css` and `shell/StatusBar.module.css`; a `endsWith` test
+ * would silently match neither, which is how a list like this one stops checking.
+ */
+const canonical = (path: string) => {
+  const ups = (path.match(/\.\.\//g) ?? []).length;
+  const rest = path.replace(/^(\.\.\/)+/, '');
+  return ups === 1 ? `ui/${rest}` : rest;
+};
 
 /** Selectors that only make sense in a global sheet, since they have no class. */
 const GLOBAL_SELECTORS = new Set([
@@ -322,6 +335,43 @@ describe('Primitive layer and shell conventions', () => {
         /opacity:\s*0?\.\d+\s*;/,
       );
     }
+  });
+
+  it('keeps the machine voice in monospace, one file at a time', () => {
+    // The app draws one line and draws it everywhere: text a PERSON reads -- a
+    // heading, a paragraph, a button's label -- is the sans face, and everything
+    // the MACHINE reports is the mono face. A tool name, a path, a duration, a
+    // counter, a tab label, the status bar, a step's name, a chip holding an
+    // identifier: none of those are sentences, and setting them in the prose face
+    // is what made a reading look like a caption. The landing page draws the same
+    // line in the same place.
+    //
+    // It is not a global rule because it cannot be: the *default* is sans (set in
+    // base.css, where prose lives), and these surfaces opt in. That asymmetry is
+    // the convention, so what has to be pinned is the list -- a file dropping out
+    // of it is exactly how the split rots, and it is invisible in a diff.
+    const machineVoice = [
+      'components/StepProgress.module.css',
+      'components/ToolCard.module.css',
+      'shell/Inspector.module.css',
+      'shell/StatusBar.module.css',
+      'shell/TitleBar.module.css',
+      'shell/panes/AgentsPane.module.css',
+      'shell/panes/ChangesPane.module.css',
+      'shell/panes/HardwarePane.module.css',
+      'shell/panes/TodosPane.module.css',
+      'ui/Chip.module.css',
+      'ui/KeyValue.module.css',
+      'ui/Stat.module.css',
+      'ui/Tabs.module.css',
+      'views/SessionSidebar.module.css',
+    ];
+    const offenders = machineVoice.filter((suffix) => {
+      const path = cssFiles.find((candidate) => canonical(candidate) === suffix);
+      expect(path, `${suffix} is on the machine-voice list but no longer exists`).toBeTruthy();
+      return !read(path!).includes('var(--ff-mono)');
+    });
+    expect(offenders).toEqual([]);
   });
 
   it('exports every component from the barrel, so a file can be split without a diff', () => {

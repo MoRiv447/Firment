@@ -4,6 +4,13 @@
  * `--h-min` (28px) rather than a height of its own: it is the same measurement as
  * the small control, and a bar taller than its readings is a bar that draws
  * attention to itself.
+ *
+ * Monospace throughout, which is the whole bar and not just its values. Everything
+ * here is something the machine reports -- the mode, the model, the thinking level,
+ * how full the context is, the branch, the queue -- and none of it is a sentence
+ * written by a person. Setting it in the same face as prose is what made a reading
+ * look like a caption; the app draws that line once, here and in `docs/design/`,
+ * and this bar is entirely on the machine side of it.
  */
 .bar {
   display: flex;
@@ -16,7 +23,7 @@
   background: var(--surface);
   border-top: 1px solid var(--line);
   color: var(--ink);
-  font-family: var(--ff-sans);
+  font-family: var(--ff-mono);
   font-size: var(--fs-meta);
   /* Readings are fixed-width by design; a bar that wrapped would push the
      transcript up and move the whole window. */
@@ -65,10 +72,10 @@
 }
 
 /* Every value in the bar is monospace, so six readings line up in columns and a
-   number that changes width does not shuffle its neighbours. */
+   number that changes width does not shuffle its neighbours. The face itself comes
+   from `.bar` -- each reading no longer has to remember to ask for it. */
 .value {
   color: var(--ink);
-  font-family: var(--ff-mono);
 }
 
 .divider {

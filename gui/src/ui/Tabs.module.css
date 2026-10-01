@@ -1,6 +1,11 @@
 /*
  * The tab strip. Rows are `--h-row` tall so the strip lines up with the sidebar and
  * the status bar without anyone measuring it.
+ *
+ * Monospace, and one place rather than per-tab. A tab label names a surface -- `Chat`,
+ * `Serial`, `Flash / Run` -- which is the machine's vocabulary, and the landing page
+ * sets its whole strip the same way. Leaving each caller to ask for the face is how
+ * the strip and the inspector's own toggles ended up disagreeing.
  */
 .strip {
   display: flex;
@@ -9,7 +14,7 @@
   min-height: var(--h-row);
   padding-inline: var(--sp-2);
   border-bottom: 1px solid var(--line);
-  font-family: var(--ff-sans);
+  font-family: var(--ff-mono);
   /* No scrollbar, on either axis.
    *
    * `overflow-x: auto` was the first mistake: a `visible` `overflow-y` is computed

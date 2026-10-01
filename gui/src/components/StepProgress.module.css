@@ -4,13 +4,19 @@
  * Every rule below keys on `data-state` rather than on a class the component
  * appends, so the pairing between a fill and its ink cannot come apart -- the
  * failure the old `ink(state)` / `fill(state)` helper pair invited.
+ *
+ * Monospace, because every part of a step is machine voice: the label is a tool or
+ * a phase (`Build`, `Flash`, `Monitor`) and what sits beside it is a duration
+ * (`8.0s +2m 00s waiting`). The landing page draws the same line in the same place
+ * -- its tool rows are mono and so are its step ordinals; only headings and prose
+ * are not.
  */
 .root {
   display: flex;
   align-items: stretch;
   flex-wrap: wrap;
   gap: var(--sp-3);
-  font-family: var(--ff-sans);
+  font-family: var(--ff-mono);
 }
 
 .step {

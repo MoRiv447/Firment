@@ -53,8 +53,11 @@
   border-bottom: 1px solid var(--line);
   background: transparent;
   color: var(--muted);
-  /* An `Icon` measures itself in `em`, and a `<button>` inherits nothing. */
-  font-family: var(--ff-sans);
+  /* An `Icon` measures itself in `em`, and a `<button>` inherits nothing.
+     Monospace, because a tab label names a panel of the machine's output rather
+     than saying a sentence -- the same call the landing page makes for its own
+     tab strip. */
+  font-family: var(--ff-mono);
   font-size: var(--fs-ui);
   cursor: pointer;
 }
