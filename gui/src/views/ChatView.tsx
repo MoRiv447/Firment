@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowDown, Bot, Brain, Square, Send } from 'lucide-react';
+import { ArrowDown, Bot, Brain } from 'lucide-react';
 
 import { LiveRun } from '../components/LiveRun';
 import { Markdown } from '../components/Markdown';
@@ -380,28 +380,28 @@ export function ChatView({
                 </button>
               </span>
               {running ? (
-                <Button tier="danger" size="sm" icon={Square} onClick={onCancel}>
+                <Button tier="danger" size="sm" onClick={onCancel}>
                   Stop
                 </Button>
               ) : (
                 /*
-                 * Not disabled on an empty field.
+                 * Text only, no glyph.
                  *
-                 * It used to be, and the reason it is not is a measurement: the
-                 * design's send button is the solid acid, and a *dimmed* acid cannot
-                 * be both weaker and still green. In dark the spent fill has to be
-                 * 70% of the acid to stay recognisable, and in light a fill pale
-                 * enough to keep a dark ink readable stops looking green at all --
-                 * the two schemes pull in opposite directions, which is exactly what
-                 * `--brand-acid-dim` records. So the field's emptiness is not a state
-                 * of this button: `send()` already returns on an empty input, and
-                 * what the button would do is nothing either way.
+                 * The design's button is 52x27 with a word in it, and a 15px icon plus
+                 * an 8px gap made this one about 71 wide at the same height -- 2.5:1
+                 * instead of 1.9:1, which reads as a flat bar rather than as a button.
+                 * The word was always the label; the glyph was decoration that cost
+                 * the shape.
                  *
-                 * The disabled state still exists and still matters where it means
-                 * something real -- `SerialView` disables its Start while the port is
-                 * not open, and that is the button a reader needs to see as spent.
+                 * And **not** disabled on an empty field. The design's send button is
+                 * the solid acid, and a *dimmed* acid cannot be both weaker and still
+                 * green: in light a fill pale enough to keep a dark ink readable stops
+                 * looking green at all. So emptiness is not a state of this button --
+                 * `send()` already returns on an empty input. The spent state is kept
+                 * where it means something real: `SerialView` disables Start while the
+                 * port is not open.
                  */
-                <Button tier="primary" size="sm" icon={Send} onClick={send}>
+                <Button tier="primary" size="sm" onClick={send}>
                   Send
                 </Button>
               )}

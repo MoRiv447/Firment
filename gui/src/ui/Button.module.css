@@ -55,7 +55,26 @@
   --pad-x: var(--sp-2);
 }
 
+/*
+ * The default size, and it had no height at all.
+ *
+ * `sm` and `lg` set theirs two lines away; `md` set only its padding, so a button that
+ * did not name a size was content plus a 1px border -- measured at 19.5px for a 13px
+ * label. That is the size with no other rule and the size almost every call site gets,
+ * which is why "flat" was the right word for the whole interface: nineteen of the
+ * twenty-two buttons in the gallery were that box.
+ *
+ * `--h-input`, not a new number. tokens.css already says it: "`data-size=\"sm\"` needs a
+ * height and `--h-input` is already the medium one". A 36px field beside a 20px button
+ * is the same mistake in the other direction, and the whole point of a shared height
+ * token is that the pair cannot disagree.
+ *
+ * The font size stays where the base rule puts it (`--fs-body`): raising it here would
+ * change the type of every default button in the app, which is a different change from
+ * this one and would hide it.
+ */
 .root[data-size='md'] {
+  height: var(--h-input);
   --pad-x: var(--sp-4);
 }
 

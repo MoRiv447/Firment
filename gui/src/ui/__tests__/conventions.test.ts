@@ -398,6 +398,20 @@ describe('Primitive layer and shell conventions', () => {
     expect(button).toContain('display: inline-flex');
   });
 
+  it('gives every button size a height of its own', () => {
+    // `md` had none, and `md` is the default: every button that did not name a size
+    // was content plus a 1px border. Measured in a browser -- 19.5px for a 13px label,
+    // and nineteen of the twenty-two buttons in the gallery were that box. The value
+    // is `--h-input` because tokens.css already names it as the medium control height;
+    // what this asserts is that the rules exist, since a missing one is invisible in a
+    // diff and shows up only as "the buttons look flat".
+    const button = read('../Button.module.css');
+    for (const size of ['sm', 'md', 'lg']) {
+      const rule = new RegExp(`\\.root\\[data-size='${size}'\\][^{]*\\{[^}]*height:`);
+      expect(button, `${size} sets no height`).toMatch(rule);
+    }
+  });
+
   it('exports every component from the barrel, so a file can be split without a diff', () => {
     const barrel = read('../index.ts');
     /** Not a primitive a view is meant to reach for; it is a dialog's backdrop. */
