@@ -90,13 +90,6 @@
   min-width: 0;
 }
 
-.calls {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-1);
-  margin-bottom: var(--sp-2);
-}
-
 .system {
   display: flex;
   align-items: baseline;

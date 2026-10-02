@@ -78,13 +78,18 @@ function chipStatus(status: ToolCardState['status'], danger: boolean): ChipStatu
  * Exported because the Changes pane renders the same diffs, and a second diff
  * renderer is a second opinion on what `+12 −3` means.
  */
-export function DiffBody({ detail }: { detail: string }) {
+export function DiffBody({ detail, failed = false }: { detail: string; failed?: boolean }) {
   const diff = parseDiff(detail);
   if (!diff) {
     // Not a diff: a build's output, a file's contents. It still gets the mono
-    // block -- the card is not the place to guess at prose.
+    // block -- the card is not the place to guess at prose -- and a failed call's
+    // block wears the failure's own ink, because the text IS the diagnosis.
     return (
-      <pre data-ui="tool-output" className={styles.raw}>
+      <pre
+        data-ui="tool-output"
+        data-kind={failed ? 'error' : undefined}
+        className={failed ? styles.error : styles.raw}
+      >
         {detail}
       </pre>
     );
@@ -114,6 +119,7 @@ export function ToolCard({
   tool,
   collapsible,
   onAction,
+  onOpenChanges,
 }: {
   tool: ToolCardState;
   /** When set, the header is a button that opens and closes the body -- used by
@@ -122,6 +128,12 @@ export function ToolCard({
   collapsible?: { open: boolean; onToggle: () => void };
   /** Sends a canned request to the agent. See lib/quickActions.ts. */
   onAction?: (prompt: string) => void;
+  /**
+   * Opens the Changes pane on this call's file. The card shows a diff and the
+   * pane shows the same file with every other call's diff folded into it, so the
+   * way out of a card is the thing the card is a slice of.
+   */
+  onOpenChanges?: (path: string) => void;
 }) {
   // §16.2: nothing is shown for a run under two seconds — a line that appears and vanishes while
   // you are reading the one above it is worse than silence. The card's own start time is the
@@ -226,7 +238,7 @@ export function ToolCard({
           */}
           {argsLine && <p className={styles.args}>{argsLine}</p>}
           {tool.detail ? (
-            <DiffBody detail={tool.detail} />
+            <DiffBody detail={tool.detail} failed={tool.status === 'failed'} />
           ) : (
             tool.status !== 'running' &&
             tool.summary && <p className={styles.summary}>{tool.summary}</p>
@@ -264,6 +276,31 @@ export function ToolCard({
                 </Button>
               ))}
             </div>
+          )}
+        </div>
+      )}
+      {/*
+        The band, outside the body so its rule runs edge to edge. Only on a call
+        that touched a file and has stopped running: a footer on a live card would
+        offer to open a diff that is still being written, and on a `read_file` it
+        would offer a change that does not exist.
+      */}
+      {open && path && tool.status !== 'running' && (
+        <div className={styles.foot}>
+          <span>
+            {path}
+            {diff && diff.added + diff.removed > 0
+              ? ` · ${diff.added} added, ${diff.removed} removed`
+              : ''}
+          </span>
+          {onOpenChanges && (
+            <button
+              type="button"
+              className={styles.footAction}
+              onClick={() => onOpenChanges(path)}
+            >
+              Open in Changes →
+            </button>
           )}
         </div>
       )}

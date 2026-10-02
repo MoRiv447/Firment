@@ -10,7 +10,7 @@
 .row {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
+  gap: 10px;
   box-sizing: border-box;
   width: 100%;
   height: 26px;
@@ -50,7 +50,10 @@
   flex: none;
   min-width: 94px;
   color: var(--ink);
-  font-weight: var(--fw-label);
+  /* 500, not the label's 600: the name is already the only ink-coloured thing in
+     a row of `--dim`, so the extra step bought noise rather than hierarchy -- and
+     at 11px mono it made the column look bolder than the card headers above it. */
+  font-weight: var(--fw-medium);
 }
 
 /* The literal the tool was handed. Truncates, because it is what you look at after
@@ -106,7 +109,7 @@
  * A step that has not run is dimmer in every part, and the name loses its weight.
  *
  * Both halves on purpose: `--dim` alone would leave the name looking like a value
- * rather than like a tool, and the drop from 600 to 400 is what says "not yet" when
+ * rather than like a tool, and the drop from 500 to 400 is what says "not yet" when
  * the colour is already this quiet in both states.
  */
 .row[data-state='pending'] .name,

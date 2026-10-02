@@ -19,6 +19,10 @@
   flex-direction: column;
   box-sizing: border-box;
   width: 100%;
+  /* The body's blocks are inset by their own margins, so nothing should ever
+     reach the corner -- but a long log line inside a scroll box has been known to
+     try, and `overflow: hidden` is what keeps the card's edge round when it does. */
+  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--r-card);
   background: var(--surface-raised);
@@ -53,11 +57,11 @@
 .head {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
+  gap: 10px;
   box-sizing: border-box;
   width: 100%;
   min-height: var(--h-input);
-  padding: var(--sp-1) var(--sp-2);
+  padding: 9px 12px;
   border: 0;
   border-radius: var(--r-card) var(--r-card) 0 0;
   background: transparent;
@@ -65,16 +69,13 @@
   font: inherit;
   font-family: var(--ff-mono);
   font-weight: var(--fw-mono);
-  font-size: var(--fs-minor);
+  font-size: var(--fs-meta);
   text-align: left;
 }
 
-/* The hairline under the header separates it from a body, so it exists only
-   while there is one -- a collapsed card with a line across its own middle is a
-   card that looks broken. */
-.card[data-open='true'] .head {
-  border-bottom: 1px solid var(--line);
-}
+/* No hairline under the header. There used to be one, to divide the head from a
+   body -- but the body's blocks now carry their own edge and sit inset inside the
+   card, so a divider between them drew a second rectangle around the first. */
 
 /* Only a header that folds is allowed to invite a click: the live card's header
    says the same thing and does nothing when you press it. */
@@ -86,11 +87,16 @@
   background: var(--hover);
 }
 
+/*
+ * The body is a gutter, not a box: 9px on the sides and bottom so its blocks
+ * float inset against the card's edge, and `--gap-card` between them because
+ * they are one call's parts rather than two things that happen to be adjacent.
+ */
 .body {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-2);
-  padding: var(--sp-2);
+  gap: var(--gap-card);
+  padding: 0 9px 9px;
 }
 
 /* The subject of the call: a path, a pattern, a command. Mono because it is a
@@ -133,9 +139,12 @@
   display: inline-flex;
   gap: var(--sp-2);
   margin-inline-start: auto;
-  font-size: var(--fs-minor);
+  font-size: var(--fs-meta);
   font-variant-numeric: tabular-nums;
-  font-weight: var(--fw-label);
+  /* The header's own weight, not the label's: the counts are a reading inside a row
+     that is already the loudest thing on the card, and 600 on both made the row
+     shout twice. */
+  font-weight: var(--fw-mono);
   white-space: nowrap;
 }
 
@@ -159,10 +168,14 @@
  * edge and its own smaller radius instead of running to the card's.
  */
 .diff,
-.raw {
+.raw,
+.error {
   box-sizing: border-box;
   max-height: 260px;
   margin: 0;
+  /* The block carries its own inset, so the lines inside it only need their
+     horizontal padding to keep the highlight bars off the frame. */
+  padding: 9px 11px;
   overflow: auto;
   border: 1px solid var(--border);
   border-radius: var(--r-inset);
@@ -170,8 +183,22 @@
   color: var(--ink);
   font-family: var(--ff-mono);
   font-weight: var(--fw-mono);
-  font-size: var(--fs-minor);
+  font-size: var(--fs-meta);
   line-height: var(--lh-mono);
+}
+
+/*
+ * A failed call's own body.
+ *
+ * The same inset frame as a diff, but the message is the failure and not a
+ * capture: the danger ink, and a looser leading, because what a tool says when it
+ * broke is a sentence or two to be read rather than lines to be scanned. It used
+ * to fall through to `.raw`, which set the whole block in the reading colour and
+ * left the failure looking like an attachment.
+ */
+.error {
+  color: var(--step-failed-ink);
+  line-height: 1.7;
 }
 
 .line {
@@ -213,6 +240,46 @@
   margin-top: var(--sp-1);
   padding-top: var(--sp-2);
   border-top: 1px solid var(--border);
+}
+
+/*
+ * The card's footer band, and it is a sibling of the body rather than a child:
+ * the body is inset by the card's own gutter, and this band belongs to the card —
+ * edge to edge, with the rule above it running the full width.
+ *
+ * Left is the reading ("src/main.c · 42 added, 8 removed"), right is the way out.
+ * One line, mono, micro: everything worth saying here was already said by the body
+ * above it, and this is the line that says *where else* to look.
+ */
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  box-sizing: border-box;
+  padding: 7px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--dim);
+  font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
+  font-size: var(--fs-micro);
+}
+
+/* A real `<button>` wearing a link's type, because it moves you inside the app
+   rather than to a URL: the affordance is the panel switch, the semantics are a
+   button's, and an `<a href>` here would be a link a keyboard could not reach. */
+.footAction {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--brand-ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.footAction:hover {
+  text-decoration: underline;
 }
 
 /*

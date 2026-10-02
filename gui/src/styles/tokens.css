@@ -419,11 +419,14 @@
    * at the same size. That is the whole reason this key exists -- "the type feels
    * weak" was a fair description of a screen whose every small label was mono 400.
    *
-   * 500 and not 600: `--fw-label` is already spoken for (a tool's name, a step's
-   * label) and if the resting weight became the label weight there would be no step
-   * left to take. It is also the reason `latin-500.css` is imported in `main.tsx` --
-   * IBM Plex Mono has no variable release, so a weight that is not imported is a
-   * weight the browser fakes.
+   * 500 and not 600: `--fw-label` is the step ABOVE the resting weight, and if the
+   * resting weight became the label weight there would be no step left to take. A
+   * tool's name used to sit on 600, which left nothing above it for an actual
+   * label; it is on this rung now, and the pending rows drop to 400 below it.
+   *
+   * It is also the reason `latin-500.css` is imported in `main.tsx` -- IBM Plex Mono
+   * has no variable release, so a weight that is not imported is a weight the
+   * browser fakes.
    */
   --fw-mono: var(--fw-medium);
   /* Left as it was. The landing page looked like a 400/500-only palette at first
@@ -442,6 +445,17 @@
   --sp-5: 20px;
   --sp-6: 24px;
   --sp-8: 32px;
+
+  /*
+   * The gap between two cards, and it is NOT a step of the ramp above.
+   *
+   * Consecutive tool cards are one object's parts laid out in a column, so they
+   * sit closer than two prose paragraphs do; 16px (the ramp's `--sp-4`, which the
+   * transcript uses between messages) reads as "two unrelated things". The number
+   * is the design's own, and it is named so a card list does not have to spell it
+   * out in three files.
+   */
+  --gap-card: 10px;
 
   /*
    * Heights. `--h-row` is both the control height and the one-line list row,

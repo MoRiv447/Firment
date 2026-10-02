@@ -16,8 +16,50 @@ function tool(over: Partial<ToolCardState> = {}): ToolCardState {
   return { seq: 1, name: 'edit_file', args: { path: 'src/main.c' }, status: 'ok', ...over };
 }
 
-describe('quickActionsFor', () => {
-  it('offers build and test after an edit', () => {
+const DIFF = [
+  '--- a/src/main.c',
+  '+++ b/src/main.c',
+  '@@ -1,2 +1,3 @@',
+  ' context',
+  '+added one',
+  '+added two',
+  '-removed one',
+  '',
+].join('\n');
+
+describe('the card footer', () => {
+  it('names the file and the size of the change', () => {
+    render(<ToolCard tool={tool({ detail: DIFF })} />);
+    expect(screen.getByText('src/main.c · 2 added, 1 removed')).toBeInTheDocument();
+  });
+
+  it('says nothing while the call is still running', () => {
+    // The band offers to open a diff; opening one that is still being written
+    // shows a change that is not the one the card is describing.
+    render(<ToolCard tool={tool({ status: 'running', detail: DIFF })} />);
+    expect(screen.queryByText(/added, /)).not.toBeInTheDocument();
+  });
+
+  it('marks a failed call\'s plain output as the failure', () => {
+    const { container } = render(
+      <ToolCard tool={tool({ status: 'failed', detail: 'no logic analyzer attached' })} />,
+    );
+    expect(
+      container.querySelector('[data-ui="tool-output"][data-kind="error"]'),
+    ).toBeInTheDocument();
+  });
+
+  it('does not mark a passed one', () => {
+    const { container } = render(
+      <ToolCard tool={tool({ status: 'ok', detail: 'linking complete' })} />,
+    );
+    expect(
+      container.querySelector('[data-ui="tool-output"][data-kind="error"]'),
+    ).toBeNull();
+  });
+});
+
+describe('quickActionsFor', () => {  it('offers build and test after an edit', () => {
     expect(quickActionsFor('edit_file').map((a) => a.label)).toEqual([
       'Build & flash',
       'Run tests',
