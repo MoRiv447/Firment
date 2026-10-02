@@ -253,6 +253,25 @@ outside `latin`, CJK included, falls through to the named faces in the stacks ab
 12/22.8). It is the one value in this palette that is inherited rather than derived;
 1.75 is the usual Chinese answer if it ever reads too loose.
 
+### The weight ramp
+
+Five named weights, and only three of them are imported for the mono face:
+
+| Token | Value | Where it is the whole decision |
+|---|---|---|
+| `--fw-book` | 400 | prose, and a step that has not run yet |
+| `--fw-medium` | 500 | the wordmark, a tool's name — the sans step the design asked for and the ramp did not have |
+| `--fw-mono` | `var(--fw-medium)` | every rule that sets the mono face; one number, named for the face it belongs to |
+| `--fw-label` | 600 | a label above its surroundings |
+| `--fw-strong` / `--fw-hero` | 700 / 800 | sans only |
+
+`main.tsx` imports `latin-400/500/600` of IBM Plex Mono and nothing else, because it
+has no variable release. A mono rule asking for 700 therefore does not get a heavier
+cut — it gets the browser smearing the 600 outlines. `tokens-css.test.ts` reads the
+imported set out of `main.tsx` and fails any rule that sets the mono face at a weight
+outside it; the check exists because one `--fw-strong` on a stat number sat in the
+tree through a whole restyle.
+
 ### The size scale
 
 | Token | Value | Role |
@@ -269,6 +288,23 @@ outside `latin`, CJK included, falls through to the named faces in the stacks ab
 `--fs-title` is the rung that was missing: the scale used to run 10–15 and jump
 straight to 28, so a card title had nowhere to go and the tool card shipped its title
 at `--fs-minor` — smaller than the body text beside it.
+
+### Two numbers that are not steps of the ramp
+
+`--gap-card` (10px) is the space between two cards. The spacing ramp's 8px reads as
+"attached to the row above" and its 16px — which is what the transcript uses between
+messages — reads as "two unrelated things"; consecutive cards are one call's parts, so
+they need a number of their own, and naming it is what keeps three card stacks from
+each spelling it slightly differently.
+
+`--h-strip` (42px) is a tab strip's height, and `--h-bar` (46px) the title bar's.
+Neither is `--h-row` (40): a row carries a text baseline and has to line up with
+sidebar rows, menu items and status items, where a strip carries a label and the rule
+under it. The two used to share the number, which is why the title bar's monospace
+path was clipped and the strip was taller than its own tabs. `conventions.test.ts`
+pins that the inspector's collapse toggle derives from the SAME token the strip does —
+it used to spell `--h-row + 1px` beside the strip's `--h-row`, correct by coincidence,
+and a coincidence is invisible in a diff.
 
 ## Radius
 

@@ -26,6 +26,20 @@
     · 卡片内嵌代码块(再下一级的表面 + 自己的描边与 4px 圆角)—— 照 .evidence-output
   并把工具名改成 font-weight 500(照 .tool-name),卡片间隙 8 → 10px。
 
+  落地时这份稿子有几处**没有照搬**,写在这里免得下次被'修回来':
+    · 字族名要写包真正声明的那个。这里曾写 'DM Sans',而 @fontsource-variable/dm-sans
+      声明的是 'DM Sans Variable' —— 名字对不上时浏览器不报错,只是悄悄回退到系统字。
+      现在 tokens-css.test.ts 会去包里读这个名字。
+    · +N −M 的绿仍取 --diff-added-ink(#c9e8a2),不取这里的 --success(#5fd39b):
+      那是一对按 add-fill 量过的值,只换一半会让配对说谎。红色 #ff9aa4 本调色板没有,
+      这里用的是 --step-failed-ink(#ffbcc2)。
+    · .phase 的字距留 --tracking-cjk(0.02em),不用这里的 .06em —— 0.16em/0.06em 是给
+      全大写拉丁设计的,CJK 吃了会散。
+    · 发送按钮仍是 --h-min(28)/pad-x 8/13px,不做 27×14:tokens.md 写了'层级靠颜色与
+      填充承担,绝不靠尺寸',一个 27 会是全应用唯一的控件高度。
+    · 状态条右侧那组没有各自的 14px gap(.tail 不是 flex),这点没在跑起来的 app 上验过,
+      不敢凭稿子改。
+
   文字色分两档:填充用 logo 色(深 #b4f779 / 浅 #4d7c0f),文字另取可读值
   (深 #b4f779 / 浅 #476f0e)—— 浅色 #4d7c0f 当文字压在卡片底上只有 4.33:1,
   现状 GUI 也有同样的坑(#107d98 压 --raised #f0f0f0 = 4.18:1)。
@@ -58,8 +72,8 @@
     --shadow: none;
 
     /* ---- 语言 ---- */
-    --ff-sans: 'DM Sans', 'Microsoft YaHei UI', 'PingFang SC', system-ui, sans-serif;
-    --ff-mono: 'IBM Plex Mono', 'Cascadia Mono', Consolas, monospace;
+    --ff-sans: 'DM Sans Variable', 'MiSans', 'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', system-ui, 'Segoe UI', sans-serif;
+    --ff-mono: 'IBM Plex Mono', 'Sarasa Mono SC', 'Microsoft YaHei UI', 'Cascadia Mono', Consolas, monospace;
     --chrome: var(--ff-mono);
     --fs-micro: 10px; --fs-meta: 11px; --fs-minor: 12px; --fs-body: 13px; --fs-ui: 14px;
     --fs-read: 15px; --fs-title: 17px; --fs-display: 28px;
