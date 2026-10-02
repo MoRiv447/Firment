@@ -15,9 +15,10 @@
 /*
  * The running pill.
  *
- * `--h-min` tall, so it sits on the same centre line as the 28px icon buttons
- * beside it without either side measuring the other, and mono because both halves of
- * it are machine voice: a tool name and a duration.
+ * 26px against the 28px icon buttons beside it: it is a reading and not a control,
+ * so it steps down one notch rather than competing with the things you can press,
+ * and mono because every half of it is machine voice -- a tool name, a step count,
+ * a duration.
  *
  * The separator is a 12px rule rather than a dot or a slash, matching the status bar's
  * own divider: the two are the same gesture -- "these are two readings in one slot".
@@ -25,11 +26,11 @@
 .pill {
   display: inline-flex;
   align-items: center;
-  gap: var(--sp-2);
+  gap: 7px;
   box-sizing: border-box;
-  height: var(--h-min);
+  height: 26px;
   flex: none;
-  padding: 0 var(--sp-2);
+  padding: 0 10px;
   border: 1px solid var(--border-strong);
   border-radius: var(--r-btn);
   color: var(--muted);
@@ -48,6 +49,13 @@
   height: 12px;
   flex: none;
   background: var(--border-strong);
+}
+
+/* Where the workflow has got to, out of how many steps it expects. Fixed-width
+   digits so the row does not jitter as the numerator moves. */
+.pillCount {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
 }
 
 /* The one number in the pill moves every second, so it gets the brand ink and the

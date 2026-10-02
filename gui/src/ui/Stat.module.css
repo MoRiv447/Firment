@@ -8,7 +8,10 @@
   color: var(--ink);
   font-family: var(--ff-mono);
   font-size: var(--fs-ui);
-  font-weight: var(--fw-strong);
+  /* 600 and not `--fw-strong`: IBM Plex Mono ships no variable release and only
+     400 / 500 / 600 are imported, so a 700 here would be the browser smearing the
+     600 outlines rather than a heavier cut. */
+  font-weight: var(--fw-label);
   /* Tabular figures, so two stats side by side put their digits in columns. */
   font-variant-numeric: tabular-nums;
   line-height: var(--lh-tight);

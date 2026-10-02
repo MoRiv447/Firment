@@ -9,14 +9,18 @@ import styles from './Wordmark.module.css';
  * component, two steps, and the display step is the only place `--fs-display` is
  * allowed to appear.
  *
- * The logo artwork is a separate thing (an `<img>` in the title bar) and keeps
- * its own cut corner: the slant in the mark is drawn into the file, so there is
- * nothing to reproduce here.
+ * The trailing period is the mark's own gesture in the other half of the identity:
+ * `LogoMark` draws the three bars, this sets the name, and the acid dot is the one
+ * pixel of colour either of them carries. It is `aria-hidden` because a screen
+ * reader should say the name, not the punctuation.
  */
 export function Wordmark({ size = 'sm' }: { size?: 'sm' | 'lg' }) {
   return (
     <span data-ui="wordmark" data-size={size} className={styles.wordmark}>
       Firment
+      <span aria-hidden className={styles.dot}>
+        .
+      </span>
     </span>
   );
 }

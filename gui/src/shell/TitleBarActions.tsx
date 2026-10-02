@@ -74,8 +74,12 @@ export function TitleBarActions({
    * The turn in flight, when there is one. Absent is the normal case: a window
    * sitting idle has nothing to report here, and the pill is rendered only for the
    * stretch where that is false.
+   *
+   * `current` / `total` are the workflow's own step count -- the same numbers the
+   * step row under the transcript shows -- and they are optional because a turn
+   * that has not touched a workflow tool has no denominator to offer.
    */
-  running?: { tool: string; seconds: number } | null;
+  running?: { tool: string; seconds: number; current?: number; total?: number } | null;
   onToggleTheme: () => void;
   onOpenSettings: () => void;
   notifications: NotificationEntry[];
@@ -94,6 +98,14 @@ export function TitleBarActions({
           <StatusDot status="running" pulse />
           <span className={styles.pillTool}>{running.tool}</span>
           <span aria-hidden className={styles.sep} />
+          {running.total ? (
+            <>
+              <span className={styles.pillCount}>
+                {running.current} / {running.total}
+              </span>
+              <span aria-hidden className={styles.sep} />
+            </>
+          ) : null}
           <span className={styles.pillTime}>{running.seconds}s</span>
         </span>
       )}

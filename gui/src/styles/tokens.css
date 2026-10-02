@@ -403,6 +403,14 @@
 
   --fw-book: 400;
   /*
+   * The 500 rung, and it exists because the sans face needs it too.
+   *
+   * The wordmark and a tool's name are both 500 in the design this layer was
+   * measured against, and a sans rule cannot reach for `--fw-mono` without
+   * saying something false about the face it is setting.
+   */
+  --fw-medium: 500;
+  /*
    * The weight of every rule that sets the mono face, and it is 500 rather than 400.
    *
    * The chrome is all mono and it is all Latin, and IBM Plex Mono's 400 is a light
@@ -417,7 +425,7 @@
    * IBM Plex Mono has no variable release, so a weight that is not imported is a
    * weight the browser fakes.
    */
-  --fw-mono: 500;
+  --fw-mono: var(--fw-medium);
   /* Left as it was. The landing page looked like a 400/500-only palette at first
      read, but its h1 is 550 and its wordmark 700, so it is not evidence for
      flattening this ramp -- and the token is read by 22 component files. */
@@ -445,7 +453,10 @@
    * `28` at a call site, which is how the old tree grew seven different heights.
    */
   --h-min: 28px;
-  --h-bar: 44px;
+  /* The title bar. 46 and not 44: this row carries the mark, the name, the path
+     and the session, and a monospace path needs the room to stay legible rather
+     than becoming a line of clipped glyphs. */
+  --h-bar: 46px;
   /* Grain: the texture, declared once, because it is the same in both schemes.
      Only its strength differs, which is why `--grain-opacity` is the half that
      lives in the scheme blocks. An inlined `feTurbulence` over the whole window

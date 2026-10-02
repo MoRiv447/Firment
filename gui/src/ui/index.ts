@@ -29,6 +29,7 @@ export type { FieldInfo } from './Field';
 export { Icon } from './Icon';
 export { SearchInput, TextArea, TextInput } from './Input';
 export type { TextAreaProps, TextInputProps } from './Input';
+export { LogoMark } from './LogoMark';
 export { KeyValue } from './KeyValue';
 export { NumberField } from './NumberField';
 export type { NumberFieldProps } from './NumberField';

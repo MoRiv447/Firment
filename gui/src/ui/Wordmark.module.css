@@ -3,15 +3,25 @@
  *
  * `lg` is the only place in the app that uses `--fs-display`, which is what keeps
  * the step from becoming "a big number anyone can ask for".
+ *
+ * `sm` is 500, not the 600 a label gets: the name sits at the very top of the
+ * window against the mark's own weight, and at 14px the extra step reads as
+ * heaviness rather than emphasis.
  */
 .wordmark {
   font-family: var(--ff-sans);
   font-size: var(--fs-ui);
-  font-weight: var(--fw-label);
+  font-weight: var(--fw-medium);
   letter-spacing: var(--tracking-display);
   line-height: var(--lh-tight);
   color: var(--ink);
   user-select: none;
+}
+
+/* The dot is text, so it takes the text green: `--brand-acid` is the FILL, and in
+   the light scheme that value is 4.33:1 under a card's own ground. */
+.dot {
+  color: var(--brand-ink);
 }
 
 .wordmark[data-size='lg'] {

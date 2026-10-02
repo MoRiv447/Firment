@@ -200,6 +200,7 @@ describe('Primitive layer and shell conventions', () => {
       'inspector-rail',
       'key-value',
       'live-run',
+      'logo-mark',
       'markdown',
       'menu',
       'menu-item',

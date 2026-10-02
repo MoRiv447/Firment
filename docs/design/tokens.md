@@ -241,10 +241,13 @@ said `'DM Sans'` for a while, which matched nothing, so the app fell back to the
 system face while the token claimed otherwise. That is the Inter failure again, and
 `tokens-css.test.ts` now reads the declared name out of the package itself.
 
-Fonts arrive as `@fontsource-variable/dm-sans/wght.css` plus `latin-400.css` and
-`latin-600.css` of `@fontsource/ibm-plex-mono` — IBM Plex Mono has no variable release,
-so it is imported one weight at a time, and only `latin`. Anything outside `latin`,
-CJK included, falls through to the named faces in the stacks above.
+Fonts arrive as `@fontsource-variable/dm-sans/wght.css` plus `latin-400.css`,
+`latin-500.css` and `latin-600.css` of `@fontsource/ibm-plex-mono` — IBM Plex Mono has
+no variable release, so it is imported one weight at a time, and only `latin`. The
+three that are imported are exactly the three the ramp uses for mono (`--fw-book`,
+`--fw-medium` behind `--fw-mono`, `--fw-label`); a weight nobody imported is not a
+fallback but a *synthesised* one, the browser smearing the 400 outlines. Anything
+outside `latin`, CJK included, falls through to the named faces in the stacks above.
 
 `--lh-body` is 1.85, measured off the landing page's own prose (14/25.9, 11/20.35,
 12/22.8). It is the one value in this palette that is inherited rather than derived;

@@ -220,6 +220,59 @@ describe('tokens.css number scales', () => {
     expect(firstFamily(shared.get('--ff-mono') ?? '')).toBe('IBM Plex Mono');
   });
 
+  it('never sets the mono face at a weight the app does not import', () => {
+    // IBM Plex Mono has no variable release, so `main.tsx` imports it one weight at a
+    // time. A rule that asks for a weight outside that list does not fall back -- the
+    // browser *synthesises* it by smearing the nearest cut, which comes out heavier
+    // and fuzzier than the neighbours it was meant to step up from. That is invisible
+    // in a diff and near-invisible in a screenshot, and one `--fw-strong` on a stat
+    // number sat in the tree through a whole restyle.
+    const entry = Object.values(
+      import.meta.glob('../../main.tsx', {
+        query: '?raw',
+        import: 'default',
+        eager: true,
+      }) as Record<string, string>,
+    ).join('');
+    const imported = new Set(
+      [...entry.matchAll(/ibm-plex-mono\/latin-(\d+)\.css/g)].map((m) => Number(m[1])),
+    );
+    expect([...imported].sort((a, b) => a - b)).toEqual([400, 500, 600]);
+
+    const sheets = import.meta.glob('../../**/*.css', {
+      query: '?raw',
+      import: 'default',
+      eager: true,
+    }) as Record<string, string>;
+    // One level of `var()` indirection has to be followed, because the ramp is allowed
+    // to alias itself (`--fw-mono` is `--fw-medium`) and a gate that read only the
+    // literal would call every mono rule unweighted.
+    const declared: Record<string, string> = {};
+    for (const m of withoutComments().matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
+      declared[m[1]] ??= m[2].trim();
+    }
+    const resolve = (value: string, depth = 0): string => {
+      const m = /^var\((--[\w-]+)\)$/.exec(value);
+      return m && declared[m[1]] && depth < 4 ? resolve(declared[m[1]], depth + 1) : value;
+    };
+
+    const offenders: string[] = [];
+    for (const [path, raw] of Object.entries(sheets)) {
+      if (path.includes('__tests__')) continue;
+      const source = raw.replace(/\/\*[\s\S]*?\*\//g, '');
+      for (const [, selector, body] of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+        if (!body.includes('font-family: var(--ff-mono)')) continue;
+        const weight = /font-weight:\s*([^;]+)/.exec(body);
+        if (!weight) continue;
+        const value = Number(resolve(weight[1].trim()));
+        if (Number.isFinite(value) && !imported.has(value)) {
+          offenders.push(`${path}: ${selector.trim()} -> ${weight[1].trim()} = ${value}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
   it('bundles DM Sans and IBM Plex Mono, and never names Inter', () => {
     // Inter was declared for two redesigns and never shipped, so for a while the
     // app rendered the system font while its tokens claimed otherwise. Naming a
@@ -238,7 +291,9 @@ describe('tokens.css number scales', () => {
       expect(shared.has(step), `missing ${step}`).toBe(true);
     }
     expect(shared.get('--sp-2')).toBe('8px');
-    expect(shared.get('--h-bar')).toBe('44px');
+    // 46, not 44: the bar carries the mark, the name, the path and the session, and
+    // the monospace path is what needs the room to stay legible.
+    expect(shared.get('--h-bar')).toBe('46px');
     // One height for every control AND every one-line row: that shared number is
     // what makes a sidebar row, a menu item and an inspector tab look like one
     // system rather than three that happen to sit near each other.

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-import { Chip, Wordmark } from '../ui';
+import { LogoMark, Wordmark } from '../ui';
 import styles from './TitleBar.module.css';
 
 /**
@@ -16,20 +16,19 @@ import styles from './TitleBar.module.css';
  * thinking level, context usage) moved to the status bar, which is where live
  * session state belongs -- they are readings, not navigation.
  *
- * Parity note: the height is `--h-bar` rather than the ~36px a native title bar
- * gets, because this bar carries the project path and a monospace path needs the
- * room. The window's own frame is still the operating system's; nothing here
- * drags it.
+ * The two rules between the three identity groups are the point of the layout: the
+ * project, the session and the brand are three different scopes, and without a
+ * rule each side of them reads as one long path.
  */
 export function TitleBar({
   project,
-  git,
+  session,
   actions,
 }: {
   /** The workspace the rail and the agent are pointed at. */
   project: string;
-  /** Branch and dirty count, when a project with a repository is open. */
-  git?: { branch: string; dirty: number } | null;
+  /** The open session's name, when one is open. */
+  session?: string | null;
   /**
    * The right-hand cluster -- `TitleBarActions` in the app. Composed by the caller
    * so this file owns the frame and not the set of things that happen to be
@@ -39,7 +38,7 @@ export function TitleBar({
 }) {
   return (
     <header data-ui="title-bar" className={styles.bar}>
-      <img src="/icons/logo-w-64.png" alt="" aria-hidden className={styles.mark} />
+      <LogoMark />
       <Wordmark />
 
       <span aria-hidden className={styles.divider} />
@@ -55,11 +54,13 @@ export function TitleBar({
         {project}
       </span>
 
-      {git && (
-        <Chip mono title={git.dirty > 0 ? `${git.dirty} changed files` : 'Working tree is clean'}>
-          {git.branch}
-          {git.dirty > 0 ? ` ·${git.dirty}` : ''}
-        </Chip>
+      {session && (
+        <>
+          <span aria-hidden className={styles.divider} />
+          <span title={session} className={styles.session}>
+            {session}
+          </span>
+        </>
       )}
 
       <span className={styles.spacer} />

@@ -1,0 +1,43 @@
+/*
+ * The mark: three bars, sheared, shrinking downward.
+ *
+ * The geometry is the logo's own, measured off the asset it replaces: an 18×21 box
+ * sheared 13°, bars 4px tall at 2 / 8.5 / 15 from the top, widths 17 / 12 / 5.
+ *
+ * Each bar is its own class rather than `.mark span` — a descendant whose head is
+ * an element name styles every span under the mark, which is the thing
+ * `conventions.test.ts` keeps out of the modules.
+ */
+.mark {
+  position: relative;
+  display: block;
+  width: 18px;
+  height: 21px;
+  flex: none;
+  transform: skew(-13deg);
+}
+
+.barTop,
+.barMid,
+.barLow {
+  position: absolute;
+  left: 0;
+  display: block;
+  height: 4px;
+  background: var(--brand-acid);
+}
+
+.barTop {
+  top: 2px;
+  width: 17px;
+}
+
+.barMid {
+  top: 8.5px;
+  width: 12px;
+}
+
+.barLow {
+  top: 15px;
+  width: 5px;
+}

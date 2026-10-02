@@ -30,6 +30,7 @@ import { ChatView } from './views/ChatView';
 import { SessionSidebar } from './views/SessionSidebar';
 import { SettingsView } from './views/SettingsView';
 import { sessionChanges } from './lib/changes';
+import { workflowSteps } from './lib/steps';
 import { initialTurnState, turnsReducer } from './lib/turnReducer';
 import type { TurnMap } from './lib/turnReducer';
 import { WorkbenchView } from './views/WorkbenchView';
@@ -750,11 +751,33 @@ export default function App() {
    * the two cannot disagree about how long this has taken.
    */
   const inFlight = turn ? Object.values(turn.tools).filter((t) => t.status === 'running').pop() : undefined;
+  /*
+   * The same three workflow steps the step row under the transcript draws, counted
+   * rather than listed: the pill has one slot for progress, not a second copy of
+   * the row. Absent for a turn that never touched build / flash / monitor, which is
+   * most turns -- and then the pill carries no denominator rather than a made-up one.
+   */
+  const steps = workflowSteps(turn ? Object.values(turn.tools) : [], nowTick);
+  const stepsDone = steps?.filter((s) => s.state === 'done').length ?? 0;
   const pill = running
     ? {
         tool: inFlight?.name ?? 'thinking',
         seconds: turn?.startedAt ? Math.max(0, Math.round((nowTick - turn.startedAt) / 1000)) : 0,
+        ...(steps
+          ? { current: Math.min(stepsDone + 1, steps.length), total: steps.length }
+          : {}),
       }
+    : null;
+
+  /*
+   * The name the title bar shows for the open chat.
+   *
+   * `SessionDto` carries no title of its own -- the sidebar's label is the excerpt
+   * of the first message, which lives on the summary -- so this looks it up rather
+   * than inventing a second naming rule the two surfaces could disagree with.
+   */
+  const sessionTitle = session
+    ? (sessions.find((s) => s.id === session.id)?.preview ?? null)
     : null;
 
   return (
@@ -769,6 +792,7 @@ export default function App() {
         <div className={styles.app}>
           <TitleBar
             project={session?.cwd || workCwd}
+            session={sessionTitle}
             actions={
               <TitleBarActions
                 running={pill}

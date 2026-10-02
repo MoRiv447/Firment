@@ -6,6 +6,8 @@ import { Inspector } from '../Inspector';
 import { NotificationBell } from '../NotificationBell';
 import { Splitter } from '../Splitter';
 import { StatusMenu } from '../StatusBar';
+import { TitleBar } from '../TitleBar';
+import { TitleBarActions } from '../TitleBarActions';
 import type { InspectorTab } from '../Inspector';
 import type { NotificationEntry } from '../../types';
 
@@ -190,5 +192,60 @@ describe('NotificationBell', () => {
     fireEvent.keyDown(panel, { key: 'Escape' });
     expect(screen.queryByRole('region', { name: 'Notifications' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Notifications, 1 unread' })).toHaveFocus();
+  });
+});
+
+describe('TitleBar', () => {
+  it('draws the mark instead of loading one', () => {
+    const { container } = render(<TitleBar project="D:/work/firmware" />);
+    // The asset this replaced was `/icons/logo-w-64.png` -- the light-ground cut of
+    // the logo, sitting nearly invisible on the dark surface that is the default
+    // scheme. An `<img>` in the bar is that bug coming back, and no colour test
+    // would have caught it, because the file itself is not a token.
+    expect(container.querySelector('img')).toBeNull();
+    expect(screen.getByRole('banner')).toHaveTextContent(/Firment/);
+  });
+
+  it('names the open session, and drops the group when there is none', () => {
+    const { rerender } = render(
+      <TitleBar project="D:/work/firmware" session="breathing led on PA0" />,
+    );
+    expect(screen.getByText('breathing led on PA0')).toBeInTheDocument();
+    rerender(<TitleBar project="D:/work/firmware" session={null} />);
+    expect(screen.queryByText('breathing led on PA0')).not.toBeInTheDocument();
+  });
+});
+
+describe('the running pill', () => {
+  const show = (running?: { tool: string; seconds: number; current?: number; total?: number } | null) =>
+    render(
+      <TitleBarActions
+        mode="dark"
+        running={running}
+        onToggleTheme={() => {}}
+        onOpenSettings={() => {}}
+        notifications={[]}
+        unread={0}
+        onMarkAllRead={() => {}}
+        onClear={() => {}}
+        onOpenSession={() => {}}
+      />,
+    );
+
+  it('counts the workflow steps it was given', () => {
+    show({ tool: 'build', seconds: 12, current: 2, total: 3 });
+    expect(screen.getByText('2 / 3')).toBeInTheDocument();
+    expect(screen.getByText('12s')).toBeInTheDocument();
+  });
+
+  it('prints no denominator for a turn that never touched the workflow', () => {
+    show({ tool: 'thinking', seconds: 4 });
+    expect(screen.getByText('thinking')).toBeInTheDocument();
+    expect(screen.queryByText(/\/ \d/)).not.toBeInTheDocument();
+  });
+
+  it('is absent on the usual case of an idle window', () => {
+    show(null);
+    expect(screen.queryByText(/s$/)).not.toBeInTheDocument();
   });
 });

@@ -6,30 +6,27 @@
  * (the right cluster), which is why nothing here has a background of its own --
  * the bar is `--surface` against the transcript's `--bg`, and the hairline under
  * it is the separator.
+ *
+ * The gaps here are the design's own measurements rather than steps of `--sp-*`:
+ * 10 between the groups and 15 before the first one is what separates three scopes
+ * reading as one run-on string, and rounding them to the 4px grid is what made the
+ * bar look crowded.
  */
 .bar {
   display: flex;
   align-items: center;
-  gap: var(--sp-3);
+  gap: 10px;
   box-sizing: border-box;
   height: var(--h-bar);
   flex: 0 0 auto;
-  padding: 0 var(--sp-3);
+  padding: 0 10px 0 15px;
   background: var(--surface);
   border-bottom: 1px solid var(--line);
   font-family: var(--ff-sans);
 }
 
-.mark {
-  width: 22px;
-  height: 22px;
-  flex: none;
-  border-radius: var(--r-chip);
-  object-fit: contain;
-}
-
-/* The vertical hairline between the mark and the context. A rule, not a border,
-   because it belongs to neither side. */
+/* The vertical hairline between the identity, the path and the session. A rule,
+   not a border, because it belongs to neither side. */
 .divider {
   width: 1px;
   height: 18px;
@@ -45,19 +42,38 @@
  * that would have to guess how wide the bar is. The path's segments are all LTR
  * runs separated by neutral `/` or `\`, and rule N1 of the bidi algorithm keeps
  * them in order between two same-direction runs, so nothing is reordered.
+ *
+ * `--fs-meta` and `--dim`, both deliberate: this is the least important thing the
+ * bar says, and at 12px in `--muted` it competed with the session name beside it.
  */
 .project {
   max-width: 420px;
   min-width: 0;
   overflow: hidden;
-  color: var(--muted);
+  color: var(--dim);
   font-family: var(--ff-mono);
   font-weight: var(--fw-mono);
-  font-size: var(--fs-minor);
+  font-size: var(--fs-meta);
   text-overflow: ellipsis;
   white-space: nowrap;
   direction: rtl;
   text-align: left;
+}
+
+/*
+ * The open session's name.
+ *
+ * Prose, not a reading: a person named this session, so it takes the sans face and
+ * the step the transcript uses for secondary text. It truncates left-to-right
+ * because, unlike a path, its beginning is the part worth keeping.
+ */
+.session {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--fs-minor);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .spacer {
