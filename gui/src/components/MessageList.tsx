@@ -76,18 +76,20 @@ function HistoryCard({
   result,
   seq,
   onAction,
+  onOpenChanges,
 }: {
   call: ToolCall;
   result?: string;
   seq: number;
   onAction?: (prompt: string) => void;
+  onOpenChanges?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   return (
     <ToolCard
       tool={asTool(call, seq, result)}
       collapsible={{ open, onToggle: () => setOpen((o) => !o) }}
-      onAction={onAction}
+      onAction={onAction} onOpenChanges={onOpenChanges}
     />
   );
 }
@@ -144,9 +146,11 @@ function ResultRow({ message }: { message: ChatMessage }) {
 export function ToolRun({
   messages,
   onAction,
+  onOpenChanges,
 }: {
   messages: ChatMessage[];
   onAction?: (prompt: string) => void;
+  onOpenChanges?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const { steps, tools } = summariseRun(messages);
@@ -174,7 +178,7 @@ export function ToolRun({
               call={entry.call}
               result={entry.result}
               seq={i + 1}
-              onAction={onAction}
+              onAction={onAction} onOpenChanges={onOpenChanges}
             />
           ))}
           {orphans.map((message, i) => (
@@ -196,7 +200,15 @@ export function ToolRun({
  * carries the name, the literal it was handed and the duration; pressing it opens
  * the card, which is where the two thousand characters of output belong.
  */
-function CallList({ calls, onAction }: { calls: ToolCall[]; onAction?: (prompt: string) => void }) {
+function CallList({
+  calls,
+  onAction,
+  onOpenChanges,
+}: {
+  calls: ToolCall[];
+  onAction?: (prompt: string) => void;
+  onOpenChanges?: () => void;
+}) {
   const [open, setOpen] = useState<string | null>(null);
   return (
     <div className={stack.stack}>
@@ -212,7 +224,7 @@ function CallList({ calls, onAction }: { calls: ToolCall[]; onAction?: (prompt: 
             />
             {open === key && (
               <div className={stack.card}>
-                <ToolCard tool={tool} onAction={onAction} />
+                <ToolCard tool={tool} onAction={onAction} onOpenChanges={onOpenChanges} />
               </div>
             )}
           </Fragment>
@@ -236,11 +248,13 @@ function SystemRow({ content }: { content: string }) {
 export const MessageList = memo(function MessageList({
   messages,
   onAction,
+  onOpenChanges,
 }: {
   messages: ChatMessage[];
   /** Sends a canned request to the agent -- the same path the composer uses. See
    *  lib/quickActions.ts. */
   onAction?: (prompt: string) => void;
+  onOpenChanges?: () => void;
 }): ReactNode {
   return (
     <div data-ui="transcript" className={styles.transcript}>
@@ -249,7 +263,7 @@ export const MessageList = memo(function MessageList({
         // the index alone -- index keys made expansion state migrate to the wrong
         // card when the optimistic-append → transcript-refresh cycle shifted rows.
         if (row.kind === 'run') {
-          return <ToolRun key={row.key} messages={row.messages} onAction={onAction} />;
+          return <ToolRun key={row.key} messages={row.messages} onAction={onAction} onOpenChanges={onOpenChanges} />;
         }
         const m = row.message;
         const key = row.key;
@@ -269,7 +283,7 @@ export const MessageList = memo(function MessageList({
                   page's own demo puts above its assistant prose. Without it the two
                   sides are told apart only by the bubble. */}
               <span className={styles.who}>Firment</span>
-              {!!m.tool_calls?.length && <CallList calls={m.tool_calls} onAction={onAction} />}
+              {!!m.tool_calls?.length && <CallList calls={m.tool_calls} onAction={onAction} onOpenChanges={onOpenChanges} />}
               {m.content && <Markdown>{m.content}</Markdown>}
             </div>
           );

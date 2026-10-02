@@ -31,6 +31,7 @@ export function LiveRun({
   tools,
   now,
   onAction,
+  onOpenChanges,
   turnStartedAt,
 }: {
   tools: ToolCardState[];
@@ -48,6 +49,7 @@ export function LiveRun({
    */
   now: number;
   onAction?: (prompt: string) => void;
+  onOpenChanges?: () => void;
   /**
    * When the turn began, which is earlier than the first row: the stretch between
    * the two is the model answering, and a timeline that started at the first call
@@ -73,7 +75,7 @@ export function LiveRun({
             />
             {openSeq === tool.seq && (
               <div className={stack.card}>
-                <ToolCard tool={tool} onAction={onAction} />
+                <ToolCard tool={tool} onAction={onAction} onOpenChanges={onOpenChanges} />
               </div>
             )}
           </Fragment>

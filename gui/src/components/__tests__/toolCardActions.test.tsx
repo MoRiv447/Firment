@@ -57,9 +57,24 @@ describe('the card footer', () => {
       container.querySelector('[data-ui="tool-output"][data-kind="error"]'),
     ).toBeNull();
   });
+
+  it('offers the way out only when somewhere to go was given', () => {
+    const onOpenChanges = vi.fn();
+    render(<ToolCard tool={tool({ detail: DIFF })} onOpenChanges={onOpenChanges} />);
+    fireEvent.click(screen.getByRole('button', { name: /Open in Changes/ }));
+    expect(onOpenChanges).toHaveBeenCalledTimes(1);
+    // And the band still reads on its own: the handler is the link, not the text.
+    expect(screen.getByText('src/main.c · 2 added, 1 removed')).toBeInTheDocument();
+  });
+
+  it('renders no link it cannot honour', () => {
+    render(<ToolCard tool={tool({ detail: DIFF })} />);
+    expect(screen.queryByRole('button', { name: /Open in Changes/ })).not.toBeInTheDocument();
+  });
 });
 
-describe('quickActionsFor', () => {  it('offers build and test after an edit', () => {
+describe('quickActionsFor', () => {
+  it('offers build and test after an edit', () => {
     expect(quickActionsFor('edit_file').map((a) => a.label)).toEqual([
       'Build & flash',
       'Run tests',

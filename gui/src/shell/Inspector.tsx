@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useId } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { PanelRightClose, PanelRightOpen } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -79,25 +79,36 @@ function RailButton({
  */
 export function Inspector({
   tabs,
+  active,
+  onActiveChange,
   open,
   onToggle,
   width,
   onResize,
 }: {
   tabs: InspectorTab[];
+  /**
+   * Which tab is up, held by the caller.
+   *
+   * It used to be this component's own `useState`, and that is why nothing else in
+   * the window could send you here: a tool card that wants to show its diff in the
+   * Changes pane has to be able to say "Changes", and a private piece of state is
+   * not a thing a sibling can reach.
+   */
+  active: string;
+  onActiveChange: (key: string) => void;
   open: boolean;
   onToggle: () => void;
   width: number;
   onResize: (next: number) => void;
 }) {
   const prefix = useId();
-  const [active, setActive] = useState(tabs[0]?.key ?? '');
   const current = tabs.find((tab) => tab.key === active) ?? tabs[0];
 
   // The pane a rail button opens is the one you wanted, so the act of collapsing
   // must not forget which that was.
   const openTab = (key: string) => {
-    setActive(key);
+    onActiveChange(key);
     if (!open) onToggle();
   };
 
@@ -131,7 +142,7 @@ export function Inspector({
               ariaLabel="Inspector"
               idPrefix={prefix}
               active={current?.key ?? ''}
-              onChange={setActive}
+              onChange={onActiveChange}
               items={tabs.map((tab) => ({
                 key: tab.key,
                 label: tab.label,

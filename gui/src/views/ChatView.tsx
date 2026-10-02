@@ -53,6 +53,7 @@ export function ChatView({
   onMode,
   onThinking,
   progress,
+  onOpenChanges,
 }: {
   session: SessionDto | null;
   running: boolean;
@@ -63,6 +64,8 @@ export function ChatView({
   /** Switch agent/plan. Absent in a read-only rendering, where the chips are hidden. */
   onMode?: (mode: string) => void;
   onThinking?: (level: string) => void;
+  /** Opens the Changes pane, from a tool card's footer. */
+  onOpenChanges?: () => void;
   /**
    * The plan's own progress, when the session has one. It outranks the tool-call
    * count above the transcript because it is the number that answers "how much is
@@ -236,7 +239,11 @@ export function ChatView({
       <div ref={scrollRef} onScroll={onScroll} className={styles.scroll}>
         {session ? (
           <>
-            <MessageList messages={session.messages} onAction={onSend} />
+            <MessageList
+              messages={session.messages}
+              onAction={onSend}
+              onOpenChanges={onOpenChanges}
+            />
             {/*
               * An empty state for the case that actually happens: a session with
               * nothing said yet. It carries no action because the action is the
@@ -291,6 +298,7 @@ export function ChatView({
               tools={toolList}
               now={nowMs}
               onAction={onSend}
+              onOpenChanges={onOpenChanges}
               turnStartedAt={turn?.startedAt}
             />
             {!!turn?.thinking && !turn.text && (

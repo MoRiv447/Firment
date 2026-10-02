@@ -28,17 +28,27 @@
 }
 
 .list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-card);
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
+/*
+ * One file is one card, not one row of a table.
+ *
+ * The pane used to draw a hairline under each file, which made the list read as a
+ * spreadsheet of paths -- and a diff opened underneath a hairline looked like it
+ * belonged to the file below it. An edge of its own ties the diff to the name it
+ * came from, and it is the same object the transcript's cards are.
+ */
 .item {
-  border-bottom: 1px solid var(--line);
-}
-
-.item:last-child {
-  border-bottom: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--surface-raised);
 }
 
 /*
@@ -49,11 +59,11 @@
 .row {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
+  gap: 9px;
   box-sizing: border-box;
   width: 100%;
   min-height: var(--h-min);
-  padding: var(--sp-2) 0;
+  padding: 9px 12px;
   border: 0;
   background: transparent;
   color: var(--ink);

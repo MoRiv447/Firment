@@ -183,6 +183,12 @@ export default function App() {
   const [workbenchOpen, setWorkbenchOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
+  /*
+   * Which inspector pane is up. The Inspector used to hold this itself, which is
+   * why nothing else in the window could send you to one -- a tool card that wants
+   * to show its diff in the Changes pane has to be able to say 'changes'.
+   */
+  const [inspectorTab, setInspectorTab] = useState('changes');
   // The column's width is the one shell measurement worth keeping: a drag that
   // resets on every restart is a drag that was never really set. The Inspector
   // clamps it, so whatever is in here is only ever a starting point.
@@ -880,6 +886,10 @@ export default function App() {
                   turn={turn}
                   infos={infos.filter((i) => !i.sid || i.sid === session?.id)}
                   progress={todoCounts(todos)}
+                  onOpenChanges={() => {
+                    setInspectorTab('changes');
+                    setInspectorOpen(true);
+                  }}
                   onSend={handleSend}
                   onCancel={handleCancel}
                   /* Mode and thinking are the composer's chips now, not status-bar
@@ -906,6 +916,8 @@ export default function App() {
             </div>
 
             <Inspector
+              active={inspectorTab}
+              onActiveChange={setInspectorTab}
               open={inspectorOpen}
               onToggle={() => setInspectorOpen((o) => !o)}
               width={inspectorWidth}

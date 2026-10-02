@@ -129,11 +129,13 @@ export function ToolCard({
   /** Sends a canned request to the agent. See lib/quickActions.ts. */
   onAction?: (prompt: string) => void;
   /**
-   * Opens the Changes pane on this call's file. The card shows a diff and the
-   * pane shows the same file with every other call's diff folded into it, so the
-   * way out of a card is the thing the card is a slice of.
+   * Opens the Changes pane. The card shows a slice of a file's history and the pane
+   * shows the whole of it, so the way out of a card is the thing the card is a
+   * slice of. No path argument on purpose: the pane lists every changed file with
+   * its own fold, and jumping to one of them is a different feature that nobody has
+   * asked for yet.
    */
-  onOpenChanges?: (path: string) => void;
+  onOpenChanges?: () => void;
 }) {
   // §16.2: nothing is shown for a run under two seconds — a line that appears and vanishes while
   // you are reading the one above it is worse than silence. The card's own start time is the
@@ -297,7 +299,7 @@ export function ToolCard({
             <button
               type="button"
               className={styles.footAction}
-              onClick={() => onOpenChanges(path)}
+              onClick={() => onOpenChanges()}
             >
               Open in Changes →
             </button>

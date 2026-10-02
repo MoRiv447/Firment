@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { Bot, Diff } from 'lucide-react';
@@ -60,16 +61,30 @@ describe('Splitter', () => {
 });
 
 describe('Inspector', () => {
-  it('is a tab strip with a panel that names its own tab', () => {
-    render(
+  /**
+   * The strip with its tab and open state held where the app holds them.
+   *
+   * The Inspector used to own that state, which is why nothing else in the window
+   * could send you to a pane. This is what the app looks like from here.
+   */
+  function Harness() {
+    const [active, setActive] = useState('changes');
+    const [open, setOpen] = useState(true);
+    return (
       <Inspector
         tabs={tabs}
-        open
-        onToggle={() => {}}
+        active={active}
+        onActiveChange={setActive}
+        open={open}
+        onToggle={() => setOpen((o) => !o)}
         width={320}
         onResize={() => {}}
-      />,
+      />
     );
+  }
+
+  it('is a tab strip with a panel that names its own tab', () => {
+    render(<Harness />);
     const strip = screen.getByRole('tablist', { name: 'Inspector' });
     expect(within(strip).getByRole('tab', { name: 'Changes' })).toHaveAttribute(
       'aria-selected',
@@ -82,22 +97,31 @@ describe('Inspector', () => {
     expect(panel).toHaveAttribute('aria-labelledby', selected.id);
   });
 
+  it('shows the pane its owner asks for, not the one it was started on', () => {
+    // The whole reason the tab is a prop: a tool card's footer says "open the
+    // Changes pane", and a strip that keeps its own state cannot be told.
+    render(
+      <Inspector
+        tabs={tabs}
+        active="agents"
+        onActiveChange={() => {}}
+        open
+        onToggle={() => {}}
+        width={320}
+        onResize={() => {}}
+      />,
+    );
+    expect(screen.getByRole('tab', { name: /Subagents/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel')).toHaveAccessibleName(/Subagents/);
+  });
+
   it('collapses to a rail that reopens the pane you chose, not the first one', () => {
-    const onToggle = vi.fn();
-    const { rerender } = render(
-      <Inspector tabs={tabs} open onToggle={onToggle} width={320} onResize={() => {}} />,
-    );
+    render(<Harness />);
     fireEvent.click(screen.getByRole('tab', { name: /Subagents/ }));
-    rerender(
-      <Inspector tabs={tabs} open={false} onToggle={onToggle} width={320} onResize={() => {}} />,
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse the inspector' }));
     fireEvent.click(screen.getByRole('button', { name: 'Subagents, 2' }));
     // The badge belongs to the accessible name because the rail has no room for a
     // second string, and a count you cannot hear is a count that is not there.
-    expect(onToggle).toHaveBeenCalled();
-    rerender(
-      <Inspector tabs={tabs} open onToggle={onToggle} width={320} onResize={() => {}} />,
-    );
     expect(screen.getByRole('tab', { name: /Subagents/ })).toHaveAttribute(
       'aria-selected',
       'true',
