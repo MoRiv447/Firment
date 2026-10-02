@@ -55,6 +55,9 @@
   flex-direction: column;
   gap: var(--sp-4);
   padding: 14px 22px 20px;
+  /* The gutter is reserved even when there is nothing to scroll, so a first reply
+     does not narrow the column by a scrollbar width halfway down its own render. */
+  scrollbar-gutter: stable;
 }
 
 /* ------------------------------------------------------------------ */
@@ -199,7 +202,13 @@
  * `:focus-within` and not `:focus`: the border belongs to the box, and the box is the
  * thing you are in when the caret is anywhere inside it.
  */
+/* The composer is capped to the transcript column and centred with it, so the
+   field and the text above share one measure instead of the box running edge to
+   edge under a column that stops short. */
 .field {
+  max-width: 864px;
+  margin-inline: auto;
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 11px;

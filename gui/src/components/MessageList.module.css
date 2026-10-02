@@ -86,7 +86,34 @@
 }
 
 .assistant {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: var(--sp-3);
+  align-items: start;
   max-width: 88%;
+  min-width: 0;
+  margin-inline: auto;
+  width: 100%;
+}
+
+/*
+ * The speaker, as a tile rather than as a caption.
+ *
+ * A micro-label above every answer says who wrote it; the same mark in a 28px box
+ * says it at the left edge of the column, which is where the eye already is when it
+ * comes back from a scroll, and it leaves the line itself to the prose.
+ */
+.avatar {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-active);
+  border-radius: var(--r-btn);
+  background: var(--selection);
+}
+
+.turn {
   min-width: 0;
 }
 

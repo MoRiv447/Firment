@@ -4,7 +4,7 @@ import { ChevronDown, ChevronRight, Terminal } from 'lucide-react';
 
 import type { ChatMessage, ToolCall, ToolCardState } from '../types';
 import { pairRun, groupTranscript } from '../lib/transcript';
-import { Chip, Icon, StatusMark } from '../ui';
+import { Chip, Icon, LogoMark, StatusMark } from '../ui';
 import { Markdown } from './Markdown';
 import { ToolCard } from './ToolCard';
 import { ToolRow } from './ToolRow';
@@ -200,6 +200,26 @@ export function ToolRun({
  * carries the name, the literal it was handed and the duration; pressing it opens
  * the card, which is where the two thousand characters of output belong.
  */
+/**
+ * One answer, framed the same way whether it is stored or still streaming.
+ *
+ * The tile carries the mark and the name line carries the label; everything the turn
+ * produced sits in the column to its right, so the transcript's left edge is one
+ * line of tiles rather than a ragged set of captions. Exported because `ChatView`
+ * renders the live turn and must not re-derive the frame -- two copies of a grid is
+ * how the two states quietly stop matching.
+ */
+export function AgentTurn({ children }: { children: ReactNode }) {
+  return (
+    <div className={styles.assistant}>
+      <span aria-hidden className={styles.avatar}>
+        <LogoMark />
+      </span>
+      <div className={styles.turn}>{children}</div>
+    </div>
+  );
+}
+
 function CallList({
   calls,
   onAction,
@@ -278,14 +298,14 @@ export const MessageList = memo(function MessageList({
         }
         if (m.role === 'assistant') {
           return (
-            <div key={key} className={styles.assistant}>
-              {/* Who is speaking, in the machine voice -- the same label the landing
-                  page's own demo puts above its assistant prose. Without it the two
-                  sides are told apart only by the bubble. */}
+            <AgentTurn key={key}>
+              {/* Who is speaking, in the machine voice, beside the tile that says the
+                  same thing without words. Both are kept: the label is what a screen
+                  reader reads, the tile is what the eye finds after a scroll. */}
               <span className={styles.who}>Firment</span>
               {!!m.tool_calls?.length && <CallList calls={m.tool_calls} onAction={onAction} onOpenChanges={onOpenChanges} />}
               {m.content && <Markdown>{m.content}</Markdown>}
-            </div>
+            </AgentTurn>
           );
         }
         if (m.role === 'tool') {
