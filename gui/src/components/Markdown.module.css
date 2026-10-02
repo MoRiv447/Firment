@@ -13,9 +13,14 @@
  * gap only spaces the top level.
  */
 .root {
-  color: var(--ink);
+  /* The answer is the thing being read, so it takes the reading rung and the
+     measure that goes with it: 15px at 66ch is about where a line stops being
+     scanned and starts being hunted for. `--ink-soft` rather than `--ink` because
+     at this size the full-strength ink makes a paragraph look like a heading. */
+  color: var(--ink-soft);
   font-family: var(--ff-sans);
-  font-size: var(--fs-body);
+  font-size: var(--fs-read);
+  max-width: 66ch;
   line-height: var(--lh-body);
   overflow-wrap: anywhere;
 }

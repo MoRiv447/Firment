@@ -41,8 +41,9 @@
  * only acid on screen. Right alignment does the rest -- it is the one signal here
  * that needs no colour and no legend at all.
  *
- * `max-width` is 68% and not the assistant's 88%: a bubble is a block with edges, so
- * its ragged edge is visible, where a paragraph's is the column's.
+ * `max-width` is 68% and not the prose's `66ch` (which `Markdown.module.css` sets on
+ * the answer itself): a bubble is a block with edges, so its ragged edge is visible,
+ * where a paragraph's is the column's.
  */
 .bubble {
   align-self: flex-end;
@@ -53,6 +54,11 @@
   border: 1px solid var(--border);
   border-radius: var(--r-card);
   background: var(--surface-raised);
+  /* One rung below the transcript's reading size: what you typed is a record of a
+     request, and what comes back is the thing you are reading. The column used to
+     make that the wrong way round -- the bubble inherited 15 and the answer was set
+     in 13 -- which is why a long reply scanned as fine print. */
+  font-size: var(--fs-body);
   line-height: var(--lh-body);
   white-space: pre-wrap;
   word-break: break-word;
@@ -68,7 +74,9 @@
  */
 .who {
   display: block;
-  margin-bottom: var(--sp-1);
+  /* 8px, not 4: the label sits above a paragraph now rather than a card, and at
+     4px it read as belonging to the line it was set against. */
+  margin-bottom: var(--sp-2);
   color: var(--dim);
   font-family: var(--ff-mono);
   font-weight: var(--fw-mono);

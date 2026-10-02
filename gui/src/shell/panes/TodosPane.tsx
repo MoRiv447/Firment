@@ -82,7 +82,13 @@ export function TodosPane({ todos, loading }: { todos: TodoDto[]; loading: boole
 }
 
 /** The one-line form for the status bar: `3/7`. */
-export function todoSummary(todos: TodoDto[]): string | null {
+/** The plan's progress as two numbers, or `null` for a session with no plan. */
+export function todoCounts(todos: TodoDto[]): { done: number; total: number } | null {
   if (todos.length === 0) return null;
-  return `${todos.filter((t) => t.done).length}/${todos.length}`;
+  return { done: todos.filter((t) => t.done).length, total: todos.length };
+}
+
+export function todoSummary(todos: TodoDto[]): string | null {
+  const counts = todoCounts(todos);
+  return counts ? `${counts.done}/${counts.total}` : null;
 }

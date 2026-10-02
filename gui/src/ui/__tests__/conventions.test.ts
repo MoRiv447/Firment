@@ -380,6 +380,22 @@ describe('Primitive layer and shell conventions', () => {
     expect(offenders).toEqual([]);
   });
 
+  it('lets the strip own its height once and the control beside it derive from that', () => {
+    // The inspector's collapse toggle has to be exactly as tall as the tab strip it
+    // shares the head with, or the two hairlines under them land a pixel apart. It
+    // used to spell that as `--h-row + 1px` while the strip measured `--h-row` --
+    // correct by coincidence, and the coincidence broke the moment the strip moved
+    // onto its own rung. So the rule is that both name the SAME token, which is the
+    // one thing a diff cannot show.
+    const strip = read(cssFiles.find((p) => canonical(p) === 'ui/Tabs.module.css')!);
+    const toggle = read(cssFiles.find((p) => canonical(p) === 'shell/Inspector.module.css')!);
+    const stripHeight = /\.strip\s*\{[^}]*min-height:\s*var\((--[\w-]+)\)/.exec(strip)?.[1];
+    const toggleHeight = /\.toggle\s*\{[^}]*height:\s*calc\(\s*var\((--[\w-]+)\)/.exec(toggle)?.[1];
+    expect(stripHeight, 'the tab strip no longer sets its height from a token').toBeTruthy();
+    expect(toggleHeight, 'the inspector toggle no longer derives from a token').toBeTruthy();
+    expect(toggleHeight).toBe(stripHeight);
+  });
+
   it('gives every rule that names the mono face a weight of its own', () => {
     // Sixty rules across thirty-nine files rested on the browser default, and IBM Plex
     // Mono's 400 is a light face -- which is what "the type feels weak" turned out to

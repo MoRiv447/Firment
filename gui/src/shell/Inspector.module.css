@@ -37,9 +37,9 @@
  * One hairline under the head, not two.
  *
  * `Tabs` already draws a border under its own strip, so this control matches its
- * height exactly -- `--h-row` of content plus the shared hairline -- and paints a
- * border of the same colour at the same offset. The lines coincide instead of
- * stacking into a heavier one.
+ * height exactly -- `--h-strip` of content plus the shared hairline, the same token
+ * and not a copy of the number -- and paints a border of the same colour at the
+ * same offset. The lines coincide instead of stacking into a heavier one.
  */
 .toggle {
   box-sizing: border-box;
@@ -47,7 +47,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: calc(var(--h-row) + 1px);
+  height: calc(var(--h-strip) + 1px);
   padding-inline: var(--sp-2);
   border: 0;
   border-bottom: 1px solid var(--line);

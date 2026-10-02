@@ -51,6 +51,7 @@ export function ChatView({
   onCancel,
   onMode,
   onThinking,
+  progress,
 }: {
   session: SessionDto | null;
   running: boolean;
@@ -61,6 +62,14 @@ export function ChatView({
   /** Switch agent/plan. Absent in a read-only rendering, where the chips are hidden. */
   onMode?: (mode: string) => void;
   onThinking?: (level: string) => void;
+  /**
+   * The plan's own progress, when the session has one. It outranks the tool-call
+   * count above the transcript because it is the number that answers "how much is
+   * left", where a call count only answers "how much has happened" -- and a turn
+   * that retried a failing build twice inflates the second without touching the
+   * first.
+   */
+  progress?: { done: number; total: number } | null;
 }) {
   const [input, setInput] = useState('');
   const [thinkOpen, setThinkOpen] = useState(false);
@@ -215,8 +224,11 @@ export function ChatView({
         <div className={styles.head}>
           <Eyebrow latin>Transcript</Eyebrow>
           <span className={styles.count}>
-            {transcriptCalls + toolList.length} tool call
-            {transcriptCalls + toolList.length === 1 ? '' : 's'}
+            {progress
+              ? `${String(progress.done).padStart(2, '0')} / ${String(progress.total).padStart(2, '0')}`
+              : `${transcriptCalls + toolList.length} tool call${
+                  transcriptCalls + toolList.length === 1 ? '' : 's'
+                }`}
           </span>
         </div>
       )}

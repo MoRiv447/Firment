@@ -453,10 +453,13 @@
    * `28` at a call site, which is how the old tree grew seven different heights.
    */
   --h-min: 28px;
-  /* The title bar. 46 and not 44: this row carries the mark, the name, the path
-     and the session, and a monospace path needs the room to stay legible rather
-     than becoming a line of clipped glyphs. */
+  /* 46, not 44: the bar carries the mark, the name, the path and the session, and
+     the monospace path is what needs the room to stay legible. */
   --h-bar: 46px;
+  /* A tab strip is not a row. It has no text baseline to share with a list, only a
+     label and the rule under it, so it gets its own height rather than borrowing
+     `--h-row` and making the strip read as a table header. */
+  --h-strip: 42px;
   /* Grain: the texture, declared once, because it is the same in both schemes.
      Only its strength differs, which is why `--grain-opacity` is the half that
      lives in the scheme blocks. An inlined `feTurbulence` over the whole window

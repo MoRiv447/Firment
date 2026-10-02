@@ -155,3 +155,19 @@ describe('ChatView: the composer', () => {
     expect(screen.getByText(/retrying in 3s/)).toBeInTheDocument();
   });
 });
+
+describe('ChatView: the counter above the transcript', () => {
+  it('counts the plan when the session has one', () => {
+    setup({ progress: { done: 2, total: 5 } });
+    // Zero-padded so the row does not change width as the numerator moves, and in
+    // `done / total` rather than a call count: a turn that retried a failing build
+    // twice moves the call count and not the plan.
+    expect(screen.getByText('02 / 05')).toBeInTheDocument();
+    expect(screen.queryByText(/tool calls/)).not.toBeInTheDocument();
+  });
+
+  it('falls back to the call count when there is no plan', () => {
+    setup({ progress: null });
+    expect(screen.getByText('0 tool calls')).toBeInTheDocument();
+  });
+});

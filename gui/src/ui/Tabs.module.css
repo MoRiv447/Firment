@@ -1,6 +1,7 @@
 /*
- * The tab strip. Rows are `--h-row` tall so the strip lines up with the sidebar and
- * the status bar without anyone measuring it.
+ * The tab strip. Rows are `--h-strip` tall: a strip is not a list row -- it has no
+ * text baseline to share, only a label and the rule under it -- so it measures its
+ * own height and the sidebar and the status bar keep theirs.
  *
  * Monospace, and one place rather than per-tab. A tab label names a surface -- `Chat`,
  * `Serial`, `Flash / Run` -- which is the machine's vocabulary, and the landing page
@@ -10,9 +11,9 @@
 .strip {
   display: flex;
   align-items: stretch;
-  gap: var(--sp-1);
-  min-height: var(--h-row);
-  padding-inline: var(--sp-2);
+  gap: 2px;
+  min-height: var(--h-strip);
+  padding-inline: var(--sp-3);
   border-bottom: 1px solid var(--line);
   font-family: var(--ff-mono);
   font-weight: var(--fw-mono);
@@ -39,7 +40,7 @@
   align-items: center;
   gap: var(--sp-2);
   box-sizing: border-box;
-  min-height: var(--h-row);
+  min-height: var(--h-strip);
   /* Shrinkable, never growing: a label tab is content-width, but it must give way
      before the strip does. */
   flex: 0 1 auto;
@@ -49,13 +50,15 @@
   /* The bottom edge sits on the strip's own hairline, so the negative margin lets
      the active rule cover it instead of stacking a second line under it. */
   margin-bottom: -1px;
-  padding: 0 var(--sp-2);
+  padding: 0 10px;
   border: 0;
-  border-bottom: 2px solid transparent;
+  /* 1px, not 2: the strip already carries a hairline, and a second, heavier rule
+     read as an underline belonging to the whole row. */
+  border-bottom: 1px solid transparent;
   background: transparent;
-  color: var(--muted);
+  color: var(--dim);
   font: inherit;
-  font-size: var(--fs-body);
+  font-size: var(--fs-minor);
   white-space: nowrap;
   cursor: pointer;
   transition:
@@ -64,16 +67,17 @@
 }
 
 .tab:hover:not([data-active]):not([disabled]) {
-  color: var(--ink);
+  color: var(--muted);
   background: var(--hover);
 }
 
 /* Green as a shape, which is the one thing `--step-rule` exists for. A filled tab
-   would compete with the selected row in the sidebar next to it. */
+   would compete with the selected row in the sidebar next to it -- and the weight
+   stays where the strip put it, because the rule and the colour already say
+   "active", and bolding the active label was a third signal for one fact. */
 .tab[data-active='true'] {
-  color: var(--ink);
+  color: var(--brand-ink);
   border-bottom-color: var(--step-rule);
-  font-weight: var(--fw-label);
 }
 
 .tab[disabled] {

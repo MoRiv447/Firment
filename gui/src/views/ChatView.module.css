@@ -35,7 +35,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-4) 0;
+  padding: 9px 22px 0;
 }
 
 .head .count {
@@ -54,7 +54,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--sp-4);
-  padding: var(--sp-6) var(--sp-8);
+  padding: 14px 22px 20px;
 }
 
 /* ------------------------------------------------------------------ */
@@ -179,9 +179,12 @@
  */
 .composer {
   flex: 0 0 auto;
-  padding: var(--sp-3) var(--sp-8) var(--sp-4);
-  border-top: 1px solid var(--line);
-  background: var(--surface);
+  padding: 10px 22px 14px;
+  /* No band. The strip of `--surface` and its hairline used to say "the input
+     starts here", but the field's own edge already says that, and the band put a
+     second rectangle around the first one. The 22px gutter is the transcript
+     column's, so the field lines up with what is above it. */
+  background: transparent;
 }
 
 /*

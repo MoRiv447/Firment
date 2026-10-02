@@ -39,7 +39,7 @@ import { StatusBar, StatusDivider, StatusItem, StatusMenu, StatusTail } from './
 import { TitleBar } from './shell/TitleBar';
 import { TitleBarActions } from './shell/TitleBarActions';
 import { AgentsPane } from './shell/panes/AgentsPane';
-import { TodosPane, todoSummary } from './shell/panes/TodosPane';
+import { TodosPane, todoCounts, todoSummary } from './shell/panes/TodosPane';
 import { HardwarePane } from './shell/panes/HardwarePane';
 import { ChangesPane } from './shell/panes/ChangesPane';
 import { Drawer, Tabs } from './ui';
@@ -879,6 +879,7 @@ export default function App() {
                   running={running}
                   turn={turn}
                   infos={infos.filter((i) => !i.sid || i.sid === session?.id)}
+                  progress={todoCounts(todos)}
                   onSend={handleSend}
                   onCancel={handleCancel}
                   /* Mode and thinking are the composer's chips now, not status-bar
