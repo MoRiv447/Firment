@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 
 import { ChatView } from '../ChatView';
 import type { SessionDto } from '../../types';
@@ -14,8 +14,8 @@ import type { SessionDto } from '../../types';
  *
  * What it pins is deliberately structural rather than pixel-level: the three
  * states of the transcript (no session / a session with nothing said / a session
- * with messages), and the composer's two rows, because that row moved to the foot
- * of the field in the layout pass and the DOM order is the layout.
+ * with messages), and the composer's frame: the text, the two setting chips and the
+ * action are one box, and the DOM order inside it is the layout.
  */
 
 function session(over: Partial<SessionDto> = {}): SessionDto {
@@ -91,23 +91,49 @@ describe('ChatView: the composer', () => {
     expect(screen.queryByRole('button', { name: 'Send' })).toBeNull();
   });
 
-  it('puts the settings after the field, not between you and it', () => {
-    // The settings row used to precede the field, which meant the fine print sat
-    // between you and what you were about to send. It is below it now, and in a
-    // flex column the document order is the visual order -- so this is the
-    // assertion that the move happened, rather than one about pixels.
+  it('is one box: the text, the settings and the action share a frame', () => {
+    // The composer used to be a frameless field with a row of readings under both
+    // it and the button -- three things stacked where the design has one object.
+    // The structure is the assertion: the nearest ancestor the two chips and the
+    // textarea have in common is the element the Send button is in as well.
     setup();
     const field = screen.getByRole('textbox', { name: 'Ask the agent' });
-    const settings = screen.getByText('glm-5.3-flash');
-    expect(
-      field.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(screen.getByText('D:\\OldStudy66\\Firment')).toBeInTheDocument();
+    const mode = screen.getByRole('button', { name: 'agent' });
+    const send = screen.getByRole('button', { name: 'Send' });
+    // chips > chip, foot > chips, frame > foot.
+    const frame = mode.parentElement?.parentElement?.parentElement;
+    expect(frame).toBeTruthy();
+    expect(frame!.contains(field)).toBe(true);
+    expect(frame!.contains(send)).toBe(true);
   });
 
-  it('names the mode in the settings row', () => {
+  it('puts the settings after the text, so nothing sits between you and it', () => {
+    setup();
+    const field = screen.getByRole('textbox', { name: 'Ask the agent' });
+    const mode = screen.getByRole('button', { name: 'agent' });
+    expect(
+      field.compareDocumentPosition(mode) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('shows the mode as two chips, with the session’s own one lit', () => {
+    // Two chips and not a menu: the mode has two answers and both fit, and a control
+    // whose options are visible is one you do not have to open to understand.
     setup({ session: session({ mode: 'plan' }) });
-    expect(screen.getByText('plan')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'agent' })).not.toHaveAttribute('data-on');
+    expect(screen.getByRole('button', { name: 'plan' })).toHaveAttribute('data-on');
+  });
+
+  it('switches the mode when a chip is pressed', () => {
+    const onMode = vi.fn();
+    setup({ onMode });
+    fireEvent.click(screen.getByRole('button', { name: 'plan' }));
+    expect(onMode).toHaveBeenCalledWith('plan');
+  });
+
+  it('names the thinking level on its chip', () => {
+    setup({ session: session({ thinking: 'max' }) });
+    expect(screen.getByRole('button', { name: /thinking · max/ })).toBeInTheDocument();
   });
 
   it('shows the notices it was handed', () => {

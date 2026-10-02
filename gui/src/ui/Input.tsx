@@ -76,6 +76,17 @@ export interface TextAreaProps extends NativeTextArea {
    */
   maxRows?: number;
   mono?: boolean;
+  /**
+   * Draw no frame of its own, because the caller's box is the frame.
+   *
+   * The composer is one bordered field holding the textarea *and* a row of controls,
+   * and a control that drew a second border inside the first would be two boxes for
+   * one thing. Everything else about the textarea is unchanged -- which is the point
+   * of doing it here rather than by writing a bare `<textarea>` in the view: the
+   * `rows`/`maxRows` growth, the `aria-invalid` wiring and the disabled state all
+   * stay in one place.
+   */
+  bare?: boolean;
   invalid?: boolean;
   ref?: Ref<HTMLTextAreaElement>;
 }
@@ -93,6 +104,7 @@ export interface TextAreaProps extends NativeTextArea {
  */
 export function TextArea({
   mono = false,
+  bare = false,
   invalid = false,
   id,
   disabled,
@@ -108,6 +120,9 @@ export function TextArea({
       className={frame.frame}
       data-multiline="true"
       data-mono={mono || undefined}
+      /* For the composer, where the frame is drawn by the box around it -- see the
+         rule. Everything else about the control stays the same. */
+      data-bare={bare || undefined}
       data-disabled={disabled || undefined}
       data-invalid={a11y['aria-invalid'] ? 'true' : undefined}
       data-grow={maxRows ? 'true' : undefined}

@@ -10,8 +10,20 @@ import { shouldShowStallNotice, stallNotice } from '../lib/stallHint';
 import { workflowSteps } from '../lib/steps';
 import { recordCompleted } from '../lib/timing';
 import type { RunningTurn, SessionDto } from '../types';
-import { Button, Callout, Chip, EmptyState, Eyebrow, Icon, Spinner, TextArea } from '../ui';
+import { Button, Callout, Chip, EmptyState, Eyebrow, Icon, Menu, Spinner, TextArea } from '../ui';
 import styles from './ChatView.module.css';
+
+/**
+ * The two settings the composer carries, and their vocabulary.
+ *
+ * They live here rather than being passed in because a control owns its own options:
+ * the labels are what the chip and the menu say, and a caller that supplied them
+ * would be a second place they could be spelled differently. The *value* still comes
+ * from the session and the *handler* still comes from the shell -- this is only the
+ * list of things that can be chosen.
+ */
+const MODE_OPTIONS = ['agent', 'plan'] as const;
+const THINKING_LEVELS = ['off', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 
 /**
  * The chat pane: the transcript, the live turn above it, and the composer below.
@@ -37,6 +49,8 @@ export function ChatView({
   infos,
   onSend,
   onCancel,
+  onMode,
+  onThinking,
 }: {
   session: SessionDto | null;
   running: boolean;
@@ -44,8 +58,13 @@ export function ChatView({
   infos: { id: number; text: string }[];
   onSend: (input: string) => void;
   onCancel: () => void;
+  /** Switch agent/plan. Absent in a read-only rendering, where the chips are hidden. */
+  onMode?: (mode: string) => void;
+  onThinking?: (level: string) => void;
 }) {
   const [input, setInput] = useState('');
+  const [thinkOpen, setThinkOpen] = useState(false);
+  const thinkAnchorRef = useRef<HTMLButtonElement | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Seconds since the last visible event, ticking every second while running —
   // the user can watch this climb to tell a slow model from a wedged turn.
@@ -297,61 +316,92 @@ export function ChatView({
           </Button>
         )}
       </div>
-      <div className={styles.composer}>
-        <div className={styles.inputRow}>
-          {/* One row by default: a two-row field beside a 36px button reads as a
-              step, and the field grows as you type anyway. The shortcuts moved to
-              the `title` -- a placeholder that wraps onto a second line is a
-              paragraph inside a text field. */}
-          <TextArea
-            aria-label="Ask the agent"
-            placeholder="Ask the agent…"
-            title="Enter to send, Shift+Enter for a newline"
-            value={input}
-            rows={1}
-            maxRows={8}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                send();
-              }
-            }}
-            disabled={running || !session}
-          />
-          {running ? (
-            <Button tier="danger" icon={Square} onClick={onCancel}>
-              Stop
-            </Button>
-          ) : (
-            <Button
-              tier="primary"
-              icon={Send}
-              onClick={send}
-              disabled={!session || !input.trim()}
-            >
-              Send
-            </Button>
-          )}
-        </div>
-        {session && (
-          /* Under the field rather than over it: what you are about to send is
-             the field, and the settings for it are the fine print. Both
-             references put mode and model at the foot, next to the action. */
-          <div className={styles.meta}>
-            <span className={styles.cwd} title={session.cwd}>
-              {session.cwd}
-            </span>
-            <span className={styles.setting}>
-              <span className={styles.provider}>{session.provider}</span>
-              <span className={styles.model}>{session.model}</span>
-              <Chip status={session.mode === 'plan' ? 'attention' : 'ok'} size="sm">
-                {session.mode}
-              </Chip>
-            </span>
+      {/*
+        * The composer is ONE bordered field: the textarea, and under it a row with
+        * what you are about to send *as* -- mode and thinking -- on the left and the
+        * action on the right. It used to be a frameless textarea beside a button with
+        * a row of readings under both, which is three things stacked where the design
+        * has one object.
+        *
+        * The two settings are chips because they are settings, not readings: they
+        * change what happens when you press the button next to them, and putting them
+        * in the same box is what says so. `Context` stays in the status bar -- it is a
+        * measurement, and the thing it measures is not this field.
+        */}
+      {session && (
+        <div className={styles.composer}>
+          <div className={styles.field}>
+            <TextArea
+              bare
+              mono
+              aria-label="Ask the agent"
+              placeholder="Ask the agent, or type / for a command…"
+              title="Enter to send, Shift+Enter for a newline"
+              value={input}
+              rows={1}
+              maxRows={8}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  send();
+                }
+              }}
+              disabled={running || !session}
+            />
+            <div className={styles.foot}>
+              <span className={styles.chips}>
+                {/* The mode is two chips rather than one menu: it has two answers and
+                    both fit, and a control whose options are visible is a control you
+                    do not have to open to understand. */}
+                {MODE_OPTIONS.map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    className={styles.chip}
+                    data-on={session.mode === option || undefined}
+                    disabled={running}
+                    onClick={() => onMode?.(option)}
+                  >
+                    {option}
+                  </button>
+                ))}
+                <button
+                  ref={thinkAnchorRef}
+                  type="button"
+                  className={styles.chip}
+                  aria-haspopup="menu"
+                  aria-expanded={thinkOpen}
+                  title="Change the thinking level"
+                  disabled={running}
+                  onClick={() => setThinkOpen((o) => !o)}
+                >
+                  thinking · {session.thinking}
+                </button>
+              </span>
+              {running ? (
+                <Button tier="danger" icon={Square} onClick={onCancel}>
+                  Stop
+                </Button>
+              ) : (
+                <Button tier="primary" icon={Send} onClick={send} disabled={!input.trim()}>
+                  Send
+                </Button>
+              )}
+            </div>
+            <Menu
+              open={thinkOpen}
+              anchorRef={thinkAnchorRef}
+              onClose={() => setThinkOpen(false)}
+              items={THINKING_LEVELS.map((level) => ({
+                key: level,
+                label: `thinking: ${level}`,
+                onSelect: () => onThinking?.(level),
+              }))}
+            />
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

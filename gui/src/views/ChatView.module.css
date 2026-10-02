@@ -166,82 +166,125 @@
   margin-block: auto;
 }
 
+/*
+ * The composer: one field, with the settings for it inside it.
+ *
+ * The textarea and the row of chips and the action are one bordered object, not a
+ * control with a row of small print under it. That is the whole change: what you are
+ * about to send and the settings it will be sent with are the same thing, so they sit
+ * in the same box, and the border is drawn once.
+ */
 .composer {
   flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
   padding: var(--sp-3) var(--sp-8) var(--sp-4);
   border-top: 1px solid var(--line);
   background: var(--surface);
 }
 
-.meta {
+/*
+ * The frame.
+ *
+ * `--border-strong` and `--r-card`: the same edge weight as a panel's, because this
+ * is the one control the whole column is for, and the same corner as a card because
+ * it is the same kind of object at the same size. The 11px inset and the 11px gap are
+ * the design's own numbers and they stay as pixels rather than being rounded onto the
+ * spacing ramp -- they are this frame's inset, not a rhythm between two things.
+ *
+ * `:focus-within` and not `:focus`: the border belongs to the box, and the box is the
+ * thing you are in when the caret is anywhere inside it.
+ */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  padding: 11px 13px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-card);
+  background: var(--field-bg);
+  transition: border-color var(--t-out) var(--ease);
+}
+
+.field:focus-within {
+  border-color: var(--brand-ink);
+}
+
+/*
+ * The meta size, and it has to be said here rather than on the control.
+ *
+ * `TextArea` is `bare` in this composer -- no second frame inside the first -- and
+ * `bare` only removes the frame's decoration, not the `--fs-body` the frame declares
+ * for itself. A prompt is mostly paths, commands and identifiers, so it is set at the
+ * same size the design sets it: one rung down from prose, in the mono face the
+ * `mono` prop already asked for.
+ *
+ * The attribute selector, not a class: `data-ui` is the hash-proof handle the
+ * primitives carry, and it is the only way to reach a control's root from a view
+ * without adding a `className` opt-in for one call site.
+ */
+.field [data-ui='textarea'] {
+  font-size: var(--fs-minor);
+}
+
+/*
+ * The row under the text.
+ *
+ * `space-between` rather than a gap: the settings belong to the left edge of the
+ * field and the action to the right, and the space between them is what says they are
+ * two different kinds of thing.
+ */
+.foot {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: var(--sp-2);
-  min-width: 0;
-  /* It sits under the field now, so the space is above it. */
-  margin-top: var(--sp-2);
-  font-size: var(--fs-meta);
-  color: var(--muted);
 }
 
-/* The settings cluster: pushed to the far end, so the row reads
-   `where … what-with` with the gap between them. */
-.setting {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-2);
-  min-width: 0;
-  margin-inline-start: auto;
-}
-
-.provider {
-  font-family: var(--ff-mono);
-}
-
-.model {
-  font-family: var(--ff-mono);
-  color: var(--ink);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.cwd {
-  /* The path is the least important thing in the row and the longest, so it is
-     the one that gives way; the full value stays in the `title`. The settings
-     cluster takes the slack now, so this no longer pushes itself right. */
-  flex: 0 1 auto;
-  min-width: 0;
-  font-family: var(--ff-mono);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.inputRow {
+.chips {
   display: flex;
-  /* Centred, not bottom-aligned. With a one-row field the two are nearly the same
-     height, so centring is what makes them read as one row instead of a small
-     control parked in one corner of a taller box. */
   align-items: center;
-  gap: var(--sp-2);
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
 }
 
-.inputRow > :first-child {
-  flex: 1 1 auto;
-}
-
-/* The field takes the slack; the action does not. A button that is allowed to
-   shrink is a button whose label gets ellipsised, and this one says "Send" --
-   which came out as "S…" the moment the button became compressible. */
-.inputRow > :last-child {
+/*
+ * A setting, shown as a chip.
+ *
+ * `--r-chip` and the mono micro size, so it reads as the same kind of small label the
+ * rest of the chrome uses -- the rail's eyebrow, a tool row's phase, a diff count. The
+ * active one takes `--brand-ink` and `--border-active`, which is the pair that means
+ * "this is on" everywhere else in the interface.
+ *
+ * No caret, deliberately: a caret would make it a menu button, and this is a reading
+ * that happens to be clickable. The hover edge and the `title` are the affordance.
+ */
+.chip {
   flex: none;
-  /* Matched to a one-line row rather than to `--h-input`: a 36px button beside a
-     40px field is a two-pixel step that reads as a mistake, and `--h-row` is the
-     height the app already uses for exactly one line of anything. It stays that
-     height when the field grows to eight rows, and the row centres it. */
-  height: var(--h-row);
+  padding: 2px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-chip);
+  background: var(--surface-raised);
+  color: var(--dim);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-micro);
+  line-height: 1.5;
+  cursor: pointer;
+  transition:
+    color var(--t-out) var(--ease),
+    border-color var(--t-out) var(--ease);
+}
+
+.chip:hover:not(:disabled) {
+  border-color: var(--border-active);
+  color: var(--ink);
+}
+
+.chip[data-on] {
+  color: var(--brand-ink);
+  border-color: var(--border-active);
+}
+
+.chip:disabled {
+  cursor: not-allowed;
+  opacity: var(--disabled-opacity);
 }

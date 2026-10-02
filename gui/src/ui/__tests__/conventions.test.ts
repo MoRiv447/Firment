@@ -317,6 +317,7 @@ describe('Primitive layer and shell conventions', () => {
       .sort();
     expect(dimmed).toEqual([
       'Button.module.css',
+      'ChatView.module.css',
       'Checkbox.module.css',
       'Hardware.module.css',
       'MultiSelect.module.css',

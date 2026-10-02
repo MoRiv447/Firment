@@ -840,6 +840,17 @@ export default function App() {
                   infos={infos.filter((i) => !i.sid || i.sid === session?.id)}
                   onSend={handleSend}
                   onCancel={handleCancel}
+                  /* Mode and thinking are the composer's chips now, not status-bar
+                     readings -- they change what the button beside them does, so
+                     they belong in the box you are typing into. The same two
+                     handlers, so there is nothing new to keep in step. */
+                  onMode={(next) =>
+                    session && void handleSetSessionProp(api.setSessionMode(session.id, next))
+                  }
+                  onThinking={(level) =>
+                    session &&
+                    void handleSetSessionProp(api.setSessionThinking(session.id, level))
+                  }
                 />
               </main>
               <main
@@ -909,34 +920,6 @@ export default function App() {
             {session && (
               <>
                 <StatusDivider />
-                <StatusMenu
-                  kind={session.mode === 'plan' ? 'attention' : 'ok'}
-                  label="Mode"
-                  value={session.mode}
-                  title="Switch between agent and plan"
-                  disabled={running}
-                  options={[
-                    { key: 'agent', label: 'agent (all tools)' },
-                    { key: 'plan', label: 'plan (read-only tools)' },
-                  ]}
-                  onSelect={(key) =>
-                    void handleSetSessionProp(api.setSessionMode(session.id, key))
-                  }
-                />
-                <StatusMenu
-                  kind="neutral"
-                  label="Thinking"
-                  value={session.thinking}
-                  title="Change the thinking level"
-                  disabled={running}
-                  options={['off', 'low', 'medium', 'high', 'xhigh', 'max'].map((t) => ({
-                    key: t,
-                    label: `thinking: ${t}`,
-                  }))}
-                  onSelect={(key) =>
-                    void handleSetSessionProp(api.setSessionThinking(session.id, key))
-                  }
-                />
                 <StatusMenu
                   kind={
                     usage === null

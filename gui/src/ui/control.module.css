@@ -50,6 +50,24 @@
 }
 
 /*
+ * No frame at all, because something else is the frame.
+ *
+ * The composer is one bordered box holding a field and a row of controls, so the
+ * textarea inside it must not draw a second border 11px inside the first. Making it
+ * a bare `<textarea>` in the view would have meant losing `rows`/`maxRows`, the
+ * `aria-invalid` wiring and the grow behaviour -- all of which are this primitive's
+ * job -- so the frame is what bends instead. It is the same kind of variant as
+ * `data-mono` and `data-grow`, for the same reason: one control, several shapes.
+ */
+.frame[data-bare='true'] {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+/*
  * The one box that grows: `TextArea` sets `data-grow` and hands up a line count,
  * so the composer follows what someone typed instead of scrolling inside two
  * rows. The cap is a count multiplied by the frame's own line height, which is
