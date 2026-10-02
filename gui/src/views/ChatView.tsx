@@ -157,6 +157,19 @@ export function ChatView({
   // builds anything, so the row does not appear as empty furniture. `nowMs` is what
   // makes a running step's elapsed count up.
   const steps = workflowSteps(toolList, nowMs);
+  /*
+   * Every tool call the transcript already holds.
+   *
+   * A stored assistant message carries its own `tool_calls`, so the count is a walk
+   * over the messages rather than a second piece of state that could disagree with
+   * them. The live turn's calls are added to it separately, because they are not in
+   * the transcript yet -- which is the whole reason this number moves while a turn
+   * runs.
+   */
+  const transcriptCalls = (session?.messages ?? []).reduce(
+    (n, m) => n + (m.role === 'assistant' ? (m.tool_calls?.length ?? 0) : 0),
+    0,
+  );
   const runningTools = toolList.filter((t) => t.status === 'running');
   const lastRunning = runningTools[runningTools.length - 1];
   const waiting = running && !lastRunning && !turn?.text;
@@ -167,22 +180,24 @@ export function ChatView({
         * The strip above the transcript.
         *
         * It names the region and puts one reading at its right edge, which is the
-        * shape the landing page uses above its own demo. What it carries is the
-        * turn's *size*, and deliberately not a step counter: the named workflow
-        * steps are already a row of their own directly below (`StepProgress`), and a
-        * second count of the same thing one strip higher would be two answers to one
-        * question. The tool count is the fact neither of them states, and it is the
-        * one that moves while a turn runs.
+        * shape the design uses above its own transcript. What it carries is the
+        * session's **tool-call count**, and deliberately not a step counter: the named
+        * workflow steps are already a row of their own directly below
+        * (`StepProgress`), and a second count of the same thing one strip higher
+        * would be two answers to one question.
         *
-        * Hidden entirely when the turn used no tools -- a chat that only answered has
-        * nothing to count, and furniture that appears to hold a zero is the failure
-        * docs/design/tokens.md names.
+        * It counts the whole session -- the transcript's calls plus the live turn's,
+        * which are not in the transcript yet -- because a strip that appeared only
+        * while a turn was running would be missing from the screen you look at most.
+        * The first version of this counted the live turn alone, and rendered nothing
+        * at all for a session that had finished.
         */}
-      {toolList.length > 0 && (
+      {session && (
         <div className={styles.head}>
-          <Eyebrow latin>Turn</Eyebrow>
+          <Eyebrow latin>Transcript</Eyebrow>
           <span className={styles.count}>
-            {toolList.length} tool{toolList.length === 1 ? '' : 's'}
+            {transcriptCalls + toolList.length} tool call
+            {transcriptCalls + toolList.length === 1 ? '' : 's'}
           </span>
         </div>
       )}

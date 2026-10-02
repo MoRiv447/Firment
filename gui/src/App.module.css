@@ -49,6 +49,17 @@
 .panes {
   display: flex;
   flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* The row of views, under the strip that names them. The strip is the column's
+   first child and the views take the rest, which is what makes the strip sit exactly
+   over the panes and not over the inspector. */
+.paneRow {
+  display: flex;
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
 }

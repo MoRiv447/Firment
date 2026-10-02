@@ -1,4 +1,4 @@
-import { LayoutDashboard, Settings, Sun, Moon } from 'lucide-react';
+import { Settings, Sun, Moon } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { IconButton, StatusDot, Tooltip, useTooltip } from '../ui';
@@ -20,13 +20,10 @@ function Action({
   label,
   icon,
   onClick,
-  pressed,
 }: {
   label: string;
   icon: LucideIcon;
   onClick: () => void;
-  /** Only for a control that stays on: the workbench, not the theme. */
-  pressed?: boolean;
 }) {
   const tip = useTooltip<HTMLButtonElement>();
   return (
@@ -37,7 +34,6 @@ function Action({
         label={label}
         icon={icon}
         onClick={onClick}
-        aria-pressed={pressed}
       />
       {/* Below, not above: every one of these hangs off the top strip. */}
       <Tooltip tip={tip} text={label} side="bottom" />
@@ -66,8 +62,6 @@ export function TitleBarActions({
   mode,
   running,
   onToggleTheme,
-  workbenchOpen,
-  onToggleWorkbench,
   onOpenSettings,
   notifications,
   unread,
@@ -83,8 +77,6 @@ export function TitleBarActions({
    */
   running?: { tool: string; seconds: number } | null;
   onToggleTheme: () => void;
-  workbenchOpen: boolean;
-  onToggleWorkbench: () => void;
   onOpenSettings: () => void;
   notifications: NotificationEntry[];
   unread: number;
@@ -111,12 +103,6 @@ export function TitleBarActions({
         onMarkAllRead={onMarkAllRead}
         onClear={onClear}
         onOpenSession={onOpenSession}
-      />
-      <Action
-        label="Project workbench"
-        icon={LayoutDashboard}
-        pressed={workbenchOpen}
-        onClick={onToggleWorkbench}
       />
       <Action label="Settings" icon={Settings} onClick={onOpenSettings} />
       <Action

@@ -41,7 +41,7 @@ import { AgentsPane } from './shell/panes/AgentsPane';
 import { TodosPane, todoSummary } from './shell/panes/TodosPane';
 import { HardwarePane } from './shell/panes/HardwarePane';
 import { ChangesPane } from './shell/panes/ChangesPane';
-import { Drawer } from './ui';
+import { Drawer, Tabs } from './ui';
 import styles from './App.module.css';
 import {
   publishScheme,
@@ -163,10 +163,20 @@ export default function App() {
   // the session changes and after every transcript refresh.
   const [usage, setUsage] = useState<ContextUsageDto | null>(null);
   // The shell's three panels, replacing a `view` union that drove a five-item
-  // tab bar. A tab was the wrong axis: it split one session across five screens,
-  // so opening the serial port lost the conversation.
+  // tab bar.
   //
-  //   workbenchOpen   a screen you open deliberately, not a tab you pass through
+  // **That bar was wrong, and this strip is not it.** The objection was to the
+  // *axis*, not to strips: five tabs split one session across five screens, so
+  // opening the serial port lost the conversation. Two views that both stay mounted
+  // -- hidden with `display`, which is what keeps the workbench's device stream and
+  // its escalation guard alive -- are one session in two colourings, and a strip is
+  // the right shape for that.
+  //
+  // The switch itself used to be the title bar's workbench toggle: a control in the
+  // window chrome for a decision about the content, and the design puts that choice
+  // at the top of the content next to the thing it switches.
+  //
+  //   workbenchOpen   the workspace beside the conversation; both stay mounted
   //   settingsOpen    a drawer, because settings are not a workspace
   //   inspectorOpen   the right column; collapsed by default on a laptop
   const [workbenchOpen, setWorkbenchOpen] = useState(false);
@@ -748,8 +758,6 @@ export default function App() {
                 running={pill}
                 mode={mode}
                 onToggleTheme={toggleTheme}
-                workbenchOpen={workbenchOpen}
-                onToggleWorkbench={() => setWorkbenchOpen((o) => !o)}
                 onOpenSettings={() => setSettingsOpen(true)}
                 notifications={notifications}
                 unread={notifUnread}
@@ -796,6 +804,30 @@ export default function App() {
             </aside>
 
             <div className={styles.panes}>
+              {/*
+                The strip that says which surface you are on.
+                
+                Both panes used to be reachable only through the title bar's workbench
+                toggle, which is a control in the window chrome for a decision about
+                the *content* -- and the design puts the choice at the top of the
+                content, as a strip, next to the thing it switches. Same two views,
+                same state: `workbenchOpen` is still the only source of truth.
+                
+                Text and not icons, which is the other half of the same move: an icon
+                tab needs a tooltip to have a name, and a name you have to hover is a
+                name that is not there.
+              */}
+              <Tabs
+                ariaLabel="Working surface"
+                idPrefix="pane"
+                active={workbenchOpen ? 'workbench' : 'chat'}
+                onChange={(key) => setWorkbenchOpen(key === 'workbench')}
+                items={[
+                  { key: 'chat', label: 'Chat' },
+                  { key: 'workbench', label: 'Workbench' },
+                ]}
+              />
+              <div className={styles.paneRow}>
               <main
                 data-pane="chat"
                 data-hidden={workbenchOpen ? 'true' : undefined}
@@ -817,6 +849,7 @@ export default function App() {
               >
                 <WorkbenchView />
               </main>
+              </div>
             </div>
 
             <Inspector
