@@ -8,23 +8,27 @@ import type { ChatMessage } from '../../types';
 /**
  * The user's own message.
  *
- * This file used to pin a fill/ink pair, and the reason it existed is worth
- * keeping even now that the pair is gone: the bubble once rendered at about 1.3:1
- * in the dark scheme, because its text took `ink` (near-white on dark) while its
- * ground was acid. Measured rather than eyeballed -- 320 near-white pixels inside
- * the bubble in dark, 0 in light. The bug was never "someone picked a bad colour",
- * it was "a fill and its ink were taken from different tokens", and the check for
- * that moved wherever the fill went.
+ * Three shapes have been tried here and this file has pinned two of them, so the
+ * history is the specification.
  *
- * The fill went. Neither of the two references puts a filled, saturated block
- * behind what the user typed, and the acid was being spent twice -- bubble and
- * composer -- so neither of the two primary actions on screen read as primary.
- * What the old test protected has not been dropped, it has been restated: a rule
- * with no fill has no pair to keep in step, and that is the assertion here.
+ *  1. The acid fill. It rendered at about 1.3:1 in the dark scheme -- 320 near-white
+ *     pixels inside the bubble in dark and 0 in light, measured rather than guessed
+ *     -- because its text took `ink` while its ground took `--brand-acid`. The lesson
+ *     was never "a bad colour": it was that a fill and its ink must come from one
+ *     measured pair.
+ *  2. No fill at all. Weight alone was to say who was speaking, and the acid stopped
+ *     being spent twice. Both true, and it failed for a different reason: a paragraph
+ *     in a column of paragraphs is the assistant's, so the reader was left to infer
+ *     the other one from a difference in weight with nothing to compare it against.
+ *  3. A block again -- right-aligned, on `--surface-raised`, with a `--border` edge.
+ *     That ground and `--ink` are a pair the palette gate already asserts (16.10:1
+ *     dark, 14.68:1 light), and it spends no brand colour, so the composer's Send is
+ *     still the only acid on screen. Right alignment is the signal that needs neither
+ *     colour nor a legend.
  *
- * jsdom cannot help further: it does not substitute `var()`, so a computed-style
- * assertion would compare against an empty string in both schemes and pass for the
- * wrong reason.
+ * jsdom cannot check the rendering: it does not substitute `var()`, so a
+ * computed-style assertion would compare against an empty string in both schemes and
+ * pass for the wrong reason. The rule is read as text instead.
  */
 
 const RULE = /\.bubble\s*\{([^}]*)\}/;
@@ -39,7 +43,7 @@ function userMessage(text: string): ChatMessage[] {
   return [{ role: 'user', content: text }];
 }
 
-describe('the user message is text, not a filled control', () => {
+describe('the user message is a block, and it is right-aligned', () => {
   it('is the transcript row that carries the class', () => {
     render(<MessageList messages={userMessage('flash the board')} />);
     const bubble = screen.getByText('flash the board');
@@ -49,23 +53,34 @@ describe('the user message is text, not a filled control', () => {
     expect(bubble.className).toMatch(/^_?bubble_/);
   });
 
-  it('has no fill, so there is no fill/ink pair left to keep in step', () => {
-    expect(declarations.background).toBeUndefined();
+  it('takes a ground and an edge, from the pair the palette gate asserts', () => {
+    // `--surface-raised` and `--ink` are asserted together in
+    // `styles/__tests__/tokens.test.ts`. This is the assertion that the bubble is a
+    // *measured* pair, and not the two tokens the 1.3:1 bug happened to pick.
+    expect(declarations.background).toBe('var(--surface-raised)');
+    expect(declarations.border).toBe('1px solid var(--border)');
     expect(declarations.color).toBeUndefined();
   });
 
-  it('is told apart by weight, which needs no ground of its own', () => {
-    expect(declarations['font-weight']).toBe('var(--fw-label)');
-    // The same measure as the assistant side: two speakers, one column.
-    expect(declarations['max-width']).toBe('88%');
+  it('spends no brand colour, so the composer still owns the acid', () => {
+    // The second attempt was right about this and it still holds: one saturated
+    // action per screen.
+    expect(JSON.stringify(declarations)).not.toContain('--brand');
+    expect(JSON.stringify(declarations)).not.toContain('--acid');
   });
 
-  it('is not a chip: no border, no radius, no shadow', () => {
-    // A grey ring around a filled block is what made every filled control in the
-    // old app read as a mistake, and a radius without a fill marks nothing.
-    expect(declarations.border).toBeUndefined();
-    expect(declarations['border-width']).toBeUndefined();
-    expect(declarations['border-radius']).toBeUndefined();
+  it('is told apart by where it sits', () => {
+    expect(declarations['align-self']).toBe('flex-end');
+    expect(declarations['margin-inline-start']).toBe('auto');
+    // Narrower than the assistant's 88%: a bubble has edges, so its ragged edge is
+    // visible where a paragraph's is the column's.
+    expect(declarations['max-width']).toBe('68%');
+  });
+
+  it('keeps the line breaks someone typed, and carries no shadow', () => {
+    expect(declarations['white-space']).toBe('pre-wrap');
+    // Elevation is the edge plus the surface step; the dark scheme has no shadow
+    // ladder at all, so a bubble with one would be a bubble that only works in light.
     expect(declarations['box-shadow']).toBeUndefined();
   });
 });

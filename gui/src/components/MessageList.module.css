@@ -18,27 +18,62 @@
 }
 
 /*
- * The user's own message. It used to be the one bubble drawn on the acid fill.
+ * The user's own message: a bordered block, right-aligned, on the raised ground.
  *
- * Two references settled it: neither Zed nor Linear puts a filled, saturated block
- * behind what the user typed. And the fill was costing more than it paid -- it
- * took the acid, which then had to compete with the composer's primary action, and
- * the pair it needed (`--brand-acid` / `--on-acid`) existed only because the fill
- * did. What is left is weight: the user's row is set in the label weight and the
- * assistant's is not. That survives both schemes and cannot come apart the way a
- * fill and its ink could.
+ * Three shapes have been tried here and the reasons are worth keeping, because two
+ * of them are still right about something.
  *
- * `data-ui` still says `user-bubble` because it names the row, and renaming it
- * would touch the conventions gate's closed set for a word. Worth doing the next
- * time this file is opened for something else.
+ * The first was the acid fill, and it was a bug rather than a taste: its text took
+ * `ink` while its ground took `--brand-acid`, so it rendered at about 1.3:1 in the
+ * dark scheme. A fill and its ink chosen from different tokens is the failure.
+ *
+ * The second was no fill at all -- weight alone was meant to say who was speaking,
+ * on the grounds that neither Zed nor Linear puts a saturated block behind what the
+ * user typed, and that the acid was being spent twice. Both halves of that hold.
+ * What it got wrong is that weight alone is a signal you have to already know: a
+ * paragraph in a column of paragraphs is the assistant's, and the reader is left to
+ * infer the other one from the fact that it is slightly bolder and has no header.
+ *
+ * So it is a block again, with the two changes that answer the first attempt rather
+ * than repeating it: the ground is `--surface-raised` and the ink is `--ink`, which
+ * is a **measured pair already in the gate** (`ink on raised`, 16.10:1 dark and
+ * 14.68:1 light), and it spends no brand colour, so the composer's Send is still the
+ * only acid on screen. Right alignment does the rest -- it is the one signal here
+ * that needs no colour and no legend at all.
+ *
+ * `max-width` is 68% and not the assistant's 88%: a bubble is a block with edges, so
+ * its ragged edge is visible, where a paragraph's is the column's.
  */
 .bubble {
-  max-width: 88%;
+  align-self: flex-end;
+  max-width: 68%;
   min-width: 0;
-  font-weight: var(--fw-label);
+  margin-inline-start: auto;
+  padding: 10px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--surface-raised);
   line-height: var(--lh-body);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/*
+ * Who is speaking, above the prose.
+ *
+ * Mono, uppercase and small, because it is a *record* of which side of the
+ * conversation this is and not a sentence -- the same call the rest of the chrome
+ * makes. Without it the assistant's turn and the user's are told apart only by the
+ * bubble, and the assistant's prose has nothing above it to say whose it is.
+ */
+.who {
+  display: block;
+  margin-bottom: var(--sp-1);
+  color: var(--dim);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
 }
 
 .assistant {

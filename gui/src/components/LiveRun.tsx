@@ -5,6 +5,7 @@ import { ToolCard } from './ToolCard';
 import { ToolRow } from './ToolRow';
 import { TurnTimeline } from './TurnTimeline';
 import styles from './LiveRun.module.css';
+import stack from './toolStack.module.css';
 
 /**
  * A live turn's tool work, as a column of one-line rows.
@@ -61,7 +62,7 @@ export function LiveRun({
 
   return (
     <div data-ui="live-run" className={styles.root}>
-      <div className={styles.stack}>
+      <div className={stack.stack}>
         {sorted.map((tool) => (
           <Fragment key={tool.seq}>
             <ToolRow
@@ -71,7 +72,7 @@ export function LiveRun({
               onToggle={() => setOpenSeq((s) => (s === tool.seq ? null : tool.seq))}
             />
             {openSeq === tool.seq && (
-              <div className={styles.card}>
+              <div className={stack.card}>
                 <ToolCard tool={tool} onAction={onAction} />
               </div>
             )}

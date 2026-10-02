@@ -1,41 +1,12 @@
 /*
  * A live run: one row per call, held by a rule down the left.
  *
- * This file used to be the folded run line -- glyph, mark, words, hairline -- and
- * the rows below replace it. What survives is `.root` and the shape of the indent.
- *
- * **The rule is what makes the rows one thing.** A run's calls are a sequence that
- * happened for one reason, and a column of rows without it is a list of unrelated
- * events -- the same job the `↳` on a branch chip does in the rail, done by geometry
- * instead of by a glyph. It takes `--border` rather than `--line`: it is the edge of
- * a *group*, so it belongs to the same tier as a card's own edge.
+ * The column itself lives in `toolStack.module.css`, because a stored message's
+ * calls are drawn in the same one. What is left here is the run's own frame.
  */
 .root {
   display: flex;
   flex-direction: column;
+  gap: var(--sp-2);
   min-width: 0;
-}
-
-/*
- * The indent is 15px, written as `15px - 1px` so the rule and the text stay one
- * measurement: the border itself is the other 1px, and a `padding` copied from the
- * preview without subtracting it puts every row 1px off the column it belongs to.
- */
-.stack {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  margin-top: var(--sp-2);
-  padding-inline-start: calc(15px - 1px);
-  border-inline-start: 1px solid var(--border);
-}
-
-/*
- * An opened row's card, held off the rows on either side of it.
- *
- * The gap above is the one that matters: without it the card reads as belonging to
- * the row *below* it, which is the row you did not press.
- */
-.card {
-  margin: var(--sp-1) 0 var(--sp-2);
 }

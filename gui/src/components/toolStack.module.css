@@ -1,0 +1,34 @@
+/*
+ * The ruled column of tool rows.
+ *
+ * One definition for two consumers -- a live run (`LiveRun`) and the calls a stored
+ * message carries (`MessageList`) -- because the rule down the left is the thing
+ * that makes a sequence read as *one* piece of work, and two copies of it are two
+ * chances for the two columns to drift apart. The rows themselves are `ToolRow` and
+ * carry their own sheet; this is only the column they sit in.
+ *
+ * `--border` rather than `--line`: this is the edge of a *group*, so it belongs to
+ * the same tier as a card's own edge. A hairline is what divides two rows of one
+ * list, and rows of one run are not a list -- they are one thing.
+ *
+ * The indent is written as `15px - 1px` so the rule and the text stay one
+ * measurement: the border itself is the other 1px, and a padding copied from the
+ * design without subtracting it puts every row 1px off its own column.
+ */
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-inline-start: calc(15px - 1px);
+  border-inline-start: 1px solid var(--border);
+}
+
+/*
+ * An opened row's card, held off the rows on either side of it.
+ *
+ * The gap above is the one that matters: without it the card reads as belonging to
+ * the row *below* it, which is the row you did not press.
+ */
+.card {
+  margin: var(--sp-1) 0 var(--sp-2);
+}

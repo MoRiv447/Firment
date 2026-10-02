@@ -1,13 +1,35 @@
-import { memo, useState } from 'react';
+import { Fragment, memo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ChevronDown, ChevronRight, Terminal } from 'lucide-react';
 
-import type { ChatMessage, ToolCall } from '../types';
+import type { ChatMessage, ToolCall, ToolCardState } from '../types';
 import { pairRun, groupTranscript } from '../lib/transcript';
 import { Chip, Icon, StatusMark } from '../ui';
 import { Markdown } from './Markdown';
 import { ToolCard } from './ToolCard';
+import { ToolRow } from './ToolRow';
 import styles from './MessageList.module.css';
+import stack from './toolStack.module.css';
+
+/**
+ * A stored call, as both the row and the card want it.
+ *
+ * `status: 'unknown'` is not a placeholder -- see `ToolCard`'s header note. A stored
+ * transcript keeps the call and the returned text and never whether the call worked,
+ * so nothing here may claim an outcome. One function rather than two literals,
+ * because a row and a card describing the same call must not disagree.
+ */
+function asTool(call: ToolCall, seq: number, result?: string): ToolCardState {
+  return {
+    seq,
+    name: call.name,
+    args: call.arguments,
+    status: 'unknown',
+    // A diff in the answer is rendered as a diff; anything else is the raw block,
+    // which `ToolCard` picks by trying to parse it.
+    detail: result ?? null,
+  };
+}
 
 /**
  * The transcript: what the agent said, and the machinery rows folded away.
@@ -63,15 +85,7 @@ function HistoryCard({
   const [open, setOpen] = useState(false);
   return (
     <ToolCard
-      tool={{
-        seq,
-        name: call.name,
-        args: call.arguments,
-        status: 'unknown',
-        // A diff in the answer is rendered as a diff; anything else is the raw
-        // block, which `ToolCard` picks by trying to parse it.
-        detail: result ?? null,
-      }}
+      tool={asTool(call, seq, result)}
       collapsible={{ open, onToggle: () => setOpen((o) => !o) }}
       onAction={onAction}
     />
@@ -172,14 +186,38 @@ export function ToolRun({
   );
 }
 
-/** Tool calls carried by a message that also has prose: the prose is the row,
- *  so the calls sit above it rather than being folded into a run. */
+/**
+ * Tool calls carried by a message that also has prose: the prose is the row, so the
+ * calls sit above it rather than being folded into a run.
+ *
+ * They sit in a **ruled column of rows**, not a card each. A card per call was four
+ * bordered boxes wedged between two paragraphs -- four times the chrome for the same
+ * information, and it made one turn's work look like four unrelated things. The row
+ * carries the name, the literal it was handed and the duration; pressing it opens
+ * the card, which is where the two thousand characters of output belong.
+ */
 function CallList({ calls, onAction }: { calls: ToolCall[]; onAction?: (prompt: string) => void }) {
+  const [open, setOpen] = useState<string | null>(null);
   return (
-    <div className={styles.calls}>
-      {calls.map((call, i) => (
-        <HistoryCard key={call.id ?? i} call={call} seq={i + 1} onAction={onAction} />
-      ))}
+    <div className={stack.stack}>
+      {calls.map((call, i) => {
+        const key = call.id ?? String(i);
+        const tool = asTool(call, i + 1);
+        return (
+          <Fragment key={key}>
+            <ToolRow
+              tool={tool}
+              open={open === key}
+              onToggle={() => setOpen((s) => (s === key ? null : key))}
+            />
+            {open === key && (
+              <div className={stack.card}>
+                <ToolCard tool={tool} onAction={onAction} />
+              </div>
+            )}
+          </Fragment>
+        );
+      })}
     </div>
   );
 }
@@ -227,6 +265,10 @@ export const MessageList = memo(function MessageList({
         if (m.role === 'assistant') {
           return (
             <div key={key} className={styles.assistant}>
+              {/* Who is speaking, in the machine voice -- the same label the landing
+                  page's own demo puts above its assistant prose. Without it the two
+                  sides are told apart only by the bubble. */}
+              <span className={styles.who}>Firment</span>
               {!!m.tool_calls?.length && <CallList calls={m.tool_calls} onAction={onAction} />}
               {m.content && <Markdown>{m.content}</Markdown>}
             </div>
