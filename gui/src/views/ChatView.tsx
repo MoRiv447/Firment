@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowDown, Bot, Brain } from 'lucide-react';
+import { ArrowDown, Bot, Brain, Send, Square } from 'lucide-react';
 
 import { LiveRun } from '../components/LiveRun';
 import { Markdown } from '../components/Markdown';
@@ -11,7 +11,18 @@ import { shouldShowStallNotice, stallNotice } from '../lib/stallHint';
 import { workflowSteps } from '../lib/steps';
 import { recordCompleted } from '../lib/timing';
 import type { RunningTurn, SessionDto } from '../types';
-import { Button, Callout, Chip, EmptyState, Eyebrow, Icon, Menu, Spinner, TextArea } from '../ui';
+import {
+  Button,
+  Callout,
+  Chip,
+  EmptyState,
+  Eyebrow,
+  Icon,
+  IconButton,
+  Menu,
+  Spinner,
+  TextArea,
+} from '../ui';
 import styles from './ChatView.module.css';
 
 /**
@@ -413,30 +424,33 @@ export function ChatView({
                 </button>
               </span>
               {running ? (
-                <Button tier="danger" size="sm" onClick={onCancel}>
-                  Stop
-                </Button>
+                <IconButton
+                  tier="danger"
+                  size="sm"
+                  icon={Square}
+                  label="Stop this turn"
+                  onClick={onCancel}
+                />
               ) : (
                 /*
-                 * Text only, no glyph.
+                 * A square glyph, not a word.
                  *
-                 * The design's button is 52x27 with a word in it, and a 15px icon plus
-                 * an 8px gap made this one about 71 wide at the same height -- 2.5:1
-                 * instead of 1.9:1, which reads as a flat bar rather than as a button.
-                 * The word was always the label; the glyph was decoration that cost
-                 * the shape.
+                 * This control has now been three shapes: word + glyph (about 71x28, a
+                 * flat bar), word alone (52x27, the design's own proportion), and now
+                 * the glyph in a 28x28 box -- the same footprint every icon button in
+                 * the title bar already has, so the composer's action stops being the
+                 * one control on screen with geometry of its own. `label` is the
+                 * accessible name, and the tooltip the primitive carries is what names
+                 * it on hover.
                  *
-                 * And **not** disabled on an empty field. The design's send button is
-                 * the solid acid, and a *dimmed* acid cannot be both weaker and still
-                 * green: in light a fill pale enough to keep a dark ink readable stops
-                 * looking green at all. So emptiness is not a state of this button --
-                 * `send()` already returns on an empty input. The spent state is kept
-                 * where it means something real: `SerialView` disables Start while the
-                 * port is not open.
+                 * And still **not** disabled on an empty field: a dimmed acid cannot be
+                 * both weaker and still green -- in light, pale enough to keep a dark
+                 * ink readable, it stops reading green at all. Emptiness is not a state
+                 * of this button, and `send()` returns on an empty input. The spent
+                 * state is kept where it means something real: `SerialView` disables
+                 * Start while the port is not open.
                  */
-                <Button tier="primary" size="sm" onClick={send}>
-                  Send
-                </Button>
+                <IconButton tier="primary" size="sm" icon={Send} label="Send" onClick={send} />
               )}
             </div>
             <Menu

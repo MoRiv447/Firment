@@ -101,8 +101,19 @@ describe('ChatView: the composer', () => {
 
   it('offers Stop instead of Send while running', () => {
     setup({ running: true });
-    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
+    // Both actions are a glyph in a square now, so the name exists only as an
+    // accessible one -- which is the thing a future "just drop the label" change
+    // would break, and nothing else here would notice.
+    const stop = screen.getByRole('button', { name: /Stop/ });
+    expect(stop).toBeInTheDocument();
+    expect(stop).toHaveTextContent('');
     expect(screen.queryByRole('button', { name: 'Send' })).toBeNull();
+  });
+
+  it('names the square send button without a word on it', () => {
+    setup();
+    const send = screen.getByRole('button', { name: 'Send' });
+    expect(send).toHaveTextContent('');
   });
 
   it('is one box: the text, the settings and the action share a frame', () => {

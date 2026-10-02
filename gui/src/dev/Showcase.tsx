@@ -7,10 +7,16 @@ import {
   Terminal,
   Trash2,
 } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
-import { currentThemeSetting, setThemeSetting } from '../lib/theme';
+import {
+  currentThemeSetting,
+  publishScheme,
+  resolveTheme,
+  setThemeSetting,
+  systemPrefersDark,
+} from '../lib/theme';
 import {
   Button,
   Callout,
@@ -53,8 +59,11 @@ import {
 import type { MenuEntry } from '../ui';
 import { TurnTimeline } from '../components/TurnTimeline';
 import { LiveRun } from '../components/LiveRun';
+import { ChatView } from '../views/ChatView';
+import { ToolCard } from '../components/ToolCard';
+import { TurnVerdict } from '../components/TurnVerdict';
 import { ToolRun } from '../components/MessageList';
-import type { ChatMessage, ToolCardState } from '../types';
+import type { ChatMessage, SessionDto, ToolCardState } from '../types';
 import styles from './Showcase.module.css';
 
 /**
@@ -105,6 +114,76 @@ const STACK_RUN: ToolCardState[] = [
   { seq: 4, name: 'flash', args: { elf: 'firmware.elf' }, status: 'unknown' },
 ];
 
+/**
+ * The three card states the design shows side by side.
+ *
+ * These are here because the card is the one object in the transcript that has a
+ * body, a footer and an edge that all move together, and until now the gallery drew
+ * the row but never the card -- which is how "the failed body looks like an
+ * attachment" survived a whole restyle unseen by anyone.
+ */
+const CARD_RUN: ToolCardState[] = [
+  {
+    seq: 5,
+    name: 'build',
+    args: { cmd: 'cmake --build build --target firmware' },
+    status: 'running',
+    startedAt: at(0),
+    progress: 'compiling',
+    detail:
+      '[ 62%] Building C object CMakeFiles/firmware.dir/src/main.c.obj\n[ 78%] Linking C executable firmware.elf',
+  },
+  {
+    seq: 6,
+    name: 'monitor',
+    args: { port: '/dev/ttyUSB0', baud: 115200 },
+    status: 'failed',
+    startedAt: at(0),
+    endedAt: at(2_000),
+    summary: 'no data in 2.0s',
+    detail:
+      'expected "LED ON" x2, saw 0 lines in 2.0s\nport opened, but no data -- check TX/RX and the baud rate',
+  },
+  {
+    seq: 7,
+    name: 'edit_file',
+    args: { path: 'src/main.c' },
+    status: 'ok',
+    startedAt: at(0),
+    endedAt: at(200),
+    detail:
+      '@@ -30,1 +30,3 @@\n-HAL_Delay(500);\n+__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, duty);\n+HAL_Delay(10);',
+  },
+];
+
+/** A finished run, for the band that ends one. */
+const VERDICT_TURN = [
+  shown(1, 'build', 0, 1_400),
+  shown(2, 'flash', 1_400, 9_400),
+  shown(3, 'monitor', 9_400, 12_400),
+];
+
+/** A chat with one exchange in it, so the composer is seen in place, not alone. */
+const COMPOSER_SESSION: SessionDto = {
+  id: 'showcase',
+  cwd: 'D:/OldStudy66/alt_testface',
+  provider: 'glm',
+  model: 'glm-5.3-flash',
+  mode: 'agent',
+  thinking: 'max',
+  created_at: 0,
+  updated_at: 0,
+  messages: [
+    { role: 'user', content: 'PA0 上有颗 LED。给它写一个 1 kHz 的 PWM 呼吸灯。' },
+    {
+      role: 'assistant',
+      content: '先确认工具链，再初始化 TIM2 通道 1，最后把固定延时换成占空比渐变。',
+      tool_calls: [{ id: 'a', name: 'edit_file', arguments: { path: 'src/main.c' } }],
+    },
+    { role: 'tool', content: 'Edited src/main.c (42 lines -> 76 lines)', tool_call_id: 'a' },
+  ],
+};
+
 /** A finished run as the store keeps it: the calls, their text, and no outcome. */
 const HISTORY_RUN: ChatMessage[] = [
   {
@@ -144,6 +223,11 @@ function Section({ title, note, children }: { title: string; note?: string; chil
 
 function Row({ children }: { children: ReactNode }) {
   return <div className={styles.row}>{children}</div>;
+}
+
+/** Card-sized things, stacked at the gap the cards themselves use. */
+function Stack({ children }: { children: ReactNode }) {
+  return <div className={styles.stack}>{children}</div>;
 }
 
 /**
@@ -186,10 +270,21 @@ export function Showcase() {
   const popConfirmRef = useRef<HTMLButtonElement | null>(null);
   const tip = useTooltip<HTMLButtonElement>();
 
+  /*
+   * The gallery paints its own scheme, and it did not.
+   *
+   * `setThemeSetting` only tells subscribers; the write to `data-scheme` lives in
+   * `App`, and this page renders INSTEAD of `App`. So the segmented control set the
+   * store, announced it to nobody, and left the document in whatever scheme
+   * `index.html` had guessed -- three buttons that did nothing, in the one place
+   * both schemes are supposed to be reviewed side by side.
+   */
+  useEffect(() => {
+    publishScheme(theme, resolveTheme(theme, systemPrefersDark()));
+  }, [theme]);
+
   const applyTheme = (next: string) => {
     setTheme(next as typeof theme);
-    // The same setter the app uses: it writes the cache and republishes
-    // `data-scheme`, so the gallery switches with the rest of the document.
     setThemeSetting(next);
   };
 
@@ -560,6 +655,46 @@ export function Showcase() {
               本轮进度
             </Eyebrow>
           </span>
+        </Section>
+
+        <Section
+          title="Tool card"
+          note="The same object in its three states: a log while it runs, a failure that reads as one, and an edit with a way to the pane that holds it."
+        >
+          <Stack>
+            {CARD_RUN.map((t) => (
+              <ToolCard key={t.seq} tool={t} onOpenChanges={() => {}} />
+            ))}
+            <TurnVerdict tools={VERDICT_TURN} now={at(12_400)} turnStartedAt={at(0)} />
+          </Stack>
+        </Section>
+
+        <Section
+          title="Composer"
+          note="The pane's own bottom edge: the field, the settings inside it, and the square action that swaps between send and stop."
+        >
+          <Stack>
+            <div className={styles.pane}>
+              <ChatView
+                session={COMPOSER_SESSION}
+                running={false}
+                turn={null}
+                infos={[]}
+                onSend={() => {}}
+                onCancel={() => {}}
+              />
+            </div>
+            <div className={styles.pane}>
+              <ChatView
+                session={COMPOSER_SESSION}
+                running
+                turn={{ text: '', tools: {}, thinking: '', startedAt: at(0), finished: false }}
+                infos={[]}
+                onSend={() => {}}
+                onCancel={() => {}}
+              />
+            </div>
+          </Stack>
         </Section>
 
         <Section title="Card" note="Head, body, one hairline. The second has no extra, so the head cannot lean on it.">

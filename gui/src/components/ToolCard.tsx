@@ -283,19 +283,27 @@ export function ToolCard({
       )}
       {/*
         The band, outside the body so its rule runs edge to edge. Only on a call
-        that touched a file and has stopped running: a footer on a live card would
-        offer to open a diff that is still being written, and on a `read_file` it
-        would offer a change that does not exist.
+        that has stopped running: a footer on a live card would offer to open a diff
+        that is still being written.
+
+        What it reads comes from whichever half the card has. An edit names its file
+        and the size of the change; a call that touched no file -- a monitor, a
+        build -- falls back to its own summary, because that one line is the whole
+        of what the tool concluded, and a card with a body but no verdict leaves the
+        reader to re-read the log to find it.
       */}
-      {open && path && tool.status !== 'running' && (
+      {open && tool.status !== 'running' && (path || tool.summary) && (
         <div className={styles.foot}>
           <span>
-            {path}
-            {diff && diff.added + diff.removed > 0
-              ? ` · ${diff.added} added, ${diff.removed} removed`
-              : ''}
+            {path
+              ? `${path}${
+                  diff && diff.added + diff.removed > 0
+                    ? ` · ${diff.added} added, ${diff.removed} removed`
+                    : ''
+                }`
+              : tool.summary}
           </span>
-          {onOpenChanges && (
+          {onOpenChanges && path && (
             <button
               type="button"
               className={styles.footAction}

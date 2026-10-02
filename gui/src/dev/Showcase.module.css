@@ -197,3 +197,23 @@
   color: var(--muted);
   font-size: var(--fs-minor);
 }
+
+/* Card-sized things in a column, at the gap the cards use. */
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-card);
+  width: 100%;
+}
+
+/* A frame for a whole pane: the composer only reads correctly pinned to the
+   bottom of something with a height. Grid, not flex -- a flex item takes its
+   content width and left a third of the frame empty, where a grid child fills
+   the area on both axes without being asked to. */
+.pane {
+  display: grid;
+  height: 460px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-panel);
+}

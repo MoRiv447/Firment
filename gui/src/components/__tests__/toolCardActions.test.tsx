@@ -71,6 +71,25 @@ describe('the card footer', () => {
     render(<ToolCard tool={tool({ detail: DIFF })} />);
     expect(screen.queryByRole('button', { name: /Open in Changes/ })).not.toBeInTheDocument();
   });
+
+  it('reads the tool\'s own conclusion when it touched no file', () => {
+    // A monitor has no path, so the band would otherwise be empty -- and the
+    // summary is the one line saying what the call concluded. It used to render
+    // only when there was no detail, so a failed capture with a log attached lost
+    // its verdict entirely.
+    render(
+      <ToolCard
+        tool={tool({
+          name: 'monitor',
+          args: { port: '/dev/ttyUSB0' },
+          status: 'failed',
+          summary: 'no data in 2.0s',
+          detail: 'port opened, but no data',
+        })}
+      />,
+    );
+    expect(screen.getByText('no data in 2.0s')).toBeInTheDocument();
+  });
 });
 
 describe('quickActionsFor', () => {
