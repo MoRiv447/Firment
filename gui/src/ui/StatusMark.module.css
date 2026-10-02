@@ -1,0 +1,31 @@
+/*
+ * The rounded-square state mark.
+ *
+ * The box is 14px and the glyph inside is 13px with a 1.5px stroke, so the stroke
+ * lands on the same optical weight as a 1em `Icon` at 13-15px next to it. It is a
+ * fixed size rather than `em`: this mark lines up in a column with other marks, and
+ * a box that grew with its row's type would break the column.
+ */
+.mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--brand-ink);
+}
+
+/*
+ * Three inks, and the fourth is the palette's quietest edge.
+ *
+ * `failed` takes the removed-diff ink rather than a fill: at this size a filled red
+ * square would out-shout the row it belongs to, and the row's own name is already
+ * painted in the same colour.
+ */
+.mark[data-state='failed'] {
+  color: var(--step-failed-ink);
+}
+
+.mark[data-state='pending'] {
+  color: var(--border-strong);
+}

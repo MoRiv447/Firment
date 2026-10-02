@@ -16,7 +16,18 @@ export interface QuickAction {
   /** Stable key, for tests and for keying the row. */
   key: 'build' | 'test';
   label: string;
-  tier: 'primary' | 'secondary';
+  /**
+   * Both are `quiet`, and that is the shape the footer band wants.
+   *
+   * These were a filled primary and an outlined secondary -- a call to action and
+   * its alternative -- sitting inside a card that is a *report about something that
+   * already happened*. A solid button at the bottom of a diff reads as "the page is
+   * waiting for you", which is the opposite of what a finished tool call is: the work
+   * is done, and these are two things you could ask next. Brand-coloured text says
+   * exactly that, and it leaves the card's only strong element -- its green edge --
+   * to mean the thing it is actually telling you.
+   */
+  tier: 'quiet' | 'secondary';
   /** What gets sent. Kept in one place so the label and the request cannot drift. */
   prompt: string;
 }
@@ -28,14 +39,14 @@ const BUILD: QuickAction = {
   // repeat the target, because the agent reads the configured one and a prompt
   // that disagreed with it would be the worse kind of specific.
   prompt: 'Build this change and flash it to the board.',
-  tier: 'primary',
+  tier: 'quiet',
 };
 
 const TEST: QuickAction = {
   key: 'test',
   label: 'Run tests',
   prompt: 'Run the tests that cover this change.',
-  tier: 'secondary',
+  tier: 'quiet',
 };
 
 /**

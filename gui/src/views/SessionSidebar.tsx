@@ -10,6 +10,7 @@ import {
   Button,
   Chip,
   EmptyState,
+  Eyebrow,
   IconButton,
   PopConfirm,
   TextInput,
@@ -165,15 +166,21 @@ export function SessionSidebar({
     <div data-ui="session-rail" className={styles.root}>
       <div className={styles.head}>
         {/*
-          * Outline again, and this one is a reversal of my own call: the rule is not
-          * "one solid per region", it is "one solid per *context*, and it is the action
-          * the context is for". A session is for sending; New is pressed once and
-          * then not again, so a solid button on it pulls the eye to the least-used
-          * corner of the screen.
+          * Solid, and this reverses an earlier call of mine.
+          *
+          * The argument for the outline was "one solid per context, and the context
+          * is for sending -- New is pressed once, so a solid pulls the eye to the
+          * least-used corner". Both halves of that are wrong about this rail. The
+          * rail's context *is* sessions, so New is not a side door: it is the one
+          * thing this region is for. And the two solids do not compete -- they are in
+          * different regions and never on screen at the same moment in a way that
+          * makes either ambiguous; the composer's Send answers "send this", the rail's
+          * bar answers "start something", and a rail whose only coloured element is a
+          * border is a rail you have to read to use.
           */}
         <TipButton
           tipText="New agent session, in the working directory below"
-          tier="secondary"
+          tier="primary"
           icon={Zap}
           onClick={() => onNew('agent')}
         >
@@ -214,19 +221,29 @@ export function SessionSidebar({
           />
         </div>
       ) : (
-        <ul className={styles.list}>
-          {rows.map((row) => (
-            <SessionRow
-              key={row.session.id}
-              row={row}
-              selected={row.session.id === currentId}
-              running={runningIds?.has(row.session.id) ?? false}
-              onSelect={() => onSelect(row.session.id)}
-              onOpenWorkbench={onOpenWorkbench}
-              onDelete={() => onDelete(row.session.id)}
-            />
-          ))}
-        </ul>
+        <div className={styles.listGroup}>
+          {/*
+            * The list gets a label, above the thing it labels.
+            *
+            * It lives inside this branch rather than above the ternary because the
+            * empty pane already says what it is: a heading over nothing is the
+            * "configured but empty" furniture docs/design/tokens.md rules out.
+            */}
+          <Eyebrow latin>Sessions</Eyebrow>
+          <ul className={styles.list}>
+            {rows.map((row) => (
+              <SessionRow
+                key={row.session.id}
+                row={row}
+                selected={row.session.id === currentId}
+                running={runningIds?.has(row.session.id) ?? false}
+                onSelect={() => onSelect(row.session.id)}
+                onOpenWorkbench={onOpenWorkbench}
+                onDelete={() => onDelete(row.session.id)}
+              />
+            ))}
+          </ul>
+        </div>
       )}
 
       <div className={styles.foot}>

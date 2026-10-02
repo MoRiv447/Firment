@@ -4,7 +4,7 @@ import { ChevronDown, ChevronRight, Terminal } from 'lucide-react';
 
 import type { ChatMessage, ToolCall } from '../types';
 import { pairRun, groupTranscript } from '../lib/transcript';
-import { Chip, Icon } from '../ui';
+import { Chip, Icon, StatusMark } from '../ui';
 import { Markdown } from './Markdown';
 import { ToolCard } from './ToolCard';
 import styles from './MessageList.module.css';
@@ -110,7 +110,23 @@ function ResultRow({ message }: { message: ChatMessage }) {
   );
 }
 
-/** A run of tool work, folded to one line. */
+/**
+ * A run of tool work, folded to one band.
+ *
+ * This was a bare line -- `▸ 12 steps · read_file ×4 · edit_file ×2` with a hairline
+ * running out to the right edge -- and it is a band now: an edge, a rounded corner,
+ * a mark at the left, and the chevron moved to where the hairline used to end. A
+ * hairline is what the interface uses *between* two rows of one list; a finished run
+ * is not a row of the prose around it, it is a separate object that took time.
+ *
+ * **The mark is `pending`, and that is a measurement rather than a mood.** A stored
+ * transcript keeps the call and the returned text and never whether the call worked
+ * -- a denial and a timeout are both plain strings in a tool message -- which is why
+ * `HistoryCard` builds every card with `status: 'unknown'` and why the band wears
+ * `--border` rather than `--border-active`. An active edge here would be the
+ * interface claiming a verdict it never recorded. See `ToolCard`'s header note: an
+ * unknown call gets no mark and no green.
+ */
 export function ToolRun({
   messages,
   onAction,
@@ -129,17 +145,12 @@ export function ToolRun({
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
       >
-        <Icon src={open ? ChevronDown : ChevronRight} size="sm" tone="muted" />
-        <span className={styles.runSteps}>{steps} steps</span>
-        {tools && (
-          <>
-            <span aria-hidden className={styles.runDot}>
-              ·
-            </span>
-            <span className={styles.runTools}>{tools}</span>
-          </>
-        )}
-        <span aria-hidden className={styles.rule} />
+        <StatusMark state="pending" label="Outcome not recorded" />
+        <span className={styles.runSteps}>
+          {steps} step{steps === 1 ? '' : 's'}
+        </span>
+        {tools && <span className={styles.runTools}>{tools}</span>}
+        <Icon src={open ? ChevronDown : ChevronRight} size="sm" tone="muted" className={styles.runChevron} />
       </button>
       {open && (
         <div className={styles.runBody}>

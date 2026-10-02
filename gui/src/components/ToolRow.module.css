@@ -1,0 +1,115 @@
+/*
+ * The compact tool row: 26px, monospace, one call.
+ *
+ * Monospace because every part of it is machine voice -- a tool name, the literal
+ * it was handed, a duration -- and 26px because it has to be shorter than the
+ * 40px row height the rest of the shell uses. A stack of these is a list you scan,
+ * not a list you read, and the difference between 26 and 40 over eight steps is a
+ * screenful.
+ */
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  box-sizing: border-box;
+  width: 100%;
+  height: 26px;
+  /* No padding-inline: the stack indents the whole column, so a row that added its
+     own would step in from the guide rule that is supposed to hold it. */
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-chip);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-family: var(--ff-mono);
+  font-size: var(--fs-meta);
+  text-align: start;
+}
+
+/* Only a row that folds invites a pointer, and only it gets a wash. The same pair
+   of rules as `ToolCard`'s head, for the same reason. */
+.row[data-fold='true'] {
+  cursor: pointer;
+}
+
+.row[data-fold='true']:hover {
+  background: var(--hover);
+}
+
+/*
+ * The name column.
+ *
+ * A fixed minimum rather than a `fit-content`: the point of the column is that a
+ * scan down the stack compares names at ONE x position. `min-width` and not `width`
+ * so that the longest tool in the tree (`periph_init`, `elf_analyze`) is not clipped
+ * -- it is the two short ones that pay for it.
+ */
+.name {
+  flex: none;
+  min-width: 94px;
+  color: var(--ink);
+  font-weight: var(--fw-label);
+}
+
+/* The literal the tool was handed. Truncates, because it is what you look at after
+   the name has told you this is the row you wanted. */
+.args {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--dim);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The phase a running tool reports: news about the wait, so it wears the brand ink
+   and a plain edge rather than a status colour -- the outcome owns the colour. */
+.phase {
+  flex: none;
+  padding: 1px var(--sp-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-chip);
+  color: var(--brand-ink);
+  font-size: var(--fs-micro);
+  letter-spacing: var(--tracking-cjk);
+}
+
+.counts {
+  display: inline-flex;
+  flex: none;
+  gap: var(--sp-1);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.counts [data-kind='added'] {
+  color: var(--diff-added-ink);
+}
+
+.counts [data-kind='removed'] {
+  color: var(--diff-removed-ink);
+}
+
+/* The duration, in the same fixed-width digits as every other counter, so a column
+   of them does not shuffle as seconds tick over. */
+.time {
+  flex: none;
+  min-width: 42px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
+
+/*
+ * A step that has not run is dimmer in every part, and the name loses its weight.
+ *
+ * Both halves on purpose: `--dim` alone would leave the name looking like a value
+ * rather than like a tool, and the drop from 600 to 400 is what says "not yet" when
+ * the colour is already this quiet in both states.
+ */
+.row[data-state='pending'] .name,
+.row[data-state='pending'] .args {
+  color: var(--dim);
+  font-weight: var(--fw-book);
+}

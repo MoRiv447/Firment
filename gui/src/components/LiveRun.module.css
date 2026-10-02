@@ -1,75 +1,41 @@
 /*
- * The live run line, and the cards behind it.
+ * A live run: one row per call, held by a rule down the left.
  *
- * Same row shape as the historical fold in `MessageList.module.css` -- glyph,
- * mark, words, hairline -- and deliberately written twice rather than shared:
- * the two lines differ in what they emphasise (one names the tool in flight and
- * claims the column's full width, the other counts steps in muted type), and a
- * shared sheet for two consumers is how one of them stops being legible.
+ * This file used to be the folded run line -- glyph, mark, words, hairline -- and
+ * the rows below replace it. What survives is `.root` and the shape of the indent.
+ *
+ * **The rule is what makes the rows one thing.** A run's calls are a sequence that
+ * happened for one reason, and a column of rows without it is a list of unrelated
+ * events -- the same job the `↳` on a branch chip does in the rail, done by geometry
+ * instead of by a glyph. It takes `--border` rather than `--line`: it is the edge of
+ * a *group*, so it belongs to the same tier as a card's own edge.
  */
 .root {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-1);
   min-width: 0;
 }
 
-.head {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  width: 100%;
-  padding: var(--sp-1) 0;
-  border: 0;
-  border-radius: var(--r-control);
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-family: var(--ff-sans);
-  font-size: var(--fs-minor);
-  text-align: left;
-  cursor: pointer;
-}
-
-.head:hover {
-  background: var(--hover);
-}
-
-/* The tool that is running right now: body ink against a muted row, so the one
-   live fact in the line is the one thing that stands out. */
-.current {
-  flex: 0 0 auto;
-  color: var(--ink);
-  font-family: var(--ff-mono);
-}
-
-.steps {
-  flex: 0 0 auto;
-  color: var(--muted);
-  font-family: var(--ff-mono);
-  font-variant-numeric: tabular-nums;
-}
-
-.tools {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--muted);
-  font-family: var(--ff-mono);
-  font-size: var(--fs-meta);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.rule {
-  flex: 1 1 auto;
-  min-width: var(--sp-3);
-  height: 1px;
-  background: var(--line);
-}
-
-.body {
+/*
+ * The indent is 15px, written as `15px - 1px` so the rule and the text stay one
+ * measurement: the border itself is the other 1px, and a `padding` copied from the
+ * preview without subtracting it puts every row 1px off the column it belongs to.
+ */
+.stack {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-1);
-  padding-left: var(--sp-4);
+  gap: 1px;
+  margin-top: var(--sp-2);
+  padding-inline-start: calc(15px - 1px);
+  border-inline-start: 1px solid var(--border);
+}
+
+/*
+ * An opened row's card, held off the rows on either side of it.
+ *
+ * The gap above is the one that matters: without it the card reads as belonging to
+ * the row *below* it, which is the row you did not press.
+ */
+.card {
+  margin: var(--sp-1) 0 var(--sp-2);
 }

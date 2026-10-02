@@ -1,0 +1,33 @@
+/*
+ * The micro-label.
+ *
+ * The bar is a pseudo-element rather than a node: it is decoration on the label, and
+ * a call site that passed it as a child would be able to put it on the wrong side.
+ */
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--ff-mono);
+  font-size: var(--fs-micro);
+  /* The CJK value by default; `[data-latin]` widens it. See the component. */
+  letter-spacing: var(--tracking-cjk);
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.eyebrow::before {
+  content: '';
+  flex: none;
+  width: 12px;
+  height: 1px;
+  background: var(--brand-ink);
+}
+
+.eyebrow[data-latin] {
+  letter-spacing: var(--tracking-label);
+}
+
+.eyebrow[data-upper] {
+  text-transform: uppercase;
+}

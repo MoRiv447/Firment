@@ -1,7 +1,7 @@
 import { LayoutDashboard, Settings, Sun, Moon } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
-import { IconButton, Tooltip, useTooltip } from '../ui';
+import { IconButton, StatusDot, Tooltip, useTooltip } from '../ui';
 import { NotificationBell } from './NotificationBell';
 import styles from './TitleBarActions.module.css';
 import type { ThemeMode } from '../lib/theme';
@@ -48,13 +48,23 @@ function Action({
 /**
  * The right-hand cluster of the title bar.
  *
- * Four controls and nothing else. The three that used to sit next to them -- mode,
- * thinking level, context usage -- are readings rather than commands, so they live
- * in the status bar now, and the fifth (the workbench tab) stopped being a tab the
- * moment it became a screen you open deliberately.
+ * Four controls, and one reading that is only sometimes there.
+ *
+ * The three readings that used to sit here -- mode, thinking level, context usage --
+ * moved to the status bar and stay there. **The pill is not one of them**, and the
+ * difference is the reason it is allowed to live here: those three are *permanent*,
+ * so they belong with the other permanent readings at the bottom; this one exists
+ * only while a turn is in flight and disappears when it ends. A transient state
+ * belongs near the identity of the window, which is where the eye already is when
+ * something starts happening.
+ *
+ * It is a reading and not a control: nothing to press, no hover, `aria-live` off --
+ * a status that announced itself every second would be a screen reader reading a
+ * stopwatch.
  */
 export function TitleBarActions({
   mode,
+  running,
   onToggleTheme,
   workbenchOpen,
   onToggleWorkbench,
@@ -66,6 +76,12 @@ export function TitleBarActions({
   onOpenSession,
 }: {
   mode: ThemeMode;
+  /**
+   * The turn in flight, when there is one. Absent is the normal case: a window
+   * sitting idle has nothing to report here, and the pill is rendered only for the
+   * stretch where that is false.
+   */
+  running?: { tool: string; seconds: number } | null;
   onToggleTheme: () => void;
   workbenchOpen: boolean;
   onToggleWorkbench: () => void;
@@ -81,6 +97,14 @@ export function TitleBarActions({
 
   return (
     <div className={styles.cluster}>
+      {running && (
+        <span className={styles.pill}>
+          <StatusDot status="running" pulse />
+          <span className={styles.pillTool}>{running.tool}</span>
+          <span aria-hidden className={styles.sep} />
+          <span className={styles.pillTime}>{running.seconds}s</span>
+        </span>
+      )}
       <NotificationBell
         notifications={notifications}
         unread={unread}

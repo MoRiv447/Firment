@@ -31,11 +31,16 @@ describe('quickActionsFor', () => {
     expect(quickActionsFor('shell')).toEqual([]);
   });
 
-  it('has exactly one primary action', () => {
-    // The design rule is one CTA per screen; two acid buttons side by side would
-    // remove the hierarchy the row exists to express.
+  it('offers its actions as prose, not as a call to action', () => {
+    // This asserted "exactly one primary action" -- a CTA and its alternative --
+    // which was the right shape for a row of buttons and the wrong one for what this
+    // is: the footer of a card that reports something that already happened. A solid
+    // button at the bottom of a diff reads as "the page is waiting for you". Both are
+    // `quiet` now, so the card has one strong element -- its own edge -- and the
+    // actions are two things you could ask next.
     const tiers = quickActionsFor('edit_file').map((a) => a.tier);
-    expect(tiers.filter((t) => t === 'primary')).toHaveLength(1);
+    expect(tiers).toEqual(['quiet', 'quiet']);
+    expect(tiers).not.toContain('primary');
   });
 
   it('carries a prompt for every action', () => {

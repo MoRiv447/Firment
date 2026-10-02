@@ -710,6 +710,27 @@ export default function App() {
 
   const todosDone = todoSummary(todos);
 
+  /*
+   * What the title bar's pill reports, or `null` for the usual case of nothing
+   * running.
+   *
+   * The tool in flight rather than a phase name: `build` and `flash` are what an
+   * engineer watching a board wants to see, and they are already the vocabulary the
+   * transcript uses. `thinking` when the turn is running and no tool is -- that is
+   * the model answering, which is the one stretch of a turn with no tool to name,
+   * and naming it beats an empty pill.
+   *
+   * The clock is the same one-second tick the status bar's elapsed reading uses, so
+   * the two cannot disagree about how long this has taken.
+   */
+  const inFlight = turn ? Object.values(turn.tools).filter((t) => t.status === 'running').pop() : undefined;
+  const pill = running
+    ? {
+        tool: inFlight?.name ?? 'thinking',
+        seconds: turn?.startedAt ? Math.max(0, Math.round((nowTick - turn.startedAt) / 1000)) : 0,
+      }
+    : null;
+
   return (
     <>
         {/*
@@ -724,6 +745,7 @@ export default function App() {
             project={session?.cwd || workCwd}
             actions={
               <TitleBarActions
+                running={pill}
                 mode={mode}
                 onToggleTheme={toggleTheme}
                 workbenchOpen={workbenchOpen}

@@ -1,119 +1,84 @@
-import { useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { Fragment, useState } from 'react';
 
 import type { ToolCardState } from '../types';
-import { Icon, StatusDot } from '../ui';
-import type { ChipStatus } from '../ui';
 import { ToolCard } from './ToolCard';
+import { ToolRow } from './ToolRow';
 import { TurnTimeline } from './TurnTimeline';
 import styles from './LiveRun.module.css';
 
 /**
- * A live turn's tool work, folded to one line while it happens.
+ * A live turn's tool work, as a column of one-line rows.
  *
- * The historical transcript folds a finished run to `▸ 12 steps · read_file ×4 ·
- * edit_file ×2` (see `MessageList`). A running one cannot use the same line,
- * because the question during a run is not "what did it do" but "what is it doing
- * *now*" -- so the header names the tool that is in flight and counts the seconds,
- * and everything already finished waits behind the fold.
+ * What this replaced was a single folded line -- `▸ ⏺ edit_file · 12s · 4 steps ·
+ * read_file ×4` -- whose argument was that five cards scrolling past is a log, and
+ * `edit_file · 12s` is a status. That was right about the two shapes it compared,
+ * and wrong about the third: a *card* per call is a log, a fold for the whole run
+ * hides the step that is failing, and a 26px row is neither. The row is the one
+ * shape that answers "what is it doing now" at the cost of a line instead of a
+ * screenful, and it is what the landing page's own demo does.
  *
- * That is the difference between a progress line and a log. Five cards scrolling
- * past is a log; `⏺ edit_file · 12s · 4 steps` is a status, and it costs one row
- * whether the turn has taken two steps or forty.
+ * **One card open at a time, and opening is per row.** The output is still the
+ * reason the rows exist -- a `read_file` answer is up to 2000 characters -- so a
+ * row opens its own card underneath itself and the rest of the column stays a
+ * column. A single `openSeq` rather than a set: two open cards would push the step
+ * being watched off the screen, which is the one thing this layout is for.
  *
- * The state colour is a `StatusDot` rather than a swatch of `statusChip().color`:
- * the chip helper returned a colour string for an inline style, which is the
- * exact shape of the bug that kept a run painted in the previous scheme's green.
+ * The timeline stays, at the bottom, where it now reads as the run's total rather
+ * than as a detail hidden behind a fold.
  */
-
-/** `read_file ×4 · edit_file` -- the shape of the work, not its length. */
-function toolCounts(tools: ToolCardState[]): string {
-  const counts = new Map<string, number>();
-  for (const t of tools) counts.set(t.name, (counts.get(t.name) ?? 0) + 1);
-  return [...counts.entries()]
-    .map(([name, n]) => (n > 1 ? `${name} ×${n}` : name))
-    .join(' · ');
-}
-
 export function LiveRun({
   tools,
+  now,
   onAction,
   turnStartedAt,
 }: {
   tools: ToolCardState[];
+  /**
+   * The caller's clock, required.
+   *
+   * This component used to keep one of its own -- an interval that ticked while
+   * something was in flight -- and that made it the only place in the app that read
+   * the time instead of being handed it. `workflowSteps(tools, now)` and
+   * `TurnTimeline now={…}` both take it for the reason written in `lib/steps.ts`:
+   * a component that calls `Date.now()` during render only moves when something
+   * else causes a render, and one that keeps its own interval cannot be drawn at a
+   * fixed instant -- which is how the gallery ended up printing a two-year-old run
+   * as `25257h 51m`. One clock, owned by the caller that already needs it.
+   */
+  now: number;
   onAction?: (prompt: string) => void;
   /**
-   * When the turn began, which is earlier than the first card: the stretch between
+   * When the turn began, which is earlier than the first row: the stretch between
    * the two is the model answering, and a timeline that started at the first call
    * would quietly drop the longest part of some turns.
    */
   turnStartedAt?: number;
 }) {
-  const [open, setOpen] = useState(false);
-  const [now, setNow] = useState(() => Date.now());
+  const [openSeq, setOpenSeq] = useState<number | null>(null);
 
   const sorted = [...tools].sort((a, b) => a.seq - b.seq);
-  const busy = sorted.some((t) => t.status === 'running');
-
-  // One tick per second, and only while something is in flight: a finished run
-  // has nothing to count and must not re-render the transcript.
-  useEffect(() => {
-    if (!busy) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [busy]);
-
   if (sorted.length === 0) return null;
-
-  const started = sorted.find((t) => t.startedAt)?.startedAt;
-  const seconds = started ? Math.max(0, Math.round((now - started) / 1000)) : null;
-  const current = [...sorted].reverse().find((t) => t.status === 'running');
-  const failed = sorted.filter((t) => t.status === 'failed').length;
-
-  // The dot reports the run, not the individual step: a run with a failure in it
-  // is a failed run even if the steps after it succeeded, and a run with
-  // something in flight is neither.
-  const status: ChipStatus = busy ? 'running' : failed > 0 ? 'failed' : 'ok';
 
   return (
     <div data-ui="live-run" className={styles.root}>
-      <button
-        type="button"
-        className={styles.head}
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-      >
-        <Icon src={open ? ChevronDown : ChevronRight} size="sm" tone="muted" />
-        <StatusDot status={status} pulse={busy} />
-        {current ? (
-          // The tool in flight, by name. This is the one piece of the run that is
-          // worth a permanent line.
-          <span className={styles.current}>{current.name}</span>
-        ) : (
-          <span className={styles.steps}>{sorted.length} step{sorted.length === 1 ? '' : 's'}</span>
-        )}
-        {seconds !== null && <span className={styles.steps}>{seconds}s</span>}
-        {sorted.length > 1 && (
-          <span className={styles.tools}>
-            {sorted.length} steps · {toolCounts(sorted)}
-          </span>
-        )}
-        <span aria-hidden className={styles.rule} />
-      </button>
-      {open && (
-        <div className={styles.body}>
-          {/*
-            * The summary of where the time went, above the things it was spent on.
-            * Inside the fold rather than on the run line: the line's whole design is
-            * that it costs one row however long the turn gets, and this is a detail
-            * for the moment someone has decided to look.
-            */}
-          <TurnTimeline tools={sorted} now={now} turnStartedAt={turnStartedAt} />
-          {sorted.map((t) => (
-            <ToolCard key={t.seq} tool={t} onAction={onAction} />
-          ))}
-        </div>
-      )}
+      <div className={styles.stack}>
+        {sorted.map((tool) => (
+          <Fragment key={tool.seq}>
+            <ToolRow
+              tool={tool}
+              now={now}
+              open={openSeq === tool.seq}
+              onToggle={() => setOpenSeq((s) => (s === tool.seq ? null : tool.seq))}
+            />
+            {openSeq === tool.seq && (
+              <div className={styles.card}>
+                <ToolCard tool={tool} onAction={onAction} />
+              </div>
+            )}
+          </Fragment>
+        ))}
+      </div>
+      <TurnTimeline tools={sorted} now={now} turnStartedAt={turnStartedAt} />
     </div>
   );
 }

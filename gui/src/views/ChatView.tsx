@@ -10,7 +10,7 @@ import { shouldShowStallNotice, stallNotice } from '../lib/stallHint';
 import { workflowSteps } from '../lib/steps';
 import { recordCompleted } from '../lib/timing';
 import type { RunningTurn, SessionDto } from '../types';
-import { Button, Callout, Chip, EmptyState, Icon, Spinner, TextArea } from '../ui';
+import { Button, Callout, Chip, EmptyState, Eyebrow, Icon, Spinner, TextArea } from '../ui';
 import styles from './ChatView.module.css';
 
 /**
@@ -163,6 +163,29 @@ export function ChatView({
 
   return (
     <div data-ui="chat" className={styles.root}>
+      {/*
+        * The strip above the transcript.
+        *
+        * It names the region and puts one reading at its right edge, which is the
+        * shape the landing page uses above its own demo. What it carries is the
+        * turn's *size*, and deliberately not a step counter: the named workflow
+        * steps are already a row of their own directly below (`StepProgress`), and a
+        * second count of the same thing one strip higher would be two answers to one
+        * question. The tool count is the fact neither of them states, and it is the
+        * one that moves while a turn runs.
+        *
+        * Hidden entirely when the turn used no tools -- a chat that only answered has
+        * nothing to count, and furniture that appears to hold a zero is the failure
+        * docs/design/tokens.md names.
+        */}
+      {toolList.length > 0 && (
+        <div className={styles.head}>
+          <Eyebrow latin>Turn</Eyebrow>
+          <span className={styles.count}>
+            {toolList.length} tool{toolList.length === 1 ? '' : 's'}
+          </span>
+        </div>
+      )}
       <div ref={scrollRef} onScroll={onScroll} className={styles.scroll}>
         {session ? (
           <>
@@ -217,7 +240,12 @@ export function ChatView({
               </Callout>
             )}
             {steps && <StepProgress steps={steps} />}
-            <LiveRun tools={toolList} onAction={onSend} turnStartedAt={turn?.startedAt} />
+            <LiveRun
+              tools={toolList}
+              now={nowMs}
+              onAction={onSend}
+              turnStartedAt={turn?.startedAt}
+            />
             {!!turn?.thinking && !turn.text && (
               <div className={styles.thinking}>
                 <Icon src={Brain} tone="muted" />

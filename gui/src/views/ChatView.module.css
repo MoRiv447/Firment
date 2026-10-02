@@ -22,6 +22,30 @@
   background: var(--bg);
 }
 
+/*
+ * The strip above the transcript.
+ *
+ * `flex: none`, so it does not scroll with the thing it labels -- a label that
+ * scrolls away is a label that was only there when you did not need it. The padding
+ * matches the composer's below it, so the strip and the field are one column.
+ */
+.head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4) 0;
+}
+
+.head .count {
+  color: var(--dim);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .scroll {
   flex: 1 1 auto;
   min-height: 0;

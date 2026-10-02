@@ -1,5 +1,6 @@
 import type { ToolCardState } from '../types';
 import type { StepProgressItem, StepState } from '../components/StepProgress';
+import type { MarkState } from '../ui';
 import { timingFor } from './timing';
 
 /**
@@ -35,6 +36,19 @@ function stateFor(status: ToolCardState['status']): StepState {
     default:
       return 'failed';
   }
+}
+
+/**
+ * The mark a tool's status draws.
+ *
+ * The same mapping the step row uses, exported rather than repeated, and typed to
+ * the four values it can actually return: `StepState` has a fifth (`unknown`) that
+ * this one never produces, while `StatusMark` has no glyph for it. Two spellings of
+ * one decision is how a tick and a cross end up disagreeing about what "no outcome
+ * recorded" looks like.
+ */
+export function markState(status: ToolCardState['status']): MarkState {
+  return stateFor(status) as MarkState;
 }
 
 /**

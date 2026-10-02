@@ -11,3 +11,47 @@
   gap: var(--sp-1);
   flex: none;
 }
+
+/*
+ * The running pill.
+ *
+ * `--h-min` tall, so it sits on the same centre line as the 28px icon buttons
+ * beside it without either side measuring the other, and mono because both halves of
+ * it are machine voice: a tool name and a duration.
+ *
+ * The separator is a 12px rule rather than a dot or a slash, matching the status bar's
+ * own divider: the two are the same gesture -- "these are two readings in one slot".
+ */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  box-sizing: border-box;
+  height: var(--h-min);
+  flex: none;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-btn);
+  color: var(--muted);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-micro);
+  white-space: nowrap;
+}
+
+.pillTool {
+  color: var(--ink);
+}
+
+.sep {
+  width: 1px;
+  height: 12px;
+  flex: none;
+  background: var(--border-strong);
+}
+
+/* The one number in the pill moves every second, so it gets the brand ink and the
+   fixed-width digits: it is the part that says "still going". */
+.pillTime {
+  color: var(--brand-ink);
+  font-variant-numeric: tabular-nums;
+}

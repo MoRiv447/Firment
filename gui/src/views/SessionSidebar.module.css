@@ -55,6 +55,27 @@
   list-style: none;
 }
 
+/*
+ * The label and the list it names, as one group.
+ *
+ * The rail's own gap is `--sp-2`, which is the right spacing between *regions* and
+ * the wrong one between a label and its own list: at 8px on both sides the label
+ * floats in the middle of the gap rather than heading anything. A group with a
+ * `--sp-1` gap fixes that in one place instead of by giving the label a margin that
+ * fights the parent's.
+ *
+ * `min-height: 0` on both this and the list is what lets the list scroll: a flex
+ * item defaults to `min-height: auto`, which refuses to shrink below its content and
+ * pushes the rail's footer off the bottom.
+ */
+.listGroup {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-height: 0;
+}
+
 /* `EmptyState` is `height: 100%` for a pane that fills its parent; in this
    column it is a flex item, so the room comes from here instead. */
 .empty {

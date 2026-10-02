@@ -68,7 +68,7 @@
 }
 
 /* ------------------------------------------------------------------ */
-/* A run, folded. */
+/* A run, folded to a band. */
 
 .run {
   display: flex;
@@ -78,59 +78,65 @@
 }
 
 /*
- * The fold line is a full-width row, so its hover is the row and not a pill
- * around the words. It is a real `<button>`: the old one was a `<div>` with
- * `role="button"` and a hand-written Enter/Space handler, which is the same
- * control with two of its behaviours missing and no focus order.
+ * The band.
+ *
+ * An edge, a rounded corner and a raised ground, rather than a bare row with a
+ * hairline running out of it: a hairline is what this interface uses *between* two
+ * rows of one list, and a finished run is not a row of the prose around it. It took
+ * time and it has a shape, so it is an object.
+ *
+ * `--border`, not `--border-active`. The band cannot report an outcome -- a stored
+ * transcript keeps the call and its text and never whether it worked -- so an active
+ * edge here would be the interface claiming a verdict nobody recorded. The mark
+ * inside says the same thing in the same colour.
+ *
+ * It is a real `<button>`: the old one was a `<div>` with `role="button"` and a
+ * hand-written Enter/Space handler, which is the same control with two of its
+ * behaviours missing and no focus order.
  */
 .runHead {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
+  box-sizing: border-box;
   width: 100%;
-  padding: var(--sp-1) 0;
-  border: 0;
-  border-radius: var(--r-control);
-  background: transparent;
-  color: var(--muted);
+  padding: var(--sp-1) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--surface-raised);
+  color: var(--ink-soft);
   font: inherit;
-  font-size: var(--fs-minor);
+  font-family: var(--ff-mono);
+  font-size: var(--fs-meta);
   text-align: left;
   cursor: pointer;
 }
 
 .runHead:hover {
-  background: var(--hover);
+  border-color: var(--border-strong);
 }
 
 .runSteps {
   flex: 0 0 auto;
+  color: var(--ink);
   font-variant-numeric: tabular-nums;
 }
 
-.runDot {
-  opacity: 0.5;
-}
-
-/* The shape of the work -- `read_file ×4 · edit_file` -- in mono, because it is a
-   list of identifiers rather than a sentence. */
+/* The shape of the work -- `read_file ×4 · edit_file` -- in the quietest rung,
+   because the count is the headline and this is the detail behind it. */
 .runTools {
   min-width: 0;
   overflow: hidden;
-  color: var(--muted);
-  font-family: var(--ff-mono);
-  font-size: var(--fs-meta);
+  color: var(--dim);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* The hairline that fills whatever the labels did not take: it is what makes a
-   fold read as one line across the column instead of three loose words. */
-.rule {
-  flex: 1 1 auto;
-  min-width: var(--sp-3);
-  height: 1px;
-  background: var(--line);
+/* The chevron sits where the hairline used to end, which is also where a disclosure
+   belongs: at the end of the row it opens, on the side the eye finishes. */
+.runChevron {
+  flex: none;
+  margin-inline-start: auto;
 }
 
 .runBody {

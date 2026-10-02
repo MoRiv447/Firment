@@ -22,6 +22,7 @@ import {
   CopyButton,
   Drawer,
   EmptyState,
+  Eyebrow,
   Field,
   Icon,
   IconButton,
@@ -39,6 +40,7 @@ import {
   Slider,
   Spinner,
   Stat,
+  StatusMark,
   Switch,
   Tabs,
   TextArea,
@@ -50,7 +52,9 @@ import {
 } from '../ui';
 import type { MenuEntry } from '../ui';
 import { TurnTimeline } from '../components/TurnTimeline';
-import type { ToolCardState } from '../types';
+import { LiveRun } from '../components/LiveRun';
+import { ToolRun } from '../components/MessageList';
+import type { ChatMessage, ToolCardState } from '../types';
 import styles from './Showcase.module.css';
 
 /**
@@ -77,6 +81,43 @@ const FLASH_TURN = [shown(1, 'build', 2_000, 42_000), shown(2, 'flash', 42_000, 
 const APPROVAL_TURN = [shown(1, 'flash', 2_000, 130_000, 120_000)];
 /** A turn that spent almost all of its time before any call ran — the model's turn. */
 const READING_TURN = [shown(1, 'read_file', 90_000, 95_000)];
+
+/**
+ * A live run, in all four row states at once.
+ *
+ * The states are the reason this fixture exists: a column of ticks tells you nothing
+ * about whether the layout works, and the four marks have to be told apart down a
+ * single column at 14px. `unknown` is here on purpose -- it is the reopened-session
+ * case and it must read as "not run", never as a failure.
+ */
+const STACK_RUN: ToolCardState[] = [
+  { seq: 1, name: 'read_file', args: { path: 'src/main.c' }, status: 'ok', startedAt: at(0), endedAt: at(400) },
+  {
+    seq: 2,
+    name: 'edit_file',
+    args: { path: 'src/main.c' },
+    status: 'ok',
+    startedAt: at(400),
+    endedAt: at(1_600),
+    detail: '@@ -12,3 +12,4 @@\n-HAL_Delay(500);\n+__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, duty);',
+  },
+  { seq: 3, name: 'build', args: { cmd: 'cmake --build build' }, status: 'running', startedAt: at(1_600), progress: 'linking' },
+  { seq: 4, name: 'flash', args: { elf: 'firmware.elf' }, status: 'unknown' },
+];
+
+/** A finished run as the store keeps it: the calls, their text, and no outcome. */
+const HISTORY_RUN: ChatMessage[] = [
+  {
+    role: 'assistant',
+    content: '',
+    tool_calls: [
+      { id: 'a', name: 'read_file', arguments: { path: 'src/main.c' } },
+      { id: 'b', name: 'read_file', arguments: { path: 'src/tim.c' } },
+    ],
+  },
+  { role: 'tool', content: 'the file', tool_call_id: 'a' },
+  { role: 'tool', content: 'the other file', tool_call_id: 'b' },
+];
 
 /** The four chip states, so a row of them says "this is the vocabulary". */
 const CHIP_STATES = ['ok', 'failed', 'running', 'attention', 'neutral'] as const;
@@ -186,11 +227,15 @@ export function Showcase() {
           </div>
         </Section>
 
-        <Section title="Button" note="Four tiers; the slant belongs to the primary CTA and nowhere else.">
+        <Section
+          title="Button"
+          note="Five tiers. A fill is a call to action, an edge is a control, bare text is an offer."
+        >
           <Row>
             <Button tier="primary">Save</Button>
             <Button tier="secondary">Cancel</Button>
             <Button tier="ghost">Rename</Button>
+            <Button tier="quiet">View the run</Button>
             <Button tier="danger">Delete</Button>
           </Row>
           <Row>
@@ -490,6 +535,30 @@ export function Showcase() {
             <TurnTimeline tools={FLASH_TURN} now={SHOWCASE_NOW} turnStartedAt={SHOWCASE_NOW} />
             <TurnTimeline tools={APPROVAL_TURN} now={SHOWCASE_NOW} turnStartedAt={SHOWCASE_NOW} />
             <TurnTimeline tools={READING_TURN} now={SHOWCASE_NOW} turnStartedAt={SHOWCASE_NOW} />
+          </span>
+        </Section>
+
+        <Section title="Tool work" note="One row per call while it runs; one band once it is over.">
+          <span className={styles.half}>
+            {/* The clock is placed just after the build started, so the running row
+                shows a real fraction of a second rather than a negative one clamped
+                to zero. `LiveRun` takes `now` instead of reading it, which is what
+                makes an instant like this expressible at all. */}
+            <LiveRun tools={STACK_RUN} now={at(2_100)} turnStartedAt={at(0)} />
+          </span>
+          <span className={styles.half}>
+            <ToolRun messages={HISTORY_RUN} />
+          </span>
+          <span className={styles.line}>
+            {(['done', 'current', 'pending', 'failed'] as const).map((state) => (
+              <StatusMark key={state} state={state} label={state} />
+            ))}
+            <Eyebrow latin>Sessions</Eyebrow>
+            {/* The same label in the other script: no case to change, and the CJK
+                tracking that the default carries. */}
+            <Eyebrow upper={false} latin={false}>
+              本轮进度
+            </Eyebrow>
           </span>
         </Section>
 

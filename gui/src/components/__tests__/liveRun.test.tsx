@@ -4,120 +4,153 @@ import { LiveRun } from '../LiveRun';
 import type { ToolCardState } from '../../types';
 
 /**
- * The live run line.
+ * The live run, as a column of one-line rows.
  *
- * During a run the question is not "what has it done" but "what is it doing
- * now", so the folded header has to name the tool in flight. If it only counted
- * steps, folding a live turn would hide the one thing worth watching.
+ * This used to be one folded line per run -- `▸ edit_file · 12s · 4 steps` -- and
+ * these cases were written for that: they asserted the fold, the step count and the
+ * summary of the run's *shape*. All three are gone, and the reason is written in
+ * `LiveRun.tsx`: a card per call is a log and a fold for the whole run hides the
+ * step that is failing, so the unit here is the call and the shape of the list is
+ * the shape of the work.
+ *
+ * What the tests still have to hold: one row per call in `seq` order, a row that
+ * opens only its own output, and a state per row rather than one verdict for the run.
  */
+
+/** A fixed clock: durations in these assertions are then numbers the test chose. */
+const NOW = 1_700_000_000_000;
 
 function tool(over: Partial<ToolCardState> & { seq: number; name: string }): ToolCardState {
   return { args: {}, status: 'ok', ...over };
 }
 
+/** The row buttons, in DOM order. The expanded card's head is a `<div>`, so these
+    are the only buttons in the tree. */
+const rows = () => screen.getAllByRole('button');
+
 describe('LiveRun', () => {
+  it('gives every call its own row, in sequence order', () => {
+    render(
+      <LiveRun
+        now={NOW}
+        tools={[
+          tool({ seq: 3, name: 'edit_file' }),
+          tool({ seq: 1, name: 'read_file' }),
+          tool({ seq: 2, name: 'build' }),
+        ]}
+      />,
+    );
+    // Passed out of order on purpose: `seq` is the turn's own count and the column
+    // has to follow it, not the order React happened to be handed.
+    expect(rows().map((r) => r.textContent)).toEqual([
+      expect.stringContaining('read_file'),
+      expect.stringContaining('build'),
+      expect.stringContaining('edit_file'),
+    ]);
+  });
+
   it('names the tool that is in flight', () => {
     render(
       <LiveRun
+        now={NOW}
         tools={[
           tool({ seq: 1, name: 'read_file', status: 'ok' }),
-          tool({ seq: 2, name: 'edit_file', status: 'running', startedAt: Date.now() - 3000 }),
+          tool({ seq: 2, name: 'edit_file', status: 'running', startedAt: NOW - 3000 }),
         ]}
       />,
     );
     expect(screen.getByText('edit_file')).toBeInTheDocument();
+    expect(screen.getByText('3.0s')).toBeInTheDocument();
   });
 
-  it('folds the finished steps away', () => {
+  it('keeps the output out of the DOM until its row is opened', () => {
     const { container } = render(
-      <LiveRun
-        tools={[
-          tool({ seq: 1, name: 'read_file', status: 'ok', summary: 'contents of the file' }),
-        ]}
-      />,
+      <LiveRun now={NOW} tools={[tool({ seq: 1, name: 'read_file', summary: 'contents of the file' })]} />,
     );
-    // The card body is not in the DOM until the row is opened: the point of the
-    // fold is that a forty-step turn costs one row.
+    // The whole point of a row: a forty-step turn costs forty lines and not forty
+    // file contents. The row itself is there either way.
     expect(container.textContent).not.toContain('contents of the file');
-    expect(screen.getByText('1 step')).toBeInTheDocument();
+    expect(screen.getByText('read_file')).toBeInTheDocument();
   });
 
-  it('opens to the same cards it hid', () => {
+  it('opens the card for the row that was pressed, and only that one', () => {
     const { container } = render(
       <LiveRun
+        now={NOW}
         tools={[
-          tool({ seq: 1, name: 'read_file', status: 'ok', summary: 'contents of the file' }),
+          tool({ seq: 1, name: 'read_file', summary: 'contents of the file' }),
+          tool({ seq: 2, name: 'edit_file', summary: 'two hunks applied' }),
         ]}
       />,
     );
-    fireEvent.click(screen.getByText('1 step'));
+    fireEvent.click(rows()[1]);
+    expect(container.textContent).toContain('two hunks applied');
+    expect(container.textContent).not.toContain('contents of the file');
+
+    // And pressing the other one closes the first: two open cards push the step you
+    // are watching off the screen, which is the one thing this layout is for.
+    fireEvent.click(rows()[0]);
     expect(container.textContent).toContain('contents of the file');
+    expect(container.textContent).not.toContain('two hunks applied');
   });
 
-  it('summarises the shape of a multi-step run', () => {
-    render(
+  it('marks each row with its own state, not one verdict for the run', () => {
+    const { container } = render(
       <LiveRun
+        now={NOW}
         tools={[
-          tool({ seq: 1, name: 'read_file' }),
-          tool({ seq: 2, name: 'read_file' }),
-          tool({ seq: 3, name: 'edit_file' }),
+          tool({ seq: 1, name: 'build', status: 'failed' }),
+          tool({ seq: 2, name: 'read_file', status: 'ok' }),
+          tool({ seq: 3, name: 'flash', status: 'running' }),
+          tool({ seq: 4, name: 'monitor', status: 'unknown' }),
         ]}
       />,
     );
-    expect(screen.getByText(/read_file ×2 · edit_file/)).toBeInTheDocument();
+    const states = [...container.querySelectorAll('[data-ui="tool-row"]')].map((r) =>
+      r.getAttribute('data-state'),
+    );
+    // `unknown` is a reopened record and reads as `pending` -- an unrecorded outcome
+    // is not a failure. See `lib/steps.ts`.
+    expect(states).toEqual(['failed', 'done', 'current', 'pending']);
   });
 
-  it('counts a run with any failure in it as failed', () => {
-    // A failed step is not redeemed by the steps that follow it.
-    const { container } = render(
-      <LiveRun
-        tools={[tool({ seq: 1, name: 'build', status: 'failed' }), tool({ seq: 2, name: 'read_file' })]}
-      />,
-    );
-    const dot = container.querySelector('[data-ui="status-dot"]') as HTMLElement;
-    // The run reports itself through this attribute; which hue `failed` maps to
-    // is `StatusDot`'s own contract, not this component's.
-    expect(dot.getAttribute('data-status')).toBe('failed');
+  it('prints no duration for a step nobody timed', () => {
+    // An em dash and not `0.0s`: a zero is a measurement, and this one was never
+    // taken.
+    render(<LiveRun now={NOW} tools={[tool({ seq: 1, name: 'read_file' })]} />);
+    expect(rows()[0]?.textContent).toContain('—');
   });
 
   it('renders nothing at all when no tool has run', () => {
-    const { container } = render(<LiveRun tools={[]} />);
+    const { container } = render(<LiveRun now={NOW} tools={[]} />);
     expect(container.textContent).toBe('');
   });
 
-  it('says where the time went, once it is opened', () => {
-    const now = Date.now();
+  it('says where the time went, whenever the clocks are real', () => {
+    const now = NOW;
     const { container } = render(
       <LiveRun
+        now={NOW}
         turnStartedAt={now - 130_000}
         tools={[
           tool({ seq: 1, name: 'build', startedAt: now - 128_000, endedAt: now - 120_000 }),
-          tool({
-            seq: 2,
-            name: 'flash',
-            startedAt: now - 120_000,
-            endedAt: now,
-            waitedMs: 112_000,
-          }),
+          tool({ seq: 2, name: 'flash', startedAt: now - 120_000, endedAt: now, waitedMs: 112_000 }),
         ]}
       />,
     );
-    fireEvent.click(screen.getByText('2 steps'));
-    // The two numbers the reader cannot get from the cards: the wait was most of
-    // the turn, and something ran underneath it.
+    // The two numbers the rows cannot show: the wait was most of the turn, and
+    // something ran underneath it.
     expect(container.textContent).toContain('waiting on you');
     expect(container.textContent).toContain('tools');
   });
 
   it('draws no timeline for a run nobody timed', () => {
-    // A reopened transcript: the cards are real, the clocks are not, and a bar
-    // built from unknowns would be a claim this app has already refused to make
-    // about the per-card durations.
+    // A reopened transcript: the rows are real, the clocks are not, and a bar built
+    // from unknowns would be a claim this app has already refused to make about the
+    // per-row durations.
     const { container } = render(
-      <LiveRun tools={[tool({ seq: 1, name: 'read_file', summary: 'file contents' })]} />,
+      <LiveRun now={NOW} tools={[tool({ seq: 1, name: 'read_file', summary: 'file contents' })]} />,
     );
-    fireEvent.click(screen.getByText('1 step'));
-    expect(container.textContent).toContain('file contents');
     expect(container.querySelector('[data-ui="turn-timeline"]')).toBeNull();
   });
 });

@@ -13,12 +13,18 @@ export type Size = 'sm' | 'md' | 'lg';
 /**
  * How much a button announces itself.
  *
- * `primary` is the acid fill and the only one allowed the slanted edge;
- * `secondary` is a hairline box; `ghost` is text that happens to be clickable;
- * `danger` is the removed-diff family, so "this deletes something" and "this
- * line went away" read as the same colour.
+ * `primary` is the acid fill; `secondary` is a hairline box; `ghost` is text that
+ * happens to be clickable; `danger` is the removed-diff family, so "this deletes
+ * something" and "this line went away" read as the same colour.
+ *
+ * `quiet` is the one added for the tool card's footer: brand-coloured text with no
+ * chrome at all -- no border, no fill, no hover wash, only the ink moving. The
+ * difference from `ghost` is a real one rather than a shade: `ghost` is a control
+ * that happens to be quiet, `quiet` is an *action offered in prose*, which is what
+ * "View the last run" is. It is also the only tier whose colour is the brand rather
+ * than an ink, which is why it is a tier and not a flag on `ghost`.
  */
-export type Tier = 'primary' | 'secondary' | 'ghost' | 'danger';
+export type Tier = 'primary' | 'secondary' | 'ghost' | 'quiet' | 'danger';
 
 /**
  * What a chip is reporting. Mirrors `StatusKind` in the old token layer, and

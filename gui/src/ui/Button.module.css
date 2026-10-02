@@ -148,6 +148,30 @@
   color: var(--muted);
 }
 
+/*
+ * An action offered in prose.
+ *
+ * Brand ink, no chrome: no border of its own (the base rule's transparent one
+ * stays), no fill, and a hover that moves the ink rather than washing the box. It
+ * exists for the tool card's footer, where "View the run" sits under a diff and a
+ * bordered button next to it would look like the card had two decisions in it.
+ *
+ * `--brand-ink`, not `--brand-acid`: this is text, and the fill is a highlighter.
+ * Asserted in `tokens.test.ts` as one of the pairs, so a call site cannot pick the
+ * wrong half.
+ */
+.root[data-tier='quiet'] {
+  color: var(--brand-ink);
+}
+
+.root[data-tier='quiet']:not(:disabled):hover {
+  color: var(--ink);
+}
+
+.root[data-tier='quiet']:disabled {
+  color: var(--muted);
+}
+
 .root[data-tier='danger'] {
   border: 1px solid var(--step-failed-bg);
   background: var(--step-failed-bg);
