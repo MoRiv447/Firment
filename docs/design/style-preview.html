@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>Firment GUI — 对话界面预览</title>
+<!--
+  这是对话界面本身的预览,铺满窗口,没有对照、没有表格。
+  标题栏最右那个 ◐ 是主题开关(dark / light),可以点。
+
+  **它不是源。** 这里是这次改版的视觉目标:一份可以点的、1:1 的稿子,用来定
+  "长什么样"。值是照 `gui/src/styles/tokens.css` 抄的,`tokens.md` 是那份值的
+  说明,而断言它们的是 `gui/src/styles/__tests__/tokens.test.ts`。
+  这份文件里的十六进制不会有人测 —— 所以**改了 token 就要回来改这里,或者
+  承认它过期**。留着它是因为"当时想要的到底是什么样"在纯代码里读不出来;
+  web/src/styles/tokens.css 曾经宣称镜像 GUI 却落后五个值,那份教训在这里
+  的对应做法就是写明这一句。
+
+  相对最终实现补了几处落地时按真实代码纠正过的东西:图标是 lucide 的真 SVG
+  (预览里曾用 ◐ ◫ ⌗ 这些字符,基线各不相同、对不齐)、图标按钮的几何照
+  gui/src/ui/Button.module.css 的 `[data-icon-only='true']`(28×28、1em=15px)、
+  滚动条 10px 槽 / 6px 视觉 / 内缩 2px。落地后这些已在真代码里,预览页不再领先。
+
+  这一版相对上一版补了四处落地页的构件:
+    · 转写区顶部的状态条(eyebrow 在左、mono 计数在右)—— 照 .demo-top-label
+    · 回合结束的结论带(图标 + 一句话 + 右对齐耗时)—— 照 .terminal-success
+    · 标题栏的状态药丸(亮点 + 状态 + 分隔 + 计数)—— 照 .release-pill
+    · 卡片内嵌代码块(再下一级的表面 + 自己的描边与 4px 圆角)—— 照 .evidence-output
+  并把工具名改成 font-weight 500(照 .tool-name),卡片间隙 8 → 10px。
+
+  文字色分两档:填充用 logo 色(深 #b4f779 / 浅 #4d7c0f),文字另取可读值
+  (深 #b4f779 / 浅 #476f0e)—— 浅色 #4d7c0f 当文字压在卡片底上只有 4.33:1,
+  现状 GUI 也有同样的坑(#107d98 压 --raised #f0f0f0 = 4.18:1)。
+-->
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: #090b09; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+  .window {
+    /* ---- 色阶 · 深色 ---- */
+    --bg: #090b09; --surface: #0d130a; --raised: #10160c; --code-bg: #0a0e07; --line: #242c1e;
+    --border: #2f3c25; --border-strong: #3a472e; --border-active: #88b366;
+    --ink: #eef1e8; --soft: #d3d9c9; --muted: #a9b09f; --dim: #828f70;
+    --acid: #b4f779; --brand-ink: #b4f779; --on-acid: #15200d;
+    /* 选中底 = 参考页实测的那个值。试过更深(更可见)的 #26370f:与行底分离度到 1.432,
+       但 dim 掉到 3.74 不达 AA,而 --selection 也用在结论带/运行中卡片上 —— 取"全部文字
+       都过、分离度还最高"的这一档。#1a2613 下 ink 13.82 / soft 10.93 / muted 7.06 / dim 4.59 / brand 12.42。 */
+    --sel-bg: #1a2613; --sel-border: #88b366;
+    --success: #5fd39b; --warn: #ffd98a; --danger: #ff9aa4;
+    --add-bg: #16230d; --add-ink: #c9e8a2; --del-bg: #2e1216; --del-ink: #ffbcc2;
+    /* 滚动条 —— 现状 tokens.css 也有这两键(#484848 / #6e6e6e),这里改成橄榄色。
+       实测:现状 thumb 压面板底只有 1.92:1,新值 #4f5f42 是 2.74:1 —— 滚动条是功能件,
+       比发丝线该更实,所以往上提了一档,不是照抄。 */
+    --scroll-thumb: #4f5f42; --scroll-thumb-hover: #7d8f6a;
+    /* 悬停/静置的两层洗色。现状是 --hover #ffffff1b / --wash-resting #ffffff1b,
+       这里同样用半透明白而不是不透明灰 —— tokens.css 那条注释讲了原因:
+       近黑底上的不透明灰看起来是泥。 */
+    --hover: #ffffff24; --wash-resting: #ffffff14;
+    --shadow: none;
+
+    /* ---- 语言 ---- */
+    --ff-sans: 'DM Sans', 'Microsoft YaHei UI', 'PingFang SC', system-ui, sans-serif;
+    --ff-mono: 'IBM Plex Mono', 'Cascadia Mono', Consolas, monospace;
+    --chrome: var(--ff-mono);
+    --fs-micro: 10px; --fs-meta: 11px; --fs-minor: 12px; --fs-body: 13px; --fs-ui: 14px;
+    --fs-read: 15px; --fs-title: 17px; --fs-display: 28px;
+    --track-label: 0.16em; --track-title: -0.4px; --track-display: -0.055em;
+    --lh-prose: 1.85; --lh-mono: 1.6;
+    --r-chip: 3px; --r-btn: 5px; --r-card: 6px; --r-panel: 8px;
+    --gap-card: 10px;
+  }
+  .window[data-scheme="light"] {
+    --bg: #fbfcf8; --surface: #f5f7f0; --raised: #edf0e6; --code-bg: #e9ede1; --line: #e2e6da;
+    --border: #c8d0b9; --border-strong: #bcc4ab; --border-active: #6d8c4a;
+    --ink: #1a1e15; --soft: #3a4230; --muted: #5c6353; --dim: #656c58;
+    --acid: #4d7c0f; --brand-ink: #476f0e; --on-acid: #ffffff;
+    /* 浅色选中底取 #dff0c2,不是更深的 #cfe6a4:后者分离度更好(1.174 vs 1.048),
+       但会把压在选中底上的绿字(brand-ink 4.37)和 dim(4.04)压到 AA 以下,
+       而 --selection 不只用于选中行 —— 结论带、运行中的工具卡、活动的图标按钮都用它。 */
+    --sel-bg: #dff0c2; --sel-border: #6d8c4a;
+    --success: #1f6b41; --warn: #8a5a00; --danger: #b3261e;
+    --add-bg: #e4f3d5; --add-ink: #24400f; --del-bg: #fbe0e3; --del-ink: #6d1a20;
+    --scroll-thumb: #b0ba9d; --scroll-thumb-hover: #7f8c6b;
+    /* 浅色下 resting wash 是 transparent(白底 + 描边已经说明"这是个控件"),
+       hover 才给一层橄榄色洗色。与现状同构。 */
+    --hover: #e6ebdc; --wash-resting: transparent;
+    --shadow: 0 12px 32px rgba(16, 24, 40, 0.12);
+  }
+
+  .window {
+    width: 100vw; height: 100vh; display: flex; flex-direction: column;
+    background: var(--bg); color: var(--ink);
+    font-family: var(--ff-sans); font-size: var(--fs-body); line-height: 1.5;
+    overflow: hidden; box-shadow: var(--shadow);
+  }
+
+  /* ================= 标题栏 ================= */
+  .titlebar { height: 46px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 10px 0 15px; border-bottom: 1px solid var(--line); background: var(--surface); }
+  .brand { display: flex; align-items: center; gap: 8px; flex: none; }
+  .mark { width: 18px; position: relative; height: 21px; transform: skew(-13deg); }
+  .mark i { position: absolute; left: 0; height: 4px; background: var(--acid); display: block; }
+  .mark i:nth-child(1) { top: 2px; width: 17px; }
+  .mark i:nth-child(2) { top: 8.5px; width: 12px; }
+  .mark i:nth-child(3) { top: 15px; width: 5px; }
+  .wordmark { font-size: var(--fs-ui); font-weight: 500; letter-spacing: var(--track-display); }
+  .wordmark b { color: var(--acid); font-weight: 500; }
+  .tsep { width: 1px; height: 18px; background: var(--line); flex: none; }
+  .tpane { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .tpane .path { font-family: var(--ff-mono); font-size: var(--fs-meta); color: var(--dim); }
+  .tpane .sess { font-size: var(--fs-minor); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tright { margin-left: auto; display: flex; align-items: center; gap: 4px; flex: none; }
+
+  /* 状态药丸 —— 照落地页 .release-pill:亮点 + 状态 + 竖分隔 + 计数 */
+  .pill { display: flex; align-items: center; gap: 7px; height: 26px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: var(--r-btn); font-family: var(--ff-mono); font-size: var(--fs-micro); color: var(--muted); }
+  .pill .sep { width: 1px; height: 12px; background: var(--border-strong); }
+  .pill .n { color: var(--brand-ink); font-variant-numeric: tabular-nums; }
+
+  /* 图标按钮 —— 几何逐条照 gui/src/ui/Button.module.css 的
+     `.root.root[data-icon-only='true']`:28x28 方框、padding 0、flex 居中、
+     font-size 15px(= --fs-read)让 1em 的图标正好 15px。
+     图标色取 --ink 不是 --muted:那段注释解释过,1.5px 的描边不算文字,
+     用 muted 会发虚。resting wash 也照抄(浅色下是 transparent,由底色和描边承担)。 */
+  .iconbtn {
+    width: 28px; height: 28px; flex: none; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 15px; line-height: 1;
+    border: 1px solid transparent; border-radius: var(--r-btn);
+    background: var(--wash-resting); color: var(--ink); cursor: pointer;
+  }
+  .iconbtn svg { width: 1em; height: 1em; display: block; }
+  .iconbtn:hover { background: var(--hover); }
+  /* "开着"的那个用活动态描边,和选中行、活动标签页同一套语言
+     (现状这里是 background: --hover,见落地计划里的第 11 条)。 */
+  .iconbtn[aria-pressed="true"] { border-color: var(--border-active); background: var(--sel-bg); color: var(--brand-ink); }
+  /* 主题图标:深色下显示太阳(动作是"切到浅色"),浅色下显示月亮 —— 与
+     TitleBarActions 的 `mode === 'dark' ? Sun : Moon` 一致。 */
+  .window[data-scheme="dark"] .ic-moon { display: none; }
+  .window[data-scheme="light"] .ic-sun { display: none; }
+
+  /* ================= 三栏 ================= */
+  .body { flex: 1; display: flex; min-height: 0; }
+  .rail { width: 236px; flex: none; border-right: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; }
+  .rail-head { padding: 11px 10px 10px; display: flex; flex-direction: column; gap: 8px; }
+  .newbtn { height: 32px; border: 0; border-radius: var(--r-btn); background: var(--acid); color: var(--on-acid); font-family: var(--ff-sans); font-size: var(--fs-minor); font-weight: 500; display: flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; }
+  .newbtn svg, .search svg { width: 1em; height: 1em; display: block; flex: none; }
+  .search { height: 30px; border: 1px solid var(--border-strong); border-radius: var(--r-btn); display: flex; align-items: center; padding: 0 9px; gap: 7px; color: var(--dim); font-family: var(--ff-mono); font-size: var(--fs-minor); }
+
+  /* 微标签:mono + 宽字距 + 前面一道绿短杠 —— 落地页的 eyebrow。
+     注意字距只给拉丁:0.16em 是给全大写拉丁设计的,中文吃这个字距会散架
+     (落地页的 eyebrow 全是 "ENGINEERED FOR ENGINEERING" 这类大写拉丁,
+     没有一个中文样本,所以这是我要单独决定的地方)。 */
+  .eyebrow { display: flex; align-items: center; gap: 6px; font-family: var(--chrome); font-size: var(--fs-micro); letter-spacing: 0.02em; text-transform: uppercase; color: var(--dim); }
+  .eyebrow.latin { letter-spacing: var(--track-label); }
+  .eyebrow::before { content: ''; width: 12px; height: 1px; background: var(--acid); flex: none; }
+
+  .railist { flex: 1; overflow: auto; padding: 10px 7px; display: flex; flex-direction: column; gap: 7px; }
+  /* 会话行 = 带描边的小卡片,活动态换亮绿描边(不是只换填充) */
+  .row { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-btn); background: var(--raised); display: flex; flex-direction: column; gap: 3px; cursor: pointer; }
+  .row:hover { border-color: var(--border-strong); }
+  .row[data-sel="1"] { background: var(--sel-bg); border-color: var(--sel-border); }
+  .row .l1 { font-size: var(--fs-body); color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .l2 { display: flex; align-items: center; gap: 6px; font-family: var(--ff-mono); font-size: var(--fs-micro); color: var(--muted); font-variant-numeric: tabular-nums; }
+  .plus { color: var(--success); }
+  .minus { color: var(--danger); }
+
+  .transcript { flex: 1; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
+  .tbar { height: 42px; flex: none; display: flex; align-items: center; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--line); }
+  .tab { font-family: var(--chrome); font-size: var(--fs-minor); color: var(--dim); padding: 0 10px; height: 100%; display: flex; align-items: center; position: relative; cursor: pointer; }
+  .tab:hover { color: var(--muted); }
+  .tab[data-on="1"] { color: var(--brand-ink); }
+  .tab[data-on="1"]::after { content: ''; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 1px; background: var(--acid); }
+
+  /* 转写区顶部的状态条 —— 照落地页 .demo-top-label */
+  .thead { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 9px 22px 0; }
+  .thead .count { font-family: var(--ff-mono); font-size: var(--fs-micro); color: var(--dim); font-variant-numeric: tabular-nums; }
+
+  .scroll { flex: 1; overflow: auto; padding: 14px 22px 20px; }
+  .userbubble { margin-left: auto; max-width: 68%; background: var(--raised); border: 1px solid var(--border); border-radius: var(--r-card); padding: 10px 13px; font-size: var(--fs-body); line-height: var(--lh-prose); }
+  .agent { margin-top: 18px; font-size: var(--fs-read); line-height: var(--lh-prose); max-width: 66ch; color: var(--soft); }
+  .agent .who { font-family: var(--chrome); font-size: var(--fs-micro); letter-spacing: var(--track-label); text-transform: uppercase; color: var(--dim); display: block; margin-bottom: 8px; }
+
+  .stack { margin-top: 18px; border-left: 1px solid var(--border); padding-left: 15px; display: flex; flex-direction: column; gap: 1px; }
+  .trow { display: flex; align-items: center; gap: 10px; height: 26px; font-family: var(--ff-mono); font-size: var(--fs-meta); }
+  .glyph { width: 14px; height: 14px; flex: none; display: grid; place-items: center; color: var(--brand-ink); }
+  .glyph svg { display: block; }
+  .tname { color: var(--ink); font-weight: 500; min-width: 94px; }
+  .targ { color: var(--dim); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; flex: 1; }
+  .ttime { color: var(--dim); font-variant-numeric: tabular-nums; }
+  .trow[data-state="pending"] .tname, .trow[data-state="pending"] .targ { color: var(--dim); font-weight: 400; }
+  .trow[data-state="fail"] .tname { color: var(--danger); }
+  .phase { font-family: var(--ff-mono); font-size: var(--fs-micro); letter-spacing: .06em; color: var(--brand-ink); border: 1px solid var(--border-strong); border-radius: var(--r-chip); padding: 1px 5px; }
+  .diffbadge { font-family: var(--ff-mono); font-size: var(--fs-micro); font-variant-numeric: tabular-nums; }
+
+  /* 结论带 —— 照落地页 .terminal-success */
+  .verdict { display: flex; align-items: center; gap: 9px; margin-top: 12px; padding: 8px 11px; border: 1px solid var(--border-active); border-radius: var(--r-card); background: var(--sel-bg); font-family: var(--ff-mono); font-size: var(--fs-meta); color: var(--soft); }
+  .verdict .right { margin-left: auto; color: var(--dim); font-variant-numeric: tabular-nums; }
+
+  /* 工具卡:1px 绿调描边 + 圆角;运行中换亮绿描边 + 染色底 */
+  .toolcard { border: 1px solid var(--border); border-radius: var(--r-card); background: var(--raised); overflow: hidden; }
+  .toolcard + .toolcard { margin-top: var(--gap-card); }
+  .toolcard[data-state="run"] { border-color: var(--border-active); background: var(--sel-bg); }
+  .toolcard[data-state="fail"] { border-color: var(--danger); }
+  .chead { display: flex; align-items: center; gap: 10px; padding: 9px 12px; font-family: var(--ff-mono); font-size: var(--fs-meta); }
+  /* 内嵌代码块 —— 照落地页 .evidence-output:再下一级的表面,自己的描边与 4px 圆角 */
+  .cbody { margin: 0 9px 9px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 4px; background: var(--code-bg); font-family: var(--ff-mono); font-size: var(--fs-meta); line-height: var(--lh-mono); }
+  .dline { display: block; padding: 0 4px; }
+  .dline.add { background: var(--add-bg); color: var(--add-ink); }
+  .dline.del { background: var(--del-bg); color: var(--del-ink); }
+  .errbody { margin: 0 9px 9px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 4px; background: var(--code-bg); font-family: var(--ff-mono); font-size: var(--fs-meta); color: var(--danger); line-height: 1.7; }
+  .cfoot { display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--border); padding: 7px 12px; font-family: var(--ff-mono); font-size: var(--fs-micro); color: var(--dim); }
+  .cfoot a { color: var(--brand-ink); text-decoration: none; }
+
+  .composer { flex: none; padding: 10px 22px 14px; }
+  .field { border: 1px solid var(--border-strong); border-radius: var(--r-card); padding: 11px 13px; display: flex; flex-direction: column; gap: 11px; }
+  .field .ph { font-family: var(--ff-mono); font-size: var(--fs-minor); color: var(--dim); }
+  .fieldfoot { display: flex; align-items: center; justify-content: space-between; }
+  .chips { display: flex; gap: 5px; }
+  /* 标签带染色底(落地页 .tags code 的底是 #151b10,比地面亮一档),不只是描边 */
+  .chip { font-family: var(--ff-mono); font-size: var(--fs-micro); border: 1px solid var(--border-strong); border-radius: var(--r-chip); padding: 2px 6px; color: var(--dim); background: var(--raised); }
+  .chip.on { color: var(--brand-ink); border-color: var(--border-active); }
+  .send { height: 27px; padding: 0 14px; border: 0; border-radius: var(--r-btn); background: var(--acid); color: var(--on-acid); font-family: var(--ff-sans); font-size: var(--fs-minor); font-weight: 500; cursor: pointer; }
+
+  .inspector { width: 320px; flex: none; background: var(--surface); display: flex; flex-direction: column; }
+  .insp-head { height: 42px; flex: none; display: flex; align-items: center; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--line); }
+  .insp-body { flex: 1; padding: 12px; display: flex; flex-direction: column; gap: var(--gap-card); overflow: auto; }
+  .filerow { border: 1px solid var(--border); border-radius: var(--r-card); background: var(--raised); padding: 9px 12px; display: flex; align-items: center; gap: 9px; }
+  .filerow code { font-family: var(--ff-mono); font-size: var(--fs-meta); color: var(--ink); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 12px; padding: 0 12px; }
+  /* 方角图标砖:1px 绿边 + 圆角 5 + 绿字形 */
+  .tile { width: 34px; height: 34px; border: 1px solid var(--border-strong); border-radius: var(--r-btn); display: grid; place-items: center; color: var(--acid); }
+  .empty .big { font-size: var(--fs-title); font-weight: 500; letter-spacing: var(--track-title); color: var(--ink); }
+  .empty p { margin: 0; font-size: var(--fs-minor); color: var(--dim); max-width: 34ch; line-height: var(--lh-prose); text-wrap: pretty; }
+
+  .statusbar { height: 28px; flex: none; display: flex; align-items: center; gap: 14px; padding: 0 13px; border-top: 1px solid var(--line); background: var(--surface); font-family: var(--ff-mono); font-size: var(--fs-micro); color: var(--dim); }
+  .statusbar .right { margin-left: auto; display: flex; gap: 14px; font-variant-numeric: tabular-nums; }
+  .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--acid); display: inline-block; }
+
+  /* ================= 滚动条 =================
+     沿用 base.css:91-109 的做法(::-webkit-scrollbar,WebView2 / WebKit 都吃),只重做视觉:
+     thumb 从"贴边的 8px 实块"改成"内缩的胶囊"——视觉 4px、可抓区 10px(比现在的 8px 更好抓)。
+
+     两个技术点,写下来免得下次改坏:
+     · 不用 scrollbar-color / scrollbar-width:标准属性在 Chromium 里一旦设置,
+       整块 ::-webkit-scrollbar 就被忽略 ⇒ 圆角与内缩全部失效。要完全受控就只能走 webkit 这一套。
+     · 内缩靠"透明边 + background-clip: content-box"。但 border-radius 是 border-box 的圆角,
+       内圈半径 = 圆角 − 边宽 ⇒ 圆角给小了会变成方角,所以给 99px 而不是 --r-chip。
+     颜色用 background-color 不用 background 简写:简写会把 background-clip 重置掉。 */
+  .window ::-webkit-scrollbar { width: 10px; height: 10px; }
+  .window ::-webkit-scrollbar-track { background: transparent; }
+  .window ::-webkit-scrollbar-corner { background: transparent; }
+  .window ::-webkit-scrollbar-thumb {
+    background-color: var(--scroll-thumb);
+    /* 视觉 6px / 可抓 10px。内缩给 2px 而不是 3px:3px 时实际只有 4px 宽,
+       在 1x 屏上偏细(实测过:gutter 10、border 3 ⇒ 画出来 4px)。 */
+    border: 2px solid transparent;
+    background-clip: content-box;
+    border-radius: 99px;
+  }
+  .window ::-webkit-scrollbar-thumb:hover { background-color: var(--scroll-thumb-hover); }
+</style>
+
+<body>
+<div class="window" id="win" data-scheme="dark">
+  <div class="titlebar">
+    <span class="brand"><span class="mark"><i></i><i></i><i></i></span><span class="wordmark">firment<b>.</b></span></span>
+    <span class="tsep"></span>
+    <span class="tpane"><span class="path">D:/OldStudy66/alt_testface</span></span>
+    <span class="tsep"></span>
+    <span class="tpane"><span class="sess">stm32-breathing-led</span></span>
+    <span class="tright">
+      <span class="pill"><span class="dot"></span><span>运行中</span><span class="sep"></span><span class="n">3 / 7</span></span>
+      <button class="iconbtn" aria-label="通知" title="通知">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/></svg>
+      </button>
+      <button class="iconbtn" aria-pressed="false" aria-label="项目工作台" title="项目工作台">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
+      </button>
+      <button class="iconbtn" aria-label="设置" title="设置">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
+      <button class="iconbtn" aria-label="切换配色" title="切换配色（深色 / 浅色）" onclick="var w=document.getElementById('win');var d=w.dataset.scheme==='dark';w.dataset.scheme=d?'light':'dark';document.body.style.background=d?'#fbfcf8':'#090b09';">
+        <svg class="ic-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+        <svg class="ic-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg>
+      </button>
+    </span>
+  </div>
+
+  <div class="body">
+    <aside class="rail">
+      <div class="rail-head">
+        <button class="newbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>新建会话</button>
+        <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg><span>搜索会话…</span></div>
+      </div>
+      <div class="eyebrow latin" style="padding:6px 11px">Sessions</div>
+      <div class="railist">
+        <div class="row" data-sel="1">
+          <span class="l1">PA0 呼吸灯 · 1 kHz PWM</span>
+          <span class="l2">glm-5.3-flash · 17:31 · <span class="plus">+23</span> <span class="minus">−2</span></span>
+        </div>
+        <div class="row">
+          <span class="l1">串口读到乱码</span>
+          <span class="l2">glm-5.3-flash · 16:02 · <span class="plus">+4</span></span>
+        </div>
+        <div class="row">
+          <span class="l1">TIM2 时钟树核对</span>
+          <span class="l2">deepseek-v4 · 昨天</span>
+        </div>
+        <div class="row">
+          <span class="l1">旧的 SPI 试写</span>
+          <span class="l2">deepseek-v4 · 09-24</span>
+        </div>
+        <div class="row">
+          <span class="l1">外设手册提问</span>
+          <span class="l2">glm-5.3-flash · 09-23</span>
+        </div>
+      </div>
+    </aside>
+
+    <main class="transcript">
+      <div class="tbar">
+        <span class="tab" data-on="1">CHAT</span>
+        <span class="tab">串口</span>
+        <span class="tab">烧录 / 运行</span>
+        <span class="tab">设置</span>
+      </div>
+      <div class="thead">
+        <span class="eyebrow">一个需求 · 完整闭环</span>
+        <span class="count">03 / 07</span>
+      </div>
+      <div class="scroll">
+        <div class="userbubble">PA0 上有颗 LED。给它写一个 1 kHz 的 PWM 呼吸灯。</div>
+        <div class="agent">
+          <span class="who">Firment</span>
+          先确认工具链，再初始化 TIM2 通道 1，最后把固定延时换成占空比渐变。
+        </div>
+
+        <div class="stack">
+          <div class="trow" data-state="done">
+            <span class="glyph"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x=".75" y=".75" width="12.5" height="12.5" rx="6" stroke="currentColor" stroke-width="1.5"/><path d="M4.2 7.2l2 2 3.6-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="tname">periph_init</span><span class="targ">TIM2_CH1 → PA0 · 1 kHz · PWM mode 1</span><span class="ttime">0.3s</span>
+          </div>
+          <div class="trow" data-state="done">
+            <span class="glyph"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x=".75" y=".75" width="12.5" height="12.5" rx="6" stroke="currentColor" stroke-width="1.5"/><path d="M4.2 7.2l2 2 3.6-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="tname">edit_file</span><span class="targ">src/main.c</span>
+            <span class="diffbadge"><span class="plus">+42</span> <span class="minus">−8</span></span><span class="ttime">0.2s</span>
+          </div>
+          <div class="trow" data-state="run">
+            <span class="glyph"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x=".75" y=".75" width="12.5" height="12.5" rx="6" stroke="currentColor" stroke-width="1.5"/><path d="M4.7 4.7l4.6 2.3-4.6 2.3z" fill="currentColor"/></svg></span>
+            <span class="tname">build</span><span class="targ">cmake --build build</span>
+            <span class="phase">正在编译</span><span class="ttime">01.4s</span>
+          </div>
+          <div class="trow" data-state="pending">
+            <span class="glyph"><span style="width:12px;height:12px;border:1.5px solid var(--border-strong);border-radius:6px;display:block"></span></span>
+            <span class="tname">flash</span><span class="targ">probe-rs download firmware.elf</span><span class="ttime">—</span>
+          </div>
+        </div>
+
+        <div class="toolcard" data-state="run" style="margin-top:14px">
+          <div class="chead">
+            <span class="glyph"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x=".75" y=".75" width="12.5" height="12.5" rx="6" stroke="currentColor" stroke-width="1.5"/><path d="M4.7 4.7l4.6 2.3-4.6 2.3z" fill="currentColor"/></svg></span>
+            <span class="tname">build</span><span class="targ">cmake --build build --target firmware</span>
+            <span class="phase">正在编译</span><span class="ttime">01.4s</span>
+          </div>
+          <div class="cbody" style="color:var(--muted)">
+            <span class="dline">[ 62%] Building C object CMakeFiles/firmware.dir/src/main.c.obj</span>
+            <span class="dline">[ 78%] Linking C executable firmware.elf</span>
+          </div>
+        </div>
+
+        <div class="toolcard" data-state="fail">
+          <div class="chead">
+            <span class="glyph" style="color:var(--danger)"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x=".75" y=".75" width="12.5" height="12.5" rx="6" stroke="currentColor" stroke-width="1.5"/><path d="M4.6 4.6l4.8 4.8M9.4 4.6l-4.8 4.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+            <span class="tname" style="color:var(--danger)">monitor</span><span class="targ">/dev/ttyUSB0 · 115200</span><span class="ttime">2.0s</span>
+          </div>
+          <div class="errbody">expected "LED ON" ×2, saw 0 lines in 2.0s<br>port opened, but no data — check TX/RX and the baud rate</div>
+          <div class="cfoot"><span>串口 2.0s 内无数据</span><a href="#">看完整日志 →</a></div>
+        </div>
+
+        <div class="toolcard" data-state="done">
+          <div class="chead">
+            <span class="glyph"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x=".75" y=".75" width="12.5" height="12.5" rx="6" stroke="currentColor" stroke-width="1.5"/><path d="M4.2 7.2l2 2 3.6-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="tname">edit_file</span><span class="targ">src/main.c</span>
+            <span class="diffbadge"><span class="plus">+42</span> <span class="minus">−8</span></span><span class="ttime">0.2s</span>
+          </div>
+          <div class="cbody">
+            <span class="dline del">-  HAL_Delay(500);</span>
+            <span class="dline add">+  __HAL_TIM_SET_COMPARE(&amp;htim2, TIM_CHANNEL_1, duty);</span>
+            <span class="dline add">+  HAL_Delay(10);  /* 100 步 × 10ms = 1s 呼吸周期 */</span>
+          </div>
+          <div class="cfoot"><span>src/main.c · 42 增 8 删</span><a href="#">在改动面板中打开 →</a></div>
+        </div>
+
+        <div class="verdict">
+          <span class="glyph"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x=".75" y=".75" width="12.5" height="12.5" rx="6" stroke="currentColor" stroke-width="1.5"/><path d="M4.2 7.2l2 2 3.6-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          <span>编译通过 · 已烧录 · 运行时断言 2/2 通过</span>
+          <span class="right">本轮 12.4s</span>
+        </div>
+      </div>
+
+      <div class="composer">
+        <div class="field">
+          <span class="ph">继续输入，或用 / 选择命令…</span>
+          <span class="fieldfoot">
+            <span class="chips"><span class="chip on">agent</span><span class="chip">plan</span><span class="chip">thinking · max</span></span>
+            <button class="send">发送</button>
+          </span>
+        </div>
+      </div>
+    </main>
+
+    <aside class="inspector">
+      <div class="insp-head">
+        <span class="tab" data-on="1">改动</span>
+        <span class="tab">文件</span>
+        <span class="tab">设备</span>
+      </div>
+      <div class="insp-body">
+        <div class="eyebrow">本次改动</div>
+        <div class="filerow">
+          <span class="glyph"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x=".75" y=".75" width="12.5" height="12.5" rx="4" stroke="currentColor" stroke-width="1.5"/><path d="M4 5.4h6M4 7h6M4 8.6h3.6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></span>
+          <code>src/main.c</code>
+          <span class="diffbadge" style="margin-left:auto"><span class="plus">+42</span> <span class="minus">−8</span></span>
+        </div>
+        <div class="empty">
+          <span class="tile"><svg width="17" height="17" viewBox="0 0 16 16" fill="none"><path d="M8 3.2v9.6M3.2 8h9.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+          <span class="big">还没有其他改动</span>
+          <p>工具改过的文件都会落到这里，一个都不会漏。</p>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="statusbar">
+    <span><span class="dot"></span> agent</span>
+    <span>glm-5.3-flash</span>
+    <span>thinking max</span>
+    <span>main <span style="color:var(--brand-ink)">+1</span></span>
+    <span class="right"><span>上下文 45%</span><span>本轮 12.4s</span><span>v1.0.0-rc</span></span>
+  </div>
+</div>
+</body>
+</html>

@@ -20,9 +20,10 @@ bare hex or px in any `.ts`/`.tsx` under `gui/src`. Both exist because "there is
 place a design value is written down" decays one inline literal at a time.
 
 The token names below are the custom properties as they are written, so anything in a
-table can be grepped in `gui/src/styles/tokens.css`. The web file is named after the
-GUI's so the two can be read side by side — except the font stacks, which differ by
-design (see Type).
+table can be grepped in `gui/src/styles/tokens.css`. **Every ratio quoted here is
+asserted in `gui/src/styles/__tests__/tokens.test.ts`**, which reads the values out
+of the stylesheet rather than out of this document — so a table row that disagrees
+with the code fails rather than misleads.
 
 ## Choosing a scheme
 
@@ -41,321 +42,258 @@ config file would fight the thing that already knows the answer.
 
 ## Colour
 
-### The palette is Radix's
+### The ramp is olive, and it is the logo's
 
-Every value below comes from [`@radix-ui/colors`](https://www.radix-ui.com/colors)
-— the same scales Supabase builds on. Each hue has 12 steps with a documented role,
-and the dark variant of each step is designed rather than derived, which is why the
-two schemes are genuinely two decisions instead of one inverted.
+Every neutral sits at about **hue 88** — yellow-green. That is not a preference; it
+is what this project's own landing page does, measured: `#414a35` is 86°, `#647257`
+91°, `#a0b28a` 87°, and its one bright colour `#b4f779` is 92°.
 
-| Step | Role | Our token |
+The app used to be perfectly neutral (`--line: #3a3a3a`, `--muted: #b4b4b4`), which
+is the plainest reason the interface and its own logo read as two different products.
+The two schemes now each match a logo that already existed:
+
+| Scheme | `--brand-acid` | Source |
 |---|---|---|
-| 1 | app background | `--bg` |
-| 2 | subtle background | `--surface` |
-| 3 | UI element background | `--surface-raised`, `*-bg` for a badge |
-| 4 | hovered element | `--hover`, a diff line |
-| 5 | **active / selected** | `--selection` |
-| 6 | subtle borders | `--line` |
-| 7 | control borders | `--outline`, `--success-border` |
-| 8 | hovered border, focus ring | `--focus-ring`, the dark brand fill |
-| 9 | solid fill (highest chroma) | `--brand-acid` in light |
-| 10 | hovered solid | button hover |
-| 11 | low-contrast text | `--muted`, `--brand-ink` |
-| 12 | high-contrast text | `--ink`, the state inks |
+| dark | `#b4f779` | `gui/public/icons/logo-*.png` |
+| light | `#4d7c0f` | `gui/public/icons/logo-w-*.png` |
 
-Three consequences worth knowing before reading the rest of this file:
+Both scheme blocks carry **the same 46 keys**, and the count is asserted — adding a
+key to one scheme and forgetting the other is the bug that test exists to catch.
 
-* **A state ink sits on step 12, not 11.** Radix guarantees step 11 on step *2* of
-  the same scale; our state inks sit on steps 3 and 4, where 11 measured below the
-  4.5 floor (success 4.21, diff-added 3.93).
-* **The dark brand fill is step 8, and its label is white.** Step 9 is the scale's
-  brightest and glows as a large fill on a near-black ground; step 8 with white
-  measures 4.57:1. Nothing clears 4.5 on step 9 — white is 3.00 there.
-* **Only the light scheme casts shadows.** In dark the whole ladder is `none`, and
-  separation is the hairline plus the surface step: a black shadow on a near-black
-  ground is invisible and still costs a composited layer.
+### Grounds and surfaces
 
-Values are lifted out of the package by a script rather than retyped — the scales
-live under `.dark`/`.light` and this app switches on `:root[data-scheme]`, so they
-cannot be imported as they are.
+Four steps, each tinted rather than merely lighter.
 
-Neutral grounds and neutral text, with the brand green in exactly four places:
-the logo, the primary CTA, progress, and the current step. An interface tinted
-green makes the diff's own red and green harder to read, and Firment's screens
-are mostly diff.
-
-**A contrast ratio is meaningless without its ground.** `#F7F7F5` and `#FFFFFF`
-look like the same white, but they are 0.3 apart on `--ink` and `--muted`. Every
-ratio below names the ground it was measured against, and
-`gui/src/styles/__tests__/tokens.test.ts` asserts the light ones.
-
-### Grounds and text
-
-| Token | Step | What it is |
-|---|---|---|
-| `--bg` | gray-1 | the app ground |
-| `--surface` | gray-2 | panels and bars. One step above the ground, and the hairline is the *second* separator |
-| `surface-raised` | gray-3 | a real step above `--surface` in both schemes. It used to equal `--surface` in light, which is what made a selected row invisible there |
-| `--ink` | gray-12 | the text you read |
-| `--muted` | gray-11 | the second rank: timestamps, model names, paths |
-| `--line` | gray-6 | a hairline and nothing more, not the 3:1 non-text threshold |
-| `--outline` | gray-7 | control borders, one step stronger than `--line` |
-
-Ratios are asserted in `gui/src/styles/__tests__/tokens.test.ts` -- the pair list is
-there, with the numbers, next to the code that fails when one of them moves.
-
-`--muted` is a **neutral grey, never olive** — olive reads as disabled. Its step is
-chosen for headroom rather than for the closest match: the light one measures 5.28 on
-`--surface`, 4.92 on `--bg` and 4.55 with the hover wash under it, so it stays above AA on
-each of the three grounds it actually lands on. A value sitting exactly on the 4.5
-floor would put a muted label under the line the first time the wash changed — and
-"4.51:1 on the page background" is not a number anyone should have to reason about
-twice.
-
-### Brand vs states — separate scales, not a separation rule
-
-| Token | Dark | Light | What it is |
+| Token | dark | light | Use |
 |---|---|---|---|
-| `--brand-acid` | cyan **8** | cyan **11** | the solid fill. The step differs by scheme because a bright fill glows as a large shape on near-black, and a bright one is unreadable as a white label |
-| `--on-acid` | white | white | the label. Measured against the fill it sits on, in both schemes |
-| `--brand-ink` | cyan **11** | cyan **11** | the brand as text. In the light scheme this is a *readable* cyan, so the same hue can be a fill and a label |
-| `--selection` | cyan **5** | cyan **5** | the selected row, on its own step rather than borrowed from the brand |
+| `--bg` | `#090b09` | `#fbfcf8` | the window |
+| `--surface` | `#0d130a` | `#f5f7f0` | a panel: rail, inspector, status bar |
+| `--surface-raised` | `#10160c` | `#edf0e6` | a card, a row, the base of a control |
+| `--code-bg` | `#0a0e07` | `#e9ede1` | a code block nested inside a card |
 
-The brand and the states are separate **scales**, not separate rules. Radix builds
-every step of every hue against the same contrast model, so a brand cyan and a
-status green coexist by construction -- there is no hue-distance rule to enforce,
-and the one this file used to state (85° vs 145°, "60° apart") went with the palette
-it was written for.
+`--code-bg` goes **down**, not further up: the nesting runs ground < panel < card <
+code, so a block inside a card is the darkest surface in it. That is the order the
+landing page builds its showcase in.
 
-**The brand is no longer fill-only.** The acid lime was ~1.8:1 on a light ground, so
-it could never be a label there; cyan-11 on the page is 4.52:1 and can. That is the
-concrete difference the palette change bought, and it is why `--brand-ink` is now the
-same hue as the fill rather than a darker green chosen to be legible.
+The light scheme's `--surface-raised` is a real step from `--surface` (1.07:1) and a
+test pins that they differ, which is the trap that once made a selected row invisible
+in light only.
 
-The brand colour is *identity*; the status colours are *feedback*. They are separate
-scales of the same system, which is what keeps "this is Firment" and "this passed"
-from looking like the same statement.
+### Edges — four weights, and one of them carries a selection
 
-**The light fill is deep enough to be a label; the dark one is not.** Which is why
-`--brand-acid` is cyan-11 in light and cyan-8 in dark, and why the label is white in
-the light scheme and white in the dark one for a different reason -- see the table
-above. Ratios are asserted in `styles/__tests__/tokens.test.ts` rather than quoted
-here, so that a value cannot move without a test failing.
+| Token | dark | light | On | Ratio |
+|---|---|---|---|---|
+| `--line` | `#242c1e` | `#e2e6da` | inside a card | 1.30 / 1.17 |
+| `--border` | `#2f3c25` | `#c8d0b9` | a card's own edge | 1.61 / 1.48 |
+| `--border-strong` | `#3a472e` | `#bcc4ab` | a panel, a window, a field | 1.99 / 1.75 |
+| `--border-active` | `#88b366` | `#6d8c4a` | a selected or running thing | 7.79 / 3.54 |
 
-### Status
+`--border-strong` is the renamed `--outline`: same role, a name that says which tier
+it is. A test asserts the ladder is strictly increasing in both schemes, because two
+of them collapsing to one value is what makes nesting unreadable and no reviewer
+would see it in a diff.
 
-| Token | Step | What it is |
+`--border-active` is not decoration; it is **the** selection signal, because the fill
+cannot be one (see Interaction).
+
+### Text — four levels
+
+| Token | dark | light | On surface | Use |
+|---|---|---|---|---|
+| `--ink` | `#eef1e8` | `#1a1e15` | 16.49 / 15.68 | headings, prose, tool names |
+| `--ink-soft` | `#d3d9c9` | `#3a4230` | 12.73 / 9.71 | secondary prose |
+| `--muted` | `#a9b09f` | `#5c6353` | 8.43 / 5.78 | labels, counts, structure |
+| `--dim` | `#828f70` | `#656c58` | 5.48 / 5.06 | paths, times, counters, an empty state's aside |
+
+There were two (`ink` and `muted`), which meant a path and a heading could only be
+told apart by size. `--dim` is the rung that binds: it is the quietest, and it still
+has to clear AA on a card, on the code block inside it, and on a selection.
+
+**`--muted` is olive now, and that reverses a documented rule.** The old comment read
+`Never olive: reads as disabled.` It was true while the rest of the ramp was neutral —
+an olive grey among neutral greys is the only one that looks switched off. With every
+neutral olive there is nothing left for it to stand out against, so the colour can no
+longer say "disabled" and the second signal is opacity: `--disabled-opacity: 0.55`,
+applied by every `:disabled` rule, listed and checked in `conventions.test.ts`.
+
+### Brand — two values again, and they are not interchangeable
+
+| Token | dark | light | Use |
+|---|---|---|---|
+| `--brand-acid` | `#b4f779` | `#4d7c0f` | the fill; equal to the logo in each scheme |
+| `--on-acid` | `#15200d` | `#ffffff` | the label on that fill (13.28 / 4.99) |
+| `--brand-ink` | `#b4f779` | `#476f0e` | brand-coloured **text** (14.82 / 5.48 on surface) |
+
+They are the same colour only in dark. In light, the logo's own green as text on a
+card ground is 4.33:1 — under AA — so text takes a darker value. This is the same
+trap the old palette had and did not notice: `#107d98` on `--surface-raised` was
+4.18:1.
+
+`--brand-ink` is also what the `brand` icon tone resolves to, which is why that tone
+can exist at all now (see the note in `gui/src/ui/Icon.tsx`; the old palette could not
+afford it, and the rule against it was a measurement rather than a taste).
+
+### Status, diff and steps
+
+Success keeps a **cooler hue than the brand on purpose** — 151° against the lime's
+92°, which is 59° of separation. That is *more* than the cyan brand it replaces had
+against its own success green (190° vs 144° = 46°), so going lime does not blur
+"brand" and "passed".
+
+| Family | dark bg / ink | light bg / ink |
 |---|---|---|
-| `--success-bg` / `--success-ink` / `--success-border` | green **3 / 12 / 7** | a positive result |
-| `--info-bg` / `--info-ink` | blue **3 / 12** | a neutral fact. Blue rather than cyan, because cyan is the brand |
-| `--warn-bg` / `--warn-ink` | amber **3 / 12** | a caution |
+| success | `#16240f` / `#5fd39b` | `#dff0d8` / `#1f6b41` |
+| info | `#0e1c2a` / `#9fd0f5` | `#e6f0f8` / `#14456b` |
+| warn | `#2a2008` / `#ffd98a` | `#fdf3d2` / `#6b4a06` |
+| diff added | `#16230d` / `#c9e8a2` | `#e4f3d5` / `#24400f` |
+| diff removed | `#2e1216` / `#ffbcc2` | `#fbe0e3` / `#6d1a20` |
 
-Status colours are their own scales -- green, amber, blue, red -- and each is used by
-role rather than by hue proximity: `--success-ink` is the green text step, `--warn-ink` the
-amber one, and the pairs are asserted in `styles/__tests__/tokens.test.ts` rather than
-quoted here.
+`--diff-meta-ink` is `--muted`: a hunk header is structure, not content.
 
-**A dark status ink does not transfer to light, which is why the ink is a step and
-not a value.** An amber bright enough to read on near-black is about 2:1 on white;
-the light scheme takes a different step of the same scale. This is what "the dark
-scales are designed rather than inverted" means in practice.
-
-### Diff
-
-| Token | Step | What it is |
-|---|---|---|
-| `--diff-added-bg` / `--diff-added-ink` | green **4 / 12** | an added line |
-| `--diff-removed-bg` / `--diff-removed-ink` | red **4 / 12** | a removed line |
-| `--diff-meta-ink` | gray **11** | hunk headers and context |
-
-Diff colours are their own family rather than reusing the status colours: an added
-line and a passed check are not the same message.
-
-A tool card also shows the counts — `+12 -3` — in this family, right-aligned in the
-header. They are counted over the diff body only, skipping the "Edited `<path>`"
-line the body drops, and **not** by borrowing the TUI's number: `lib/diff.ts` records
-that the TUI counts the whole body and so reports one *removed* line too many, which
-makes "match the TUI" the wrong target. The number worth hitting is the one the diff
-actually contains.
+The three step states are derived rather than invented — `--step-done-*` is
+`--diff-added-*` and `--step-failed-*` is `--diff-removed-*`, the same message at two
+sizes, and a test pins that they stay shared. `--step-rule` is a shape rather than
+text, so it only owes 3:1; in light it is `#6d8c4a` (3.71:1 on `--bg`) because the
+acid would be 4.85:1 as a *fill* and a 2px rule is not a fill.
 
 ### Interaction
 
-| Token | Dark | Light | Notes |
+| Token | dark | light | Note |
 |---|---|---|---|
-| `--hover` | gray-alpha **4** (a translucent white) | gray **4** | the hover and pressed wash. It is a *wash*, not a grey: an opaque step on near-black reads as mud because no light passes through it |
-| `--selection` | cyan **5** | cyan **5** | the chosen row -- the step Radix documents for exactly this |
-| `--on-selection` | gray **12** | gray **12** | text and icons inside it |
-| `--focus-ring` | cyan **8** | cyan **10** | keyboard focus. Step 8 is the documented ring, but cyan-8 on white is 2.32:1 -- under the 3:1 a ring needs -- so the light scheme uses a deeper step |
-| `--outline` | gray **7** | gray **7** | the border on a card, chip or control. `--line` is gray **6**, one step quieter, and they are distinct values now rather than one merged in |
-| `wash-resting` | a translucent white | `transparent` | an icon-only control on a bar. A value, not a branch: the dark scheme wants something under it, the light one does not |
-| `field-bg` | a translucent white | `var(--surface)` | the same reasoning, for field backgrounds |
-| `--shadow-sm` | `none` | `0 1px 2px rgba(16,24,40,.06)` | a control that means "press me" |
-| `--shadow-md` | `none` | `0 4px 12px rgba(16,24,40,.08)` | transient overlays |
-| `--shadow-lg` | `none` | `0 12px 32px rgba(16,24,40,.12)` | what dims the page behind it |
+| `--hover` | `#ffffff24` | `#e6ebdc` | a wash, not a grey |
+| `--wash-resting` | `#ffffff14` | `transparent` | a control with nothing else to sit on |
+| `--field-bg` | `#ffffff0f` | `--surface` | a translucent white, never an opaque grey |
+| `--selection` | `#1a2613` | `#dff0c2` | an active surface |
+| `--on-selection` | `#eef1e8` | `#1a1e15` | text on it (13.82 / 14.01) |
+| `--focus-ring` | `#b4f779` | `#476f0e` | ≥3:1 as a shape, in both |
 
-**The selected row has its own step.** It used to be the brand fill, and the pair
-that fill needed (`--on-acid` on `--brand-acid`) had to be re-derived per scheme, because
-a fill that reads well on near-black is a smear on cream. Radix gives selection a
-step of its own, so this is no longer a pair that has to hold together -- it is a
-background, with the ordinary ink on top. One rule survives from that arrangement
-and is enforced by `styles/__tests__/tokens.test.ts`:
+**`--selection` is a surface and the fill is auxiliary.** Its value is the darkest
+fill that still holds all four text levels at AA on top of it. A more visible fill
+(1.43:1 against a row's ground instead of 1.17) drops `--dim` to 3.74 and fails. What
+marks a selection is `--border-active`. Note also that `--selection` is not only a
+selected row: the running tool card, the verdict band and a pressed icon button all
+use it, so "what gets painted on it" is a longer list than "what a row contains" —
+check all of them before changing it. Every one of those pairs is in the test table.
 
-- text and icons inside a selected row read `--on-selection`, **never** `--ink`;
-- a chip that lands on a selected row inverts to the pair, because every status
-  pair in the table is measured against `--bg`/`--surface` and neither of those is the
-  ground under it.
+`--hover` and `--wash-resting` are translucencies rather than greys because an opaque
+grey on a near-black ground is mud: no light passes through it. Light has no need of
+the wash, where the ground and the hairline already give a control an edge.
 
-The dark hover is **translucent, and that is the whole point of it.** It was
-briefly an opaque grey step after the palette moved, and it read as a flat panel
-laid on the row rather than a change in the row: nothing passes through an opaque
-wash on a near-black ground. Radix ships alpha scales for exactly this, and the
-difference between `#ffffff1b` and `#2a2a2a` is the difference between "lit" and
-"painted on".
+## Button weight — four tiers
 
-The focus ring is **step 8 in dark and step 10 in light**. Step 8 is the step Radix
-documents for a ring, and cyan-8 on white measures 2.32:1 -- under the 3:1 a ring
-needs, which is the one contrast floor that is about a *graphic* rather than text.
-The light scheme takes a deeper step and clears it.
-
-**`--outline` is a grey in both schemes, and the shadow is the second separator.**
-It used to be `#000000` in both, carrying the neo-brutalist frame: 2px and 3px
-borders with a hard offset block (`3px 3px 0`) behind them. That layer is gone.
-Two surfaces are now told apart by a hairline first and a shadow second, so
-`--shadow-sm` sits under raised rows and `--shadow-md`/`--shadow-lg` are reserved for
-things that genuinely overlap live content. The name `--outline` survived the
-change because ~60 call sites read it and they all mean the same thing by it —
-"the border on this thing" — but it carries no brand meaning any more.
-
-The light shadows are wider and much lower-alpha than the dark ones on purpose:
-the same black that reads as depth on `#0F0F12` reads as dirt on `#F7F7F5`.
-
-### Steps
-
-The build / flash / monitor progress row. Three visible states plus an unknown
-one, and the row is **never interactive**: no hover, no pointer, no click target.
-A progress row that looks pressable becomes a control that does nothing.
-
-| State | Dark | Light | Light ratio on `--bg` |
-|---|---|---|---|
-| done | green **4** fill, green **11** ink | green **4** fill, green **11** ink | measured |
-| failed | red **3** fill, red **11** ink | red **3** fill, red **11** ink | measured |
-| current | no fill, `--ink`, a 2px brand rule | no fill, `--ink`, a 2px brand rule | the rule is the brand fill in each scheme |
-| pending | transparent, gray **12** ink | transparent, gray **12** ink | measured |
-| unknown | transparent, `--muted` ink, `○` | same | — |
-
-Two rules matter more than the values:
-
-- **A pending step stays legible.** It reads as "not yet", not as "unavailable",
-  so it keeps the pending ink rather than being greyed to disabled.
-- **Unknown is not failure.** It renders `○` with muted ink and never `✗`; red is
-  reserved for a real error, and a step nobody has measured yet is not one.
-
-`failed` is the one state that may be red, and it borrows the removed-diff pair
-rather than introducing a fourth red: "this broke" and "this was taken out" are
-the same message at different sizes. Only `done` and `failed` are filled — they
-are the only two states whose outcome is already known.
-
-The row is **derived from the turn's tool calls** (`gui/src/lib/steps.ts`), not
-tracked as its own state, so it cannot disagree with the tool cards next to it. A
-turn that never built anything shows no row at all, and a later attempt
-supersedes an earlier one: a build that failed and then passed reads as `done`.
-
-## Button weight — three tiers
-
-Weight is carried by **colour and fill, never by size**: all three tiers are the
-same height and sit level on a row.
+Weight is carried by **colour and fill, never by size**: every tier is the same height
+and sits level on a row.
 
 | Tier | Treatment |
 |---|---|
 | primary | `--brand-acid` fill, `--on-acid` label |
-| secondary | `--surface` fill, `--outline` hairline |
-| tertiary | no chrome, a `--muted` label and a chevron |
+| secondary | `--hover` fill, `--border-strong` hairline |
+| ghost | no chrome, `--muted` label, `--ink` when it is an icon-only button |
+| danger | `--step-failed-bg` fill, `--step-failed-ink` label |
 
-All three tiers are the layer's own `Button`, so their hover, active, disabled
-and loading states come from `Button.module.css` and nothing else.
+All four are the layer's own `Button`, so hover, active, disabled and loading come
+from `Button.module.css` and nowhere else.
 
-The fill and its label are not chosen per call site: the tier rules read
-`--brand-acid` and `--on-acid` from `tokens.css`, and the pair is asserted there.
-A fill and an ink taken from different tokens is what once put near-white text
-on the filled user bubble (about 1.3:1, in the dark scheme only). The bubble is
-text now, so that assertion moved with the fill -- but the lesson is the one
-this file is for: a fill and its ink have to be a measured pair, or they are
-accidentally correct in one scheme and wrong in the other.
+**A fill and its ink are never chosen per call site**, and the pair is asserted in
+tokens.test.ts. A fill and an ink taken from different tokens is what once put
+near-white text on a filled user bubble — about 1.3:1, in the dark scheme only.
 
 ## Type
 
-Two tracking tokens, because they are two decisions: `--tracking-label` (0.12em,
-positive) for uppercase micro-labels — a session kind, a pin, a status — and
-`--tracking-display` (-0.02em, negative) for the wordmark. One value used for both
-would have been a coincidence wearing a system's clothes.
+Two tracking tokens for two decisions: `--tracking-label` (0.16em, positive) for
+uppercase Latin micro-labels, and `--tracking-display` (−0.02em, negative) for the
+wordmark. One value used for both would have been a coincidence wearing a system's
+clothes. `--tracking-title` (−0.4px) is the heading rung; `--tracking-cjk` (0.02em)
+exists because **0.16em is designed for uppercase Latin** and reads as a line of
+separated characters under CJK.
 
 Uppercase is a rule rather than a typed string: `Chip` takes `upper`, which sets
-`text-transform` and the label tracking in CSS. It is scoped to labels — a small
-chip is just as likely to hold a path, and `PA5` is a token before it is a word.
+`text-transform` and the label tracking in CSS. It is scoped to labels — a small chip
+is just as likely to hold a path, and `PA5` is a token before it is a word.
 
 | Surface | Token | Stack |
 |---|---|---|
-| GUI | `--ff-sans` | `'Geist Variable', system-ui, -apple-system, 'Segoe UI', sans-serif` |
-| GUI | `--ff-mono` | `'JetBrains Mono Variable', 'Cascadia Code', Consolas, monospace` |
+| GUI | `--ff-sans` | `'DM Sans Variable', 'MiSans', 'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', system-ui, 'Segoe UI', sans-serif` |
+| GUI | `--ff-mono` | `'IBM Plex Mono', 'Sarasa Mono SC', 'Microsoft YaHei UI', 'Cascadia Mono', Consolas, monospace` |
 | Web | `--font-sans-stack` | `'Inter', 'Noto Sans SC', system-ui, -apple-system, 'Segoe UI', sans-serif` |
 | Web | `--font-mono-stack` | `'JetBrains Mono', 'Noto Sans SC', 'Cascadia Code', Consolas, monospace` |
 
-UI text and code are separate. The GUI previously set the whole interface in a
-monospace, which made every label shout.
+**Prose and code are separate, and the line is drawn by voice rather than by
+element.** Text a person reads — a heading, a paragraph, a button's label — is the
+sans face. Everything the machine reports is the mono face: a tool name, a path, a
+duration, a counter, a tab label, a step's name. The rule that used to live here,
+"setting UI text in a monospace makes every label shout", was written against a tree
+where prose *and* chrome were monospace, which is a page of equal-width text.
+Monospace for the machine's half is the opposite of shouting — it is how a report is
+told apart from a sentence. `conventions.test.ts` holds the list of machine-voice
+files so the split cannot rot quietly.
 
-**The GUI bundles its two faces and names no CJK one, on purpose.**
-`@fontsource-variable/*` carries Geist and JetBrains Mono; Chinese is left to
-`system-ui`, because a bundled CJK face is megabytes of glyphs the system already
-has. The cost is that Chinese renders slightly differently on each platform, which
-is accepted rather than overlooked.
+**The GUI names a CJK face and bundles none.** `system-ui` alone is what produced the
+complaint that started this: Latin rendered in the bundled face and Chinese in
+whatever the platform picked, so one line of mixed text had two faces in it. Naming
+`'Microsoft YaHei UI'` (which hints better at small sizes than plain `YaHei`),
+`'PingFang SC'` and `'Noto Sans CJK SC'` costs nothing and fixes the mixture; bundling
+one would cost megabytes for glyphs the system already has.
 
-**Neither GUI stack names Inter, and that decision has a test behind it.** Inter was
-declared for two redesigns and never shipped, so for a while the app rendered the
-system font while its tokens claimed otherwise; `styles/__tests__/tokens-css.test.ts`
-fails when someone reaches for the familiar name again. Loading a font and naming one
-are different acts.
+**The first family in each stack is the name the package declares.** The variable
+packages ship `'<Name> Variable'` and the static ones the plain name — `--ff-sans`
+said `'DM Sans'` for a while, which matched nothing, so the app fell back to the
+system face while the token claimed otherwise. That is the Inter failure again, and
+`tokens-css.test.ts` now reads the declared name out of the package itself.
 
-Web is the opposite case: Inter arrives through `next/font`, so its stacks name it,
-and `'Noto Sans SC'` is listed explicitly so Chinese does not fall back to Microsoft
-YaHei and sit visibly wrong beside the Latin text. Its variables are `--font-*-stack`
-rather than `--font-sans`/`--font-mono` for a reason worth keeping: a `font-family` on
-`:root` would silently override what `next/font` set up in `app/layout.tsx`.
+Fonts arrive as `@fontsource-variable/dm-sans/wght.css` plus `latin-400.css` and
+`latin-600.css` of `@fontsource/ibm-plex-mono` — IBM Plex Mono has no variable release,
+so it is imported one weight at a time, and only `latin`. Anything outside `latin`,
+CJK included, falls through to the named faces in the stacks above.
+
+`--lh-body` is 1.85, measured off the landing page's own prose (14/25.9, 11/20.35,
+12/22.8). It is the one value in this palette that is inherited rather than derived;
+1.75 is the usual Chinese answer if it ever reads too loose.
+
+### The size scale
+
+| Token | Value | Role |
+|---|---|---|
+| `--fs-micro` | 10px | uppercase micro-labels, counters |
+| `--fs-meta` | 11px | chips, tags, tab labels, timestamps, mono paths |
+| `--fs-minor` | 12px | tool args, session meta, the status bar |
+| `--fs-body` | 13px | **default**: prose, inputs, log lines, card titles |
+| `--fs-ui` | 14px | control labels, the active inspector tab |
+| `--fs-read` | 15px | text you read: the transcript |
+| `--fs-title` | 17px | a card's or a panel's heading |
+| `--fs-display` | 28px | the wordmark, and nothing else |
+
+`--fs-title` is the rung that was missing: the scale used to run 10–15 and jump
+straight to 28, so a card title had nowhere to go and the tool card shipped its title
+at `--fs-minor` — smaller than the body text beside it.
 
 ## Radius
 
 | Token | Value | Use |
 |---|---|---|
-| `--r-chip` | `4` | Badges, chips, tooltips |
-| `--r-control` | `6` | Inputs, buttons, selectable rows |
-| `--r-panel` | `8` | Cards, panels, modals — and the logo tile, the other shape that shares this corner |
-| `--r-round` | `999` | Pills, dots, avatars |
+| `--r-chip` | `3` | badges, chips, counters, the phase pill |
+| `--r-inset` | `4` | a code block nested inside a card |
+| `--r-btn` | `5` | buttons, selected rows, icon squares |
+| `--r-card` | `6` | a card's own corner |
+| `--r-control` | `6` | inputs and other controls |
+| `--r-panel` | `8` | panels, modals — and the logo tile, the other shape that shares this corner |
+| `--r-round` | `999` | pills, dots, avatars |
 
 Not one value everywhere: a small chip needs to stay crisp, a large panel needs
 softness. `0` everywhere reads as unfinished rather than deliberate; `12` on a dense
 panel reads as loose, and `12` on a control starts to look like a pill.
 
-**A fourth tier named `tile` (8) is gone, and so is `brand` (0).** `tile` only ever fed
-an antd component token, so a rounded 16px tile could sit next to a 12px cut corner —
-the "five competing boxes" problem again. The logo tile takes `--r-panel` now and there
-is nothing left to keep in step. `brand` (0) meant "the brand anchor stays hard-edged",
-which was the neo-brutalist frame speaking: once the black outline around a card went
-away, a 0 on that card read as an unfinished box rather than a deliberate one, so the
-tiles round like everything else and the tier is named for what it is.
+`--r-card` and `--r-control` hold the same number and are still two names, because a
+card and a control are different objects that happen to share a corner — measured off
+the landing page they are 6 and 5, with the tags at 3 and the windows at 8. Keeping
+them apart means a change to one cannot drag the other.
 
-Applied by element, not by habit: badges and chips take `--r-chip`, alerts, inputs,
-buttons and selectable rows take `--r-control`, cards and panels take `--r-panel`.
-
-`gui/src/styles/__tests__/no-literal-tokens.test.ts` enforces the token layer, not just
-the radius: no literal corner radius, no literal hex colour and no hand-written font
-stack anywhere in the TypeScript under `gui/src`. The claim that there is one place a
-design value is written down decays one inline literal at a time, so it is asserted
-rather than trusted.
-
-What it does **not** read is the stylesheets — it globs `.ts`/`.tsx` only. A bare `px`
-in a `.module.css` is legal by design, because a component's own padding is not a design
-token; a colour there is expected to be a `var(--…)` reference. That half is convention
-rather than a gate, which is worth knowing before trusting a green suite to have caught
-it.
+`no-literal-tokens.test.ts` enforces the token layer, not just the radius: no literal
+corner radius, no literal hex colour and no hand-written font stack anywhere in the
+TypeScript under `gui/src`. What it does **not** read is the stylesheets — it globs
+`.ts`/`.tsx` only. A bare `px` in a `.module.css` is legal by design, because a
+component's own padding is not a design token; a colour there is expected to be a
+`var(--…)` reference. That half is convention rather than a gate.
 
 ## Motion
 
@@ -372,6 +310,11 @@ it.
   terminal where the spinner still is not worth the repaints. See
   `crates/firment-tui/src/motion.rs`.
 
+These numbers were left alone by the restyle, and that was a decision rather than an
+omission: the landing page's own motion is three keyframes and a flat 200ms (a 3–4px
+rise plus a fade on entry, a 2s soft blink for a caret), which is *coarser* than this
+ramp, not finer. There was nothing here to adopt.
+
 ## State semantics
 
 Three states must be visually distinct, and **red is reserved for real errors**:
@@ -384,3 +327,7 @@ Three states must be visually distinct, and **red is reserved for real errors**:
 
 The rule for any new panel: **unconfigured → hidden entirely; configured but empty
 → neutral copy; only a real failure → red.**
+
+A disabled control is a fourth thing, and it is not a state: it is dimmed by
+`--disabled-opacity` (0.55) in addition to whatever colour change the tier makes,
+because with an all-olive ramp colour alone is no longer a signal.

@@ -28,6 +28,27 @@ const MATCHED = Object.entries(SOURCES);
 const css = MATCHED[0]?.[1] ?? '';
 
 /**
+ * The two font packages, read from where they are installed.
+ *
+ * A glob into `node_modules`, because the family a package declares is a fact
+ * about the dependency rather than about this file -- and it is the fact a font
+ * stack gets wrong. `'Geist Variable'` matched `@fontsource-variable/geist`;
+ * `'DM Sans'` does not match `@fontsource-variable/dm-sans`, which declares
+ * `'DM Sans Variable'`, and the browser's answer to a name nobody ships is to fall
+ * back without saying so.
+ */
+const MATCHED_FONTS = import.meta.glob(
+  [
+    '../../../node_modules/@fontsource-variable/dm-sans/wght.css',
+    '../../../node_modules/@fontsource/ibm-plex-mono/latin-400.css',
+  ],
+  { query: '?raw', import: 'default', eager: true },
+) as Record<string, string>;
+
+/** The first family in a stack -- the one that has to exist -- with its quotes off. */
+const firstFamily = (stack: string) => (stack.split(',')[0] ?? '').trim().replace(/^'|'$/g, '');
+
+/**
  * Values are compared after whitespace is normalised, because the two sides of a
  * comparison are written for different readers: a hex in a scheme block, and a
  * `var()` or an `rgba()` a call site would keep readable at 3am. Both are the same
@@ -176,12 +197,33 @@ describe('tokens.css number scales', () => {
     expect(shared.get('--tracking-cjk')).toBe('0.02em');
   });
 
+  it('asks for the family name the imported package actually declares', () => {
+    // The trap this exists for has now been walked into twice. The old palette
+    // declared Inter for two redesigns and never bundled it, so the app rendered
+    // the system font while its tokens claimed otherwise. This restyle declared
+    // `'DM Sans'`, which is not what `@fontsource-variable/dm-sans` ships -- the
+    // variable packages declare `'<Name> Variable'` -- so the browser matched
+    // nothing and fell back, silently, with every test green.
+    //
+    // Reading the package is the only way to check it: the name is a fact about the
+    // dependency, not about this file.
+    expect(Object.keys(MATCHED_FONTS)).toHaveLength(2);
+    const declared = Object.values(MATCHED_FONTS)
+      .flatMap((css) => [...css.matchAll(/font-family:\s*'([^']+)'/g)].map((m) => m[1]));
+    expect(new Set(declared)).toEqual(new Set(['DM Sans Variable', 'IBM Plex Mono']));
+    // And the tokens have to name exactly those, first in their stacks.
+    expect(firstFamily(shared.get('--ff-sans') ?? '')).toBe('DM Sans Variable');
+    expect(firstFamily(shared.get('--ff-mono') ?? '')).toBe('IBM Plex Mono');
+  });
+
   it('bundles DM Sans and IBM Plex Mono, and never names Inter', () => {
     // Inter was declared for two redesigns and never shipped, so for a while the
     // app rendered the system font while its tokens claimed otherwise. Naming a
     // font is not loading one, and the answer is not a comment: it is a test that
     // fails when someone reaches for the familiar name again.
-    expect(shared.get('--ff-sans')).toContain('DM Sans');
+    // `Variable` in the name, and that is not decoration: `toContain('DM Sans')`
+    // passed for the whole restyle while the stack matched no installed face.
+    expect(shared.get('--ff-sans')).toContain('DM Sans Variable');
     expect(shared.get('--ff-mono')).toContain('IBM Plex Mono');
     expect(shared.get('--ff-sans')).not.toMatch(/Inter/i);
     expect(shared.get('--ff-mono')).not.toMatch(/Inter/i);

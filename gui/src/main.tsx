@@ -2,14 +2,31 @@ import { lazy, Suspense } from 'react';
 import ReactDOM from 'react-dom/client';
 
 import App from './App';
-/* The two typefaces, bundled by Vite as woff2 rather than named and hoped for.
-   Both are variable, so one file each covers every weight the layer asks for.
-   `wght.css` references every subset fontsource ships and gives each one its own
-   `unicode-range`, which means the browser fetches latin and nothing else -- and
-   Chinese falls through to the system font, which is the only affordable answer:
-   a bundled CJK face is megabytes. */
-import '@fontsource-variable/geist/wght.css';
-import '@fontsource-variable/jetbrains-mono/wght.css';
+/*
+ * The two typefaces, bundled by Vite as woff2 rather than named and hoped for.
+ *
+ * They are not the same kind of package, and the imports say so:
+ *
+ * * **DM Sans is variable**, so one file covers every weight the layer asks for
+ *   and `wght.css` is the whole story -- the same shape the Geist import had.
+ * * **IBM Plex Mono has no variable release**, so it is imported one weight at a
+ *   time. Two, because those are the two the layer uses: `--fw-book` (400) for
+ *   everything and `--fw-label` (600) for the counts, the review badge and a hunk
+ *   header. A weight that is not loaded is not a fallback, it is a *synthesised*
+ *   one -- the browser smears the 400 outlines -- which is why this is a short
+ *   list rather than `index.css`, which would pull all seven weights and every
+ *   subset with them.
+ *
+ * `latin` only, deliberately. Fontsource's other subsets are cyrillic, greek and
+ * vietnamese; bundling them costs their weight in the installer for glyphs this
+ * app never draws, and anything outside `latin` -- including every CJK glyph --
+ * falls through to the named faces in `--ff-mono` / `--ff-sans` anyway. That
+ * fallback is the reason those stacks name a CJK face instead of trusting
+ * `system-ui` to pick one.
+ */
+import '@fontsource-variable/dm-sans/wght.css';
+import '@fontsource/ibm-plex-mono/latin-400.css';
+import '@fontsource/ibm-plex-mono/latin-600.css';
 /**
  * `?showcase=1` opens the primitive gallery instead of the app.
  *

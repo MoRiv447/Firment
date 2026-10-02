@@ -309,8 +309,16 @@
    *
    * Neither stack names Inter. That is a decision, not an oversight -- see the test
    * in `styles/__tests__/tokens-css.test.ts`, which exists so it stays one.
+   *
+   * **The first family in each stack is the name the package declares**, and that is
+   * not a detail: the variable packages ship `'<Name> Variable'` and the static ones
+   * ship the plain name. `--ff-sans` said `'DM Sans'` for the whole of this restyle,
+   * which matched nothing, so the app fell back to the system face while the token
+   * claimed otherwise -- the exact failure the old palette shipped with Inter, and
+   * one that no type-check or unit test can see. It took a browser to find; the gate
+   * in `tokens-css.test.ts` now reads the declared name out of the package itself.
    */
-  --ff-sans: 'DM Sans', 'MiSans', 'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', system-ui, 'Segoe UI', sans-serif;
+  --ff-sans: 'DM Sans Variable', 'MiSans', 'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', system-ui, 'Segoe UI', sans-serif;
   --ff-mono: 'IBM Plex Mono', 'Sarasa Mono SC', 'Microsoft YaHei UI', 'Cascadia Mono', Consolas, monospace;
 
   /*
