@@ -1,0 +1,46 @@
+/*
+ * The band that ends a turn.
+ *
+ * `--border-active` and `--selection` -- the same pair a running card and a
+ * selected row use -- because this is the interface saying "this is the one line
+ * to look at", and that is the same signal, not a new one. A third green would
+ * have been a fourth thing competing for the eye at the bottom of a transcript.
+ *
+ * The failed tone keeps the shape and swaps only the edge: the sentence above it
+ * already says what failed, and a red fill would grade the whole turn as an error
+ * when most of it passed.
+ */
+.band {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  box-sizing: border-box;
+  padding: 8px 11px;
+  border: 1px solid var(--border-active);
+  border-radius: var(--r-card);
+  background: var(--selection);
+  color: var(--ink-soft);
+  font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
+  font-size: var(--fs-meta);
+}
+
+.band[data-tone='failed'] {
+  border-color: var(--step-failed-ink);
+  background: transparent;
+}
+
+.text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The clock goes to the far edge by `margin-inline-start: auto`, the same one rule
+   the card header's counts use, so nothing here measures the row. */
+.time {
+  margin-inline-start: auto;
+  padding-inline-start: var(--sp-2);
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

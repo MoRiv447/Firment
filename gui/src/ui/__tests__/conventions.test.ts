@@ -245,6 +245,7 @@ describe('Primitive layer and shell conventions', () => {
       'tool-run',
       'transcript',
       'turn-timeline',
+      'turn-verdict',
       'user-bubble',
       'wordmark',
     ]);

@@ -5,6 +5,7 @@ import { LiveRun } from '../components/LiveRun';
 import { Markdown } from '../components/Markdown';
 import { MessageList } from '../components/MessageList';
 import { StepProgress } from '../components/StepProgress';
+import { TurnVerdict } from '../components/TurnVerdict';
 import { formatDuration } from '../lib/format';
 import { shouldShowStallNotice, stallNotice } from '../lib/stallHint';
 import { workflowSteps } from '../lib/steps';
@@ -308,6 +309,18 @@ export function ChatView({
               </details>
             )}
             {!!turn?.text && <Markdown>{turn.text}</Markdown>}
+            {/*
+              The sentence at the end of the turn. Only once there are cards to
+              summarise: a turn that answered in prose alone has no workflow to
+              grade, and a band above nothing would be a verdict on no evidence.
+            */}
+            {turn && Object.values(turn.tools).length > 0 && (
+              <TurnVerdict
+                tools={Object.values(turn.tools)}
+                now={nowMs}
+                turnStartedAt={turn.startedAt}
+              />
+            )}
           </>
         ) : (
           <EmptyState
