@@ -68,6 +68,20 @@
 }
 
 /*
+ * And no drag grip, which is the part of a bare field you can see.
+ *
+ * A `<textarea>` is `resize: vertical` here, and the browser draws its own grip in the
+ * bottom-right corner of the control. Inside the frame that is the whole reason this
+ * variant exists, that corner is the middle of somebody else's box -- it landed just
+ * above the composer's Send button as a white diagonal glyph, the one thing on screen
+ * that belonged to no design. The field already grows with `maxRows`, so the grip was
+ * also a second way to make the same box taller.
+ */
+.frame[data-bare='true'] [data-ui='textarea'] {
+  resize: none;
+}
+
+/*
  * The one box that grows: `TextArea` sets `data-grow` and hands up a line count,
  * so the composer follows what someone typed instead of scrolling inside two
  * rows. The cap is a count multiplied by the frame's own line height, which is

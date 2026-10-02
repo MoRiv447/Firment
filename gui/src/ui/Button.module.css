@@ -240,16 +240,34 @@
   background: transparent;
   color: var(--muted);
   cursor: not-allowed;
-  /* The second disabled signal. `--muted` is olive now, so colour alone
-     cannot say "switched off" any more -- see the header of tokens.css. */
+}
+
+/*
+ * Everything but the filled tier dims by one shared amount.
+ *
+ * `--disabled-opacity` is the second signal the whole interface uses, because with an
+ * all-olive ramp a colour change alone can no longer mean "switched off" (see the
+ * header of tokens.css). The primary is the exception and it is a measurement, not a
+ * preference: this tier is the only one whose disabled state is *mostly* what you
+ * see -- an empty composer is the normal state of a composer -- so it gets a measured
+ * pair instead. Dropping the alpha over it would put both halves of that pair on the
+ * same road to the ground, and in light the two meet: white ink on the pale dim fill
+ * is 2.3:1.
+ */
+.root[data-tier='ghost']:disabled,
+.root[data-tier='secondary']:disabled,
+.root[data-tier='quiet']:disabled,
+.root[data-tier='danger']:disabled {
   opacity: var(--disabled-opacity);
 }
 
 .root[data-tier='primary']:disabled {
-  /* Still a fill, still readable, just spent: the acid at 24% over the page
-     ground is the same "this CTA is waiting for something" as a disabled row. */
-  background: color-mix(in srgb, var(--brand-acid) 24%, var(--bg));
-  color: var(--muted);
+  /* Still a fill, still the acid, still readable -- just spent. `--brand-acid-dim`
+     exists because the obvious version of this rule, the acid mixed 24% into the
+     ground, is a muddy olive in dark that reads as a grey pill rather than as the
+     button it is. */
+  background: var(--brand-acid-dim);
+  color: var(--on-acid-dim);
 }
 
 /* ------------------------------------------------------------------ */

@@ -79,10 +79,24 @@ describe('ChatView: the three states of the transcript', () => {
 });
 
 describe('ChatView: the composer', () => {
-  it('has the field, and the action is not offered when there is nothing to send', () => {
+  it('has the field, and the action is offered even when the field is empty', () => {
+    // It is not disabled on an empty field, and that is a measurement rather than a
+    // preference: the design's send button is the solid acid, and in light a fill
+    // pale enough to keep a dark ink readable stops looking green at all. So the
+    // field's emptiness is not a state of this button -- `send()` returns on an empty
+    // input either way, and the disabled state is kept for the places it means
+    // something real (`SerialView`'s Start, while the port is not open).
     setup();
     expect(screen.getByRole('textbox', { name: 'Ask the agent' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    const send = screen.getByRole('button', { name: 'Send' });
+    expect(send).toBeEnabled();
+    expect(send).toHaveAttribute('data-tier', 'primary');
+  });
+
+  it('sends nothing when the field is empty', () => {
+    const { onSend } = setup();
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(onSend).not.toHaveBeenCalled();
   });
 
   it('offers Stop instead of Send while running', () => {

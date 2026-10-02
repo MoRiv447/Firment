@@ -120,7 +120,11 @@ describe('tokens.css structure', () => {
     // more edge weights (`border`, `border-active` -- the second carries a
     // selection, which a fill cannot), and `code-bg`, the surface a code block
     // nested inside a card sits on.
-    expect(customProps(dark).length).toBe(46);
+    //
+    // 46 -> 48 on 2026-10-02: `--brand-acid-dim` / `--on-acid-dim`, the filled
+    // button's spent state as a measured pair. It cannot be an opacity, because the
+    // two schemes need opposite directions -- see the note in the file.
+    expect(customProps(dark).length).toBe(48);
   });
 
   it('has a light scheme whose raise step is real', () => {

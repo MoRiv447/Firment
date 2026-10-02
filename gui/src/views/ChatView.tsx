@@ -380,11 +380,28 @@ export function ChatView({
                 </button>
               </span>
               {running ? (
-                <Button tier="danger" icon={Square} onClick={onCancel}>
+                <Button tier="danger" size="sm" icon={Square} onClick={onCancel}>
                   Stop
                 </Button>
               ) : (
-                <Button tier="primary" icon={Send} onClick={send} disabled={!input.trim()}>
+                /*
+                 * Not disabled on an empty field.
+                 *
+                 * It used to be, and the reason it is not is a measurement: the
+                 * design's send button is the solid acid, and a *dimmed* acid cannot
+                 * be both weaker and still green. In dark the spent fill has to be
+                 * 70% of the acid to stay recognisable, and in light a fill pale
+                 * enough to keep a dark ink readable stops looking green at all --
+                 * the two schemes pull in opposite directions, which is exactly what
+                 * `--brand-acid-dim` records. So the field's emptiness is not a state
+                 * of this button: `send()` already returns on an empty input, and
+                 * what the button would do is nothing either way.
+                 *
+                 * The disabled state still exists and still matters where it means
+                 * something real -- `SerialView` disables its Start while the port is
+                 * not open, and that is the button a reader needs to see as spent.
+                 */
+                <Button tier="primary" size="sm" icon={Send} onClick={send}>
                   Send
                 </Button>
               )}

@@ -95,6 +95,12 @@ describe('text is readable on every ground it is used on', () => {
     ['dark brandInk on surface', D.brandInk, D.surface, 14.82],
     ['onAcid on brandAcid light', Lt.onAcid, Lt.brandAcid, 4.99],
     ['onAcid on brandAcid dark', D.onAcid, D.brandAcid, 13.28],
+    // The spent fill, as its own pair. This is what an empty composer shows, which is
+    // most of the time -- and the light value used to be a `color-mix` at 24%, which
+    // came to 4.40:1. Nobody had measured it, because a rule that mixes two colours
+    // is not a pair the table can name.
+    ['onAcidDim on brandAcidDim light', Lt.onAcidDim, Lt.brandAcidDim, 4.80],
+    ['onAcidDim on brandAcidDim dark', D.onAcidDim, D.brandAcidDim, 6.66],
     // Status and the two diff families -- the step states share their values
     // with the diff one, so these also pin that they stay shared.
     ['light successInk on successBg', Lt.successInk, Lt.successBg, 5.43],

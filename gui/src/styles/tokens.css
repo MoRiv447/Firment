@@ -90,6 +90,27 @@
                                         enough for lime text. Light cannot: see
                                         the light block. */
 
+  /*
+   * The acid, spent.
+   *
+   * A pair rather than `--brand-acid` at an opacity, because the two schemes need
+   * different answers and opacity cannot give them: a fill and an ink dimmed together
+   * collapse toward each other, and in light that is fatal -- the acid at 24% over
+   * `--bg` is `#d1ddc0`, where the white ink reads 1.42:1 and even `--muted` only
+   * reaches 4.40:1.
+   *
+   * So each scheme says what "the send button, not available yet" looks like, and the
+   * dark one is the reason these exist: 24% over a near-black ground is `#324424`,
+   * a muddy olive that reads as a grey pill rather than as this button. 70% is
+   * `#81b057` -- unmistakably the same button, clearly weaker -- and the same near
+   * black ink still clears AA on it at 6.66:1.
+   *
+   * This is the button a reader sees almost all of the time, because an empty
+   * composer is the normal state, so it is worth a measured pair of its own.
+   */
+  --brand-acid-dim: #81b057;
+  --on-acid-dim: #15200d;            /* 6.66:1 on the dim fill */
+
   /* Status. Success keeps a cooler hue than the brand on purpose -- 151deg vs
      92deg, which is 59deg of separation. That is MORE than the cyan brand it
      replaces had against its own success green (190deg vs 144deg = 46deg), so
@@ -223,6 +244,13 @@
   --brand-ink: #476f0e;              /* NOT the fill: the logo green as text on a
                                         card ground is 4.33:1, under AA. This is
                                         5.48:1 on surface, 5.13:1 on raised. */
+  /* The acid, spent -- and light needs the opposite direction from dark. A pale
+     green keeps `--muted` readable on it (4.80:1 at 18%); anything stronger is a
+     fill whose only readable ink would be near-black, which is the enabled button.
+     The old value here was 24%, which came to 4.40:1 -- under AA, and nobody had
+     measured it because the rule was a `color-mix` and not a pair. */
+  --brand-acid-dim: #dce5ce;
+  --on-acid-dim: #5c6353;            /* 4.80:1 on the dim fill -- = `--muted` */
   --success-bg: #dff0d8;
   --success-ink: #1f6b41;            /* 5.43:1 on success-bg, 5.62:1 on raised, and
                                         5.37:1 on `--selection` -- which is the
