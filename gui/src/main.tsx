@@ -26,6 +26,7 @@ import App from './App';
  */
 import '@fontsource-variable/dm-sans/wght.css';
 import '@fontsource/ibm-plex-mono/latin-400.css';
+import '@fontsource/ibm-plex-mono/latin-500.css';
 import '@fontsource/ibm-plex-mono/latin-600.css';
 /**
  * `?showcase=1` opens the primitive gallery instead of the app.

@@ -17,6 +17,7 @@
   flex-wrap: wrap;
   gap: var(--sp-3);
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
 }
 
 .step {

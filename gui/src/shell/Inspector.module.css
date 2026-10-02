@@ -58,6 +58,7 @@
      than saying a sentence -- the same call the landing page makes for its own
      tab strip. */
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-ui);
   cursor: pointer;
 }

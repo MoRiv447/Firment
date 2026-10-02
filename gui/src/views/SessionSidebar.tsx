@@ -1,23 +1,23 @@
-import { useMemo, useState } from 'react';
-import { Bot, FolderOpen, ShieldCheck, Trash2, Zap } from 'lucide-react';
+import { useMemo, useRef, useState } from 'react';
+import { Bot, FolderOpen, MoreHorizontal, Pencil, ShieldCheck, Trash2, Zap } from 'lucide-react';
 import type { CSSProperties } from 'react';
 
 import pkg from '../../package.json';
-import { formatStamp } from '../lib/format';
 import type { SessionSummaryDto } from '../types';
 import {
+  confirm,
   Field,
   Button,
-  Chip,
   EmptyState,
   Eyebrow,
-  IconButton,
-  PopConfirm,
+  Icon,
+  Menu,
+  StatusDot,
   TextInput,
   Tooltip,
   useTooltip,
 } from '../ui';
-import type { ButtonProps, ChipStatus } from '../ui';
+import type { ButtonProps } from '../ui';
 import styles from './SessionSidebar.module.css';
 
 /**
@@ -88,11 +88,6 @@ function buildRows(sessions: SessionSummaryDto[]): RailRow[] {
 }
 
 /** The row's one judgement-free label: what kind of session this is. */
-function kindOf(session: SessionSummaryDto, depth: number): { status: ChipStatus; text: string } {
-  if (session.kind === 'mainline') return { status: 'ok', text: 'mainline' };
-  if (session.kind === 'branch' || depth > 0) return { status: 'neutral', text: '↳ BRANCH' };
-  return { status: 'neutral', text: 'normal' };
-}
 
 /**
  * A control plus the tooltip that names it.
@@ -113,30 +108,6 @@ function TipButton({ tipText, ...rest }: ButtonProps & { tipText: string }) {
   );
 }
 
-/** Jump to the workbench scoped to this project. Only a root has one. */
-function WorkbenchAction({ cwd, onOpen }: { cwd: string; onOpen: (cwd: string) => void }) {
-  const tip = useTooltip<HTMLButtonElement>();
-  const label = "Open this project's workbench";
-  return (
-    <>
-      <IconButton
-        {...tip.triggerProps}
-        ref={tip.anchorRef}
-        size="sm"
-        label={label}
-        icon={FolderOpen}
-        onClick={() => {
-          tip.close();
-          // The row's own click handler is not in this subtree, so opening the
-          // workbench does not also select the session underneath.
-          onOpen(cwd);
-        }}
-      />
-      <Tooltip tip={tip} text={label} />
-    </>
-  );
-}
-
 export function SessionSidebar({
   sessions,
   currentId,
@@ -147,6 +118,7 @@ export function SessionSidebar({
   onDelete,
   runningIds,
   onOpenWorkbench,
+  onRename,
 }: {
   sessions: SessionSummaryDto[];
   currentId: string | null;
@@ -159,6 +131,14 @@ export function SessionSidebar({
   runningIds?: Set<string>;
   /** Open the Workbench view scoped to this session's project path. */
   onOpenWorkbench: (cwd: string) => void;
+  /**
+   * Rename a session, or clear the name with an empty string.
+   *
+   * The core decides what a name means -- it prefers an explicit title over the
+   * name derived from the first message, so clearing one hands the row back to
+   * it. Nothing is interpreted on this side.
+   */
+  onRename: (id: string, title: string) => void;
 }) {
   const rows = useMemo(() => buildRows(sessions), [sessions]);
 
@@ -239,6 +219,7 @@ export function SessionSidebar({
                 running={runningIds?.has(row.session.id) ?? false}
                 onSelect={() => onSelect(row.session.id)}
                 onOpenWorkbench={onOpenWorkbench}
+                onRename={(title) => onRename(row.session.id, title)}
                 onDelete={() => onDelete(row.session.id)}
               />
             ))}
@@ -262,6 +243,7 @@ function SessionRow({
   running,
   onSelect,
   onOpenWorkbench,
+  onRename,
   onDelete,
 }: {
   row: RailRow;
@@ -269,108 +251,142 @@ function SessionRow({
   running: boolean;
   onSelect: () => void;
   onOpenWorkbench: (cwd: string) => void;
+  onRename: (title: string) => void;
   onDelete: () => void;
 }) {
   const { session, depth, isProjectRoot } = row;
-  const kind = kindOf(session, depth);
-  const updated = new Date(session.updated_at * 1000);
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [menuOpen, setMenuOpen] = useState(false);
+  const moreRef = useRef<HTMLButtonElement | null>(null);
+  const name = session.preview || 'New session';
+
+  const commit = () => {
+    setRenaming(false);
+    // Nothing to say if it did not change -- and an unchanged name would still bump
+    // `updated_at` and re-sort the rail under the pointer.
+    if (draft.trim() !== name) onRename(draft.trim());
+  };
 
   return (
     <li
       className={styles.item}
       data-selected={selected || undefined}
+      data-renaming={renaming || undefined}
       style={{ '--depth': String(depth) } as CSSProperties}
     >
-      <button
-        type="button"
-        data-ui="session-row"
-        className={styles.select}
-        aria-current={selected ? 'true' : undefined}
-        onClick={onSelect}
-      >
-        <span className={styles.top}>
-          <Chip status={kind.status} size="sm" upper>
-            {kind.text}
-          </Chip>
-          {/* The tooltip carries the whole first message, not the 30 characters
-              the row has room for. */}
-          {/*
-            * The title slot is a preview of what the conversation says, so a session
-            * that has said nothing has none -- and a row left with only its chip, its
-            * model and its time reads as a nameless thing. Saying what it is costs one
-            * string; `data-untitled` keeps it in the muted ink so an empty row does not
-            * look like a titled one.
-            */}
-          <span
-            className={styles.title}
-            data-untitled={session.preview ? undefined : true}
-            title={session.preview || undefined}
+      {renaming ? (
+        /*
+         * Renaming happens in the row, not in a dialog.
+         *
+         * A bare `<input>` rather than the layer's `TextInput`: that control is 36px
+         * with a frame of its own, and this is a 28px row where the row *is* the field.
+         * A framed box appearing inside a list row would push every row below it down
+         * for as long as the rename lasts.
+         */
+        <input
+          className={styles.rename}
+          autoFocus
+          defaultValue={name}
+          aria-label="Session name"
+          onChange={(e) => setDraft(e.target.value)}
+          onFocus={() => setDraft(name)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              commit();
+            }
+            if (e.key === 'Escape') setRenaming(false);
+          }}
+          onBlur={commit}
+        />
+      ) : (
+        <>
+          <button
+            type="button"
+            data-ui="session-row"
+            className={styles.select}
+            aria-current={selected ? 'true' : undefined}
+            title={name}
+            onClick={onSelect}
           >
-            {session.preview || 'New session'}
-          </span>
-        </span>
-        <span className={styles.meta}>
-          {running ? (
-            <Chip status="running" size="sm" icon={Zap} upper>
-              running
-            </Chip>
-          ) : null}
-          <span className={styles.model} title={session.model}>
-            {session.model}
-          </span>
-          <span className={styles.stamp} title={updated.toLocaleString()}>
-            {formatStamp(session.updated_at)}
-          </span>
-        </span>
-      </button>
-
-      <span className={styles.controls}>
-        {isProjectRoot ? <WorkbenchAction cwd={session.cwd} onOpen={onOpenWorkbench} /> : null}
-        <DeleteAction preview={session.preview} onDelete={onDelete} />
-      </span>
+            {/*
+              * The running mark survives the trim, and it is the only thing that does.
+              * The row used to carry a kind chip, the model and a timestamp under the
+              * name; the name is the row now. A 6px dot is not a second line, and
+              * without it the rail has no way at all to say which session is working.
+              */}
+            {running ? <StatusDot status="running" pulse /> : null}
+            <span className={styles.title} data-untitled={session.preview ? undefined : true}>
+              {name}
+            </span>
+          </button>
+          <button
+            ref={moreRef}
+            type="button"
+            className={styles.more}
+            aria-label={`Options for ${name}`}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen((open) => !open)}
+          >
+            <Icon src={MoreHorizontal} size="sm" tone="muted" />
+          </button>
+          {/*
+            * The destructive action lives in here now instead of on the row.
+            *
+            * It was a bin icon rendered on every row, which put the one irreversible
+            * thing in the rail at the same weight as the row's own name, on a surface
+            * you hover to read. A menu is one press further away and it is where every
+            * other client puts it.
+            */}
+          <Menu
+            open={menuOpen}
+            anchorRef={moreRef}
+            onClose={() => setMenuOpen(false)}
+            labelledBy={`${session.id}-options`}
+            align="end"
+            items={[
+              {
+                key: 'rename',
+                label: 'Rename',
+                icon: Pencil,
+                onSelect: () => {
+                  setDraft(name);
+                  setRenaming(true);
+                },
+              },
+              ...(isProjectRoot
+                ? [
+                    {
+                      key: 'workbench',
+                      label: 'Open workbench',
+                      icon: FolderOpen,
+                      onSelect: () => onOpenWorkbench(session.cwd),
+                    },
+                  ]
+                : []),
+              { separator: true as const, key: 'sep' },
+              {
+                key: 'delete',
+                label: 'Delete',
+                icon: Trash2,
+                danger: true,
+                onSelect: () => {
+                  void confirm({
+                    title: 'Delete this session?',
+                    message: name,
+                    confirmLabel: 'Delete',
+                    tone: 'danger',
+                  }).then((ok) => {
+                    if (ok) onDelete();
+                  });
+                },
+              },
+            ]}
+          />
+        </>
+      )}
     </li>
-  );
-}
-
-/**
- * Delete, with the question next to the row it is about.
- *
- * One `anchorRef` serves two panels here: the tooltip's and the confirmation's.
- * `useOutsideDismiss` ignores a press inside either of them, which is what lets
- * the trigger open the panel in a single gesture instead of opening it and
- * dismissing it again on the way out.
- */
-function DeleteAction({ preview, onDelete }: { preview: string; onDelete: () => void }) {
-  const tip = useTooltip<HTMLButtonElement>();
-  const [open, setOpen] = useState(false);
-  const label = 'Delete this session';
-  return (
-    <>
-      <IconButton
-        {...tip.triggerProps}
-        ref={tip.anchorRef}
-        size="sm"
-        label={label}
-        icon={Trash2}
-        onClick={() => {
-          tip.close();
-          setOpen(true);
-        }}
-      />
-      <Tooltip tip={tip} text={label} />
-      <PopConfirm
-        open={open}
-        anchorRef={tip.anchorRef}
-        onClose={() => setOpen(false)}
-        onConfirm={() => {
-          setOpen(false);
-          onDelete();
-        }}
-        tone="danger"
-        title="Delete this session?"
-        message={preview}
-        confirmLabel="Delete"
-      />
-    </>
   );
 }

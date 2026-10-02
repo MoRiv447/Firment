@@ -45,6 +45,7 @@
   margin: 0;
   color: var(--muted);
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-meta);
 }
 
@@ -59,6 +60,7 @@
 .path {
   min-width: 0;
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-meta);
   /* A path is the subject of the row and the part worth keeping when the pane
      is narrow; the two numbers can wrap under it, a filename cannot. */
@@ -69,6 +71,7 @@
   flex: none;
   color: var(--muted);
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-meta);
   font-variant-numeric: tabular-nums;
 }

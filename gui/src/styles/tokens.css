@@ -402,6 +402,22 @@
   --lh-mono: 1.6;      /* diff and log lines */
 
   --fw-book: 400;
+  /*
+   * The weight of every rule that sets the mono face, and it is 500 rather than 400.
+   *
+   * The chrome is all mono and it is all Latin, and IBM Plex Mono's 400 is a light
+   * face: an English interface set in it reads thinner than the Chinese design it was
+   * drawn from, where the same rules sit under CJK glyphs that carry their own weight
+   * at the same size. That is the whole reason this key exists -- "the type feels
+   * weak" was a fair description of a screen whose every small label was mono 400.
+   *
+   * 500 and not 600: `--fw-label` is already spoken for (a tool's name, a step's
+   * label) and if the resting weight became the label weight there would be no step
+   * left to take. It is also the reason `latin-500.css` is imported in `main.tsx` --
+   * IBM Plex Mono has no variable release, so a weight that is not imported is a
+   * weight the browser fakes.
+   */
+  --fw-mono: 500;
   /* Left as it was. The landing page looked like a 400/500-only palette at first
      read, but its h1 is 550 and its wordmark 700, so it is not evidence for
      flattening this ramp -- and the token is read by 22 component files. */

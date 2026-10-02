@@ -62,6 +62,7 @@ pub fn run() {
             commands::running_sessions,
             commands::set_session_thinking,
             commands::set_session_mode,
+            commands::set_session_title,
             commands::set_session_budget,
             commands::session_context_usage,
             commands::mqtt_status,

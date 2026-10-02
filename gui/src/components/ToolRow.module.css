@@ -23,6 +23,7 @@
   color: inherit;
   font: inherit;
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-meta);
   text-align: start;
 }

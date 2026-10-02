@@ -21,6 +21,7 @@
 .tally {
   color: var(--ink);
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-meta);
   font-variant-numeric: tabular-nums;
 }
@@ -86,6 +87,7 @@
   width: 1em;
   color: var(--step-pending-ink);
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
 }
 
 .item[data-current='true'] .mark {

@@ -32,6 +32,7 @@
   gap: var(--sp-1);
   color: var(--muted);
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-meta);
   /* The word sits on the same baseline as the two segment labels next to it, so
      it reads as a third reading of the same row rather than a badge. */

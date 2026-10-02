@@ -1,33 +1,24 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
-import type { ComponentProps } from 'react';
+// The session rail's own tests, rewritten for the row that has no chrome.
+//
+// Three assumptions died with the restructure and each of them was load-bearing for
+// more than one case: the row's first `span[title]` was its name (there is one span
+// now and no separate model span), every row carried exactly one kind chip (there is
+// no chip), and each row had a bin button beside it (the actions are behind a menu).
+// What replaces them is the name as text and the menu as a thing you open.
 import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 import pkg from '../../../package.json';
 import { SessionSidebar } from '../SessionSidebar';
 import type { SessionSummaryDto } from '../../types';
 
-/**
- * The rail's structure, not its colours.
- *
- * What is worth pinning is the shape of the tree and the fact that no colour is
- * assembled in JS any more:
- *
- * * Branches nest under their mainline, and a session whose parent is gone is
- *   hoisted rather than dropped -- a row that renders nowhere is a session that
- *   cannot be deleted from this window.
- * * One category chip per row, guaranteed by `kindOf` being an `if` chain rather
- *   than three `&&`s in markup.
- * * The workbench and delete controls sit BESIDE the row's own button, so
- *   neither has to stop the row's click: opening the workbench or answering a
- *   question about deleting a row leaves the transcript alone.
- */
+type RailProps = Parameters<typeof SessionSidebar>[0];
 
-type RailProps = ComponentProps<typeof SessionSidebar>;
-
-const session = (over: Partial<SessionSummaryDto> & { id: string }): SessionSummaryDto => ({
+const session = (over: Partial<SessionSummaryDto> = {}): SessionSummaryDto => ({
+  id: 'a',
   kind: 'normal',
   parent_session: null,
-  preview: `preview ${over.id}`,
+  preview: `preview ${over.id ?? 'a'}`,
   model: 'claude-sonnet-4-5',
   cwd: 'C:\\work\\proj',
   updated_at: 1_700_000_000,
@@ -43,6 +34,7 @@ const railHandlers = () => ({
   onNew: vi.fn(),
   onDelete: vi.fn(),
   onOpenWorkbench: vi.fn(),
+  onRename: vi.fn(),
 });
 
 function renderRail(over: Partial<RailProps> = {}) {
@@ -66,17 +58,22 @@ function renderRail(over: Partial<RailProps> = {}) {
 const rowsIn = (container: HTMLElement) =>
   Array.from(container.querySelectorAll('[data-ui="session-row"]'));
 
-/** The first titled span in a row is its session title; the model span is second. */
-const titles = (container: HTMLElement) =>
-  rowsIn(container).map((row) => row.querySelector('span[title]')?.textContent);
+/**
+ * What each row says.
+ *
+ * The row is a name and nothing else now -- the running mark is a dot with no text,
+ * and it is `aria-hidden` -- so the button's text content *is* the name. That is a
+ * better handle than the class it used to be found by: a rename or a new badge cannot
+ * silently change what this returns.
+ */
+const titles = (container: HTMLElement) => rowsIn(container).map((row) => row.textContent);
 
 /** The row's indent is a custom property, so ask for it by name rather than parsing `style`. */
 const depthOf = (row: Element) =>
   (row.closest('li') as HTMLElement | null)?.style.getPropertyValue('--depth').trim();
-const kindOf = (row: Element) => {
-  const chip = row.querySelector('[data-ui="chip"]');
-  return { text: chip?.textContent, status: chip?.getAttribute('data-status') };
-};
+
+/** The options button names its own row, which is also how a test finds the right one. */
+const moreFor = (name: string) => screen.getByRole('button', { name: `Options for ${name}` });
 
 describe('session tree', () => {
   it('nests branches under their mainline, newest root first', () => {
@@ -98,37 +95,14 @@ describe('session tree', () => {
       sessions: [branch('orphan', 'gone', 'the only row', 5)],
     });
     expect(titles(container)).toEqual(['the only row']);
-    expect(rowsIn(container).map(kindOf)).toEqual([{ text: '↳ BRANCH', status: 'neutral' }]);
+    // A branch is told apart by its indent and by the rail's own tree, not by a chip:
+    // the row carries no category at all any more.
+    expect(container.querySelectorAll('[data-ui="chip"]')).toHaveLength(0);
   });
 
   it('does not become its own child forever', () => {
     const { container } = renderRail({ sessions: [branch('loop', 'loop', 'self-parented', 5)] });
     expect(container.querySelectorAll('[data-ui="session-row"]')).toHaveLength(1);
-  });
-
-  it('gives every row exactly one category chip', () => {
-    const { container } = renderRail({
-      sessions: [
-        session({ id: 'm', kind: 'mainline' }),
-        session({ id: 'n', kind: 'normal' }),
-        branch('b', 'm', 'a fork', 5),
-        session({ id: 'x', kind: 'unknown-to-the-ui' }),
-      ],
-    });
-    const rows = rowsIn(container);
-    // A `kind` the kernel never sends still has to read as something, and `x` is
-    // the case that would print no chip at all if the markup were three `&&`s.
-    // The walk is depth-first, so `b` sits right below its parent `m` instead of
-    // keeping its place in the input array.
-    expect(rows.map((row) => row.querySelectorAll('[data-ui="chip"]').length)).toEqual([
-      1, 1, 1, 1,
-    ]);
-    expect(rows.map(kindOf)).toEqual([
-      { text: 'mainline', status: 'ok' },
-      { text: '↳ BRANCH', status: 'neutral' },
-      { text: 'normal', status: 'neutral' },
-      { text: 'normal', status: 'neutral' },
-    ]);
   });
 });
 
@@ -150,19 +124,23 @@ describe('row state', () => {
       currentId: 'b',
       runningIds: new Set(['a', 'b']),
     });
-    // The rail used to rebuild every chip's `background` and `color` for a
-    // selected row. `Chip` pairs its own opaque fill and ink now, so a chip that
-    // carries an inline style is the old bug coming back.
-    expect(container.querySelectorAll('[data-ui="chip"][style]')).toHaveLength(0);
+    // The rail used to rebuild every chip's `background` and `color` for a selected
+    // row. Nothing in the rail is painted from a `style` attribute now.
+    expect(container.querySelectorAll('[style*="background"]')).toHaveLength(0);
   });
 
-  it('reports a background turn as running, and the rest as not', () => {
+  it('reports a background turn with a mark, and the rest without one', () => {
+    // The word "running" is gone with the meta line the row used to carry. The mark
+    // is what is left of that signal, and it is the only thing on a row that is not
+    // the name -- which is why this case still exists.
     const { container } = renderRail({
       sessions: [session({ id: 'a' }), session({ id: 'b' })],
       runningIds: new Set(['b']),
     });
-    expect(screen.getAllByText('running')).toHaveLength(1);
-    expect(container.querySelectorAll('[data-status="running"]')).toHaveLength(1);
+    const marks = container.querySelectorAll('[data-ui="status-dot"]');
+    expect(marks).toHaveLength(1);
+    expect(marks[0]).toHaveAttribute('data-status', 'running');
+    expect(titles(container)).toEqual(['preview a', 'preview b']);
   });
 
   it('selects the session when the row itself is clicked', () => {
@@ -181,21 +159,14 @@ describe('header', () => {
   });
 
   it('names the working directory in a visible label, and stays controlled', () => {
-    // The label is the accessible name now: `Field` wires `htmlFor` to the
-    // control, so an `aria-label` beside it would only be a second name to
-    // disagree with.
     const { handlers } = renderRail();
     const field = screen.getByRole('textbox', { name: 'new sessions in' });
     fireEvent.change(field, { target: { value: 'D:\\old\\proj' } });
     expect(handlers.onWorkCwd).toHaveBeenCalledWith('D:\\old\\proj');
-    // Controlled: what the rail shows is the caller's value, not what was typed.
     expect(field).toHaveValue('C:\\work');
   });
 
   it('names a session that has said nothing yet', () => {
-    // Its title slot is a preview of the conversation, so an empty session used to
-    // render a row with no name at all -- chip, model and time, which reads as a
-    // nameless thing rather than as a new one.
     renderRail({ sessions: [session({ id: 'a', preview: '' })] });
     expect(screen.getByText('New session')).toBeInTheDocument();
   });
@@ -220,48 +191,90 @@ describe('header', () => {
   });
 });
 
-describe('row controls', () => {
-  const root = session({ id: 'm', kind: 'mainline', cwd: 'D:\\firm\\bot' });
+describe('row actions', () => {
+  const root = session({ id: 'm', kind: 'mainline', preview: 'a mainline', cwd: 'D:\\firm\\bot' });
   const kids: SessionSummaryDto[] = [root, branch('b', 'm', 'a fork', 5)];
 
-  const workbenchButtons = () =>
-    screen.queryAllByRole('button', { name: "Open this project's workbench" });
+  /** Open a row's menu and hand back its panel. */
+  const openMenu = (name: string) => {
+    // Close first: the trigger toggles, and a re-render keeps the open state, so the
+    // second press in one of these cases would shut the menu rather than open it.
+    const open = screen.queryByRole('menu');
+    if (open) fireEvent.keyDown(open, { key: 'Escape' });
+    fireEvent.click(moreFor(name));
+    return screen.getByRole('menu');
+  };
+
+  it('keeps the destructive action off the surface', () => {
+    // It was a bin icon on every row -- the one irreversible thing in the rail, at the
+    // weight of the row's own name, on a surface you hover to read. It is one press
+    // further away now, and the row at rest offers nothing but its name.
+    const { container } = renderRail({ sessions: kids });
+    expect(container.textContent).not.toContain('Delete');
+    expect(container.querySelectorAll('[data-ui="session-row"]')).toHaveLength(2);
+  });
 
   it('offers the workbench only on a mainline that has branches', () => {
     const { again } = renderRail({ sessions: kids });
-    expect(workbenchButtons()).toHaveLength(1);
+    expect(within(openMenu('a mainline')).getByText('Open workbench')).toBeInTheDocument();
     again({ sessions: [root] });
-    expect(workbenchButtons()).toHaveLength(0);
+    // Reopened, because the rail re-rendered: only a root with branches has a
+    // workbench of its own, so the item is not there for a lone session.
+    expect(within(openMenu('a mainline')).queryByText('Open workbench')).toBeNull();
   });
 
   it('opens the workbench without selecting the session underneath it', () => {
     const { handlers } = renderRail({ sessions: kids });
-    fireEvent.click(screen.getByRole('button', { name: "Open this project's workbench" }));
+    fireEvent.click(within(openMenu('a mainline')).getByText('Open workbench'));
     expect(handlers.onOpenWorkbench).toHaveBeenCalledWith('D:\\firm\\bot');
     expect(handlers.onSelect).not.toHaveBeenCalled();
   });
 
-  it('asks beside the row it is about, and only answers on Delete', () => {
+  it('asks before deleting, and only deletes on the answer', async () => {
     const { handlers } = renderRail({ sessions: kids });
-    const trash = screen.getAllByRole('button', { name: 'Delete this session' });
-    fireEvent.click(trash[1]);
+    fireEvent.click(within(openMenu('a fork')).getByText('Delete'));
 
-    const panel = screen.getByRole('dialog', { name: 'Delete this session?' });
+    // The question is the layer's `confirm`, not a panel anchored to the row: the row
+    // is a menu item now and there is nothing left to anchor a popover to.
+    const panel = await screen.findByRole('dialog', { name: 'Delete this session?' });
     expect(panel).toHaveTextContent('a fork');
     expect(handlers.onDelete).not.toHaveBeenCalled();
 
     fireEvent.click(within(panel).getByRole('button', { name: 'Delete' }));
-    expect(handlers.onDelete).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole('dialog')).toBeNull();
+    // `confirm` resolves a promise, so the call lands a tick later -- which is the
+    // whole reason the item is not wired straight to `onDelete`.
+    await waitFor(() => expect(handlers.onDelete).toHaveBeenCalledTimes(1));
     expect(handlers.onSelect).not.toHaveBeenCalled();
   });
 
-  it('cancels without deleting', () => {
-    const { handlers } = renderRail({ sessions: [session({ id: 'a' })] });
-    fireEvent.click(screen.getByRole('button', { name: 'Delete this session' }));
-    const panel = screen.getByRole('dialog', { name: 'Delete this session?' });
-    fireEvent.click(within(panel).getByRole('button', { name: 'Cancel' }));
-    expect(handlers.onDelete).not.toHaveBeenCalled();
-    expect(screen.queryByRole('dialog')).toBeNull();
+  it('renames in the row, and sends the new name', () => {
+    const { handlers } = renderRail({ sessions: kids });
+    fireEvent.click(within(openMenu('a fork')).getByText('Rename'));
+
+    const field = screen.getByRole('textbox', { name: 'Session name' });
+    fireEvent.change(field, { target: { value: 'renamed fork' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+
+    expect(handlers.onRename).toHaveBeenCalledWith('b', 'renamed fork');
+  });
+
+  it('leaves an unchanged name alone', () => {
+    // Committing the same string would still bump `updated_at` in the core and
+    // re-sort the rail under the pointer.
+    const { handlers } = renderRail({ sessions: kids });
+    fireEvent.click(within(openMenu('a fork')).getByText('Rename'));
+    const field = screen.getByRole('textbox', { name: 'Session name' });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(handlers.onRename).not.toHaveBeenCalled();
+  });
+
+  it('abandons a rename on Escape', () => {
+    const { handlers } = renderRail({ sessions: kids });
+    fireEvent.click(within(openMenu('a fork')).getByText('Rename'));
+    const field = screen.getByRole('textbox', { name: 'Session name' });
+    fireEvent.change(field, { target: { value: 'thrown away' } });
+    fireEvent.keyDown(field, { key: 'Escape' });
+    expect(handlers.onRename).not.toHaveBeenCalled();
+    expect(screen.queryByRole('textbox', { name: 'Session name' })).toBeNull();
   });
 });

@@ -9,6 +9,7 @@
   align-items: center;
   gap: 6px;
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-micro);
   /* The CJK value by default; `[data-latin]` widens it. See the component. */
   letter-spacing: var(--tracking-cjk);

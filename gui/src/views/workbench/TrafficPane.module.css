@@ -41,6 +41,7 @@
   white-space: nowrap;
   text-overflow: ellipsis;
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-meta);
 }
 
@@ -78,5 +79,6 @@
   text-overflow: ellipsis;
   color: var(--muted);
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-meta);
 }

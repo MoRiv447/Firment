@@ -22,6 +22,7 @@
   background: var(--surface-raised);
   color: var(--ink);
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-micro);
   cursor: pointer;
 }
@@ -63,6 +64,7 @@
 .probe {
   margin: 0;
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-micro);
   line-height: var(--lh-tight);
 }

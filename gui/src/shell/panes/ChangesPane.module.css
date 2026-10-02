@@ -81,6 +81,7 @@
   overflow: hidden;
   color: var(--ink);
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -121,6 +122,7 @@
   flex: 0 0 auto;
   color: var(--muted);
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-meta);
   font-variant-numeric: tabular-nums;
 }

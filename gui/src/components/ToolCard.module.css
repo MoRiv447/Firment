@@ -64,6 +64,7 @@
   color: inherit;
   font: inherit;
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-minor);
   text-align: left;
 }
@@ -123,6 +124,7 @@
 
 .args {
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
 }
 
 /* `margin-inline-start: auto` is the whole alignment story: the counts go to the
@@ -167,6 +169,7 @@
   background: var(--code-bg);
   color: var(--ink);
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-minor);
   line-height: var(--lh-mono);
 }

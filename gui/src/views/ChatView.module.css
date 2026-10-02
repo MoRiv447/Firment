@@ -41,6 +41,7 @@
 .head .count {
   color: var(--dim);
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-micro);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -70,6 +71,7 @@
 
 .phaseText {
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
 }
 
 .phaseTimer {
@@ -78,6 +80,7 @@
      twitching once a second. */
   margin-inline-start: auto;
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-variant-numeric: tabular-nums;
   color: var(--muted);
 }
@@ -266,6 +269,7 @@
   background: var(--surface-raised);
   color: var(--dim);
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-micro);
   line-height: 1.5;
   cursor: pointer;

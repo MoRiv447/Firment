@@ -41,6 +41,7 @@
 .kicker {
   color: var(--muted);
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-meta);
 }
 

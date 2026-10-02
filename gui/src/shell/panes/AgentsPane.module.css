@@ -57,6 +57,7 @@
   flex: 0 0 auto;
   color: var(--muted);
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-meta);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -79,6 +80,7 @@
   margin: 0 0 var(--sp-2);
   color: var(--muted);
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-meta);
   overflow-wrap: anywhere;
 }

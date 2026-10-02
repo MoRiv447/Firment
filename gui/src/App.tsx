@@ -637,6 +637,22 @@ export default function App() {
       .catch(console.error);
   };
 
+  /*
+   * Rename, then re-read the list.
+   *
+   * The rail renders *summaries*, and a summary's label is the core's answer -- it
+   * prefers an explicit title over the name derived from the first message. So the
+   * new name is only visible after the list is read again; patching the row locally
+   * would be a second place that decides what a session is called.
+   */
+  const handleRenameSession = (id: string, title: string) => {
+    void api
+      .setSessionTitle(id, title)
+      .then(() => api.listSessions())
+      .then(setSessions)
+      .catch(console.error);
+  };
+
   const handleDeleteSession = (id: string) => {
     // Bounded retry: the backend refuses while that session's turn is
     // winding down, so cancel + retry covers the window — but a hard IO
@@ -796,6 +812,7 @@ export default function App() {
                       .map(([id]) => id),
                   )
                 }
+                onRename={handleRenameSession}
                 onOpenWorkbench={(projectCwd) => {
                   setWorkbenchOpen(true);
                   requestWorkbenchOpen(projectCwd);

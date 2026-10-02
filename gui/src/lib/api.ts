@@ -33,6 +33,17 @@ export const api = {
     invoke<SessionDto>('set_session_thinking', { sessionId, level }),
   setSessionMode: (sessionId: string, mode: string) =>
     invoke<SessionDto>('set_session_mode', { sessionId, mode }),
+  /**
+   * Rename a session, or clear the name with an empty string.
+   *
+   * The core decides what a name is: it trims, treats whitespace as "no name", and
+   * then prefers the title over the first message when it builds a row's label. So
+   * there is nothing to normalize on this side -- an empty string is how you hand the
+   * row back to the derived name, and it is not a special case the caller has to know
+   * about beyond that.
+   */
+  setSessionTitle: (sessionId: string, title: string) =>
+    invoke<SessionDto>('set_session_title', { sessionId, title }),
   setSessionBudget: (sessionId: string, chars: number) =>
     invoke<SessionDto>('set_session_budget', { sessionId, chars }),
   sessionContextUsage: (sessionId: string) =>

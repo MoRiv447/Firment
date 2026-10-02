@@ -33,5 +33,6 @@
 /* A path is read character by character, and the button's own padding is enough. */
 .path {
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-meta);
 }

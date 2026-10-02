@@ -8,6 +8,7 @@
 .summary {
   color: var(--muted);
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-minor);
   cursor: pointer;
 }
@@ -18,6 +19,7 @@
   overflow: auto;
   color: var(--muted);
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-meta);
   line-height: var(--lh-tight);
   white-space: pre-wrap;

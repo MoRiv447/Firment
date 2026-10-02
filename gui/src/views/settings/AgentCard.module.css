@@ -24,6 +24,7 @@
 .model {
   border-radius: var(--r-chip);
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-micro);
 }
 

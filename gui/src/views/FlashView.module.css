@@ -51,6 +51,7 @@
 
 .cmd {
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-micro);
 }
 
@@ -80,6 +81,7 @@
 .out {
   margin: var(--sp-2) 0 0;
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-minor);
   white-space: pre-wrap;
   word-break: break-all;

@@ -403,6 +403,35 @@ pub async fn set_session_mode(
 }
 
 #[tauri::command]
+pub async fn set_session_title(
+    shared: tauri::State<'_, Arc<Shared>>,
+    session_id: String,
+    title: String,
+) -> Result<crate::events::SessionDto, String> {
+    /*
+     * Deliberately not gated on `ensure_not_running`: the three commands above are,
+     * because they change what the turn in flight will do. A name does not, and a
+     * rename that refused while the agent was thinking would be a rename that
+     * usually refuses.
+     *
+     * The normalization lives in the core -- `set_title` trims, turns whitespace into
+     * `None`, and bumps `updated_at`, and `SessionSummary` already prefers the title
+     * over the derived preview. So there is nothing to interpret here: the command
+     * loads, sets and saves, and the rail reads the same field it always did.
+     */
+    let shared = shared.inner().clone();
+    let store = shared
+        .store
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    let mut session = store.load(&session_id).map_err(|e| e.to_string())?;
+    session.set_title(Some(title));
+    store.save(&session).map_err(|e| e.to_string())?;
+    Ok(session_dto(&session))
+}
+
+#[tauri::command]
 pub async fn set_session_budget(
     shared: tauri::State<'_, Arc<Shared>>,
     session_id: String,

@@ -379,6 +379,28 @@ describe('Primitive layer and shell conventions', () => {
     expect(offenders).toEqual([]);
   });
 
+  it('gives every rule that names the mono face a weight of its own', () => {
+    // Sixty rules across thirty-nine files rested on the browser default, and IBM Plex
+    // Mono's 400 is a light face -- which is what "the type feels weak" turned out to
+    // be about: an English interface whose every small label is Latin mono reads
+    // thinner than the Chinese design it was drawn from, where the same rules sit
+    // under CJK glyphs that carry their own weight at the same size.
+    //
+    // The weight is one token (`--fw-mono`), so a rule that names the face and not the
+    // weight is a rule that drifts the day the token moves. Rules that set their own
+    // -- `--fw-label` on a tool's name, `--fw-mono` on a counter -- are left alone;
+    // this catches the ones that said nothing at all.
+    const missing: string[] = [];
+    for (const path of cssFiles) {
+      for (const [, body] of read(path).matchAll(/[^{}]+\{([^{}]*)\}/g)) {
+        if (body.includes('font-family: var(--ff-mono)') && !body.includes('font-weight')) {
+          missing.push(canonical(path));
+        }
+      }
+    }
+    expect([...new Set(missing)]).toEqual([]);
+  });
+
   it('gives the button a box of its own instead of the platform one', () => {
     // Found by rendering, not by reading. `Button.tsx` composes `styles.root` and
     // Button.module.css had only `[data-size]` and `[data-tier]` variants, so every

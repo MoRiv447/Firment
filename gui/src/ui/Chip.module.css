@@ -35,6 +35,7 @@
 
 .chip[data-mono='true'] {
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
 }
 
 .chip[data-size='sm'] {

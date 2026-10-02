@@ -15,6 +15,7 @@
   padding-inline: var(--sp-2);
   border-bottom: 1px solid var(--line);
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   /* No scrollbar, on either axis.
    *
    * `overflow-x: auto` was the first mistake: a `visible` `overflow-y` is computed
@@ -93,6 +94,7 @@
   flex: none;
   color: var(--muted);
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-meta);
   font-variant-numeric: tabular-nums;
 }

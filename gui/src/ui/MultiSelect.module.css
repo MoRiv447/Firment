@@ -39,6 +39,7 @@
 
 .chipText {
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
 }
 
 .remove {

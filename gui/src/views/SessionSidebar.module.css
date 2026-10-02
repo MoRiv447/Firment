@@ -83,124 +83,164 @@
   min-height: 0;
 }
 
+/*
+ * One session row: its name, and an options menu.
+ *
+ * The row used to be a card -- a border, a raised ground, a kind chip, the model and a
+ * timestamp under the name, and a bin icon parked beside it. That is four pieces of
+ * chrome for a list whose job is to let you find a conversation, and the two that cost
+ * the most were the least useful: the kind chip and the timestamp answer a question
+ * nobody opens this rail with.
+ *
+ * What is left is the name. The depth indent stays, because the rail is a *tree* --
+ * a branch under a mainline session is a fact about which conversation this is -- and
+ * the six-pixel running dot stays, because it is a state rather than a second line and
+ * without it the rail cannot say which session is working at all.
+ *
+ * **Unselected rows have no edge.** The border was there to make each row a card; a
+ * list of names separated by nothing but space does not need one, and hovering is
+ * what says a row is a target. The selected row keeps its edge and its tint -- see
+ * the note below on why the fill alone is not enough in the light scheme.
+ */
 .item {
   display: flex;
-  align-items: stretch;
+  position: relative;
+  align-items: center;
   gap: var(--sp-1);
   padding-inline-start: calc(var(--depth, 0) * var(--sp-4));
 }
 
 /*
- * The row proper, and the reason it is a `<button>` with its controls beside it
- * rather than a `<div>` with them inside: a nested interactive element is
- * invalid, and the old row was a clickable box holding two buttons, which is
- * why every one of them needed an `e.stopPropagation()`.
+ * The row proper.
+ *
+ * A `<button>` with the options button beside it rather than a `<div>` with controls
+ * inside: a nested interactive element is invalid, and the old row was a clickable box
+ * holding two buttons, which is why every one of them needed an `e.stopPropagation()`.
+ *
+ * No border and no ground at rest, so the list reads as names. `min-height` is the
+ * row's floor rather than a padding, because the name has to sit on one line whether
+ * or not the running dot is there.
  */
 .select {
   display: flex;
   flex: 1 1 auto;
-  flex-direction: column;
-  align-items: stretch;
-  gap: var(--sp-05);
+  align-items: center;
+  gap: var(--sp-2);
   box-sizing: border-box;
   min-width: 0;
-  padding: var(--sp-2);
-  border: 1px solid var(--border);
+  min-height: var(--h-min);
+  padding: 0 var(--sp-2);
+  border: 1px solid transparent;
   border-radius: var(--r-btn);
-  background: var(--surface-raised);
+  background: transparent;
   color: inherit;
   font: inherit;
+  font-size: var(--fs-body);
   text-align: start;
   cursor: pointer;
-  /* Border as well as fill: the border is what moves when the row is selected, so
-     it cannot be the one property that jumps. */
   transition:
-    background var(--t-out) var(--ease),
+    background-color var(--t-out) var(--ease),
     border-color var(--t-out) var(--ease);
 }
 
 .select:hover {
   background: var(--hover);
-  border-color: var(--border-strong);
 }
 
-/* Outranks the hover rule above, so a selected row keeps its surface under the
-   pointer instead of flashing at the moment you are looking at it.
+/*
+ * **The edge carries the selection, the fill corroborates it.**
  *
- * **The edge carries the selection, the fill corroborates it.** In the light
- * scheme the fill is 1.05:1 against the untinted row -- it cannot be stronger than
- * that without dropping `dim` and `brandInk` under AA on top of it, which is
- * checked in `styles/__tests__/tokens.test.ts`. What a reader actually sees is the
- * bright green border; the tint is what keeps a row from looking like an outline
- * with nothing in it.
- *
- * The shadow this rule used to carry is gone with it. It was there to lift the row
- * off a flat ground, and a bordered card on a gapped list is already off it.
+ * In the light scheme the fill is 1.05:1 against the untinted row -- it cannot be
+ * stronger without dropping `dim` and `brandInk` under AA on top of it, which is
+ * checked in `styles/__tests__/tokens.test.ts`. So the border is the signal a reader
+ * actually sees, and the tint is what keeps the row from looking like an outline with
+ * nothing in it. That is also why the *unselected* rows can lose their border without
+ * the selected one losing its meaning: the selection is the only edge left in the list.
  */
 .item[data-selected='true'] .select {
   background: var(--selection);
   border-color: var(--border-active);
 }
 
-.top {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-1);
-  min-width: 0;
-}
-
+/* The name, and the whole of the row. */
 .title {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
-  white-space: nowrap;
+  color: var(--ink);
   text-overflow: ellipsis;
-  font-size: var(--fs-body);
-  line-height: var(--lh-tight);
+  white-space: nowrap;
 }
 
-/* A session with nothing in it yet: it has a name in the slot, and the name is
-   muted, because it is a placeholder and not a summary. */
+/* A session that has said nothing has no name of its own, and the placeholder is
+   quieter than a real one so an empty row does not read as a titled one. */
 .title[data-untitled] {
+  color: var(--dim);
+}
+
+/*
+ * The options button.
+ *
+ * **A fixed box that fades rather than one that appears.** Laying it out only on hover
+ * would shift the name sideways at the moment the pointer arrived, which is the one
+ * moment a list must hold still; an always-present box whose opacity moves costs the
+ * name 26px and nothing else.
+ *
+ * Hidden with `opacity` and not `display`, and revealed by `:focus-within` as well as
+ * `:hover`, so it is reachable by keyboard -- a control that only exists under a
+ * pointer does not exist for anyone else.
+ */
+.more {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-btn);
+  background: transparent;
   color: var(--muted);
-  font-weight: var(--fw-label);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--t-out) var(--ease);
 }
 
-.meta {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
+.item:hover .more,
+.item:focus-within .more,
+.item[data-selected='true'] .more {
+  opacity: 1;
+}
+
+.more:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.more:focus-visible {
+  opacity: 1;
+}
+
+/*
+ * Renaming, in the row.
+ *
+ * A bare `<input>` and not the layer's `TextInput`: that control is 36px with a frame
+ * of its own, and this is a 26px row where the row *is* the field. The edge comes from
+ * the row's own box, so nothing below it moves while the rename lasts.
+ */
+.rename {
+  flex: 1 1 auto;
+  box-sizing: border-box;
   min-width: 0;
-  font-size: var(--fs-meta);
-  color: var(--muted);
-}
-
-/* The chips on this line keep their own grounds, and so does the bare text now:
-   with a neutral surface there is nothing for it to move to. */
-
-.model {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-family: var(--ff-mono);
-}
-
-.stamp {
-  /* The oldest thing in the row and the thing you compare across rows, so it
-     holds the right edge and every minute it prints is the same width. */
-  flex: 0 0 auto;
-  margin-inline-start: auto;
-  font-family: var(--ff-mono);
-  font-variant-numeric: tabular-nums;
-}
-
-.controls {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: var(--sp-05);
+  min-height: var(--h-min);
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border-active);
+  border-radius: var(--r-btn);
+  background: var(--surface-raised);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-body);
+  outline: none;
 }
 
 .foot {
@@ -219,4 +259,5 @@
 .version {
   margin-inline-start: auto;
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
 }

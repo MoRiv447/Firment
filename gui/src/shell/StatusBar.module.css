@@ -24,6 +24,7 @@
   border-top: 1px solid var(--line);
   color: var(--ink);
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-meta);
   /* Readings are fixed-width by design; a bar that wrapped would push the
      transcript up and move the whole window. */

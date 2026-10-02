@@ -59,6 +59,7 @@
 
 .payload {
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   overflow-wrap: anywhere;
 }
 

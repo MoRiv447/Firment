@@ -79,6 +79,7 @@
 .readout {
   min-width: var(--sl-readout, 5ch);
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-minor);
   font-variant-numeric: tabular-nums;
   color: var(--ink);

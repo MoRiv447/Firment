@@ -44,6 +44,7 @@
   border-radius: var(--r-panel);
   background: var(--bg);
   font-family: var(--ff-mono);
+  font-weight: var(--fw-mono);
   font-size: var(--fs-meta);
   line-height: var(--lh-mono);
 }
