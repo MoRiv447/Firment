@@ -73,6 +73,7 @@ entries below; this is the part to read while something is broken.
 | `[safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED]` while cleaning `web/.next` | `env -u NODE_OPTIONS npm run build` |
 | Cargo sits for minutes with no output at all, and even `cargo fmt` looks slow | **Look for an orphaned `cargo.exe` / test binary before blaming the environment.** An interrupted run leaves its children holding the build lock, and the "Blocking waiting for file lock" line is invisible behind a pipe until the command exits. See the lock-file section for the two commands |
 | Every external command fails at once — `ls: command not found`, `dirname: command not found` — and the shell prints `shell-runtime-bash-env.sh: line 3: cd: null directory` | **The session's bash shim never built its PATH.** Nothing in the repo is wrong, and no cargo flag helps. Prefix the command with the Git-for-Windows `usr/bin` it lost: `export PATH="$PATH:/c/Users/18978/.workbuddy/binaries/PortableGit/versions/1.2.0/usr/bin"` (measured 2026-09-18). That directory does contain a `link.exe`, so the usual shadowing worry applies — but `~/.cargo/config.toml` names the MSVC linker by absolute path, which is what makes this workaround safe; if a link ever fails right after using it, that is why. Note `timeout` resolves to Windows' `timeout.exe` once that PATH is added, so use the absolute `…/usr/bin/timeout` or none at all |
+| `npm <anything>` dies with `PROGRAM BLOCKED BY SECURITY POLICY … wsl.exe`, and `npm test` reports `E_ACCESSDENIED` | **The npm on PATH goes through a shim that tries to start `wsl.exe`,** which this sandbox's program blacklist blocks. Not a repo problem, and nothing in the repo can fix it. Two ways round it, both measured 2026-10-01: call the CLI directly, `node "C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js" <args>` (npm 11.17.0), or skip npm for the GUI's three checks entirely — `node node_modules/vitest/vitest.mjs run`, `node node_modules/typescript/bin/tsc --noEmit`, `node node_modules/vite/bin/vite.js build`, all from `gui/` |
 | `cargo install` / `cargo search` cannot reach crates.io: `Could not connect to server … via 127.0.0.1` | **There is no network here, and nothing local fixes it.** Measured 2026-09-18 while trying to install `cargo-audit`. That is why the advisory gate lives in CI (`.github/workflows/ci.yml`, job `audit`) — and why a *local* audit would be misleading even with the tool installed: `~/.cargo/advisory-db` is a snapshot last fetched 2026-08-11, and an advisory database is a live feed |
 | `error copying object file … to incremental directory … 拒绝访问 (os error 5)`, occasionally followed by a rustc ICE | The interception reached the incremental cache. `CARGO_INCREMENTAL=0` takes that path out of the run — observed 2026-09-18, and it does **not** explain the ICE, which happened once and has not been reproduced |
 
@@ -337,6 +338,15 @@ two variables above are the whole available route.
   `cargo clippy --workspace --all-targets -- -D warnings`,
   per-crate `cargo test` (see `.github/workflows/ci.yml`),
   and `web` + `gui` type-check/tests/build for frontend changes.
+- The GUI's `gui/src/ui/__tests__/conventions.test.ts` carries three **closed lists**
+  that a change has to update on purpose: the `data-ui` anchors, the files that carry a
+  disabled state, and the machine-voice files (the ones that set `var(--ff-mono)`).
+  A new component that fits one of them and does not edit the list fails the suite —
+  that is the point of the list, not an oversight in it.
+  `gui/src/styles/__tests__/tokens.test.ts` holds the other half: every contrast ratio
+  quoted in `docs/design/tokens.md` or in a comment inside `tokens.css` is asserted
+  against the stylesheet itself, so changing a value means moving the document with it.
+  Both exist because the failures they catch are invisible in a diff.
 - `web/src/lib/tools/specs.json` is a committed snapshot of the Rust tool
   registry. If you change any tool's `input_schema()` or `description()`
   in `crates/firment-tools`, regenerate/verify the snapshot — CI diffs it
