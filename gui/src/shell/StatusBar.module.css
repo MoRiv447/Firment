@@ -15,17 +15,17 @@
 .bar {
   display: flex;
   align-items: center;
-  gap: var(--sp-3);
+  gap: 14px;
   box-sizing: border-box;
   height: var(--h-min);
   flex: 0 0 auto;
-  padding: 0 var(--sp-2);
+  padding: 0 13px;
   background: var(--surface);
   border-top: 1px solid var(--line);
-  color: var(--ink);
+  color: var(--dim);
   font-family: var(--ff-mono);
   font-weight: var(--fw-mono);
-  font-size: var(--fs-meta);
+  font-size: var(--fs-micro);
   /* Readings are fixed-width by design; a bar that wrapped would push the
      transcript up and move the whole window. */
   overflow: hidden;
