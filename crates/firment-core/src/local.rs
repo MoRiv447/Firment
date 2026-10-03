@@ -202,6 +202,35 @@ pub fn recommend(models: &[String], vram_gb: Option<f32>) -> Vec<ModelFit> {
     candidates
 }
 
+/// The authority part of a URL as text: no scheme, no userinfo, no port, no brackets.
+///
+/// Written out rather than taken from `url::Url` because this decides *without* a DNS lookup
+/// (see [`is_private_url`]) and a parse that normalises a hostname would be a resolver in
+/// disguise. What it does have to get right is the shapes a split on `:` and `/` cannot: a
+/// bracketed IPv6 literal contains both characters, so the naive read of
+/// `http://[::1]:11434/v1` is the single character `[`, and `::1` was compared against a string
+/// the caller could never produce.
+fn url_host(url: &str) -> &str {
+    let after_scheme = match url.split_once("//") {
+        Some((_, rest)) => rest,
+        None => url,
+    };
+    let authority = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(after_scheme);
+    // `rsplit`, because a password may legitimately contain `@` and the host is what is left of
+    // the last one.
+    let authority = authority
+        .rsplit_once('@')
+        .map(|(_, h)| h)
+        .unwrap_or(authority);
+    if let Some(bracketed) = authority.strip_prefix('[') {
+        return bracketed.split(']').next().unwrap_or(bracketed);
+    }
+    authority.split(':').next().unwrap_or(authority)
+}
+
 /// Whether a base URL points at this machine or the network it sits on.
 ///
 /// "Local model" means "not a cloud account", and for a lot of people that includes the
@@ -209,16 +238,13 @@ pub fn recommend(models: &[String], vram_gb: Option<f32>) -> Vec<ModelFit> {
 /// `192.168.1.8`. So the private ranges count, and the check is a string test rather than a
 /// DNS lookup: resolving a name to decide whether to probe it would be a network call
 /// deciding whether to make a network call.
+///
+/// Anything this cannot recognise reads as *not* local, which is the direction that costs a
+/// missing probe rather than an unasked-for one.
 pub fn is_private_url(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
-    let host = lower
-        .split("//")
-        .nth(1)
-        .unwrap_or(&lower)
-        .split(['/', ':'])
-        .next()
-        .unwrap_or("");
-    if host == "localhost" || host == "::1" || host == "[::1]" {
+    let host = url_host(&lower);
+    if host == "localhost" || host == "::1" || host == "0:0:0:0:0:0:0:1" {
         return true;
     }
     let octets: Vec<u8> = host
@@ -423,6 +449,30 @@ mod tests {
                 .clone(),
         );
         assert_eq!(provider_name("ollama", &config), "ollama-2");
+    }
+
+    #[test]
+    fn the_host_is_read_out_of_a_url_in_every_shape_a_host_takes() {
+        // Splitting the authority on `:` and `/` gets a bracketed IPv6 literal wrong: the host
+        // of `http://[::1]:11434/v1` came out as the single character `[`, so the `::1`
+        // comparison below could never be reached, and a model server bound to the IPv6 loopback
+        // was reported as a cloud account.
+        for url in [
+            "http://[::1]:11434/v1",
+            "http://[0:0:0:0:0:0:0:1]:11434/v1",
+            "http://[::1]/v1",
+            "http://user:pw@127.0.0.1:11434/v1",
+            "http://[::1]:11434",
+        ] {
+            assert!(is_private_url(url), "{url} should count as local");
+        }
+        for url in [
+            "http://[2001:db8::1]:11434/v1",
+            "http://example.com/[::1]",
+            "https://[::1]@api.example.com/v1",
+        ] {
+            assert!(!is_private_url(url), "{url} is not a local endpoint");
+        }
     }
 
     #[test]

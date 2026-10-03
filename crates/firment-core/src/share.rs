@@ -276,17 +276,27 @@ pub fn mask(text: &str) -> String {
             .iter()
             .any(|prefix| candidate.starts_with(prefix) && candidate.len() >= prefix.len() + 12);
         if looks_like_key {
-            // Keep the prefix: a reader needs to know *which* key leaked.
+            // Keep the prefix: a reader needs to know *which* key leaked. And keep the longest
+            // match rather than the first in the table, because `sk-` is a prefix of both
+            // `sk-ant-` and `sk_live_`: an array-order search relabelled an Anthropic key as an
+            // OpenAI one and a Stripe live key as either, which is the one job the kept prefix
+            // has.
             let prefix = PREFIXES
                 .iter()
-                .find(|prefix| candidate.starts_with(**prefix))
+                .filter(|prefix| candidate.starts_with(**prefix))
+                .max_by_key(|prefix| prefix.len())
                 .copied()
                 .unwrap_or("");
+            // The punctuation the detection stepped over belongs to the sentence, not to the key.
+            // Without this, `("sk-ant-aaa…")` came back as `sk-ant-***masked***)`: the opening
+            // bracket eaten, the closing one kept, and the text around the secret rewritten by a
+            // redactor that was only supposed to shorten it.
+            out.push_str(&word[..word.len() - trimmed.len()]);
             out.push_str(prefix);
             out.push_str("***masked***");
             let tail = &candidate[prefix.len()..];
-            if let Some(rest) = word.rsplit_once(tail) {
-                out.push_str(rest.1);
+            if let Some((_, after)) = word.rsplit_once(tail) {
+                out.push_str(after);
             }
         } else {
             out.push_str(word);
@@ -422,6 +432,27 @@ mod tests {
         assert!(md.contains("9f8e7d6c5b4a39281706"), "{md}");
         // The reader is told what was done, and told it is not a guarantee.
         assert!(md.contains("not a guarantee"), "{md}");
+    }
+
+    #[test]
+    fn a_masked_key_keeps_the_prefix_that_identifies_it() {
+        // `sk-` is a prefix of both `sk-ant-` and `sk_live_`, and the table was searched in array
+        // order, so an Anthropic key and a Stripe live key both came out labelled as the OpenAI
+        // shape. The kept prefix is the only part of the secret an export is allowed to show, and
+        // its whole purpose is to tell the reader whose key to revoke.
+        assert_eq!(mask("sk-ant-abcdefghijklmnop"), "sk-ant-***masked***");
+        assert_eq!(mask("sk_live_ABCDEFGHIJKLMNOP"), "sk_live_***masked***");
+        assert_eq!(
+            mask("sk-abcdefghijklmnopqrstuvwxyz"),
+            "sk-***masked***",
+            "the plain shape keeps masking as it always did"
+        );
+        // Punctuation around the token is not part of it and comes back unchanged.
+        assert_eq!(
+            mask("(sk-ant-abcdefghijklmnop)"),
+            "(sk-ant-***masked***)",
+            "the redactor may shorten the key; it may not rewrite the sentence around it"
+        );
     }
 
     #[test]
