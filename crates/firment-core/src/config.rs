@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
     pub providers: HashMap<String, ProviderConfig>,
@@ -122,6 +123,7 @@ pub struct Pin {
 
 /// `[mqtt]` in config.toml.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MqttConfig {
     /// "host:port" of the mosquitto broker, e.g. "192.168.1.6:1883".
     #[serde(default)]
@@ -229,6 +231,7 @@ impl UiTheme {
 /// local-model report lists what a server has and recommends nothing — which is the
 /// honest output, not a gap to be filled with a guess.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LocalConfig {
     #[serde(default)]
     pub vram_gb: Option<f32>,
@@ -241,6 +244,7 @@ pub struct LocalConfig {
 /// own board is more useful than one that does not. `[tools] default_chip` is merged today
 /// for exactly the same reason.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BoardConfig {
     /// Name of the active profile in `docs/boards/` (also accepted: a part number or a
     /// probe-rs chip name — `firm_core::board::find` resolves all three).
@@ -252,6 +256,7 @@ pub struct BoardConfig {
 /// reason as [`UiConfig`]: a cloned repository must not be able to make every edit of
 /// yours cost an extra model call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReviewConfig {
     /// When an edit triggers a self-review. See [`AfterEdit`].
     #[serde(default)]
@@ -276,6 +281,7 @@ fn default_review_min_lines() -> usize {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UiConfig {
     #[serde(default)]
     pub tool_verbosity: ToolVerbosity,
@@ -531,6 +537,7 @@ impl<'de> Deserialize<'de> for LaConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ToolsConfig {
     /// Command run by the `verify` tool (platform shell), e.g. `cargo check`.
     #[serde(default)]
@@ -678,6 +685,7 @@ pub enum CompactionStrategy {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProviderConfig {
     #[serde(rename = "type")]
     pub r#type: String,
@@ -1859,6 +1867,46 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_key_nobody_reads_is_refused_rather_than_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        // The shape of a typo. `auto_aperove` is not a field, and it used to parse as "nothing is
+        // auto-approved" -- a config that says one thing and a program that does another, with no
+        // message to connect them.
+        std::fs::write(
+            &path,
+            "default_provider = \"x\"\nauto_aperove = [\"build\"]\n",
+        )
+        .unwrap();
+        let err = Config::load(&path).expect_err("an unread key is not an unset one");
+        let text = err.to_string();
+        assert!(text.contains("auto_aperove"), "{text}");
+
+        // The same rule one level down, where a struct of known names is in scope: an inline key
+        // spelled wrong reads as "no inline key", and the provider then quietly falls back.
+        std::fs::write(
+            &path,
+            "[providers.x]\ntype = \"openai\"\nmodel = \"m\"\napi_krey = \"sk\"\n",
+        )
+        .unwrap();
+        let err = Config::load(&path).expect_err("a provider's keys are checked too");
+        assert!(err.to_string().contains("api_krey"), "{err}");
+    }
+
+    #[test]
+    fn the_shipped_template_still_parses_after_the_stricter_reader() {
+        // `load_or_create` writes this text and then reads it back with the same parser, so a key
+        // in the template that the struct does not have would break every fresh install -- and no
+        // other test touches the template at all.
+        let parsed: Config =
+            toml::from_str(default_config_text()).expect("the shipped template must parse");
+        assert!(
+            !parsed.providers.is_empty(),
+            "a template with no provider is not a template"
+        );
+    }
 
     #[test]
     fn parses_tools_elf_string_backward_compatible() {

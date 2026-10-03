@@ -73,6 +73,7 @@ impl Capability {
 
 /// A `[plugins.<name>]` entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PluginConfig {
     /// The program to run. A relative path is resolved against the directory the config was
     /// loaded for (see [`resolve_command`]), because a plugin committed with a project is
