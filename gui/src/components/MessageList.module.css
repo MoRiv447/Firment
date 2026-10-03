@@ -10,6 +10,9 @@
   display: flex;
   flex-direction: column;
   gap: var(--sp-4);
+  max-width: var(--measure);
+  margin-inline: auto;
+  width: 100%;
   font-family: var(--ff-sans);
   /* What is read, not what is scanned. The tool-call and meta lines below keep
      their own smaller sizes, so the hierarchy is unchanged -- only the prose the
@@ -90,10 +93,7 @@
   grid-template-columns: 28px minmax(0, 1fr);
   gap: var(--sp-3);
   align-items: start;
-  max-width: 88%;
   min-width: 0;
-  margin-inline: auto;
-  width: 100%;
 }
 
 /*

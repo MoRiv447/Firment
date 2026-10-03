@@ -305,6 +305,7 @@ export function ChatView({
               </Callout>
             )}
             {turn && (
+              <div className={styles.column}>
               <AgentTurn>
             {steps && <StepProgress steps={steps} />}
             <LiveRun
@@ -343,6 +344,7 @@ export function ChatView({
               />
             )}
               </AgentTurn>
+              </div>
             )}
           </>
         ) : (

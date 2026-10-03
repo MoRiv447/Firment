@@ -214,6 +214,14 @@
  * a line of the footer on, because getting it wrong on the first message sends
  * nothing and explains itself as a broken app.
  */
+/* The live turn, capped to the same measure the stored messages use. */
+.column {
+  max-width: var(--measure);
+  margin-inline: auto;
+  width: 100%;
+  min-width: 0;
+}
+
 .hint {
   /* The chips stay on the left with the field's own settings; the keys and the
      action go to the right edge together, which is where a hand already is. */
@@ -238,7 +246,7 @@
    field and the text above share one measure instead of the box running edge to
    edge under a column that stops short. */
 .field {
-  max-width: 864px;
+  max-width: var(--measure);
   margin-inline: auto;
   width: 100%;
   display: flex;

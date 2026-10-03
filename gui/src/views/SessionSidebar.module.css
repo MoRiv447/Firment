@@ -261,3 +261,23 @@
   font-family: var(--ff-mono);
   font-weight: var(--fw-mono);
 }
+
+/*
+ * The selected row also carries a bar. An edge says "this card is chosen"; a 3px
+ * bar at the column's left says "this is where you are", and the second is the one
+ * you read while scrolling fast. Both, because the fill is deliberately quiet.
+ */
+.item[data-selected='true'] .select {
+  position: relative;
+}
+
+.item[data-selected='true'] .select::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  border-radius: 0 var(--r-chip) var(--r-chip) 0;
+  background: var(--brand-acid);
+}

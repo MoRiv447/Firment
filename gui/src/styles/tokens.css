@@ -456,6 +456,16 @@
    * out in three files.
    */
   --gap-card: 10px;
+  /*
+   * The transcript's reading measure, and the one number every part of the conversation
+   * column has to agree on: the stored messages, the live turn and the composer all
+   * cap to it, so their left edges are one line rather than three calculations.
+   *
+   * It is centred by the column's own padding, not per row -- a row that centres
+   * itself is a row whose neighbour does not, which is how a bubble, a tile and a
+   * step band end up starting at three different x positions.
+   */
+  --measure: 864px;
 
   /*
    * Heights. `--h-row` is both the control height and the one-line list row,

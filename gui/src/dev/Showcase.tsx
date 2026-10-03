@@ -156,6 +156,16 @@ const CARD_RUN: ToolCardState[] = [
   },
 ];
 
+/** A call in flight, so the live turn can be seen with something in it. */
+const LIVE_TURN: ToolCardState = {
+  seq: 8,
+  name: 'build',
+  args: { cmd: 'cmake --build build' },
+  status: 'running',
+  startedAt: at(0),
+  progress: 'compiling',
+};
+
 /** A finished run, for the band that ends one. */
 const VERDICT_TURN = [
   shown(1, 'build', 0, 1_400),
@@ -688,7 +698,13 @@ export function Showcase() {
               <ChatView
                 session={COMPOSER_SESSION}
                 running
-                turn={{ text: '', tools: {}, thinking: '', startedAt: at(0), finished: false }}
+                turn={{
+                  text: '',
+                  tools: { 8: LIVE_TURN },
+                  thinking: '',
+                  startedAt: at(0),
+                  finished: false,
+                }}
                 infos={[]}
                 onSend={() => {}}
                 onCancel={() => {}}
