@@ -21,7 +21,6 @@ import type {
   PermissionRequest,
   SessionDto,
   SessionSummaryDto,
-  SettingsDto,
   TodoDto,
   TurnFlowEvent,
 } from './types';
@@ -66,20 +65,16 @@ export default function App() {
   // Read the persisted setting once at startup. Reusing `get_settings` rather
   // than adding a command just for this: it is one local IPC call, and a
   // second source of the same value is a second thing that can disagree.
-  // `SettingsView` publishes later changes, so this is the only read.
   //
-  // The whole DTO is kept, not just `theme`, because the header's scheme toggle
-  // writes the setting back through the same `save_settings` the settings form
-  // uses -- and that call replaces the whole object, so a theme-only payload
-  // would blank every other field.
-  const [settings, setSettings] = useState<SettingsDto | null>(null);
+  // Only the theme is taken from it, and nothing is kept of the rest. The
+  // header's scheme toggle writes through the same `save_settings` the settings
+  // form uses, and that call replaces the WHOLE object -- so a cached copy is a
+  // copy of whatever the form held when this window opened, and writing one back
+  // undoes anything saved since. The toggle re-reads instead (see below).
   useEffect(() => {
     void api
       .getSettings()
-      .then((s) => {
-        setSettings(s);
-        setThemeSetting(s.theme ?? 'auto');
-      })
+      .then((s) => setThemeSetting(s.theme ?? 'auto'))
       .catch((err: unknown) => console.error(err));
   }, []);
 
@@ -99,14 +94,20 @@ export default function App() {
   const toggleTheme = () => {
     const next = mode === 'dark' ? 'light' : 'dark';
     setThemeSetting(next);
-    if (!settings) return;
-    const updated = { ...settings, theme: next };
-    setSettings(updated);
-    void api.saveSettings(updated).catch((err: unknown) => {
-      // The scheme is already applied on screen; a failed write means it will
-      // not survive a restart. Say so rather than pretending it saved.
-      console.error('theme not persisted:', err);
-    });
+    // Read, patch, write -- never a copy held from earlier. `save_settings`
+    // replaces the whole object, so writing back a stale one reverted whatever
+    // the Settings drawer had saved since this window opened: switching the
+    // scheme from the header undid a model change, a budget change, an
+    // auto-approve list. Re-reading narrows the race to the few milliseconds the
+    // two calls apart, and the drawer is modal, so the two are never open at once.
+    void api
+      .getSettings()
+      .then((current) => api.saveSettings({ ...current, theme: next }))
+      .catch((err: unknown) => {
+        // The scheme is already applied on screen; a failed write means it will
+        // not survive a restart. Say so rather than pretending it saved.
+        console.error('theme not persisted:', err);
+      });
   };
 
   const [sessions, setSessions] = useState<SessionSummaryDto[]>([]);
@@ -716,15 +717,18 @@ export default function App() {
     void run();
   };
 
-  const handleSend = (input: string) => {
+  const handleSend = (input: string): Promise<void> => {
     const sid = sessionRef.current?.id;
-    if (!sid) return;
+    if (!sid) return Promise.reject(new Error('no session is open'));
     const snapshot = sessionRef.current?.messages ?? [];
     // 乐观追加用户消息，发送后立即显示在聊天区（turn_end 后以 transcript 为准）
     setSession((s) =>
       s ? { ...s, messages: [...s.messages, { role: 'user', content: input }] } : s,
     );
-    void api.startTurn(sid, input).catch((err) => {
+    // The rejection travels back to the caller on purpose: `ChatView` has already cleared the
+    // composer, and this is the one path where the text has to come back. The transcript rollback
+    // below removes the optimistic copy, so without it the message would exist nowhere on screen.
+    return api.startTurn(sid, input).catch((err) => {
       console.error(err);
       // 发送失败（如 agent 正忙）：回滚乐观消息，避免界面上出现"幽灵消息"。
       // 只在用户仍停留在同一个会话时回滚——盲目写入快照会把 A 会话的
@@ -735,6 +739,7 @@ export default function App() {
       // agent is busy, and the in-transcript quick-action buttons can only
       // ever hit that path.
       pushInfo(sid, `Not sent: ${err}`);
+      throw err;
     });
   };
 
@@ -1057,14 +1062,26 @@ export default function App() {
         >
           <SettingsView />
         </Drawer>
+        {/*
+          Keyed by request id, which the backend takes from one process-global counter, so an id
+          names exactly one outstanding request. Without it the queue's next request is rendered
+          into the SAME component instance: `AskDialog` holds the free text in state, so an answer
+          typed for one question is sitting in the box when the next one opens -- and Enter sends
+          it to a question it was never written for.
+        */}
         {permQueue[0] && (
           <PermissionDialog
+            key={permQueue[0].id}
             req={permQueue[0]}
             onClose={() => setPermQueue((q) => q.slice(1))}
           />
         )}
         {askQueue[0] && (
-          <AskDialog req={askQueue[0]} onClose={() => setAskQueue((q) => q.slice(1))} />
+          <AskDialog
+            key={askQueue[0].id}
+            req={askQueue[0]}
+            onClose={() => setAskQueue((q) => q.slice(1))}
+          />
         )}
     </>
   );

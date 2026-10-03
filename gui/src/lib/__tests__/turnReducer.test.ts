@@ -230,6 +230,47 @@ describe('turnReducer (IDE event->UI contract)', () => {
     expect(state.turn?.text).toBe('partial\n⚠ network down');
   });
 
+  it('closes a dangling card on the error path exactly as turn_end does', () => {
+    // "The turn is over and this card never reported" is one fact with two ways to reach it, so
+    // it is one close. The error arm used to hand-roll its own: it set the status and a summary,
+    // and left the card's last progress sentence on it with no end time — so an interrupted build
+    // rendered as failed *and* still said "compiling the app", which is what `ToolCard` prints
+    // whenever `progress` is set. The nested list was already closed properly by the shared
+    // helper, which is the other tell: one of the two arms had the cleanup and the other did not.
+    const events: TurnFlowEvent[] = [
+      { type: 'turn_start' },
+      { type: 'tool_start', name: 'build', args: {}, seq: 5 },
+      { type: 'progress', tool: 'build', seq: 5, phase: 'compiling', current: 1, total: 3 },
+      { type: 'subagent_start', id: 's1', label: 'research', depth: 1 },
+      { type: 'tool_start', name: 'grep', args: {}, seq: 1, owner: 's1' },
+      {
+        type: 'progress',
+        tool: 'grep',
+        seq: 1,
+        owner: 's1',
+        phase: 'scanning',
+        current: 2,
+        total: 4,
+      },
+    ];
+    const interrupted = feed([...events, { type: 'error', message: 'network down' }]);
+    const ended = feed([...events, { type: 'turn_end', text: 'done' }]);
+
+    expect(interrupted.turn?.tools[5].status).toBe('failed');
+    expect(interrupted.turn?.tools[5].summary).toContain('interrupted by error');
+    expect(interrupted.turn?.tools[5].progress).toBeUndefined();
+    expect(interrupted.turn?.tools[5].endedAt).toBeDefined();
+
+    // The same close, field for field — the timestamps excepted, since each feed stamps its own
+    // instant and a millisecond between them is not a difference in behaviour.
+    for (const field of ['progress', 'status'] as const) {
+      expect(interrupted.turn?.tools[5][field]).toEqual(ended.turn?.tools[5][field]);
+      expect(interrupted.subagents[0].steps[0][field]).toEqual(ended.subagents[0].steps[0][field]);
+    }
+    expect(interrupted.subagents[0].steps[0].progress).toBeUndefined();
+    expect(interrupted.subagents[0].steps[0].summary).toContain('interrupted by error');
+  });
+
   it('does not mutate the previous state object', () => {
     const before = feed([{ type: 'turn_start' }]);
     const after = feed([{ type: 'text_delta', text: 'x' }], before);

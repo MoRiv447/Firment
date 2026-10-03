@@ -71,7 +71,11 @@ export function ChatView({
   running: boolean;
   turn: RunningTurn | null;
   infos: { id: number; text: string }[];
-  onSend: (input: string) => void;
+  /**
+   * Hand the text to the agent. A rejected promise means the kernel refused it, and the composer
+   * puts the draft back (see `submit`).
+   */
+  onSend: (input: string) => Promise<void> | void;
   onCancel: () => void;
   /** Switch agent/plan. Absent in a read-only rendering, where the chips are hidden. */
   onMode?: (mode: string) => void;
@@ -189,12 +193,33 @@ export function ChatView({
     if (el) el.scrollTop = el.scrollHeight;
   };
 
-  const send = () => {
-    const trimmed = input.trim();
+  /*
+   * The one send path, shared by the composer and by a card's quick action.
+   *
+   * The draft is cleared FIRST and put back if the kernel refuses, rather than cleared only on
+   * success: clearing after the reply lands would leave the text sitting in the composer for the
+   * whole round trip, and a chat that echoes the message optimistically would show it twice. The
+   * refusal path is not hypothetical -- `start_turn` refuses while the session's slot is held, and
+   * the frontend's own `running` can disagree with it (a turn that ended while this window was
+   * reloading). A refusal that also ate the text is the one outcome nobody can recover.
+   */
+  const submit = (text: string) => {
+    const trimmed = text.trim();
     if (!trimmed || running) return;
     setInput('');
-    onSend(trimmed);
+    void Promise.resolve(onSend(trimmed)).catch(() => setInput(trimmed));
   };
+  const send = () => submit(input);
+
+  /*
+   * A card's quick actions are the same send, so they carry the same precondition -- and they are
+   * offered by the CARD's own status, which says nothing about the turn. An edit that finished a
+   * moment ago is `done` while the agent is still working through the rest of the wave, so
+   * "Build & flash" sits under it offering a request the kernel will refuse, and the refusal is the
+   * only thing the reader learns. No callback is the honest rendering of "there is nowhere to send
+   * this yet": the row disappears, exactly as it does for a card that has no pane to send from.
+   */
+  const actions = running ? undefined : onSend;
 
   const toolList = turn ? Object.values(turn.tools) : [];
   // Every finished run feeds the estimate the step row may show, and the record is
@@ -264,7 +289,7 @@ export function ChatView({
           <>
             <MessageList
               messages={session.messages}
-              onAction={onSend}
+              onAction={actions}
               onOpenChanges={onOpenChanges}
             />
             {/*
@@ -322,7 +347,7 @@ export function ChatView({
             <LiveRun
               tools={toolList}
               now={clock}
-              onAction={onSend}
+              onAction={actions}
               onOpenChanges={onOpenChanges}
               turnStartedAt={turn?.startedAt}
             />

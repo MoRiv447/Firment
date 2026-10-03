@@ -27,7 +27,7 @@ import type {
 
 export const api = {
   startTurn: (sessionId: string, input: string) =>
-    invoke('start_turn', { sessionId, input }),
+    invoke<void>('start_turn', { sessionId, input }),
   cancelTurn: (sessionId: string) => invoke('cancel_turn', { sessionId }),
   setSessionThinking: (sessionId: string, level: string) =>
     invoke<SessionDto>('set_session_thinking', { sessionId, level }),

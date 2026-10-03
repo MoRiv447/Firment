@@ -17,7 +17,20 @@ import type { AskRequest, PermissionRequest } from '../../types';
  * `api` is the real module with two of its methods spied on. Nothing here reaches
  * the network: the spy replaces the call before `invoke` is asked for a Tauri
  * runtime that jsdom does not have.
+ *
+ * The last case reads `App.tsx` as text, which is out of place here and deliberate:
+ * what it checks is how the queue RENDERS these components, and every test in this
+ * file renders one dialog on its own — the shape a queue gives them is invisible to
+ * that, and invisible in a diff.
  */
+
+// The app root, as text. Same route `ui/__tests__/conventions.test.ts` takes: the
+// GUI has no Node types, so `?raw` is the only file read a test here can do.
+const appSource = import.meta.glob('../../App.tsx', {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+})['../../App.tsx'] as string;
 
 const permission = (over: Partial<PermissionRequest> = {}): PermissionRequest => ({
   id: 7,
@@ -185,4 +198,27 @@ describe('AskDialog', () => {
     fireEvent.click(dismiss);
     expect(askSpy).toHaveBeenCalledTimes(1);
   });
+});
+
+describe('the queue that renders them', () => {
+  it('actually reads the app root', () => {
+    // A glob that matched nothing hands back `''`, and every assertion below would then be
+    // vacuously true -- the same reason `conventions.test.ts` counts its own files.
+    expect(appSource.length).toBeGreaterThan(1000);
+  });
+
+  it.each(['AskDialog', 'PermissionDialog'])(
+    'renders %s with the request id as its key',
+    (name) => {
+      // Both dialogs keep state of their own: `AskDialog` the free text being typed,
+      // `PermissionDialog` the flag that marks an answer in flight. The queue renders only
+      // `queue[0]`, so answering one request while another waits swaps the props on the SAME
+      // component instance -- unkeyed, the text typed for the first question is sitting in the
+      // box when the second opens, and Enter sends it to a question it was never written for.
+      // `id` is unique because the backend takes it from one process-global counter.
+      const element = new RegExp(`<${name}\\b[\\s\\S]*?/>`).exec(appSource);
+      expect(element, `${name} is no longer rendered from App.tsx`).toBeTruthy();
+      expect(element![0], `${name} renders with no key`).toMatch(/key=\{/);
+    },
+  );
 });

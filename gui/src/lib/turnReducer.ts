@@ -68,21 +68,30 @@ function routeToSubagent(
   return state.subagents.map((s) => (s.id === owner ? { ...s, steps: update(s.steps) } : s));
 }
 
+/** What a card that never reported reads as, for each of the two ways a turn can be over. */
+const CLOSED_BY_TURN_END = 'no result reported before the turn ended';
+const CLOSED_BY_ERROR = 'interrupted by error';
+
 /** Resolve a card that is still running when its turn ends.
  *
  * Every path through the agent emits a `tool_end` — normal, cancelled and wave-timeout — so
- * reaching `turn_end` with a card still running means the event was lost, not that the tool is
- * still working. Saying so is better than a spinner that never stops, and worse than lying about
- * what it did, so the summary names the absence rather than a result.
+ * reaching the end of a turn with a card still running means the event was lost, not that the
+ * tool is still working. Saying so is better than a spinner that never stops, and worse than
+ * lying about what it did, so the summary names the absence rather than a result.
+ *
+ * The reason is a parameter because there are two ways to reach this and they read differently
+ * ("the turn ended" vs "an error cut it short"). What is NOT a parameter is the cleanup: an
+ * interrupted card keeps its last progress sentence otherwise, and `ToolCard` renders that line
+ * under the failed mark — a card that says both "it went wrong" and "still compiling the app".
  */
-function closeRunning(t: ToolCardState): ToolCardState {
+function closeRunning(t: ToolCardState, why: string): ToolCardState {
   return t.status === 'running'
     ? {
         ...t,
         status: 'failed',
         progress: undefined,
         endedAt: Date.now(),
-        summary: 'no result reported before the turn ended',
+        summary: why,
       }
     : t;
 }
@@ -90,10 +99,10 @@ function closeRunning(t: ToolCardState): ToolCardState {
 /** Close every open frame. Used on the paths where the turn ends without the
  *  nested agents having reported back: a frame left open would attribute the
  *  NEXT turn's first tool calls to an agent that had already returned. */
-function closeAll(state: TurnState): Pick<TurnState, 'subagents' | 'stack'> {
+function closeAll(state: TurnState, why: string): Pick<TurnState, 'subagents' | 'stack'> {
   return {
     subagents: state.subagents.map((s) =>
-      s.done ? s : { ...s, done: true, steps: s.steps.map(closeRunning) },
+      s.done ? s : { ...s, done: true, steps: s.steps.map((t) => closeRunning(t, why)) },
     ),
     stack: [],
   };
@@ -287,11 +296,14 @@ export function turnReducer(state: TurnState, e: TurnFlowEvent): TurnState {
               ...state.turn,
               finished: true,
               tools: Object.fromEntries(
-                Object.entries(state.turn.tools).map(([seq, t]) => [seq, closeRunning(t)]),
+                Object.entries(state.turn.tools).map(([seq, t]) => [
+                  seq,
+                  closeRunning(t, CLOSED_BY_TURN_END),
+                ]),
               ),
             }
           : null,
-        ...closeAll(state),
+        ...closeAll(state, CLOSED_BY_TURN_END),
       };
 
     case 'turn_synced':
@@ -311,7 +323,10 @@ export function turnReducer(state: TurnState, e: TurnFlowEvent): TurnState {
       // null and the error must still surface instead of being dropped.
       // Tools still marked running are resolved as failed — an interrupted
       // wave never gets its tool_end, and blue "running" cards would
-      // otherwise hang under the transcript until the next turn.
+      // otherwise hang under the transcript until the next turn. This is the
+      // same close `turn_end` performs, so it goes through the same function;
+      // the two arms hand-rolling one shutdown is how the error path ended up
+      // leaving a stale progress line behind.
       return {
         running: false,
         turn: state.turn
@@ -321,14 +336,12 @@ export function turnReducer(state: TurnState, e: TurnFlowEvent): TurnState {
               tools: Object.fromEntries(
                 Object.entries(state.turn.tools).map(([seq, t]) => [
                   seq,
-                  t.status === 'running'
-                    ? { ...t, status: 'failed' as const, summary: 'interrupted by error' }
-                    : t,
+                  closeRunning(t, CLOSED_BY_ERROR),
                 ]),
               ),
             }
           : { text: `⚠ ${e.message}`, thinking: '', tools: {}, startedAt: Date.now() },
-        ...closeAll(state),
+        ...closeAll(state, CLOSED_BY_ERROR),
       };
 
     default: {

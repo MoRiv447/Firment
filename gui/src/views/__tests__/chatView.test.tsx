@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import { ChatView } from '../ChatView';
-import type { SessionDto } from '../../types';
+import type { RunningTurn, SessionDto } from '../../types';
 
 /**
  * The chat pane, which had no test at all until now.
@@ -200,5 +200,67 @@ describe('ChatView: the counter above the transcript', () => {
   it('falls back to the call count when there is no plan', () => {
     setup({ progress: null });
     expect(screen.getByText('0 tool calls')).toBeInTheDocument();
+  });
+});
+
+describe('ChatView: what a finished edit offers next', () => {
+  const started = 1_700_000_000_000;
+  // A card the turn has already closed: the row's own precondition is met, which is the
+  // point — the thing that has to stop the offer is the TURN, and a card cannot see it.
+  const turn: RunningTurn = {
+    text: '',
+    thinking: '',
+    startedAt: started,
+    finished: false,
+    tools: {
+      3: { seq: 3, name: 'edit_file', args: {}, status: 'ok', summary: 'two hunks applied' },
+    },
+  };
+
+  const openEditCard = () => {
+    fireEvent.click(screen.getAllByRole('button', { name: /edit_file/ })[0]);
+    return screen.queryByRole('button', { name: 'Build & flash' });
+  };
+
+  it('offers the actions for an edit that finished, once the turn is over', () => {
+    setup({ turn });
+    expect(openEditCard()).toBeInTheDocument();
+  });
+
+  it('offers nothing while the turn is still running', () => {
+    // Both actions send a NEW request through the composer's path, and `start_turn` refuses
+    // while the session's slot is held — so mid-turn the only thing pressing one can do is
+    // produce "Not sent". An offer that cannot be taken is not an offer; the row disappears,
+    // the same way it does for a card with nowhere to send to.
+    setup({ turn, running: true });
+    expect(openEditCard()).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Run tests' })).toBeNull();
+  });
+});
+
+describe('ChatView: the composer when a send is refused', () => {
+  it('puts the text back in the field when the kernel refuses it', async () => {
+    // `send()` clears the field before the call lands, because a composer that keeps the text
+    // through the round trip shows the same message twice — the transcript has it optimistically.
+    // A refusal then removes it from the transcript too, and without this the text existed
+    // nowhere on screen: the click did nothing AND ate what was typed.
+    const refuse = vi.fn().mockRejectedValue(new Error('this session already has a turn running'));
+    setup({ onSend: refuse });
+    const field = screen.getByRole('textbox', { name: 'Ask the agent' });
+    fireEvent.change(field, { target: { value: 'flash the board' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(field).toHaveValue('');
+    await waitFor(() => expect(field).toHaveValue('flash the board'));
+    expect(refuse).toHaveBeenCalledWith('flash the board');
+  });
+
+  it('leaves the field empty when the send is accepted', async () => {
+    const accept = vi.fn().mockResolvedValue(undefined);
+    setup({ onSend: accept });
+    const field = screen.getByRole('textbox', { name: 'Ask the agent' });
+    fireEvent.change(field, { target: { value: 'flash the board' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(accept).toHaveBeenCalledTimes(1));
+    expect(field).toHaveValue('');
   });
 });
