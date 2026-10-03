@@ -498,6 +498,40 @@ impl Agent {
         self.event_owner.clone()
     }
 
+    /// Whether this agent owns the turn the human is watching.
+    ///
+    /// A nested run executes `run_turn` on its parent's sink, and a surface keys one turn slot
+    /// per session — so an inner `turn_start` RESETS the outer turn: every card and every streamed
+    /// sentence the person is looking at disappears the moment the agent delegates, and the inner
+    /// `turn_end` closes a turn whose parent is still working. `owner` was added so cards could be
+    /// routed to their author; the turn boundary has no author to route to, because a delegation
+    /// does not begin or end anyone's turn — the `SubagentStart`/`SubagentEnd` pair that brackets
+    /// it already says where the nested run began and finished.
+    fn owns_turn_boundary(&self) -> bool {
+        self.event_owner.is_none()
+    }
+
+    async fn emit_turn_start(&self) {
+        if self.owns_turn_boundary() {
+            self.sink.event(AgentEvent::TurnStart).await;
+        }
+    }
+
+    async fn emit_turn_end(&self, text: String) {
+        if self.owns_turn_boundary() {
+            self.sink.event(AgentEvent::TurnEnd { text }).await;
+        }
+    }
+
+    /// The turn-ending failure notice. Suppressed for a nested run for the same reason as the
+    /// boundary pair: the frontend's `error` handler closes the turn slot, and the failure belongs
+    /// to the parent as a failed `task` card, which is where its text lands anyway.
+    async fn emit_turn_error(&self, message: String) {
+        if self.owns_turn_boundary() {
+            self.sink.event(AgentEvent::Error(message)).await;
+        }
+    }
+
     /// The journal this turn writes into, and whether this turn may close it.
     ///
     /// Its own, by default: one per turn, in the session's undo directory, so a cancel rolls
@@ -1074,11 +1108,7 @@ impl Agent {
             // Persist BEFORE TurnEnd: clients that refresh the transcript on
             // turn_end must not read a stale store.
             let _ = self.store.save(&self.session);
-            self.sink
-                .event(AgentEvent::TurnEnd {
-                    text: String::new(),
-                })
-                .await;
+            self.emit_turn_end(String::new()).await;
             return Ok(String::new());
         }
         let (delta, last_seq) = Ledger::new(self.store.ledger_path(&self.session.id))
@@ -1113,7 +1143,7 @@ impl Agent {
         self.session.push(ChatMessage::User {
             content: input.to_string(),
         });
-        self.sink.event(AgentEvent::TurnStart).await;
+        self.emit_turn_start().await;
 
         // The turn's transaction: its own, or the one a parent handed down to a subagent.
         let journal = self.turn_journal();
@@ -1165,11 +1195,7 @@ impl Agent {
                     .event(AgentEvent::Info(journal.interrupted_note()))
                     .await;
                 let _ = self.store.save(&self.session);
-                self.sink
-                    .event(AgentEvent::TurnEnd {
-                        text: String::new(),
-                    })
-                    .await;
+                self.emit_turn_end(String::new()).await;
                 return Ok(String::new());
             }
             let request = self.build_request();
@@ -1187,13 +1213,9 @@ impl Agent {
                             Some(clause) => format!("provider error; {clause}"),
                             None => format!("provider error: {e}"),
                         };
-                        self.sink.event(AgentEvent::Error(message)).await;
+                        self.emit_turn_error(message).await;
                         let _ = self.store.save(&self.session);
-                        self.sink
-                            .event(AgentEvent::TurnEnd {
-                                text: String::new(),
-                            })
-                            .await;
+                        self.emit_turn_end(String::new()).await;
                         return Err(AgentError::Provider(e));
                     }
                 },
@@ -1202,11 +1224,7 @@ impl Agent {
                         .event(AgentEvent::Info(journal.interrupted_note()))
                         .await;
                     let _ = self.store.save(&self.session);
-                    self.sink
-                        .event(AgentEvent::TurnEnd {
-                            text: String::new(),
-                        })
-                        .await;
+                    self.emit_turn_end(String::new()).await;
                     return Ok(String::new());
                 }
                 // Creation timeout: bounds how long we wait for the stream to
@@ -1224,11 +1242,7 @@ impl Agent {
                         )))
                         .await;
                     let _ = self.store.save(&self.session);
-                    self.sink
-                        .event(AgentEvent::TurnEnd {
-                            text: String::new(),
-                        })
-                        .await;
+                    self.emit_turn_end(String::new()).await;
                     // Not `Ok`: the turn produced nothing because a timer stopped it, and the
                     // one-shot CLI reads the `Ok` as a completed request.
                     return Err(AgentError::TimedOut(format!(
@@ -1315,13 +1329,9 @@ impl Agent {
                     Some(clause) => format!("provider error; {clause}"),
                     None => format!("provider error: {e}"),
                 };
-                self.sink.event(AgentEvent::Error(message)).await;
+                self.emit_turn_error(message).await;
                 let _ = self.store.save(&self.session);
-                self.sink
-                    .event(AgentEvent::TurnEnd {
-                        text: String::new(),
-                    })
-                    .await;
+                self.emit_turn_end(String::new()).await;
                 return Err(AgentError::Provider(e));
             }
 
@@ -1344,11 +1354,7 @@ impl Agent {
                     .event(AgentEvent::Info(journal.interrupted_note()))
                     .await;
                 let _ = self.store.save(&self.session);
-                self.sink
-                    .event(AgentEvent::TurnEnd {
-                        text: content.clone(),
-                    })
-                    .await;
+                self.emit_turn_end(content.clone()).await;
                 return Ok(content);
             }
 
@@ -1375,11 +1381,7 @@ impl Agent {
                     )))
                     .await;
                 let _ = self.store.save(&self.session);
-                self.sink
-                    .event(AgentEvent::TurnEnd {
-                        text: content.clone(),
-                    })
-                    .await;
+                self.emit_turn_end(content.clone()).await;
                 return Ok(content);
             }
 
@@ -1584,19 +1586,18 @@ impl Agent {
                 // contention on the session file) must not fail the whole
                 // turn — surface it and still end cleanly.
                 if let Err(e) = self.store.save(&self.session) {
-                    self.sink
-                        .event(AgentEvent::Error(format!(
-                            "warning: could not persist the session transcript: {e}"
-                        )))
-                        .await;
+                    // A nested run's transcript lives in a temp directory that is deleted on the
+                    // way out, so a failure to write it is nothing the person can act on — while
+                    // the `Error` it emits would close the PARENT's turn in every surface that
+                    // keys one slot per session.
+                    self.emit_turn_error(format!(
+                        "warning: could not persist the session transcript: {e}"
+                    ))
+                    .await;
                 }
                 // Persist BEFORE TurnEnd so transcript-refreshing clients see
                 // the final message.
-                self.sink
-                    .event(AgentEvent::TurnEnd {
-                        text: content.clone(),
-                    })
-                    .await;
+                self.emit_turn_end(content.clone()).await;
                 return Ok(content);
             }
 
@@ -1610,11 +1611,7 @@ impl Agent {
                     )))
                     .await;
                 let _ = self.store.save(&self.session);
-                self.sink
-                    .event(AgentEvent::TurnEnd {
-                        text: String::new(),
-                    })
-                    .await;
+                self.emit_turn_end(String::new()).await;
                 // Not `Ok`: the wave was cut off, nothing after it ran and no final text was ever
                 // produced. `main.rs:827` reads an `Ok` as a finished request and exits 0, which
                 // tells a script the job is done when a timer stopped it.

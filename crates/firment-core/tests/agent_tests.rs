@@ -774,6 +774,74 @@ async fn a_subagents_events_name_the_agent_that_issued_them() {
     );
 }
 
+/// The turn boundary belongs to the agent a person asked, not to every agent that runs.
+///
+/// A delegated run executes the same `run_turn` on its parent's sink, and a surface keys ONE turn
+/// slot per session: the inner `turn_start` resets it, so every card and every streamed sentence
+/// the person is watching vanishes the moment the agent delegates, and the inner `turn_end`
+/// closes a turn whose parent is still working. The `SubagentStart`/`SubagentEnd` pair that
+/// brackets the nested run already says where it began and finished.
+#[tokio::test]
+async fn a_nested_run_moves_the_turn_boundary_of_nobody() {
+    let boundary_kinds = |events: &[AgentEvent]| -> Vec<&'static str> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::TurnStart => Some("turn_start"),
+                AgentEvent::TurnEnd { .. } => Some("turn_end"),
+                AgentEvent::Error(_) => Some("error"),
+                _ => None,
+            })
+            .collect()
+    };
+
+    let dir = tempdir().unwrap();
+    let nested = Arc::new(Mutex::new(Vec::new()));
+    let mut agent = Agent::new(
+        Some(Box::new(fake_provider(echo_turns("nested")))),
+        registry_with(vec![Arc::new(EchoTool)]),
+        Session::new(dir.path().to_path_buf(), "default", "fake"),
+        SessionStore::new(dir.path().to_path_buf()),
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(nested.clone())),
+        10,
+    );
+    agent.set_event_owner("sub-1");
+    agent.run_turn("echo hi").await.unwrap();
+
+    let held = nested.lock().unwrap().clone();
+    assert_eq!(
+        boundary_kinds(&held),
+        Vec::<&'static str>::new(),
+        "a delegated run opened, closed or failed a turn it was not asked to run"
+    );
+    assert!(
+        held.iter()
+            .any(|e| matches!(e, AgentEvent::ToolStart { .. })),
+        "the nested run emitted no work either — the sink saw nothing at all"
+    );
+
+    // The session's own turn keeps both bounds, or the suppression above has simply
+    // disabled the events for everyone.
+    let own = Arc::new(Mutex::new(Vec::new()));
+    let mut plain = Agent::new(
+        Some(Box::new(fake_provider(echo_turns("own")))),
+        registry_with(vec![Arc::new(EchoTool)]),
+        Session::new(dir.path().to_path_buf(), "default", "fake"),
+        SessionStore::new(dir.path().join("own")),
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(own.clone())),
+        10,
+    );
+    plain.run_turn("echo hi").await.unwrap();
+    let held = own.lock().unwrap().clone();
+    assert_eq!(
+        boundary_kinds(&held),
+        vec!["turn_start", "turn_end"],
+        "a turn that was not delegated to anyone must still open and close"
+    );
+}
+
 /// Stands in for the real `edit_file`: the output text is shaped exactly like
 /// the editor's (one-line header, then a unified diff). Only the NAME decides
 /// whether `detail` is populated, so a stub is enough to pin the contract.
