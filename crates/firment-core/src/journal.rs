@@ -321,9 +321,14 @@ impl EditJournal {
 
     /// Record a path before it is mutated. The first call per path keeps the
     /// original bytes; later mutations to the same path reuse that backup.
-    pub fn begin(&mut self, path: &Path) -> Result<(), String> {
+    ///
+    /// The answer says whether *this* call is the one that recorded the path, and a tool that
+    /// might have to undo its own failure needs it: an entry already in the batch was taken by
+    /// whatever tool wrote the file earlier in the turn, and rolling it back would hand that
+    /// tool's change back too.
+    pub fn begin(&mut self, path: &Path) -> Result<bool, String> {
         if self.entries.iter().any(|e| same_path(&e.path, path)) {
-            return Ok(());
+            return Ok(false);
         }
         let existed = path.exists();
         let backup = if existed {
@@ -341,7 +346,7 @@ impl EditJournal {
             backup,
             existed,
         });
-        Ok(())
+        Ok(true)
     }
 
     /// Restore every recorded file to its pre-turn state and drop the batch.
@@ -381,8 +386,58 @@ impl EditJournal {
         }
     }
 
-    pub fn commit(&mut self) -> Result<Vec<LedgerChange>, String> {
-        self.commit_at_seq(0)
+    /// Restore only the entries recorded under `paths`, leaving every other entry in the batch
+    /// exactly where it was.
+    ///
+    /// [`rollback`](Self::rollback) is what a turn's epilogue uses, and it is the wrong size for
+    /// one tool that failed: the batch also holds files another tool wrote successfully in the
+    /// same turn, and inside a `task` call it holds the spawning turn's files too. None of those
+    /// were this tool's to take back.
+    ///
+    /// Entries whose restore failed are retained with their backups, as in `rollback`.
+    pub fn rollback_paths(&mut self, paths: &[PathBuf]) -> Result<Vec<String>, String> {
+        let mut matched: Vec<usize> = Vec::new();
+        for (i, entry) in self.entries.iter().enumerate() {
+            if paths.iter().any(|p| same_path(p, &entry.path)) {
+                matched.push(i);
+            }
+        }
+        let mut restored = Vec::new();
+        let mut errors = Vec::new();
+        let mut failed: Vec<usize> = Vec::new();
+        // Newest first, like the whole-batch rollback.
+        for &i in matched.iter().rev() {
+            let entry = &self.entries[i];
+            match restore_entry(&self.dir, entry) {
+                Ok(()) => {
+                    restored.push(entry.path.to_string_lossy().into_owned());
+                    if !entry.backup.is_empty() {
+                        let _ = fs::remove_file(self.dir.join(&entry.backup));
+                    }
+                }
+                Err(e) => {
+                    errors.push(e);
+                    failed.push(i);
+                }
+            }
+        }
+        let mut keep = vec![true; self.entries.len()];
+        for i in &matched {
+            if !failed.contains(i) {
+                keep[*i] = false;
+            }
+        }
+        let mut at = 0usize;
+        self.entries.retain(|_| {
+            let held = keep[at];
+            at += 1;
+            held
+        });
+        if errors.is_empty() {
+            Ok(restored)
+        } else {
+            Err(format!("rollback incomplete: {}", errors.join("; ")))
+        }
     }
 
     /// `commit`, recording which tool calls the turn reached.
@@ -900,7 +955,7 @@ mod tests {
         let mut journal = EditJournal::new(undo_dir.clone());
         journal.begin(&file).unwrap();
         std::fs::write(&file, "changed\n").unwrap();
-        journal.commit().unwrap();
+        journal.commit_at_seq(0).unwrap();
 
         assert_eq!(EditJournal::turns_before_seq(&undo_dir, 1), Rewind::Unknown);
     }
@@ -921,7 +976,7 @@ mod tests {
             let mut journal = EditJournal::new(undo_dir.clone());
             journal.begin(file).unwrap();
             std::fs::write(file, format!("changed {i}\n")).unwrap();
-            journal.commit().unwrap();
+            journal.commit_at_seq(i as u64 + 1).unwrap();
         }
 
         let (undone, summary) = EditJournal::undo_turns(&undo_dir, 2).unwrap();
@@ -964,7 +1019,7 @@ mod tests {
         journal.begin(&b).unwrap();
         std::fs::write(&a, "a changed\n").unwrap();
         std::fs::write(&b, "b changed\n").unwrap();
-        journal.commit().unwrap();
+        journal.commit_at_seq(1).unwrap();
 
         let (undone, summary) = EditJournal::undo_turns(&undo_dir, 1).unwrap();
         assert_eq!(undone, 1);
@@ -976,12 +1031,12 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    /// `EditJournal::commit` does NOT write the ledger itself: it returns the
+    /// Closing a turn's transaction does NOT write the ledger: `commit_at_seq` returns the
     /// changes and `Agent` appends them to `store.ledger_path(session)` (see
     /// `agent.rs`). So an export test has to do the same two steps -- commit,
     /// then append -- or it reads a file nothing ever created.
     fn committed_ledger(undo: &std::path::Path, journal: &mut EditJournal) -> Ledger {
-        let changes = journal.commit().unwrap();
+        let changes = journal.commit_at_seq(1).unwrap();
         let ledger = Ledger::new(undo.join("ledger.jsonl"));
         ledger.append(&changes).unwrap();
         ledger
@@ -1027,15 +1082,53 @@ mod tests {
         let file = dir.path().join("a.txt");
         fs::write(&file, "v1").unwrap();
         let mut journal = EditJournal::new(dir.path().join("undo"));
-        journal.begin(&file).unwrap();
+        assert!(journal.begin(&file).unwrap(), "the first begin records it");
         // A roundabout spelling of the same file: a second entry would back up
         // the content the FIRST edit already wrote and "restore" that instead.
         let roundabout = dir.path().join("sub").join("..").join("a.txt");
-        journal.begin(&roundabout).unwrap();
+        assert!(
+            !journal.begin(&roundabout).unwrap(),
+            "a path already in the batch is not this call's to roll back"
+        );
         assert_eq!(journal.entries.len(), 1, "one file, one backup entry");
         fs::write(&file, "v2").unwrap();
         journal.rollback().unwrap();
         assert_eq!(fs::read_to_string(&file).unwrap(), "v1");
+    }
+
+    #[test]
+    fn rollback_paths_gives_back_only_the_paths_it_is_named() {
+        // The narrow one a single failing tool needs. `rollback` is the turn's, and a batch can
+        // hold another tool's successful work — or, inside a `task` call, the spawning turn's.
+        let dir = tempdir().unwrap();
+        let a = dir.path().join("a.txt");
+        let b = dir.path().join("b.txt");
+        fs::write(&a, "a1").unwrap();
+        fs::write(&b, "b1").unwrap();
+        let mut journal = EditJournal::new(dir.path().join("undo"));
+        journal.begin(&a).unwrap();
+        journal.begin(&b).unwrap();
+        fs::write(&a, "a2").unwrap();
+        fs::write(&b, "b2").unwrap();
+
+        let restored = journal
+            .rollback_paths(std::slice::from_ref(&a))
+            .unwrap();
+        assert_eq!(restored, vec![a.to_string_lossy().to_string()]);
+        assert_eq!(fs::read_to_string(&a).unwrap(), "a1");
+        assert_eq!(
+            fs::read_to_string(&b).unwrap(),
+            "b2",
+            "the entry nobody named keeps its content"
+        );
+        assert_eq!(
+            journal.entries.len(),
+            1,
+            "only the named entry left the batch"
+        );
+        // And the survivor is still undoable by the turn's own rollback.
+        journal.rollback().unwrap();
+        assert_eq!(fs::read_to_string(&b).unwrap(), "b1");
     }
 
     #[test]
@@ -1056,14 +1149,14 @@ mod tests {
         fs::write(&a, "v1").unwrap();
         journal.begin(&a).unwrap();
         fs::write(&a, "v2").unwrap();
-        journal.commit().unwrap();
+        journal.commit_at_seq(1).unwrap();
         // Second turn touches only a NEW file, so no backup was taken and the
         // sample counter never moved — the index name used to collide with the
         // previous turn's and overwrite it.
         let b = dir.path().join("b.txt");
         journal.begin(&b).unwrap();
         fs::write(&b, "new").unwrap();
-        journal.commit().unwrap();
+        journal.commit_at_seq(2).unwrap();
 
         let indexes: Vec<String> = fs::read_dir(&undo)
             .unwrap()
@@ -1092,7 +1185,7 @@ mod tests {
         let mut journal = EditJournal::new(undo_dir.clone());
         journal.begin(&file).unwrap();
         fs::write(&file, "changed").unwrap();
-        let changes = journal.commit().unwrap();
+        let changes = journal.commit_at_seq(1).unwrap();
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].old_lines, 1);
         assert_eq!(changes[0].new_lines, 1);
@@ -1123,7 +1216,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let undo_dir = dir.path().join("undo");
         let mut journal = EditJournal::new(undo_dir.clone());
-        journal.commit().unwrap();
+        journal.commit_at_seq(1).unwrap();
         assert!(EditJournal::undo_latest(&undo_dir).is_err());
     }
 

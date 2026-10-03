@@ -10,8 +10,10 @@
 //!
 //! So the transaction is the feature, and it reuses the machinery that already exists
 //! rather than inventing a second one: `EditJournal::begin` backs a file up before it is
-//! touched, and `rollback` restores every backup that was not committed. One `begin` per
-//! file, one `commit` at the end, and a `rollback` on the first failure.
+//! touched, and `rollback_paths` gives back the backups this call took. One `begin` per
+//! file, one rollback to that set on the first failure, and **no commit** — the turn's
+//! epilogue closes the shared transaction, because that is the only place which knows the
+//! call number the turn reached.
 //!
 //! `dry_run` reports the plan. It is off by default because the caller asked for a rename,
 //! not for a plan — but the tool is built so that running it twice is safe: the second run
@@ -19,7 +21,7 @@
 
 use super::util::{resolve_write_scope, simple_diff};
 use async_trait::async_trait;
-use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
+use firment_core::{EditJournal, Tool, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -200,18 +202,27 @@ impl Tool for RenameSymbol {
             });
         }
 
-        // The transaction. One `begin` per file before any write, one `commit` at the end;
-        // any failure rolls back every backup that was not committed, which is what makes
-        // the failure a no-op rather than a half-finished rename.
+        // The transaction. One `begin` per file before any write, and **no commit here**: the
+        // turn's own epilogue closes the shared journal (`agent.rs`, `commit_at_seq`) with the
+        // turn's highest call number, which is the number `/undo --before` measures against. A
+        // tool that closed it itself wrote `max_seq = 0`, and `turns_before_seq` answers
+        // "unknown" for every turn in a session that holds one — so `/undo --before` would stop
+        // working for the rest of the session's life. Any failure rolls back only the backups
+        // this call took, which is what makes the failure a no-op rather than a half-finished
+        // rename *and* keeps another tool's work in the same turn from being handed back.
         {
             let mut journal = ctx
                 .journal
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
+            // Which of these files this call is the first to record. A path already in the
+            // batch was written by another tool this turn: its backup is that tool's state, not
+            // the state before this rename, so this call has no business restoring it.
+            let mut ours: Vec<bool> = Vec::with_capacity(plans.len());
             for plan in &plans {
-                journal.begin(&plan.resolved).map_err(ToolError::new)?;
+                ours.push(journal.begin(&plan.resolved).map_err(ToolError::new)?);
             }
-            for plan in &plans {
+            for (i, plan) in plans.iter().enumerate() {
                 // Re-read and compare before writing: a file that changed since we read it
                 // means someone else is editing, and the right answer is to stop rather
                 // than to overwrite their work. (Same CAS rule as `edit_file`.)
@@ -220,37 +231,31 @@ impl Tool for RenameSymbol {
                 });
                 let current = match current {
                     Ok(text) => text,
-                    Err(e) => {
-                        let _ = journal.rollback();
-                        return Err(e);
-                    }
+                    Err(e) => return Err(aborted(&mut journal, &plans, &ours, i, e.message)),
                 };
                 let (fresh, _) = replace_whole_word(&current, &from, &to);
                 if fresh != plan.updated {
-                    let _ = journal.rollback();
-                    return Err(ToolError::new(format!(
-                        "[ConcurrentChange] {} changed while the rename was being prepared; \
-                         nothing was written",
-                        plan.label
-                    )));
+                    return Err(aborted(
+                        &mut journal,
+                        &plans,
+                        &ours,
+                        i,
+                        format!(
+                            "[ConcurrentChange] {} changed while the rename was being prepared",
+                            plan.label
+                        ),
+                    ));
                 }
                 if let Err(e) = firment_core::session::write_atomic(&plan.resolved, &plan.updated) {
-                    let rolled_back = journal.rollback();
-                    return Err(ToolError::new(format!(
-                        "[Io] writing {} failed: {e}{}",
-                        plan.label,
-                        match rolled_back {
-                            Ok(restored) if !restored.is_empty() => format!(
-                                " — {} other file(s) were rolled back: {}",
-                                restored.len(),
-                                restored.join(", ")
-                            ),
-                            _ => " — nothing else was kept".to_string(),
-                        }
-                    )));
+                    return Err(aborted(
+                        &mut journal,
+                        &plans,
+                        &ours,
+                        i,
+                        format!("[Io] writing {} failed: {e}", plan.label),
+                    ));
                 }
             }
-            journal.commit().map_err(ToolError::new)?;
         }
 
         let mut text = summary(&plans, &unmatched, "renamed");
@@ -264,6 +269,70 @@ impl Tool for RenameSymbol {
         }
         Ok(ToolOutput { text })
     }
+}
+
+/// Give back what an aborted rename wrote, and say by how much.
+///
+/// `done` is how many files had already been written when the rename stopped: the write loop runs
+/// file by file, so failing on the fourth means three changed, and a message claiming "nothing
+/// was written" would be the one thing the reader cannot act on.
+///
+/// Two routes, because there are two states to go back to. A file this call recorded is restored
+/// from its backup and leaves the batch, so the turn's commit does not record an edit that no
+/// longer stands. A file another tool already recorded stays in that tool's batch — its backup is
+/// the state before *that* tool ran, and restoring it would lose someone else's work — so this
+/// call writes back the bytes it read, which is that tool's text with the rename taken out.
+fn aborted(
+    journal: &mut EditJournal,
+    plans: &[FilePlan],
+    ours: &[bool],
+    done: usize,
+    reason: String,
+) -> ToolError {
+    let mine: Vec<PathBuf> = plans
+        .iter()
+        .zip(ours)
+        .filter(|(_, recorded)| **recorded)
+        .map(|(plan, _)| plan.resolved.clone())
+        .collect();
+    // Both routes land on the same state — the text this rename read — so one sentence covers
+    // them: a backup this call took holds exactly `plan.original`.
+    let mut reverted: Vec<String> = Vec::new();
+    let mut stranded: Vec<String> = Vec::new();
+    for (plan, recorded) in plans[..done].iter().zip(&ours[..done]) {
+        if *recorded {
+            continue;
+        }
+        match firment_core::session::write_atomic(&plan.resolved, &plan.original) {
+            Ok(()) => reverted.push(plan.label.clone()),
+            Err(e) => stranded.push(format!("{} ({e})", plan.label)),
+        }
+    }
+    let incomplete = match journal.rollback_paths(&mine) {
+        Ok(files) => {
+            reverted.extend(files);
+            String::new()
+        }
+        Err(e) => format!("; {e}"),
+    };
+    let mut out = reason;
+    if reverted.is_empty() && stranded.is_empty() && incomplete.is_empty() {
+        out.push_str(" — nothing had been written");
+    } else {
+        out.push_str(&format!(
+            " — {} file(s) were put back as they were read: {reverted}{incomplete}",
+            reverted.len(),
+            reverted = reverted.join(", ")
+        ));
+    }
+    if !stranded.is_empty() {
+        out.push_str(&format!(
+            "; {} file(s) still carry the rename: {}",
+            stranded.len(),
+            stranded.join(", ")
+        ));
+    }
+    ToolError::new(out)
 }
 
 /// An argument that must be a bare identifier: a rename of a phrase is a different tool.
@@ -338,7 +407,7 @@ pub fn replace_whole_word(text: &str, from: &str, to: &str) -> (String, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use firment_core::{AutoApprove, EditJournal};
+    use firment_core::{AutoApprove, EditJournal, journal::Rewind};
     use std::path::Path;
     use std::sync::{Arc, Mutex};
     use tempfile::tempdir;
@@ -533,5 +602,82 @@ mod tests {
             "the first file must be rolled back"
         );
         assert_eq!(std::fs::read_to_string(&second).unwrap(), "foo\n");
+    }
+
+    #[tokio::test]
+    async fn a_rename_leaves_the_turns_transaction_open_for_the_turn_to_close() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("a.rs"), "fn foo() {}\n").unwrap();
+        std::fs::write(dir.path().join("b.rs"), "foo();\n").unwrap();
+        let ctx = ctx(dir.path());
+
+        RenameSymbol
+            .run(
+                json!({"from": "foo", "to": "bar", "paths": ["a.rs", "b.rs"]}),
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        // The tool used to `commit()` the journal it was handed, which closed the *turn's*
+        // transaction in the middle of the turn: every edit that came after it landed in a batch
+        // nobody would ever undo. Only the turn knows where it stops.
+        assert!(
+            !ctx.journal.lock().unwrap().is_empty(),
+            "a tool that commits the shared journal has ended the turn's transaction"
+        );
+
+        // Closing it the way the epilogue does has to leave a store `/undo --before` can answer from.
+        // The tool-level commit wrote `max_seq = 0`, and `turns_before_seq` gives up on any entry that
+        // holds one — for every turn in the session, permanently.
+        ctx.journal.lock().unwrap().commit_at_seq(4).unwrap();
+        assert_eq!(
+            EditJournal::turns_before_seq(&dir.path().join("undo"), 2),
+            Rewind::Turns(1),
+            "the rename reached call 2, so one turn is what goes back"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rename_failure_does_not_take_back_another_tools_file() {
+        // The batch can already hold this turn's earlier work, and its backup is the state before
+        // *that* tool ran. Rolling the whole batch back would delete the change the user asked
+        // for two tools ago, because a later tool failed.
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("sub")).unwrap();
+        let shared = dir.path().join("a.rs");
+        let blocked = dir.path().join("sub").join("b.rs");
+        std::fs::write(&shared, "foo();\n").unwrap();
+        std::fs::write(&blocked, "foo();\n").unwrap();
+
+        let ctx = ctx(dir.path());
+        ctx.journal.lock().unwrap().begin(&shared).unwrap();
+        const OTHER_TOOL: &str = "the earlier tool wrote foo();\n";
+        std::fs::write(&shared, OTHER_TOOL).unwrap();
+
+        // The rename reads that text as its starting point, then cannot write the second file.
+        let original = std::fs::metadata(&blocked).unwrap().permissions();
+        let mut locked = original.clone();
+        locked.set_readonly(true);
+        std::fs::set_permissions(&blocked, locked).unwrap();
+        let result = RenameSymbol
+            .run(
+                json!({"from": "foo", "to": "bar", "paths": ["a.rs", "sub/b.rs"]}),
+                &ctx,
+            )
+            .await;
+        std::fs::set_permissions(&blocked, original).unwrap();
+
+        let err = result.expect_err("the read-only file should have stopped the rename");
+        assert_eq!(
+            std::fs::read_to_string(&shared).unwrap(),
+            OTHER_TOOL,
+            "the other tool's change must survive, with the rename taken out of it: {}",
+            err.message
+        );
+        assert_eq!(std::fs::read_to_string(&blocked).unwrap(), "foo();\n");
+        // And the foreign entry is still in the batch for the turn to close — the rename neither
+        // committed it nor dropped it.
+        assert!(!ctx.journal.lock().unwrap().is_empty(), "{}", err.message);
     }
 }
