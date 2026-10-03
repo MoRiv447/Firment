@@ -92,7 +92,12 @@
    buttons it sits near. One step up, so the strip and the title bar agree on how
    big an icon is. */
 .tab [data-ui='icon'] {
-  font-size: var(--fs-read);
+  font-size: var(--glyph-inline);
+}
+
+/* A tab with no label is a chrome icon, same as the title bar's. */
+.tab[data-icon-only] [data-ui='icon'] {
+  font-size: var(--glyph-chrome);
 }
 
 .label {

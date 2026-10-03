@@ -487,6 +487,21 @@
   /* An icon-only control in the chrome. 28 was a touch too small to hit reliably at
      1x, and 36 (the input rung) makes a row of them read as four blocks. */
   --h-icon: 32px;
+  /*
+   * Two glyph sizes, because a glyph has two jobs and 1em of the label is wrong
+   * for both of them.
+   *
+   * `--glyph-inline` sits beside a word, where the pair has to read as one unit: a
+   * step above the label, not two. `--glyph-chrome` stands alone in a square button
+   * -- the bell, the gear, Send -- where the box is doing no work and the glyph is
+   * the whole control. At 17 those still read small inside 32px; the ratio that
+   * looks right is about 0.6 of the box.
+   *
+   * They are not `--fs-*` steps: those are a reading ramp for text, and a stroke
+   * width is not a font size wearing a different name.
+   */
+  --glyph-inline: 15px;
+  --glyph-chrome: 19px;
   /* Grain: the texture, declared once, because it is the same in both schemes.
      Only its strength differs, which is why `--grain-opacity` is the half that
      lives in the scheme blocks. An inlined `feTurbulence` over the whole window

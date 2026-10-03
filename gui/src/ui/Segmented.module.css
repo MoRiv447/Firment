@@ -74,3 +74,15 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/*
+ * A glyph inside a segment takes the icon size, not the label's.
+ *
+ * It inherited 13px (1em of the segment's own font-size), which is a stroke thin
+ * enough to read as a smudge next to a 12px word -- the same complaint already
+ * settled for `Button` and the tab strip. One size for a glyph beside a label,
+ * wherever that pair appears.
+ */
+.group [data-ui='icon'] {
+  font-size: var(--glyph-inline);
+}

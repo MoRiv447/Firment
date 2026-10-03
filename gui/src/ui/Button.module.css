@@ -131,7 +131,7 @@
   /* The glyph is a 1em icon, so this font-size IS its size: 17px in a 32px box.
      At 15 it read small beside the labels next to it -- the centre line was exact
      (measured: dy 0.00), the optical mass was not. */
-  font-size: var(--fs-title);
+  font-size: var(--glyph-chrome);
 }
 
 /*
@@ -158,7 +158,7 @@
    the eye reports that as 'not lined up'. One step up, and the two carry equal
    weight. Scoped away from the icon-only case, which sets its own size above. */
 .root:not([data-icon-only='true']) [data-ui='icon'] {
-  font-size: var(--fs-read);
+  font-size: var(--glyph-inline);
 }
 
 .root[data-full='true'] {
