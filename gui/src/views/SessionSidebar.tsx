@@ -159,7 +159,7 @@ export function SessionSidebar({
           * border is a rail you have to read to use.
           */}
         <TipButton
-          tipText="New agent session, in the working directory below"
+          tipText="New agent session, in the working directory below (Ctrl+N)"
           tier="primary"
           icon={Zap}
           onClick={() => onNew('agent')}

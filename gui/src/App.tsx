@@ -31,6 +31,7 @@ import { SessionSidebar } from './views/SessionSidebar';
 import { SettingsView } from './views/SettingsView';
 import { sessionChanges } from './lib/changes';
 import { workflowSteps } from './lib/steps';
+import { useNewSessionShortcut } from './lib/shortcuts';
 import { initialTurnState, turnsReducer } from './lib/turnReducer';
 import type { TurnMap } from './lib/turnReducer';
 import { WorkbenchView } from './views/WorkbenchView';
@@ -759,6 +760,18 @@ export default function App() {
       .then((s) => setSession(s))
       .catch((err) => console.error(err));
   };
+
+  /*
+   * `Ctrl N` opens a session, the same action the rail's button performs.
+   *
+   * Blocked while a dialog is up: a permission prompt or an unanswered question
+   * belongs to the turn that raised it, and starting a new session underneath one
+   * would strand it with nobody to answer.
+   */
+  useNewSessionShortcut(
+    () => handleNewSession('agent'),
+    !!permQueue[0] || !!askQueue[0] || settingsOpen,
+  );
 
   const todosDone = todoSummary(todos);
 
