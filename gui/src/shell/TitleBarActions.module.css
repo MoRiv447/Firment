@@ -8,7 +8,7 @@
 .cluster {
   display: flex;
   align-items: center;
-  gap: var(--sp-1);
+  gap: var(--sp-2);
   flex: none;
 }
 

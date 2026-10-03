@@ -88,6 +88,13 @@
   opacity: var(--disabled-opacity);
 }
 
+/* The glyph in a tab is 1em of the tab label (12px), smaller than the chrome
+   buttons it sits near. One step up, so the strip and the title bar agree on how
+   big an icon is. */
+.tab [data-ui='icon'] {
+  font-size: var(--fs-read);
+}
+
 .label {
   min-width: 0;
   overflow: hidden;

@@ -484,6 +484,9 @@
      label and the rule under it, so it gets its own height rather than borrowing
      `--h-row` and making the strip read as a table header. */
   --h-strip: 42px;
+  /* An icon-only control in the chrome. 28 was a touch too small to hit reliably at
+     1x, and 36 (the input rung) makes a row of them read as four blocks. */
+  --h-icon: 32px;
   /* Grain: the texture, declared once, because it is the same in both schemes.
      Only its strength differs, which is why `--grain-opacity` is the half that
      lives in the scheme blocks. An inlined `feTurbulence` over the whole window

@@ -114,15 +114,16 @@
      actions. Sized explicitly rather than derived, because `aspect-ratio` needs a
      definite height -- if the height token fails to resolve, the box collapses to
      its content plus padding, which is a rectangle with off-centre glyph in it. */
-  width: var(--h-min);
-  height: var(--h-min);
+  width: var(--h-icon);
+  height: var(--h-icon);
   flex: none;
   aspect-ratio: 1;
   padding: 0;
   justify-content: center;
-  /* One step up from the chrome size: the glyph is a 1em icon, so this is what
-     makes it 15px rather than 13px inside a 28px box. */
-  font-size: var(--fs-read);
+  /* The glyph is a 1em icon, so this font-size IS its size: 17px in a 32px box.
+     At 15 it read small beside the labels next to it -- the centre line was exact
+     (measured: dy 0.00), the optical mass was not. */
+  font-size: var(--fs-title);
 }
 
 /*
@@ -138,8 +139,18 @@
   /* A resting wash, so the button reads as a control rather than an icon floating
      on the bar -- and translucent, which is what "no texture" was about: an opaque
      grey on near-black is mud, because no light passes through it. The token is
-     `transparent` in the light scheme, where the ground already does the job. */
-  background: var(--wash-resting);
+     `transparent` in the light scheme, where the ground already does the job.
+     The wash is gone: it made every chrome cluster read as three boxes with glyphs
+     in them, and the hover is the half that carried information. What remains here
+     is the stronger ink -- a 1.5px stroke is not text, and `--muted` made it faint. */
+}
+
+/* A glyph beside a label is 1em of that label (13px), which reads small next to
+   text whose line box is 17.5px tall: the centre line is exact, the mass is not, and
+   the eye reports that as 'not lined up'. One step up, and the two carry equal
+   weight. Scoped away from the icon-only case, which sets its own size above. */
+.root:not([data-icon-only='true']) [data-ui='icon'] {
+  font-size: var(--fs-read);
 }
 
 .root[data-full='true'] {
