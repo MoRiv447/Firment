@@ -844,7 +844,10 @@ impl Agent {
     /// the file is large relative to the context budget.
     pub fn pin_path(&self, path: PathBuf) -> Result<String, String> {
         let id = self.session.id.clone();
-        let mut pins = self.store.load_pins(&id);
+        let mut pins = self
+            .store
+            .load_pins(&id)
+            .map_err(|e| format!("the pinned list could not be read: {e}"))?;
         if !pins.contains(&path) {
             pins.push(path.clone());
             self.store
@@ -871,17 +874,22 @@ impl Agent {
     /// Remove a pinned file.
     pub fn unpin_path(&self, path: PathBuf) -> Result<String, String> {
         let id = self.session.id.clone();
-        let mut pins = self.store.load_pins(&id);
+        let mut pins = self
+            .store
+            .load_pins(&id)
+            .map_err(|e| format!("the pinned list could not be read: {e}"))?;
         let before = pins.len();
         pins.retain(|p| p != &path);
+        if pins.len() == before {
+            // Nothing came out, so nothing gets written. This used to save the list it had just
+            // read even when the name was not in it — which is how asking to unpin one path
+            // rewrote the file from whatever a damaged read had produced.
+            return Ok(format!("{} is not in the pinned list", path.display()));
+        }
         self.store
             .save_pins(&id, &pins)
             .map_err(|e| e.to_string())?;
-        if pins.len() == before {
-            Ok(format!("{} is not in the pinned list", path.display()))
-        } else {
-            Ok(format!("Unpinned {}", path.display()))
-        }
+        Ok(format!("Unpinned {}", path.display()))
     }
 
     /// Tool outputs above the threshold are spilled to the session's spill
@@ -893,37 +901,14 @@ impl Agent {
             return text.to_string();
         }
         let dir = self.store.spill_dir(&self.session.id);
-        // Spill files live only as long as the messages referencing them; on
-        // each spill, drop files older than a day so long sessions do not
-        // accumulate unbounded disk usage. Files still referenced by the
-        // current transcript are kept even past the cutoff: deleting them
-        // would make the stored spill path unreadable after a session reload.
-        let referenced: std::collections::HashSet<String> = self
-            .session
-            .messages
-            .iter()
-            .flat_map(|m| match m {
-                ChatMessage::System { content }
-                | ChatMessage::User { content }
-                | ChatMessage::Assistant { content, .. }
-                | ChatMessage::Tool { content, .. } => Some(content.as_str()),
-            })
-            .flat_map(|t| t.split_whitespace())
-            .filter(|w| w.starts_with("spill") || w.ends_with(".txt"))
-            .map(|w| w.rsplit(['/', '\\']).next().unwrap_or(w).to_string())
-            .collect();
+        // Spill files live only as long as the messages referencing them; on each spill, drop the
+        // ones older than a day so long sessions do not accumulate unbounded disk usage. See
+        // `purge_unreferenced_spill` for what counts as referenced.
         let _ = fs::create_dir_all(&dir);
-        if let Ok(read) = fs::read_dir(&dir) {
-            let cutoff =
-                std::time::SystemTime::now().checked_sub(std::time::Duration::from_secs(24 * 3600));
-            for entry in read.flatten() {
-                let Ok(meta) = entry.metadata() else { continue };
-                let expired = cutoff.is_some_and(|c| meta.modified().ok().is_some_and(|t| t < c));
-                let file_name = entry.file_name().to_string_lossy().into_owned();
-                if expired && !referenced.contains(&file_name) {
-                    let _ = fs::remove_file(entry.path());
-                }
-            }
+        if let Some(cutoff) =
+            std::time::SystemTime::now().checked_sub(std::time::Duration::from_secs(24 * 3600))
+        {
+            purge_unreferenced_spill(&dir, cutoff, &self.session.messages);
         }
         {
             let name = format!("{}.txt", uuid::Uuid::new_v4());
@@ -1692,8 +1677,18 @@ impl Agent {
         if let Some(files) = self.recent_read_files_text() {
             content.push_str(&format!("\n\n{files}"));
         }
-        if let Some(pins) = self.pinned_files_text() {
-            content.push_str(&format!("\n\n{pins}"));
+        match self.pinned_files_text() {
+            Ok(Some(files)) => content.push_str(&format!("\n\n{files}")),
+            // The user is about to lose their pinned files from the model's view of the
+            // conversation, for a reason sitting in a file on disk.
+            Err(e) => {
+                self.sink
+                    .event(AgentEvent::Info(format!(
+                        "pinned files were not re-injected: {e}"
+                    )))
+                    .await
+            }
+            Ok(None) => {}
         }
         let mut messages = Vec::with_capacity(self.session.messages.len() + 1);
         let mut inserted = false;
@@ -1717,12 +1712,16 @@ impl Agent {
     }
 
     /// Pinned files re-injected with full content after compaction.
-    fn pinned_files_text(&self) -> Option<String> {
+    ///
+    /// `Err` is the list on disk being unreadable, which is a different fact from "nothing is
+    /// pinned" and one only the user can put right — the pins are about to leave the model's
+    /// context and say nothing about it.
+    fn pinned_files_text(&self) -> Result<Option<String>, crate::session::SessionError> {
         const MAX_FILES: usize = 5;
         const MAX_CHARS: usize = 8000;
-        let pins = self.store.load_pins(&self.session.id);
+        let pins = self.store.load_pins(&self.session.id)?;
         if pins.is_empty() {
-            return None;
+            return Ok(None);
         }
         let mut out = String::new();
         for path in pins.iter().take(MAX_FILES) {
@@ -1732,11 +1731,11 @@ impl Agent {
             }
         }
         if out.is_empty() {
-            None
+            Ok(None)
         } else {
-            Some(format!(
+            Ok(Some(format!(
                 "[pinned files (full content kept during compaction)]\n{out}"
-            ))
+            )))
         }
     }
 
@@ -2429,6 +2428,54 @@ fn lock_journal(journal: &Arc<Mutex<EditJournal>>) -> std::sync::MutexGuard<'_, 
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Delete the spill files in `dir` older than `before` that no message in `messages` names, and
+/// return what went.
+///
+/// Referenced is tested by looking for the file's own name in the message text, not by splitting
+/// the text into whitespace tokens and keeping the ones that look like a path. The pointer the
+/// spilling writes is `... full content spilled to {path}; use read_file to view`, so the token
+/// carrying it ends in `;` — a filter keyed on `.txt` matched nothing, `spill`-prefixed names
+/// never existed, and every expired file was deleted including the ones the transcript still
+/// pointed at. `read_file` on the stored path then failed for the rest of the session. The names
+/// are uuids, so a substring hit cannot come from anything else, and only expired files are
+/// searched, which keeps the common case — nothing has aged out — free.
+fn purge_unreferenced_spill(
+    dir: &Path,
+    before: std::time::SystemTime,
+    messages: &[ChatMessage],
+) -> Vec<String> {
+    let Ok(read) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut gone = Vec::new();
+    for entry in read.flatten() {
+        let expired = entry
+            .metadata()
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .is_some_and(|m| m < before);
+        if !expired {
+            continue;
+        }
+        // Lossy for the sake of a name no message could ever have named anyway; deleting it is
+        // the point of that branch.
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let referenced = messages.iter().any(|m| match m {
+            ChatMessage::System { content }
+            | ChatMessage::User { content }
+            | ChatMessage::Assistant { content, .. }
+            | ChatMessage::Tool { content, .. } => content.contains(&name),
+        });
+        if referenced {
+            continue;
+        }
+        if fs::remove_file(entry.path()).is_ok() {
+            gone.push(name);
+        }
+    }
+    gone
+}
+
 /// Find the earliest message index to keep such that eviction never splits an
 /// API round: cuts only at User-message round boundaries, keeping the last
 /// `ROUNDS_TO_KEEP` rounds verbatim. Returns (cut_index, total_rounds).
@@ -2772,6 +2819,46 @@ fn thinking_opt(level: ThinkingLevel) -> Option<ThinkingLevel> {
 
 #[cfg(test)]
 mod tests {
+    /// A spill file the transcript still names must outlive the day.
+    ///
+    /// The reference used to be collected by splitting each message on whitespace and keeping the
+    /// tokens that started with `spill` or ended with `.txt` — and the pointer line is
+    /// `... spilled to {path}; use read_file to view`, so the token holds a trailing `;` and the
+    /// names are uuids. Nothing ever matched, and every expired file was deleted, including the
+    /// ones a reload would go on reading.
+    #[test]
+    fn a_spill_file_the_transcript_still_points_at_is_never_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let kept = "11111111-1111-1111-1111-111111111111.txt";
+        let stale = "22222222-2222-2222-2222-222222222222.txt";
+        for name in [kept, stale] {
+            std::fs::write(dir.path().join(name), "x").unwrap();
+        }
+        let pointer = format!(
+            "[output too long (9 chars); full content spilled to {}; use read_file to view]\nbody",
+            dir.path().join(kept).display()
+        );
+        let messages = vec![ChatMessage::Tool {
+            tool_call_id: "c1".to_string(),
+            name: "read_file".to_string(),
+            content: pointer,
+        }];
+
+        // A cutoff past today makes both files expired, which is the only way to test a rule about
+        // a day-old mtime without arranging a mtime.
+        let gone = purge_unreferenced_spill(
+            dir.path(),
+            std::time::SystemTime::now() + std::time::Duration::from_secs(60),
+            &messages,
+        );
+        assert_eq!(gone, vec![stale.to_string()], "{gone:?}");
+        assert!(
+            dir.path().join(kept).exists(),
+            "the transcript can still read it back"
+        );
+        assert!(!dir.path().join(stale).exists());
+    }
+
     #[test]
     fn a_nested_agent_writes_into_the_journal_it_was_handed() {
         // The seam between "the task tool passes the parent's journal" (tested in the tool) and

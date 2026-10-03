@@ -646,7 +646,11 @@ pub async fn workbench_kb_save(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    std::fs::write(&path, content).map_err(|e| format!("write {}: {e}", path.display()))
+    // tmp + rename. A plain `fs::write` truncates the knowledge file before filling it back in,
+    // so a process killed mid-save left the user's cheatsheet half-written — and the mtime guard
+    // above cannot help, because the damaged file is the one the editor will reload as truth.
+    firment_core::session::write_atomic(&path, &content)
+        .map_err(|e| format!("write {}: {e}", path.display()))
 }
 
 #[tauri::command]
@@ -1020,6 +1024,42 @@ mod tests {
             std::fs::read_to_string(kb_path(&root, key).unwrap()).unwrap(),
             "b\n"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn a_save_over_an_existing_file_leaves_no_sibling_behind() {
+        // The save is a tmp + rename now. What this pins is the part a test can see: the temp
+        // file lands in the directory the knowledge scanner walks, so it has to be gone by the
+        // time the save returns — and a fixed-name temp that survives a failed rename shows up
+        // right here. The truncation the rename buys instead (a plain `fs::write` empties the
+        // file before filling it back) is only visible to a process killed mid-save, which no
+        // test on this machine can arrange.
+        let root = temp_project("no-sibling");
+        let key = "cheatsheet:saved.toml";
+        let path = kb_path(&root, key).unwrap();
+        workbench_kb_save(
+            root.to_string_lossy().into(),
+            key.into(),
+            "first\n".into(),
+            None,
+        )
+        .await
+        .unwrap();
+        workbench_kb_save(
+            root.to_string_lossy().into(),
+            key.into(),
+            "second\n".into(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "second\n");
+        let siblings: Vec<String> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(siblings, vec!["saved.toml".to_string()], "{siblings:?}");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

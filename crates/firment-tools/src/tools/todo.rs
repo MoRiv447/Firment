@@ -3,7 +3,7 @@ use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct Todo;
 
@@ -22,27 +22,52 @@ fn todos_path(ctx: &ToolContext) -> Result<PathBuf, ToolError> {
     Ok(dir.join("todos.json"))
 }
 
-fn load_todos(path: &PathBuf) -> Vec<TodoItem> {
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default()
+/// The list as it sits on disk, or why it could not be read.
+///
+/// A file that exists and does not parse is an error rather than an empty list. Every writing op
+/// puts the whole vector back, so reading damage as "no todos" and then answering `op=add` would
+/// delete the items the file still holds — and `op=list` saying "the list is empty" would send
+/// the model off to rebuild a list it never lost.
+fn load_todos(path: &Path) -> Result<Vec<TodoItem>, ToolError> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        // No file is not a failure: the first `op=add` of a session has nothing to read.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => {
+            return Err(ToolError::new(format!(
+                "[Io] {} could not be read: {e}",
+                path.display()
+            )));
+        }
+    };
+    if text.trim().is_empty() {
+        // The signature of a write that died after truncating. `op=clear` is how to say "an empty
+        // list is what I want", and it does not read first.
+        return Err(ToolError::new(format!(
+            "[Corrupt] {} is empty — the todo list was truncated, not cleared",
+            path.display()
+        )));
+    }
+    serde_json::from_str(&text)
+        .map_err(|e| ToolError::new(format!("[Corrupt] {} does not parse: {e}", path.display())))
 }
 
-fn save_todos(path: &PathBuf, todos: &[TodoItem]) -> Result<(), ToolError> {
+fn save_todos(path: &Path, todos: &[TodoItem]) -> Result<(), ToolError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| ToolError::new(format!("[Io] cannot create todo dir: {e}")))?;
     }
-    // Atomic write (tmp + rename) so an interrupted save never leaves a
-    // truncated/corrupt todos.json.
-    let tmp = path.with_extension("json.tmp");
-    fs::write(
-        &tmp,
-        serde_json::to_string_pretty(todos).unwrap_or_default(),
-    )
-    .map_err(|e| ToolError::new(format!("[Io] cannot write todos: {e}")))?;
-    fs::rename(&tmp, path).map_err(|e| ToolError::new(format!("[Io] cannot write todos: {e}")))
+    let text = serde_json::to_string_pretty(todos).map_err(|e| {
+        ToolError::new(format!(
+            "[Io] the todo list was not saved, and nothing on disk changed: {e}"
+        ))
+    })?;
+    // tmp + rename with a name no other writer is using. The old code wrote one shared
+    // `todos.json.tmp` and renamed it, so two todo calls in the same tool wave could rename each
+    // other's temp file; and `unwrap_or_default()` on the serialise step would have saved an
+    // empty list over a good one had it ever failed.
+    firment_core::session::write_atomic(path, &text)
+        .map_err(|e| ToolError::new(format!("[Io] cannot write todos: {e}")))
 }
 
 /// Resolve a `1`-based item number, falling back to an exact text match.
@@ -83,7 +108,15 @@ impl Tool for Todo {
             .and_then(|o| o.as_str())
             .ok_or_else(|| ToolError::new("[InvalidInput] missing op"))?;
         let path = todos_path(ctx)?;
-        let mut todos = load_todos(&path);
+        if op == "clear" {
+            // Nothing is read first: writing an empty list cannot destroy what this call did not
+            // look at, and this is the one command that recovers a truncated or corrupt file.
+            save_todos(&path, &[])?;
+            return Ok(ToolOutput {
+                text: "Cleared the todo list".to_string(),
+            });
+        }
+        let mut todos = load_todos(&path)?;
         let text = args
             .get("text")
             .and_then(|t| t.as_str())
@@ -151,13 +184,6 @@ impl Tool for Todo {
                 save_todos(&path, &todos)?;
                 Ok(ToolOutput {
                     text: format!("Removed todo: {removed}"),
-                })
-            }
-            "clear" => {
-                todos.clear();
-                save_todos(&path, &todos)?;
-                Ok(ToolOutput {
-                    text: "Cleared the todo list".to_string(),
                 })
             }
             other => Err(ToolError::new(format!(
@@ -280,5 +306,56 @@ mod tests {
         c.session_dir = None;
         let err = tool().run(json!({"op": "list"}), &c).await.unwrap_err();
         assert!(err.message.contains("[NoSession]"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn a_damaged_todo_file_is_never_answered_as_an_empty_list() {
+        let dir = tempdir().unwrap();
+        let c = ctx(dir.path());
+        std::fs::create_dir_all(dir.path().join("session")).unwrap();
+        let store = dir.path().join("session").join("todos.json");
+        std::fs::write(&store, "[{\"text\":\"keep me\",\"done\":false}").unwrap();
+        let before = std::fs::read_to_string(&store).unwrap();
+
+        // The list has one item in it and the file is merely truncated. Every writing op saves
+        // the whole vector, so an op that read this as "no todos" would replace the file with
+        // whatever it was about to add.
+        let err = tool()
+            .run(json!({"op": "list"}), &c)
+            .await
+            .expect_err("a broken file is not an empty list");
+        assert!(err.message.contains("does not parse"), "got: {err}");
+
+        let err = tool()
+            .run(json!({"op": "add", "text": "one more"}), &c)
+            .await
+            .expect_err("adding must not rewrite the list from a read that failed");
+        assert!(err.message.contains("does not parse"), "got: {err}");
+        assert_eq!(
+            std::fs::read_to_string(&store).unwrap(),
+            before,
+            "the item still in the file must not have been overwritten"
+        );
+
+        // An empty file is the same story: it is what a truncated write leaves, not a cleared list.
+        std::fs::write(&store, "").unwrap();
+        let err = tool()
+            .run(json!({"op": "list"}), &c)
+            .await
+            .expect_err("an empty file is a loss, not an empty list");
+        assert!(err.message.contains("truncated"), "got: {err}");
+
+        // `clear` is the way out, and it needs nothing readable to do its job.
+        let out = tool().run(json!({"op": "clear"}), &c).await.unwrap();
+        assert!(out.text.contains("Cleared"), "got: {}", out.text);
+        let out = tool().run(json!({"op": "list"}), &c).await.unwrap();
+        assert!(out.text.contains("empty"), "got: {}", out.text);
+        assert_eq!(
+            std::fs::read_dir(dir.path().join("session"))
+                .unwrap()
+                .count(),
+            1,
+            "no temp file left beside the saved one"
+        );
     }
 }

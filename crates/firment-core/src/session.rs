@@ -439,17 +439,27 @@ impl SessionStore {
         self.dir.join(format!("{}.pins.json", sanitize_id(id)))
     }
 
-    pub fn load_pins(&self, id: &str) -> Vec<PathBuf> {
-        let Ok(text) = fs::read_to_string(self.pins_path(id)) else {
-            return Vec::new();
+    /// The session's pinned-file list.
+    ///
+    /// A list that exists but does not parse is an error, not an empty list: `pin_path` and
+    /// `unpin_path` write the whole vector back, so reading a damaged file as "nothing is pinned"
+    /// is how a later pin deletes the ones that were there.
+    pub fn load_pins(&self, id: &str) -> Result<Vec<PathBuf>, SessionError> {
+        let path = self.pins_path(id);
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e.into()),
         };
-        serde_json::from_str(&text).unwrap_or_default()
+        Ok(serde_json::from_str(&text)?)
     }
 
     pub fn save_pins(&self, id: &str, pins: &[PathBuf]) -> Result<(), SessionError> {
         fs::create_dir_all(&self.dir)?;
-        fs::write(self.pins_path(id), serde_json::to_string_pretty(pins)?)?;
-        Ok(())
+        // Atomic, for the other half of the same rule: a plain `fs::write` truncates the list
+        // before filling it back in, so a killed process left the damage the read now refuses to
+        // ignore.
+        atomic_write(&self.pins_path(id), &serde_json::to_string_pretty(pins)?)
     }
 
     pub fn save(&self, session: &Session) -> Result<(), SessionError> {
@@ -973,6 +983,36 @@ fn relevant_decisions(
 mod tests {
     use super::*;
     use crate::ToolCall;
+
+    #[test]
+    fn a_damaged_pin_list_is_an_error_rather_than_an_empty_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().join("sessions"));
+        // A fresh session has no list at all, and that is not a failure.
+        assert!(store.load_pins("s1").unwrap().is_empty());
+
+        store
+            .save_pins(
+                "s1",
+                &[PathBuf::from("src/main.c"), PathBuf::from("src/board.h")],
+            )
+            .unwrap();
+        assert_eq!(store.load_pins("s1").unwrap().len(), 2);
+
+        std::fs::write(store.pins_path("s1"), "[\"src/main.c\",").unwrap();
+        let err = store
+            .load_pins("s1")
+            .expect_err("a truncated list is not a list with nothing in it");
+        assert!(matches!(err, SessionError::Json(_)), "{err}");
+        // The reason it matters is the caller: `pin_path` and `unpin_path` write the whole vector
+        // back, so the read that answered "empty" became the file's new content, and every pin the
+        // user had is gone with no error anywhere.
+        assert_eq!(
+            std::fs::read_to_string(store.pins_path("s1")).unwrap(),
+            "[\"src/main.c\",",
+            "reading is not what destroys it — the save refused by this error is"
+        );
+    }
 
     /// `work_dir` is what `ToolContext::session_dir` points at, so it decides
     /// where the `todo` tool keeps `todos.json`.
