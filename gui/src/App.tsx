@@ -184,6 +184,25 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   /*
+   * Below the width where three columns stop fitting (248 rail + a readable
+   * transcript + a 320 inspector), the inspector collapses itself.
+   *
+   * It is state, not a `display: none` media query, on purpose: a CSS hide leaves
+   * the toggle on screen pointing at something the stylesheet refuses to show, and
+   * "the button does nothing" is the defect this repo keeps finding. Collapsing the
+   * state means the control still means what it says -- open it at any width and it
+   * opens, and the transcript gives up the room.
+   */
+  useEffect(() => {
+    const NARROW = 968;
+    const yieldRoom = () => {
+      if (window.innerWidth < NARROW) setInspectorOpen(false);
+    };
+    yieldRoom();
+    window.addEventListener('resize', yieldRoom);
+    return () => window.removeEventListener('resize', yieldRoom);
+  }, []);
+  /*
    * Which inspector pane is up. The Inspector used to hold this itself, which is
    * why nothing else in the window could send you to one -- a tool card that wants
    * to show its diff in the Changes pane has to be able to say 'changes'.
@@ -985,6 +1004,7 @@ export default function App() {
                           : 'ok'
                   }
                   label="Context"
+                  meter={usage?.pct}
                   value={usage ? `${usage.pct.toFixed(0)}%` : '…'}
                   title={usage ? `${usage.total_chars} / ${usage.budget} chars` : 'usage unknown'}
                   disabled={running}

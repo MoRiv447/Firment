@@ -90,3 +90,27 @@
 .tail {
   margin-left: auto;
 }
+
+/*
+ * The context meter: 64px of the budget, filled by what is spent.
+ *
+ * It is a proportion, and the number beside it is the same fact in words -- both
+ * stay, because the bar is what you read at a glance and the percentage is what you
+ * quote. The fill is the acid, which is the one place in the shell the identity
+ * colour means "this much of the room is gone" rather than "this is the brand".
+ */
+.meter {
+  display: inline-block;
+  width: 64px;
+  height: 5px;
+  overflow: hidden;
+  border-radius: var(--r-chip);
+  background: var(--surface-raised);
+}
+
+.meterFill {
+  display: block;
+  width: var(--fill, 0%);
+  height: 100%;
+  background: var(--brand-acid);
+}

@@ -1,5 +1,5 @@
 import { useId, useRef, useState } from 'react';
-import type { ButtonHTMLAttributes, ReactNode, Ref } from 'react';
+import type { ButtonHTMLAttributes, CSSProperties, ReactNode, Ref } from 'react';
 import { ChevronDown } from 'lucide-react';
 
 import { Icon, Menu, StatusDot } from '../ui';
@@ -98,6 +98,7 @@ export function StatusMenu({
   value,
   title,
   options,
+  meter,
   onSelect,
   disabled = false,
 }: {
@@ -106,6 +107,12 @@ export function StatusMenu({
   value: string;
   title?: string;
   options: MenuItem[];
+  /**
+   * A 0-100 reading to draw between the label and the value, for the one status
+   * that is a proportion rather than a number: context used against the budget.
+   * The percentage stays as text -- a bar alone cannot say '4%' or '94%' apart.
+   */
+  meter?: number;
   onSelect: (key: string) => void;
   disabled?: boolean;
 }) {
@@ -120,7 +127,20 @@ export function StatusMenu({
         label={label}
         value={value}
         title={title}
-        trailing={<Icon src={ChevronDown} className={styles.caret} />}
+        trailing={
+          <>
+            {meter !== undefined && (
+              <span
+                aria-hidden
+                className={styles.meter}
+                style={{ '--fill': `${Math.min(100, Math.max(0, meter))}%` } as CSSProperties}
+              >
+                <span className={styles.meterFill} />
+              </span>
+            )}
+            <Icon src={ChevronDown} className={styles.caret} />
+          </>
+        }
         button={{
           id,
           ref: anchorRef,

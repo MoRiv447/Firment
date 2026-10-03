@@ -31,6 +31,9 @@
 
 .dot[data-status='running'] {
   background: var(--info-ink);
+  /* The live one gets a ring. Six pixels on a panel ground is easy to miss at a
+     glance, and this is the state where missing it costs something. */
+  box-shadow: 0 0 0 3px var(--selection);
 }
 
 .dot[data-status='attention'] {

@@ -163,6 +163,41 @@ describe('StatusMenu', () => {
     // lying about what it can do.
     expect(screen.getByRole('button', { name: /Mode/ })).toBeDisabled();
   });
+
+  it('draws the meter between the label and the number it explains', () => {
+    render(
+      <StatusMenu
+        kind="ok"
+        label="Context"
+        value="40%"
+        options={options}
+        onSelect={() => {}}
+        meter={40}
+      />,
+    );
+    const bar = document.querySelector('[style*="--fill"]');
+    expect(bar?.getAttribute('style')).toContain('40%');
+    // Clamped, because a budget overrun would otherwise paint a bar wider than the
+    // strip it sits in.
+    render(
+      <StatusMenu
+        kind="ok"
+        label="Context"
+        value="140%"
+        options={options}
+        onSelect={() => {}}
+        meter={140}
+      />,
+    );
+    expect(document.querySelectorAll('[style*="100%"]').length).toBeGreaterThan(0);
+  });
+
+  it('draws no meter for a reading that is not a proportion', () => {
+    render(
+      <StatusMenu kind="ok" label="Mode" value="agent" options={options} onSelect={() => {}} />,
+    );
+    expect(document.querySelector('[style*="--fill"]')).toBeNull();
+  });
 });
 
 describe('NotificationBell', () => {
