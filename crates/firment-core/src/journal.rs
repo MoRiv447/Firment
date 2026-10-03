@@ -84,6 +84,19 @@ impl Ledger {
         Self { path }
     }
 
+    /// Append one committed turn.
+    ///
+    /// The line number is one above the highest `seq` already in the file — not one above its
+    /// line count, which is what it used to be. The readers (`delta_text`, `entries`) skip a line
+    /// that does not parse, so a torn or edited file can hold fewer records than it has lines, and
+    /// `count + 1` can then hand out a number at or below one already in use. Nothing reports
+    /// that: the watermark `delta_text` returns is `max(seq)`, and a turn filed under a lower
+    /// number is filtered out of every later delta by `seq > since_seq`. The change is in the
+    /// ledger and the model is never told about it again.
+    ///
+    /// So an unreadable existing ledger is an error here rather than a restart at 1, and this
+    /// refuses the append instead. What it does not settle is two processes appending at the same
+    /// moment — both read the same maximum and both write it — which needs a lock, not a number.
     pub fn append(&self, changes: &[LedgerChange]) -> Result<(), String> {
         if changes.is_empty() {
             return Ok(());
@@ -91,12 +104,17 @@ impl Ledger {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        let seq = if self.path.exists() {
-            fs::read_to_string(&self.path)
-                .map(|t| t.lines().count() as u64 + 1)
-                .unwrap_or(1)
-        } else {
-            1
+        let seq = match fs::read_to_string(&self.path) {
+            Ok(text) => {
+                text.lines()
+                    .filter_map(|line| serde_json::from_str::<LedgerLine>(line).ok())
+                    .map(|line| line.seq)
+                    .max()
+                    .unwrap_or(0)
+                    + 1
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => 1,
+            Err(e) => return Err(format!("read {}: {e}", self.path.display())),
         };
         let line = LedgerLine {
             seq,
@@ -327,6 +345,16 @@ impl EditJournal {
     /// whatever tool wrote the file earlier in the turn, and rolling it back would hand that
     /// tool's change back too.
     pub fn begin(&mut self, path: &Path) -> Result<bool, String> {
+        // What is recorded here is what a later `/undo` writes or deletes, and it does that from
+        // whatever directory the command is run in: a relative path means a different file every
+        // time. This is a correctness rule before it is a safety one.
+        if !path.is_absolute() {
+            return Err(format!(
+                "{} is not an absolute path — the edit journal records the file it will restore \
+                 later, so it has to name that file unambiguously",
+                path.display()
+            ));
+        }
         if self.entries.iter().any(|e| same_path(&e.path, path)) {
             return Ok(false);
         }
@@ -589,6 +617,14 @@ impl EditJournal {
         })?;
         let text = fs::read_to_string(latest).map_err(|e| e.to_string())?;
         let record: IndexRecord = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+        // Read back from disk and about to write and delete real files, so every entry is checked
+        // before any of them is acted on. Half-applying a record that fails is worse than not
+        // applying it: the user would be told some of a turn came back when the rest went
+        // somewhere nobody meant.
+        for entry in &record.entries {
+            entry_trustable(entry)
+                .map_err(|why| format!("undo record {} is not applied: {why}", latest.display()))?;
+        }
         let mut restored = Vec::new();
         let mut errors = Vec::new();
         // Reverse order, like `rollback`: the last mutation of the turn is
@@ -818,6 +854,34 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
         chars.push('…');
     }
     chars.into_iter().collect()
+}
+
+/// Can an entry read back from an undo index be acted on, and if not, why?
+///
+/// Two things are checked, and neither is exotic for a file that names where to write: the target
+/// has to be absolute, because `restore` resolves a relative path against the cwd of whoever ran
+/// `/undo` — a different file in a different directory — and the backup has to be one plain name,
+/// because it is reached with `dir.join(..)` and then deleted, so a `..` or a separator in it
+/// reads and unlinks outside the journal directory.
+fn entry_trustable(entry: &EntryRecord) -> Result<(), String> {
+    if !entry.path.is_absolute() {
+        return Err(format!(
+            "the target {} is not an absolute path",
+            entry.path.display()
+        ));
+    }
+    let backup = Path::new(&entry.backup);
+    let one_plain_name = matches!(
+        backup.components().next(),
+        Some(std::path::Component::Normal(_))
+    ) && backup.components().count() == 1;
+    if !entry.backup.is_empty() && !one_plain_name {
+        return Err(format!(
+            "the backup {} is not one file inside the journal directory",
+            entry.backup
+        ));
+    }
+    Ok(())
 }
 
 fn restore_entry(dir: &Path, entry: &EntryRecord) -> Result<(), String> {
@@ -1130,6 +1194,57 @@ mod tests {
     }
 
     #[test]
+    fn begin_refuses_a_path_it_could_not_resolve_on_restore() {
+        let dir = tempdir().unwrap();
+        let mut journal = EditJournal::new(dir.path().join("undo"));
+        let err = journal
+            .begin(Path::new("src/main.c"))
+            .expect_err("a relative target means a different file in another cwd");
+        assert!(err.contains("absolute"), "{err}");
+        assert!(journal.is_empty(), "and nothing was recorded");
+    }
+
+    #[test]
+    fn an_undo_entry_that_escapes_the_journal_directory_is_not_applied() {
+        let dir = tempdir().unwrap();
+        let undo = dir.path().join("undo");
+        fs::create_dir_all(&undo).unwrap();
+        let victim = dir.path().join("victim.txt");
+        fs::write(&victim, "still mine").unwrap();
+        // A record that names a backup living outside the journal directory: acting on it reads
+        // that file and then deletes it, and the index is only a JSON file on disk.
+        let record = IndexRecord {
+            created_at: 1,
+            entries: vec![EntryRecord {
+                path: victim.clone(),
+                backup: "../victim.txt".to_string(),
+                existed: true,
+            }],
+            max_seq: 1,
+        };
+        let index = undo.join(format!("undo-{:032x}-{:04x}.json", 1u64, 1u64));
+        fs::write(
+            &index,
+            serde_json::to_string(&record).expect("a record serialises"),
+        )
+        .unwrap();
+
+        let err = EditJournal::undo_latest(&undo).expect_err("the record must be refused");
+        assert!(err.contains("not one file inside"), "{err}");
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "still mine");
+        assert!(index.exists(), "and it stays for whoever can explain it");
+        assert!(
+            entry_trustable(&EntryRecord {
+                path: PathBuf::from("a.c"),
+                backup: String::new(),
+                existed: true,
+            })
+            .is_err(),
+            "a relative target is refused for the same reason"
+        );
+    }
+
+    #[test]
     fn same_path_folds_dot_components() {
         assert!(same_path(
             Path::new("/x/y/a.rs"),
@@ -1248,6 +1363,47 @@ mod tests {
         assert!(!delta.contains("a.txt"), "got: {delta}");
         let (delta2, _) = ledger.delta_text(2, 5);
         assert!(delta2.is_empty());
+    }
+
+    #[test]
+    fn a_ledger_line_is_numbered_above_every_one_already_in_the_file() {
+        fn change(name: &str) -> LedgerChange {
+            LedgerChange {
+                path: PathBuf::from(name),
+                old_lines: 0,
+                new_lines: 1,
+                hunks: format!("+{name}\n"),
+                old_sha256: "old".to_string(),
+                new_sha256: "new".to_string(),
+            }
+        }
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("ledger.jsonl");
+        // Two lines, one of which no reader will ever see. `count + 1` called that "seq 3" and
+        // filed the turn below a number already in use, which the `seq > since` filter then hid
+        // forever; the readers take their numbers from the lines that do parse.
+        std::fs::write(
+            &path,
+            "{\"seq\":7,\"created_at\":1,\"changes\":[]}\nnot json\n",
+        )
+        .unwrap();
+        let ledger = Ledger::new(path.clone());
+        ledger
+            .append(&[change("a.txt")])
+            .expect("the file is readable");
+
+        let entries = ledger.entries();
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        assert_eq!(
+            entries[1].0, 8,
+            "the new turn must land above the seq already in the file"
+        );
+        let (delta, last) = ledger.delta_text(7, 5);
+        assert!(
+            delta.contains("a.txt"),
+            "the change was filed where nothing reads it: {delta}"
+        );
+        assert_eq!(last, 8);
     }
 
     #[test]
