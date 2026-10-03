@@ -75,7 +75,7 @@ export function LiveRun({
             />
             {openSeq === tool.seq && (
               <div className={stack.card}>
-                <ToolCard tool={tool} onAction={onAction} onOpenChanges={onOpenChanges} />
+                <ToolCard tool={tool} now={now} onAction={onAction} onOpenChanges={onOpenChanges} />
               </div>
             )}
           </Fragment>

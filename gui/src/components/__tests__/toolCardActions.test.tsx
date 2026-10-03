@@ -27,6 +27,46 @@ const DIFF = [
   '',
 ].join('\n');
 
+describe('the phase line and its two-second gate', () => {
+  // §16.2: a phase that appears and vanishes under the row above it is worse than silence. The
+  // measurement needs a clock, and the clock has to come from the caller: a card that read
+  // `Date.now()` during render could only ever be drawn at the instant the test happened to run
+  // it, so the gate was unassertable -- and a fixture frozen to a past timestamp showed every
+  // restored card as ancient.
+  const started = 1_700_000_000_000;
+  const running = tool({
+    status: 'running',
+    progress: 'compiling main.c',
+    startedAt: started,
+  });
+  const phase = () => document.querySelector('[data-ui="tool-progress"]');
+
+  it('stays silent for the first two seconds', () => {
+    render(<ToolCard tool={running} now={started + 500} />);
+    expect(phase()).toBeNull();
+  });
+
+  it('shows the phase once the run is past two seconds', () => {
+    render(<ToolCard tool={running} now={started + 2500} />);
+    expect(phase()?.textContent).toBe('compiling main.c');
+  });
+
+  it('shows nothing at all when no clock was handed over', () => {
+    // The renderings that reach this are the ones with no running card to time -- a stored
+    // transcript, a permission prompt -- so "no clock" means "no phase", never a guess read off
+    // the wall.
+    render(<ToolCard tool={running} />);
+    expect(phase()).toBeNull();
+  });
+
+  it('drops the phase when the call finishes', () => {
+    render(
+      <ToolCard tool={{ ...running, status: 'ok', endedAt: started + 9000 }} now={started + 9000} />,
+    );
+    expect(phase()).toBeNull();
+  });
+});
+
 describe('the card footer', () => {
   it('names the file and the size of the change', () => {
     render(<ToolCard tool={tool({ detail: DIFF })} />);

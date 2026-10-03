@@ -120,6 +120,7 @@ export function ToolCard({
   collapsible,
   onAction,
   onOpenChanges,
+  now,
 }: {
   tool: ToolCardState;
   /** When set, the header is a button that opens and closes the body -- used by
@@ -136,10 +137,20 @@ export function ToolCard({
    * asked for yet.
    */
   onOpenChanges?: () => void;
+  /**
+   * The clock the two-second phase gate is measured against, from the caller that
+   * already needs one -- the rule `LiveRun` and `ChatView` follow for every duration
+   * in the transcript. Absent means no clock was handed over, which is only true of
+   * the renderings where no card is running (a stored transcript, a permission
+   * prompt), so it shows no phase rather than guessing at a `Date.now()` this render
+   * cannot be asked about again.
+   */
+  now?: number;
 }) {
   // §16.2: nothing is shown for a run under two seconds — a line that appears and vanishes while
   // you are reading the one above it is worse than silence. The card's own start time is the
-  // clock, and the gate lives here rather than in the reducer because the reducer is pure.
+  // other half of the measurement, and the gate lives here rather than in the reducer because
+  // the reducer is pure.
   //
   // A finished card has no "now" to report: the phase means *currently doing*, so it goes with
   // `running` and not with the elapsed rule.
@@ -147,7 +158,8 @@ export function ToolCard({
     tool.status === 'running' &&
     tool.progress !== undefined &&
     tool.startedAt !== undefined &&
-    Date.now() - tool.startedAt >= 2000;
+    now !== undefined &&
+    now - tool.startedAt >= 2000;
 
   const danger = dangerousName(tool.name, tool.args);
   const status = chipStatus(tool.status, danger);

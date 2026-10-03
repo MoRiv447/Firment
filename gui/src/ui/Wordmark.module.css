@@ -1,8 +1,10 @@
 /*
- * The wordmark, at the two sizes it appears.
+ * The wordmark, at the one size it is drawn.
  *
- * `lg` is the only place in the app that uses `--fs-display`, which is what keeps
- * the step from becoming "a big number anyone can ask for".
+ * The 28px step this used to carry as `data-size="lg"` left with the empty state that asked for
+ * it, and a variant with no caller is a second definition waiting to disagree with the first.
+ * `--fs-display` and `--fw-hero` survive for the gallery's type sample (`dev/Showcase.module.css`),
+ * which is a specimen of the ramp rather than a second place the name is set.
  *
  * `sm` is 500, not the 600 a label gets: the name sits at the very top of the
  * window against the mark's own weight, and at 14px the extra step reads as
@@ -21,12 +23,5 @@
 /* The dot is text, so it takes the text green: `--brand-acid` is the FILL, and in
    the light scheme that value is 4.33:1 under a card's own ground. */
 .dot {
-  color: var(--brand-ink);
-}
-
-.wordmark[data-size='lg'] {
-  font-size: var(--fs-display);
-  font-weight: var(--fw-hero);
-  letter-spacing: var(--tracking-display);
   color: var(--brand-ink);
 }
