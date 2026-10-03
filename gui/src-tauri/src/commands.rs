@@ -857,8 +857,7 @@ pub async fn monitor_stop(
     shared: tauri::State<'_, Arc<Shared>>,
     port: String,
 ) -> Result<(), String> {
-    hardware::monitor_stop(shared.inner().clone(), &port).await;
-    Ok(())
+    hardware::monitor_stop(shared.inner().clone(), &port).await
 }
 
 #[tauri::command]

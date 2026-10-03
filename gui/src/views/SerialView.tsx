@@ -81,7 +81,14 @@ export function SerialView({ lines }: { lines: Record<string, MonitorLine[]> }) 
   };
 
   const stop = async (p: string) => {
-    await api.monitorStop(p);
+    try {
+      await api.monitorStop(p);
+    } catch (err) {
+      // The monitor did stop; this says only that its reader has not handed the port back
+      // yet, which is what a failed restart right after it would otherwise leave unexplained.
+      setSendMsg(`⚠ ${err}`);
+      console.error(err);
+    }
     setActive(await api.activeMonitors());
   };
 
