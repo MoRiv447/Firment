@@ -19,7 +19,8 @@ const providers: ProviderEntryDto[] = [
     base_url: 'https://api.deepseek.com/v1',
     model: 'deepseek-v4-flash',
     is_default: true,
-    api_key: null,
+    has_key: true,
+    key_source: 'configured (auth.json)',
   },
   {
     name: 'local',
@@ -27,7 +28,8 @@ const providers: ProviderEntryDto[] = [
     base_url: null,
     model: 'qwen3',
     is_default: false,
-    api_key: null,
+    has_key: false,
+    key_source: 'MISSING (no api_key or api_key_env)',
   },
 ];
 
@@ -86,18 +88,32 @@ describe('ProvidersCard', () => {
     expect(onChange).toHaveBeenCalledWith(expect.anything(), { base_url: null });
   });
 
-  it('keeps the key draft in the same list as the rest of the row', () => {
-    const { onChange } = setup();
-    fireEvent.change(screen.getByPlaceholderText(/api key for deepseek/), {
-      target: { value: 'sk-1' },
-    });
-    expect(onChange).toHaveBeenCalledWith(expect.anything(), { api_key: 'sk-1' });
+  it('keeps a stored key out of the field and the draft out of the settings', () => {
+    // The box used to be pre-filled from `get_settings`, which meant the live key travelled to a
+    // window whose only job is to display settings and sat in its DOM. The field is write-only, so
+    // what it needs back is `has_key` and where the key came from -- not the value.
+    const { onChange, onSaveKey } = setup();
+    const box = () =>
+      screen.getByPlaceholderText(/api key for deepseek/) as HTMLInputElement;
+    expect(box().value).toBe('');
+    expect(screen.queryAllByText('configured (auth.json)')).toHaveLength(1);
+
+    fireEvent.change(box(), { target: { value: 'sk-1' } });
+    // Not a patch on the settings list: a key is its own file, and the draft is the row's.
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onSaveKey).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save key' })[0]);
+    expect(onSaveKey).toHaveBeenCalledWith(expect.objectContaining({ name: 'deepseek' }), 'sk-1');
+    expect(box().value).toBe('');
   });
 
-  it('saves the key with its own button, because it is its own file', () => {
-    const { onSaveKey } = setup();
-    fireEvent.click(screen.getAllByRole('button', { name: 'Save key' })[0]);
-    expect(onSaveKey).toHaveBeenCalledWith(expect.objectContaining({ name: 'deepseek' }));
+  it('will not offer to save a key that has not been typed', () => {
+    // This used to be a click that answered "empty key — nothing saved". A button that is off is
+    // the same information before the fact rather than after it.
+    setup();
+    const save = screen.getAllByRole('button', { name: 'Save key' })[0] as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
   });
 
   it('asks before deleting, and deletes when told to', async () => {

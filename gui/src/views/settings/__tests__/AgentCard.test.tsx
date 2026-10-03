@@ -32,7 +32,8 @@ const settings: SettingsDto = {
       base_url: null,
       model: 'deepseek-v4-flash',
       is_default: true,
-      api_key: null,
+      has_key: false,
+      key_source: 'MISSING (no api_key or api_key_env)',
     },
   ],
 };

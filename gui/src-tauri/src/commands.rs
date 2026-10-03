@@ -655,9 +655,14 @@ pub struct ProviderEntryDto {
     pub base_url: Option<String>,
     pub model: String,
     pub is_default: bool,
-    /// Resolved API key (from auth.json / inline / env). Sent back so the
-    /// settings UI can show per-provider keys; it never leaves the local app.
-    pub api_key: Option<String>,
+    /// Whether a key resolves for this provider, and which source supplied it — never the key.
+    ///
+    /// The old comment said the key "never leaves the local app", and that is exactly the
+    /// reasoning that does not hold: "it stays on this machine" has already let a secret into a
+    /// DOM built to display settings and into anything else the webview is wired to. The form
+    /// needs to know whether a key is set and where from; the value answers neither.
+    pub has_key: bool,
+    pub key_source: String,
 }
 
 #[tauri::command]
@@ -671,13 +676,17 @@ pub async fn get_settings(shared: tauri::State<'_, Arc<Shared>>) -> Result<Setti
     let mut providers: Vec<ProviderEntryDto> = config
         .providers
         .iter()
-        .map(|(name, p)| ProviderEntryDto {
-            name: name.clone(),
-            r#type: p.r#type.clone(),
-            base_url: p.base_url.clone(),
-            model: p.model.clone(),
-            is_default: name == &config.default_provider,
-            api_key: config.api_key_for(p, name),
+        .map(|(name, p)| {
+            let (key, source) = config.resolve_api_key(p, name);
+            ProviderEntryDto {
+                name: name.clone(),
+                r#type: p.r#type.clone(),
+                base_url: p.base_url.clone(),
+                model: p.model.clone(),
+                is_default: name == &config.default_provider,
+                has_key: key.is_some(),
+                key_source: source.label(),
+            }
         })
         .collect();
     providers.sort_by(|a, b| a.name.cmp(&b.name));

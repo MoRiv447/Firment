@@ -42,7 +42,9 @@ export function ProvidersCard({
   onChange: (provider: ProviderEntryDto, patch: Partial<ProviderEntryDto>) => void;
   /** Write the row out. Called on blur. */
   onPersist: (provider: ProviderEntryDto) => void;
-  onSaveKey: (provider: ProviderEntryDto) => void;
+  /** Writing a key is a different file from writing the config, so it has its own button -- and
+   * the value comes from the row's own draft, because the stored key never comes back here. */
+  onSaveKey: (provider: ProviderEntryDto, key: string) => void;
   onRemove: (provider: ProviderEntryDto) => void;
   /** Returns true when the provider was stored. */
   onAdd: (fields: {
@@ -104,7 +106,7 @@ export function ProvidersCard({
           busy={busy}
           onChange={onChange}
           onPersist={(p) => void wrap(() => onPersist(p))}
-          onSaveKey={(p) => void wrap(() => onSaveKey(p))}
+          onSaveKey={(p, key) => void wrap(() => onSaveKey(p, key))}
           onRemove={(p) => void wrap(() => onRemove(p))}
         />
       ))}
@@ -180,10 +182,14 @@ function ProviderRow({
   busy: boolean;
   onChange: (provider: ProviderEntryDto, patch: Partial<ProviderEntryDto>) => void;
   onPersist: (provider: ProviderEntryDto) => void;
-  onSaveKey: (provider: ProviderEntryDto) => void;
+  onSaveKey: (provider: ProviderEntryDto, key: string) => void;
   onRemove: (provider: ProviderEntryDto) => void;
 }) {
   const [asking, setAsking] = useState(false);
+  // The draft lives here and is write-only, because that is all a secret can be from this side:
+  // `get_settings` reports whether a key exists and where it came from, never the value, so the
+  // box starts empty on every reload and nothing here can show what is stored.
+  const [draft, setDraft] = useState('');
   // The confirmation hang off a span because the button it belongs to is a layer
   // component, and the layer does not hand out refs from inside.
   const anchorRef = useRef<HTMLSpanElement | null>(null);
@@ -250,10 +256,23 @@ function ProviderRow({
           mono
           type="password"
           placeholder={`api key for ${provider.name} (empty = use env)`}
-          value={provider.api_key ?? ''}
-          onChange={(e) => onChange(provider, { api_key: e.target.value })}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
         />
-        <Button size="sm" disabled={busy} onClick={() => onSaveKey(provider)}>
+        {/* What the stored key is, not what it says. */}
+        {provider.has_key && (
+          <Chip size="sm" status="neutral">
+            {provider.key_source}
+          </Chip>
+        )}
+        <Button
+          size="sm"
+          disabled={busy || draft.trim() === ''}
+          onClick={() => {
+            onSaveKey(provider, draft.trim());
+            setDraft('');
+          }}
+        >
           Save key
         </Button>
       </div>

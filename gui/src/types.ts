@@ -356,7 +356,13 @@ export interface ProviderEntryDto {
   base_url: string | null;
   model: string;
   is_default: boolean;
-  api_key: string | null;
+  /**
+   * Whether a key resolves, and which source supplied it. The key itself is not sent:
+   * `SettingsDto` used to carry it so the password box could be pre-filled, and a field that is
+   * only ever typed into does not need to arrive already full.
+   */
+  has_key: boolean;
+  key_source: string;
 }
 
 /**

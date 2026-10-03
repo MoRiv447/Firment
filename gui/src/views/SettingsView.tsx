@@ -121,12 +121,10 @@ export function SettingsView() {
   };
 
 
-  const saveProviderKey = async (p: ProviderEntryDto) => {
-    const key = p.api_key?.trim() ?? '';
-    if (!key) {
-      setKeyMsg(`empty key for ${p.name} — nothing saved (env fallback still applies)`);
-      return;
-    }
+  // The value is the row's draft, not a field of the settings: a stored key is never read back
+  // to this side, so there is nothing here to clear and nothing here to leak. The row's Save
+  // button is off until there is a draft, so what reaches here is always a key.
+  const saveProviderKey = async (p: ProviderEntryDto, key: string) => {
     try {
       await api.setApiKey(p.name, key);
       setKeyMsg(`key saved for ${p.name}`);
