@@ -708,6 +708,61 @@ async fn kill_tree_and_report(
     (format!("command: {command}\n{reason}"), None)
 }
 
+/// One debug probe, one holder at a time.
+///
+/// probe-rs opens the probe exclusively at the USB level, so a second call does not queue
+/// behind the first — it fails, usually part-way through a download, and a flash that dies
+/// mid-transfer leaves the target holding a partial image. Nothing in the product noticed
+/// before this: the GUI's flash button, an agent turn, and the workbench panel are three
+/// independent ways onto the same ST-Link, and the tools run concurrently within a wave.
+static PROBE_HELD_BY: Mutex<Option<&'static str>> = Mutex::new(None);
+
+/// The lease. Released by `Drop`, so a cancelled, timed-out or panicking call gives the probe
+/// back on the way out instead of only on the way it finishes well.
+pub(crate) struct ProbeLease;
+
+impl ProbeLease {
+    /// Take the probe for `what`, or say who holds it.
+    pub(crate) fn acquire(what: &'static str) -> Result<Self, String> {
+        // A panic while holding the lock poisons it, and recovering the guard is the difference
+        // between one bad flash and a probe that stays "busy" for the life of the process.
+        let mut held = PROBE_HELD_BY
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(other) = *held {
+            return Err(format!(
+                "[Busy] the debug probe is held by {other}; wait for it to finish, or cancel \
+                 that turn and retry once it has let go"
+            ));
+        }
+        *held = Some(what);
+        Ok(ProbeLease)
+    }
+}
+
+impl Drop for ProbeLease {
+    fn drop(&mut self) {
+        *PROBE_HELD_BY
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    }
+}
+
+/// Which probe-rs subcommand needs the probe to itself, and what to call it in a message.
+///
+/// `list`, `info` and `hardware` read a scan rather than a target, so they are not leased.
+/// Anything that writes to, runs on, or attaches to the chip is.
+fn exclusive_probe_subcommand(args: &[String]) -> Option<&'static str> {
+    match args.first().map(String::as_str) {
+        Some("download") => Some("a flash"),
+        Some("run") => Some("a run"),
+        Some("reset") => Some("a target reset"),
+        Some("attach") | Some("debug") => Some("a debug session"),
+        Some("profile") | Some("gdb-server") => Some("a profiling session"),
+        _ => None,
+    }
+}
+
 /// Run a `probe-rs` subcommand directly with an explicit argument array (no
 /// shell), capturing combined stdout+stderr. Enforces a timeout; a process
 /// killed by the timeout or by turn cancellation reports exit code `None`.
@@ -724,6 +779,9 @@ pub(crate) async fn run_probe_rs(
     cancel: Option<Cancellable>,
     envs: &[(String, String)],
 ) -> Result<(String, Option<i32>), String> {
+    let _lease = exclusive_probe_subcommand(&args)
+        .map(ProbeLease::acquire)
+        .transpose()?;
     run_argv("probe-rs", args, cwd, timeout_ms, cancel, envs, None).await
 }
 
@@ -740,6 +798,9 @@ pub(crate) async fn run_probe_rs_watching(
     envs: &[(String, String)],
     on_line: Option<LineObserver>,
 ) -> Result<(String, Option<i32>), String> {
+    let _lease = exclusive_probe_subcommand(&args)
+        .map(ProbeLease::acquire)
+        .transpose()?;
     run_argv("probe-rs", args, cwd, timeout_ms, cancel, envs, on_line).await
 }
 
@@ -1485,5 +1546,52 @@ mod tests {
         let small = dir.path().join("small.txt");
         fs::write(&small, "hello").unwrap();
         assert_eq!(read_text(&small).unwrap(), "hello");
+    }
+
+    #[test]
+    fn only_the_subcommands_that_touch_a_target_take_the_probe() {
+        let cmd = |name: &str| vec![name.to_string(), "--chip".to_string()];
+        for name in [
+            "download",
+            "run",
+            "reset",
+            "attach",
+            "debug",
+            "profile",
+            "gdb-server",
+        ] {
+            assert!(
+                exclusive_probe_subcommand(&cmd(name)).is_some(),
+                "{name} writes to, runs on, or attaches to the chip"
+            );
+        }
+        for name in ["list", "info", "hardware", "self-update"] {
+            assert!(
+                exclusive_probe_subcommand(&cmd(name)).is_none(),
+                "{name} reads a scan rather than a target"
+            );
+        }
+        assert!(exclusive_probe_subcommand(&[]).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_second_holder_is_told_who_has_the_probe() {
+        let lease = ProbeLease::acquire("a flash").expect("free to start with");
+        // probe-rs is not installed here and must not be reached: the refusal happens before any
+        // process is spawned, which is the entire point of taking the lease first.
+        let err = run_probe_rs(
+            vec!["download".to_string()],
+            Path::new("."),
+            1_000,
+            None,
+            &[],
+        )
+        .await
+        .expect_err("the probe is held");
+        assert!(err.starts_with("[Busy]"), "{err}");
+        assert!(err.contains("a flash"), "{err}");
+        drop(lease);
+        ProbeLease::acquire("a flash")
+            .expect("the lease is given back by Drop, not by the call finishing well");
     }
 }

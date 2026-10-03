@@ -1964,17 +1964,24 @@ fn is_mutation_tool(name: &str) -> bool {
 /// Errors that mean "this call itself was rejected before touching the file":
 /// the model mis-specified the anchor ([InvalidInput], e.g. `old_text`
 /// matched 0 or several times, a no-change edit), the file is missing
-/// ([NotFound]), or the call was hard-rejected before touching anything
+/// ([NotFound]), the call was hard-rejected before touching anything
 /// ([Permission] — the path sandbox, not a user denial, which already carries
-/// `denied=true` and is excluded above). They must not roll the whole batch
-/// back — a previously succeeded mutation in the same wave is still valid and
-/// the model can retry with corrected arguments. State failures
-/// ([ConcurrentChange], [Io]) still roll back because the workspace may hold
-/// edits based on stale content.
+/// `denied=true` and is excluded above), or the resource it needed was held by
+/// somebody else ([Busy], the debug probe lease) and the call never started.
+/// They must not roll the whole batch back — a previously succeeded mutation in
+/// the same wave is still valid and the model can retry with corrected
+/// arguments. State failures ([ConcurrentChange], [Io]) still roll back because
+/// the workspace may hold edits based on stale content.
+///
+/// This is a closed list keyed on the tag each error opens with, so a tool that
+/// invents a new tag for "nothing happened" reads as "something did" and rolls
+/// back a turn's good edits: `the_tags_that_mean_nothing_happened_are_listed`
+/// pins it.
 fn is_benign_mutation_error(message: &str) -> bool {
     message.starts_with("[InvalidInput]")
         || message.starts_with("[NotFound]")
         || message.starts_with("[Permission]")
+        || message.starts_with("[Busy]")
 }
 
 fn is_broad_tool(name: &str) -> bool {
@@ -3811,5 +3818,24 @@ mod tests {
             "the scan found {backing_up} tools taking backups; a scan that finds nothing must not \
              read as a pass"
         );
+    }
+
+    /// The list `is_benign_mutation_error` reads is closed and keyed on the tag an error opens
+    /// with, so a tool inventing a tag for "nothing happened" rolls back a wave of edits that
+    /// succeeded. `ProbeLease`'s `[Busy]` is the one that arrived from outside this crate.
+    #[test]
+    fn the_tags_that_mean_nothing_happened_are_listed() {
+        for tag in ["[InvalidInput]", "[NotFound]", "[Permission]", "[Busy]"] {
+            assert!(
+                is_benign_mutation_error(&format!("{tag} something")),
+                "{tag} means the call never touched the workspace"
+            );
+        }
+        for tag in ["[ConcurrentChange]", "[Io]", "[Corrupt]", "[Timeout]"] {
+            assert!(
+                !is_benign_mutation_error(&format!("{tag} something")),
+                "{tag} means the workspace may be holding something wrong"
+            );
+        }
     }
 }
