@@ -33,6 +33,10 @@
   display: flex;
   flex: 0 0 auto;
   gap: var(--sp-2);
+  /* `stretch`, the default, is what lines these two up: the labelled New button
+     sets the row height and the square plan-mode button becomes that height by
+     aspect-ratio. One bottom line, no number written down twice. */
+  align-items: stretch;
 }
 
 /* "New" is the action and the plan-mode variant is its sibling, so only the

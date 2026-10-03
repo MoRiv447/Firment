@@ -41,6 +41,10 @@
   color: var(--ink);
   font-family: var(--ff-sans);
   font-size: var(--fs-body);
+  /* 500, not the inherited 400: a control label is not prose. At 400 the word
+     next to a 15px glyph read as body text with an icon glued to it, which is what
+     "the font is still thin" was about. */
+  font-weight: var(--fw-medium);
   line-height: var(--lh-tight);
   text-align: center;
   white-space: nowrap;
@@ -114,8 +118,12 @@
      actions. Sized explicitly rather than derived, because `aspect-ratio` needs a
      definite height -- if the height token fails to resolve, the box collapses to
      its content plus padding, which is a rectangle with off-centre glyph in it. */
-  width: var(--h-icon);
-  height: var(--h-icon);
+  /* No width and no height: `min-height` plus `aspect-ratio` on a stretched flex
+     item makes the box a square of whatever the row already is, which is the
+     invariant an icon button beside a labelled one needs. Naming a size here is what
+     put the rail two buttons and four pixels out of line -- and every other row
+     would have had to remember the same number. */
+  min-height: var(--h-icon);
   flex: none;
   aspect-ratio: 1;
   padding: 0;
