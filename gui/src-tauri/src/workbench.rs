@@ -1,6 +1,19 @@
 //! Workbench commands: project state for the workbench panel
 //! (`.firment/workbench.toml` + session tree + git status).
 //! See docs/gui-workbench.md.
+//!
+//! One thing here is an open decision rather than an unwritten check, so it is recorded where the
+//! work is done: these commands take `cwd` from the frontend and read and write under it. The
+//! names *inside* a project are validated where they are joined — `kb_path` accepts only a
+//! cheatsheet segment of `[A-Za-z0-9_.-]`, which rejects separators, `..` and a Windows drive
+//! prefix (`"c:evil.toml"` would otherwise truncate the base via `PathBuf::push`) — but nothing
+//! below this layer decides WHICH project root a request may name, and that is the trust the
+//! frontend holds. `WorkbenchConfig::path_for` is a plain `root.join(...)`: it inherits whatever
+//! root it is handed. Today the panel is the only caller, so the reachable set is the projects
+//! this app's own session list already names; the gap is un-anchored authority, not a missing
+//! validation, and the fix is a decision about who supplies the root (the config's own
+//! `[local]`/session store, the directory the process was started in, or a per-project allow
+//! list) — a product call, not a patch.
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};

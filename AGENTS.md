@@ -331,6 +331,48 @@ two variables above are the whole available route.
 
 ## Repo conventions agents must keep
 
+- **A guard fix is not done until the copies are counted.** Three audit rounds
+  (2026-09-18, 2026-09-24, 2026-10-02) found the same shape over and over: the repair
+  landed on the canonical implementation and never reached the second copy. Measured
+  from the 10-02 round alone — `/undo` had `refuse_while_busy` and both `/ledger`
+  forms (same lock, same premature promise on screen) did not, though the helper's own
+  doc comment named `/ledger --export`; `doctor --json`'s exit code sat inside the
+  human-readable branch while its help line promised it; the GUI reducer had one
+  `closeRunning` for `turn_end` and a hand-rolled half-close beside it for `error`;
+  `install.sh` matched a sums row by field while `install.ps1` matched it by
+  substring; card events got `owner` routing and the turn boundary did not, so a
+  delegated run reset the parent's whole turn. So before declaring a guard fixed, grep
+  the thing it protects across the workspace **and** `gui/src-tauri` — they are
+  separate cargo workspaces and one grep covers neither — plus `gui/src` when the
+  invariant is a frontend one, and put that command and the per-site status in the
+  commit message. Where two copies are unavoidable, prefer one tail site that decides
+  over two branches that each remember to.
+- **Verification that can be skipped silently is not verification.** `install.sh` and
+  `install.ps1` both fetched `SHA256SUMS` with `|| true` and installed unverified when
+  the fetch came back empty, while the same script's dry run printed
+  「下载 -> SHA256 校验 -> 解压」. Both stop with a named reason now (an asset and its
+  sums ship from one release job, so a missing sums file means the wrong place was
+  fetched — which is exactly when the check matters). Apply the same test to any
+  optional check you add: if it cannot look, it says so and fails, rather than
+  reporting the success it did not earn.
+- **A shipped `.ps1` containing non-ASCII text needs a UTF-8 BOM.** Windows PowerShell
+  5.1 decodes a BOM-less file in the ANSI codepage, so a Chinese message string can
+  swallow a quote terminator: `Parser::ParseFile` on `install.ps1` as committed
+  reported a missing terminator and a runaway script block, and `powershell -File`
+  and `iex (Get-Content …)` both died before downloading anything. The documented
+  `irm | iex` path survived because the HTTP response declares UTF-8, which is why
+  the file shipped broken: the only route anyone tested was the one that worked.
+  Measured on this machine with PS 5.1 (no PowerShell 7 installed here to compare, so
+  that half is unverified); adding the BOM made the same parse report clean.
+- **A regression test has to fail before the fix, and on this machine the proof cannot
+  always be run.** Re-inserting a just-fixed bug to show the test catches it is refused
+  by the sandbox's command classifier, which reads the edit as an unauthorised
+  regression. Do not fight it, and do not imply a run that did not happen: state the
+  fail-before from the code (which line, and what the assertion does without it), or —
+  better where the behaviour allows — build the negative control into the test so one
+  run exercises both directions. Examples from the 2026-10-03 round: the IME cases
+  assert that the plain Enter one keystroke later still sends, and the restored-card
+  case asserts that a live failing call keeps its `✗` after the invented mark is gone.
 - Commit style: conventional commits (`fix:`, `feat:`, `docs:`,
   `chore:`), as used throughout `git log`.
 - CI gates a push must satisfy before you declare done:

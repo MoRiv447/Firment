@@ -719,6 +719,13 @@ static PROBE_HELD_BY: Mutex<Option<&'static str>> = Mutex::new(None);
 
 /// The lease. Released by `Drop`, so a cancelled, timed-out or panicking call gives the probe
 /// back on the way out instead of only on the way it finishes well.
+///
+/// What it does NOT cover, deliberately and left open: the lease is per CALL. A `debug` session is
+/// a run of separate probe-rs calls, so another holder can take the probe between two of them and
+/// the session goes on talking to a probe that is no longer its own. Closing that needs a lease
+/// scoped to the session and keyed to the probe rather than to the tool, which is a design step of
+/// its own — per-call exclusion still removes the case that was actually happening (the GUI's
+/// flash button, an agent turn and the workbench panel colliding on one ST-Link).
 pub(crate) struct ProbeLease;
 
 impl ProbeLease {

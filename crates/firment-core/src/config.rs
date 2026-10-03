@@ -1028,6 +1028,21 @@ impl Config {
         self.pinned.max_output_tokens = None;
     }
 
+    /// Write the whole config back from the struct.
+    ///
+    /// Destructive in one direction that matters to a person who edits `config.toml` by hand:
+    /// `to_string_pretty` renders what the struct holds and nothing else, so comments, blank
+    /// lines, section order and any key this build does not know are gone afterwards. Every
+    /// settings write goes through here — and one write skips it and does the same thing inline:
+    /// the DeepSeek name migration in `load_or_create`, which fires on a plain *read* of an
+    /// existing file. Both are recorded here so the next reader finds the cost where the work is
+    /// done rather than in a changelog.
+    ///
+    /// Preserving the user's text means rebuilding this on `toml_edit` (already in the lockfile,
+    /// as `toml`'s own dependency) and then answering a question nobody has decided yet: what
+    /// does a comment-preserving writer do with a key this version does not recognise?
+    /// `deny_unknown_fields` refuses such a file on load, so "keep it untouched" and "reject the
+    /// file" cannot both be the answer. That decision is why this is still a rewrite.
     pub fn save(&self, path: &Path) -> Result<(), ConfigError> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
