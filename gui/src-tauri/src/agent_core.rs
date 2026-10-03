@@ -27,10 +27,7 @@ pub fn build_agent(
         .clone();
     let merged = config.merged_for(&session.cwd);
 
-    let sink: Arc<GuiSink> = Arc::new(GuiSink {
-        shared: shared.clone(),
-        session_id: session.id.clone(),
-    });
+    let sink: Arc<GuiSink> = Arc::new(GuiSink::new(shared.clone(), session.id.clone()));
     let permission: Arc<GuiPermission> = Arc::new(GuiPermission {
         shared: shared.clone(),
         session_id: session.id.clone(),

@@ -12,7 +12,7 @@ use tauri::Emitter;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 
-use crate::events::frontend_event;
+use crate::events::{frontend_event, FrontendEvent};
 use crate::state::{next_seq, Shared};
 
 /// How long a permission dialog may stay unanswered before the tool call is
@@ -62,13 +62,125 @@ impl Drop for WaiterGuard {
 pub struct GuiSink {
     pub shared: Arc<Shared>,
     pub session_id: String,
+    /// Streamed text waiting to go out — see [`GuiSink::push`].
+    pending: Arc<std::sync::Mutex<Pending>>,
+}
+
+/// How much streamed text to hold before sending it, and for how long.
+///
+/// One token was one event: a paragraph cost eighty `emit` calls, eighty serialisations across
+/// the IPC boundary, and — because each one arrives in the webview as its own task, so React
+/// cannot batch them — eighty renders for text the user reads as one flowing line.
+const COALESCE_BYTES: usize = 1024;
+/// The other bound, so a slow model is not held back by a batch it never fills.
+const COALESCE_WINDOW: Duration = Duration::from_millis(40);
+
+#[derive(Default)]
+struct Pending {
+    /// `(kind, text)` in arrival order, consecutive same-kind parts merged. One list rather
+    /// than one buffer per kind: thinking and answer can interleave, and two buffers would
+    /// reorder them.
+    parts: Vec<(&'static str, String)>,
+    bytes: usize,
+    /// When the first held part arrived. `None` means nothing is buffered, which is also what
+    /// keeps a long idle gap from making the next single token wait.
+    since: Option<Instant>,
+}
+
+impl Pending {
+    /// Take one streamed part, merging it into the run it continues.
+    fn hold(&mut self, kind: &'static str, text: &str) {
+        self.bytes += text.len();
+        self.since.get_or_insert_with(Instant::now);
+        match self.parts.last_mut() {
+            Some((previous, buf)) if *previous == kind => buf.push_str(text),
+            _ => self.parts.push((kind, text.to_string())),
+        }
+    }
+
+    /// Whether what is held should go out now.
+    ///
+    /// Both bounds are read off the stream itself, so no timer task is needed: a burst reaches
+    /// the byte cap, a trickle passes the window on its next arrival, and the next structural
+    /// event flushes whatever is left *before* it. Which also means a held tail can only sit
+    /// until something else happens — the reason `Drop` flushes too.
+    fn due_to_send(&self, now: Instant) -> bool {
+        self.bytes >= COALESCE_BYTES
+            || self
+                .since
+                .is_some_and(|since| now.duration_since(since) >= COALESCE_WINDOW)
+    }
+}
+
+impl GuiSink {
+    pub fn new(shared: Arc<Shared>, session_id: String) -> Self {
+        Self {
+            shared,
+            session_id,
+            pending: Arc::new(std::sync::Mutex::new(Pending::default())),
+        }
+    }
+
+    /// Hold a streamed part, and send what is held once it is worth a message.
+    ///
+    /// Both triggers are driven by the stream itself, so no timer task is needed: a burst of
+    /// tokens reaches the byte cap, a trickle passes the window on its next arrival, and the
+    /// turn's next structural event (`tool_start`, `turn_end`, …) flushes whatever is left
+    /// *before* it, so the order the user sees is the order the model wrote.
+    fn push(&self, kind: &'static str, text: &str) {
+        // Never held across an `await`: `std::sync::Mutex` is deliberate.
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        pending.hold(kind, text);
+        let due = pending.due_to_send(Instant::now());
+        drop(pending);
+        if due {
+            self.flush();
+        }
+    }
+
+    /// Forward everything held, as the events they would have been.
+    fn flush(&self) {
+        let held = {
+            let mut pending = self
+                .pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            std::mem::take(&mut *pending)
+        }; // the guard is gone before anything is emitted
+        for (kind, text) in held.parts {
+            let session_id = Some(self.session_id.clone());
+            let fe = match kind {
+                "thinking" => FrontendEvent::Thinking { session_id, text },
+                _ => FrontendEvent::TextDelta { session_id, text },
+            };
+            let _ = self.shared.app.emit("agent-event", fe);
+        }
+    }
+}
+
+impl Drop for GuiSink {
+    fn drop(&mut self) {
+        // A turn abandoned mid-stream — an aborted task, a panic — sends no further event to
+        // flush through, and the tokens it did stream would die in the buffer.
+        self.flush();
+    }
 }
 
 #[async_trait]
 impl EventSink for GuiSink {
     async fn event(&self, event: AgentEvent) {
-        if let Some(fe) = frontend_event(&event, Some(&self.session_id)) {
-            let _ = self.shared.app.emit("agent-event", fe);
+        match &event {
+            AgentEvent::TextDelta(text) => self.push("text_delta", text),
+            AgentEvent::Thinking(text) => self.push("thinking", text),
+            other => {
+                self.flush();
+                if let Some(fe) = frontend_event(other, Some(&self.session_id)) {
+                    let _ = self.shared.app.emit("agent-event", fe);
+                }
+            }
         }
     }
 }
@@ -205,5 +317,69 @@ impl Asker for GuiAsker {
                 ASK_TIMEOUT.as_secs()
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn held_text_keeps_its_runs_and_their_order() {
+        let mut pending = Pending::default();
+        pending.hold("text_delta", "Hel");
+        pending.hold("text_delta", "lo ");
+        pending.hold("thinking", "because");
+        pending.hold("text_delta", "world");
+        let runs: Vec<(&str, &str)> = pending
+            .parts
+            .iter()
+            .map(|(kind, text)| (*kind, text.as_str()))
+            .collect();
+        assert_eq!(
+            runs,
+            vec![
+                ("text_delta", "Hello "),
+                ("thinking", "because"),
+                ("text_delta", "world"),
+            ],
+            "thinking between two answer runs must not merge them or move either"
+        );
+    }
+
+    #[test]
+    fn a_run_goes_out_on_whichever_bound_it_reaches_first() {
+        let mut pending = Pending::default();
+        assert!(
+            !pending.due_to_send(Instant::now()),
+            "nothing held is not a message"
+        );
+
+        pending.hold("text_delta", "a few words");
+        assert!(
+            !pending.due_to_send(pending.since.unwrap()),
+            "a short burst waits — measured from its own arrival, so a stalled CI host cannot \
+             make this flaky"
+        );
+
+        for _ in 0..200 {
+            pending.hold("text_delta", "0123456789");
+        }
+        assert!(
+            pending.due_to_send(Instant::now()),
+            "the byte cap is what bounds a fast stream"
+        );
+
+        let mut trickle = Pending::default();
+        trickle.hold("text_delta", "one token");
+        let arrived = trickle.since.unwrap();
+        assert!(
+            !trickle.due_to_send(arrived),
+            "a lone token is never late on arrival — that is the latency a slow model keeps"
+        );
+        assert!(
+            trickle.due_to_send(arrived + COALESCE_WINDOW),
+            "the window is what bounds a slow one"
+        );
     }
 }
