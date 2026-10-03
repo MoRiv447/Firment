@@ -204,10 +204,12 @@ impl EventLog {
     /// under the cap", and a write that pushes it over only to rotate later would break the
     /// promise for exactly the line that mattered.
     pub fn append(&self, record: &LogRecord) -> std::io::Result<()> {
-        if let Ok(line) = serde_json::to_string(record) {
-            self.append_line(&line)?;
-        }
-        Ok(())
+        // A record that cannot become a line is a failed write, not a skipped one. It used to be
+        // swallowed here (`if let Ok(line)` and then `Ok(())`), which is how a log ends up
+        // shorter than the session while still reading as a complete record.
+        let line = serde_json::to_string(record)
+            .map_err(|e| std::io::Error::other(format!("event record: {e}")))?;
+        self.append_line(&line)
     }
 
     fn append_line(&self, line: &str) -> std::io::Result<()> {
@@ -298,6 +300,10 @@ impl EventLog {
 pub struct LoggingSink {
     inner: std::sync::Arc<dyn EventSink>,
     log: Mutex<EventLog>,
+    /// Said once, the first time a write fails. The log is a convenience and the session must
+    /// not die for it, but a record that quietly stopped being written turns `replay` and the
+    /// export into an incomplete story told as a complete one.
+    warned: std::sync::atomic::AtomicBool,
 }
 
 impl LoggingSink {
@@ -305,7 +311,25 @@ impl LoggingSink {
         Self {
             inner,
             log: Mutex::new(log),
+            warned: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Tell the UI, through the sink underneath this one, that the log is not being written.
+    ///
+    /// Not back through `self`: an `Info` event is itself an event to log, so re-entering this
+    /// sink would try the failing write again and then want to warn about that one.
+    async fn warn_once(&self, why: &str) {
+        use std::sync::atomic::Ordering;
+        if self.warned.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        self.inner
+            .event(AgentEvent::Info(format!(
+                "the session event log is not being written ({why}); replay and export will be \
+                 incomplete from here"
+            )))
+            .await;
     }
 }
 
@@ -313,10 +337,19 @@ impl LoggingSink {
 impl EventSink for LoggingSink {
     async fn event(&self, event: AgentEvent) {
         if let Some(record) = record_of(&event, now_secs()) {
-            // A poisoned or failing log must not take the session with it: the log is a
-            // convenience, and the event it failed to record is still on its way to the UI.
-            if let Ok(log) = self.log.lock() {
-                let _ = log.append(&record);
+            // Scoped so the guard is gone before anything is awaited: a `std::sync::MutexGuard`
+            // held across an `await` makes the sink's future non-`Send`, and the agent moves it
+            // between threads. A poisoned mutex still hands back the log, and appending is safe;
+            // this is the same convention the edit journal uses.
+            let failed = {
+                let log = self
+                    .log
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                log.append(&record).err()
+            };
+            if let Some(e) = failed {
+                self.warn_once(&e.to_string()).await;
             }
         }
         self.inner.event(event).await;
@@ -488,5 +521,57 @@ mod tests {
         )
         .unwrap();
         assert!(failed.summary.contains("FAILED"), "{}", failed.summary);
+    }
+
+    /// What the sink under the logger stands in for: a place to see what reached the UI.
+    struct Recorder {
+        seen: Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl EventSink for Recorder {
+        async fn event(&self, event: AgentEvent) {
+            let label = match event {
+                AgentEvent::Info(message) => format!("info: {message}"),
+                other => format!("other: {other:?}"),
+            };
+            self.seen.lock().unwrap().push(label);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failing_event_log_says_so_once() {
+        // The log is a convenience and the session must not die for it — but silence about a log
+        // that stopped being written is how `replay` and an export end up telling half the story
+        // as if it were all of it. Point the log at a directory: opening that for append cannot
+        // succeed on any platform.
+        let dir = tempfile::tempdir().unwrap();
+        let blocked = dir.path().join("events.jsonl");
+        std::fs::create_dir_all(&blocked).unwrap();
+        let recorder = std::sync::Arc::new(Recorder {
+            seen: Mutex::new(Vec::new()),
+        });
+        let sink = LoggingSink::new(recorder.clone(), EventLog::new(blocked));
+
+        sink.event(AgentEvent::TurnStart).await;
+        sink.event(AgentEvent::TurnEnd {
+            text: "hi".to_string(),
+        })
+        .await;
+
+        let seen = recorder.seen.lock().unwrap();
+        let warned: Vec<&String> = seen
+            .iter()
+            .filter(|line| line.contains("event log is not being written"))
+            .collect();
+        assert_eq!(
+            warned.len(),
+            1,
+            "one warning for a log that keeps failing: {seen:?}"
+        );
+        assert!(
+            seen.iter().any(|line| line == "other: TurnStart"),
+            "the event itself still has to reach the UI: {seen:?}"
+        );
     }
 }
