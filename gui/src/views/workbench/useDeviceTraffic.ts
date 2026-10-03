@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api, onAgentEvent } from '../../lib/api';
 import type { AlertEntry, DeviceEntry } from '../../types';
 import type { GuardLink } from './guard';
-import { readGuardFrame } from './guard';
+import { isLinkFrame, readGuardFrame } from './guard';
 
 /**
  * The SBC data plane's raw traffic, as one subscription.
@@ -18,7 +18,7 @@ export interface DeviceTraffic {
   devices: DeviceEntry[];
   /** Alert frames, newest first. The card lists five of them. */
   alerts: AlertEntry[];
-  /** The broker link, as the guard last reported it. */
+  /** The broker link, as the link itself last reported it. */
   link: GuardLink;
 }
 
@@ -57,7 +57,12 @@ export function useDeviceTraffic(
     void onAgentEvent((e) => {
       if (cancelled) return;
       if (e.type === 'guard_status') {
-        setGuardFrame(e.frame);
+        // Two documents arrive on this one event: this app's broker-link status, and the guard's own
+        // status payload published on `firment/guard/status`. The card shows the link, and the
+        // backend keeps the last link frame for a remount to pull — so a guard payload used to
+        // wipe a green indicator to `unknown` every time the SBC said anything about itself,
+        // which is the flicker the pull exists to prevent.
+        if (isLinkFrame(e.frame)) setGuardFrame(e.frame);
         return;
       }
       if (e.type !== 'device_frame') return;

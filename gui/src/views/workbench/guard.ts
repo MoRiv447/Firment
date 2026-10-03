@@ -129,6 +129,15 @@ export interface GuardLink {
 const UNKNOWN_LINK: GuardLink = { state: 'unknown', error: null };
 
 /**
+ * Does this frame speak about the **link** — the broker session this app holds — as opposed to
+ * whatever the SBC guard publishes about itself? Both arrive on `guard_status`, and they are
+ * different documents: only the link one carries `connected`.
+ */
+export function isLinkFrame(frame: string): boolean {
+  return typeof fields(frame).connected === 'boolean';
+}
+
+/**
  * Read the guard's status frame.
  *
  * Called from two places in the old render, each doing its own `JSON.parse` and
@@ -136,11 +145,8 @@ const UNKNOWN_LINK: GuardLink = { state: 'unknown', error: null };
  * readers of one frame with no shared answer.
  */
 export function readGuardFrame(frame: string | null): GuardLink {
-  if (!frame) return UNKNOWN_LINK;
+  if (!frame || !isLinkFrame(frame)) return UNKNOWN_LINK;
   const parsed = fields(frame);
   if (parsed.connected === true) return { state: 'on', error: null };
-  if (parsed.connected === false) {
-    return { state: 'off', error: text(parsed.error, 'disconnected') };
-  }
-  return UNKNOWN_LINK;
+  return { state: 'off', error: text(parsed.error, 'disconnected') };
 }

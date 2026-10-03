@@ -133,6 +133,17 @@ describe('useDeviceTraffic', () => {
     expect(result.current.link.state).toBe('on');
   });
 
+  it('is not moved by a guard status frame that says nothing about the link', () => {
+    // `guard_status` carries two documents: this app's broker status, and the guard's own
+    // status payload from `firment/guard/status`. Only the first one is about the link, and
+    // reading the other as if it were reset a green indicator to "unknown" every time the SBC
+    // said anything about itself.
+    const { result } = renderHook(() => useDeviceTraffic());
+    emit(status('{"connected":true,"frames":12}'));
+    emit(status('{"node":"s3","sev":"info","state":"watching"}'));
+    expect(result.current.link).toEqual({ state: 'on', error: null });
+  });
+
   it('says nothing to the project about a frame that is not an alert', () => {
     const onAlert = vi.fn();
     renderHook(() => useDeviceTraffic(onAlert));
