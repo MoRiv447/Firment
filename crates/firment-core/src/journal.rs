@@ -317,11 +317,21 @@ fn same_path(a: &Path, b: &Path) -> bool {
 
 impl EditJournal {
     pub fn new(dir: PathBuf) -> Self {
+        Self::at(dir, now_nanos())
+    }
+
+    /// A journal whose backups are namespaced under a chosen `stamp`.
+    ///
+    /// Every file name here is `(stamp, counter)`, and the counter restarts in each instance, so
+    /// two journals over one directory that were built in the same clock tick hold the same names
+    /// for different files. `new` takes the stamp from the clock, which is the only thing keeping
+    /// them apart.
+    fn at(dir: PathBuf, stamp: u128) -> Self {
         Self {
             dir,
             entries: Vec::new(),
             next_seq: 0,
-            stamp: now_nanos(),
+            stamp,
         }
     }
 
@@ -361,7 +371,15 @@ impl EditJournal {
         let existed = path.exists();
         let backup = if existed {
             fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
-            let name = self.backup_name(self.next_seq);
+            // The same walk `commit_at_seq` makes over the undo index names: a backup is the only
+            // copy of what a file held before this turn touched it, so writing one over another
+            // journal's is not a rename of convenience, it is the recovery path for a file nobody
+            // else can restore.
+            let mut name = self.backup_name(self.next_seq);
+            while self.dir.join(&name).exists() {
+                self.next_seq += 1;
+                name = self.backup_name(self.next_seq);
+            }
             fs::copy(path, self.dir.join(&name))
                 .map_err(|e| format!("backup {} failed: {e}", path.display()))?;
             self.next_seq += 1;
@@ -1202,6 +1220,31 @@ mod tests {
             .expect_err("a relative target means a different file in another cwd");
         assert!(err.contains("absolute"), "{err}");
         assert!(journal.is_empty(), "and nothing was recorded");
+    }
+
+    #[test]
+    fn two_journals_on_one_directory_never_share_a_backup_name() {
+        let dir = tempdir().unwrap();
+        let undo = dir.path().join("undo");
+        let a = dir.path().join("a.txt");
+        let b = dir.path().join("b.txt");
+        fs::write(&a, "a-original").unwrap();
+        fs::write(&b, "b-original").unwrap();
+
+        // The same stamp on purpose: that is what two journals built in one clock tick get, and a
+        // backup name is `(stamp, counter)` with the counter restarting per journal. The second
+        // `begin` therefore wrote its backup over the first file's only recovery copy, and undoing
+        // `a` handed back b's content.
+        let mut one = EditJournal::at(undo.clone(), 7);
+        let mut two = EditJournal::at(undo.clone(), 7);
+        assert!(one.begin(&a).unwrap());
+        assert!(two.begin(&b).unwrap());
+        fs::write(&a, "a-changed").unwrap();
+        fs::write(&b, "b-changed").unwrap();
+        one.rollback().unwrap();
+        two.rollback().unwrap();
+        assert_eq!(fs::read_to_string(&a).unwrap(), "a-original");
+        assert_eq!(fs::read_to_string(&b).unwrap(), "b-original");
     }
 
     #[test]
