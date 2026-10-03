@@ -305,8 +305,21 @@ impl App {
                 // Finished cards dim into the background: the eye should go
                 // to what is RUNNING, not to a wall of bright history.
                 let dim = !running;
+                // A restored card prints no verdict, and that is a claim about the data rather
+                // than a rendering choice: the transcript stores what a call returned and nothing
+                // about whether it succeeded. The mark used to be inferred from three prefixes
+                // (`Permission denied`, `unknown tool`, `[Permission] Dangerous command`) and
+                // every other way a tool can fail — `[NotFound]`, `[Io]`, `[Timeout]`,
+                // `[cancelled: interrupted]`, about twenty tags — came back as a green ✓ on a
+                // call that failed. The GUI draws `unknown` for the same rows for the same
+                // reason: an unrecorded outcome is not a success. The `seq` sentinel already
+                // says "restored, never numbered live" (see `card_id` above), so the mark reads
+                // the one fact that actually distinguishes the two kinds of card.
+                let restored = *seq == u64::MAX;
                 let (symbol, color) = if *running {
                     (SPINNER[self.spinner_frame()], Color::Yellow)
+                } else if restored {
+                    ('○', crate::theme::muted(self.tier))
                 } else if *ok {
                     ('✓', Color::Green)
                 } else {

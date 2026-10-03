@@ -232,12 +232,10 @@ impl App {
                     self.items.push(Item::Assistant(content.clone()));
                 }
                 ChatMessage::Tool { name, content, .. } => {
-                    let ok = !content.starts_with("Permission denied")
-                        && !content.starts_with("unknown tool")
-                        && !content.starts_with("[Permission] Dangerous command");
-                    // A restored session stores the tool text verbatim, so
-                    // history gets the same diff view the live card had — it is
-                    // not limited to the one-line summary.
+                    // The restored card takes no verdict. `content` is the tool's own text, and
+                    // the transcript never recorded whether the call succeeded, so any mark here
+                    // would be a guess — see the restored branch of `view::render_rows`, which
+                    // draws an untried circle for these.
                     let expanded = self.should_auto_expand(Some(content.as_str()));
                     self.items.push(Item::Tool {
                         name: name.clone(),
@@ -248,7 +246,7 @@ impl App {
                         running: false,
                         // A restored card has no live phase to show: the tool is long over.
                         progress: None,
-                        ok,
+                        ok: false,
                         detail: Some(content.clone()),
                         expanded,
                         summary: content.clone(),
@@ -1052,10 +1050,13 @@ impl App {
 
     /// Refuse a command that would otherwise be queued behind a running turn.
     ///
-    /// `/undo` and `/ledger --export` take the agent lock, which a running turn holds: the
-    /// command does not fail, it *waits* and then acts on the turn that has just finished
-    /// writing — after the transcript already said "Undoing the last committed edit…". The
-    /// files it rolls back are the ones the user watched being written a moment ago.
+    /// The four commands that read or roll back the session's *record* take the agent lock, which
+    /// a running turn holds: `/undo`, `/undo --before`, `/ledger` and `/ledger --export`. None of
+    /// them fails — it *waits*, then acts on the turn that has just finished writing, after the
+    /// transcript already said "Undoing the last committed edit…" or "Exporting the change
+    /// ledger…". The files it rolls back, or the patch it writes, are the ones the user watched
+    /// being created a moment ago. Commands that are *meant* to take effect later (`/plan`,
+    /// `/agent`, `/model`) are not refused; they say so on the way in.
     fn refuse_while_busy(&mut self) -> bool {
         if !self.busy {
             return false;
@@ -2213,6 +2214,9 @@ impl App {
                 }));
             }
             "ledger" if arg.is_empty() => {
+                if self.refuse_while_busy() {
+                    return;
+                }
                 self.send_cmd(AgentCmd::Ledger { export: None });
                 self.items.push(Item::System("Reading the change ledger…".to_string()));
             }
@@ -2220,6 +2224,12 @@ impl App {
             // (plan §8). The default lands in the session's own directory, not in a temp
             // file: a patch is something the user keeps or applies.
             "ledger" => {
+                // Both ledger forms read the session under the agent lock the turn holds, so an
+                // export queued now reports the files as the running turn has just left them,
+                // after the transcript already promised "Exporting…".
+                if self.refuse_while_busy() {
+                    return;
+                }
                 let dest = match arg.trim().strip_prefix("--export") {
                     Some(rest) if !rest.trim().is_empty() => {
                         std::path::PathBuf::from(rest.trim())

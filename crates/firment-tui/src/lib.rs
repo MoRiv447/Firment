@@ -1840,10 +1840,79 @@ mod tests {
             Item::Tool {
                 name,
                 running: false,
-                ok: true,
+                // The restored sentinel, and no verdict: the transcript recorded the text a call
+                // returned and nothing about whether it succeeded. See
+                // `a_restored_card_draws_no_verdict_for_an_outcome_nobody_recorded`.
+                seq: u64::MAX,
+                ok: false,
                 ..
             } if name == "read_file"
         ));
+    }
+
+    #[test]
+    fn a_restored_card_draws_no_verdict_for_an_outcome_nobody_recorded() {
+        // The mark on a restored card used to be guessed from three prefixes (`Permission denied`,
+        // `unknown tool`, `[Permission] Dangerous command`). Those are three of the roughly twenty
+        // ways a tool can fail: `[NotFound]`, `[Io]`, `[Timeout]`, `[cancelled: interrupted]` all
+        // fell through to a green ✓, so reopening a session that had failed read as a session that
+        // worked -- and the file it claims to have read is the one that was not there.
+        let mut app = test_app();
+        let mut session = Session::new(PathBuf::from("."), "default", "m");
+        for (name, content) in [
+            ("read_file", "[NotFound] no such file: a.c".to_string()),
+            ("shell", "Permission denied: rm -rf build".to_string()),
+            ("build", "[cancelled: interrupted]".to_string()),
+        ] {
+            session.push(ChatMessage::Tool {
+                tool_call_id: format!("c-{name}"),
+                name: name.to_string(),
+                content,
+            });
+        }
+        app.on_agent(AgentEvent::SessionLoaded(session));
+        let text: String = app
+            .render_rows(80)
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+        assert!(
+            !text.contains('✓') && !text.contains('✗'),
+            "a restored card claimed an outcome the transcript never recorded: {text}"
+        );
+        assert_eq!(
+            text.matches('○').count(),
+            3,
+            "every restored card should hold the untried mark, not a verdict"
+        );
+
+        // The negative control: a live call carries its own flag on the event, so its mark is a
+        // fact and stays exactly as red as it was.
+        let mut live = test_app();
+        live.on_agent(AgentEvent::ToolStart {
+            name: "build".to_string(),
+            args: serde_json::json!({}),
+            seq: 1,
+            owner: None,
+        });
+        live.on_agent(AgentEvent::ToolEnd {
+            name: "build".to_string(),
+            ok: false,
+            summary: "[Io] compiler not found".to_string(),
+            detail: None,
+            seq: 1,
+            owner: None,
+            waited_ms: None,
+        });
+        let live_text: String = live
+            .render_rows(80)
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+        assert!(
+            live_text.contains('✗'),
+            "a failed live call lost its mark: {live_text}"
+        );
     }
 
     #[test]
@@ -2602,6 +2671,35 @@ mod tests {
                     Item::System(t) if t.contains("Undoing") || t.contains("Rewinding")
                 )),
                 "{cmd} promised an undo it has not done yet"
+            );
+        }
+    }
+
+    #[test]
+    fn the_ledger_forms_are_refused_while_a_turn_is_running() {
+        // The sibling the undo test above proves the shape of: both ledger forms take the same
+        // agent lock the running turn holds, so neither fails -- it waits, reads the ledger of the
+        // turn that has just finished writing, and reports it after the transcript already promised
+        // "Reading the change ledger…" / "Exporting… to X…". `refuse_while_busy`'s own doc comment
+        // named `/ledger --export` as one of the two commands that need it, and only `/undo` had it.
+        for cmd in ["ledger", "ledger --export", "ledger --export my.patch"] {
+            let mut app = test_app();
+            app.busy = true;
+            app.run_command(cmd);
+            let last = app
+                .items
+                .last()
+                .unwrap_or_else(|| panic!("{cmd} left nothing on screen"));
+            assert!(
+                matches!(last, Item::System(t) if t.contains("Agent is busy")),
+                "{cmd} was accepted while a turn runs"
+            );
+            assert!(
+                !app.items.iter().any(|item| matches!(
+                    item,
+                    Item::System(t) if t.contains("ledger") || t.contains("Exporting")
+                )),
+                "{cmd} promised a ledger result it has not produced"
             );
         }
     }
