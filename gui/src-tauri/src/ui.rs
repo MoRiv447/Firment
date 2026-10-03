@@ -64,6 +64,68 @@ pub struct GuiSink {
     pub session_id: String,
     /// Streamed text waiting to go out — see [`GuiSink::push`].
     pending: Arc<std::sync::Mutex<Pending>>,
+    /// The turn's closing notices wait here rather than going out — see [`TerminalHold`].
+    terminal: Arc<TerminalHold>,
+}
+
+/// The notices that end a turn, held back until the slot says the turn is over.
+///
+/// On mount the frontend re-lights a spinner for every session `running_sessions` reports, because
+/// a window reopened mid-turn has an empty reducer and would otherwise show nothing at all. That
+/// snapshot reads the slot's `running` flag, and `run_turn` emits the event closing a turn BEFORE
+/// the turn task drops the guard that clears the flag. A mount landing in between therefore asked
+/// for a turn that had already announced its own end — and got a spinner with no later event that
+/// could ever stop it.
+///
+/// Holding the two boundary notices until the flag is down makes the snapshot mean exactly what the
+/// frontend has to assume: reported means "an end you have not seen yet". The turn's own task
+/// drains the hold after releasing the guard, so this delays those two events by the teardown of
+/// one `Agent`, and nothing else changes order: a boundary is the last thing `run_turn` emits, and
+/// the `error`-then-`turn_end` pair keeps its sequence here.
+#[derive(Default)]
+pub struct TerminalHold(std::sync::Mutex<Vec<FrontendEvent>>);
+
+/// Whether this event is the turn ending — by failure or by answer.
+fn is_turn_boundary(event: &FrontendEvent) -> bool {
+    matches!(
+        event,
+        FrontendEvent::TurnEnd { .. } | FrontendEvent::Error { .. }
+    )
+}
+
+impl TerminalHold {
+    /// Take one event on its way to the frontend: `Some` when it can go now, `None` when this is
+    /// the notice that ends the turn and it has to wait for the slot.
+    pub fn route(&self, event: FrontendEvent) -> Option<FrontendEvent> {
+        if is_turn_boundary(&event) {
+            self.0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(event);
+            return None;
+        }
+        Some(event)
+    }
+
+    /// Everything held, in the order the agent produced it, leaving the hold empty. Draining is
+    /// what the turn task does once `running` is down; a second drain then finds nothing, which is
+    /// why an early `start_turn` return and the task cannot both send the same notice.
+    pub fn take(&self) -> Vec<FrontendEvent> {
+        std::mem::take(
+            &mut *self
+                .0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        )
+    }
+}
+
+/// Forward one frontend event, holding back the two that end a turn — the sink and the agent build
+/// both send, and neither may let a boundary through early.
+pub fn route_event(shared: &Arc<Shared>, terminal: &TerminalHold, event: FrontendEvent) {
+    if let Some(now) = terminal.route(event) {
+        let _ = shared.app.emit("agent-event", now);
+    }
 }
 
 /// How much streamed text to hold before sending it, and for how long.
@@ -113,11 +175,12 @@ impl Pending {
 }
 
 impl GuiSink {
-    pub fn new(shared: Arc<Shared>, session_id: String) -> Self {
+    pub fn new(shared: Arc<Shared>, session_id: String, terminal: Arc<TerminalHold>) -> Self {
         Self {
             shared,
             session_id,
             pending: Arc::new(std::sync::Mutex::new(Pending::default())),
+            terminal,
         }
     }
 
@@ -178,7 +241,7 @@ impl EventSink for GuiSink {
             other => {
                 self.flush();
                 if let Some(fe) = frontend_event(other, Some(&self.session_id)) {
-                    let _ = self.shared.app.emit("agent-event", fe);
+                    route_event(&self.shared, &self.terminal, fe);
                 }
             }
         }
@@ -380,6 +443,74 @@ mod tests {
         assert!(
             trickle.due_to_send(arrived + COALESCE_WINDOW),
             "the window is what bounds a slow one"
+        );
+    }
+
+    fn boundary(message: &str) -> FrontendEvent {
+        FrontendEvent::Error {
+            session_id: Some("s-1".to_string()),
+            message: message.to_string(),
+        }
+    }
+
+    fn ended() -> FrontendEvent {
+        FrontendEvent::TurnEnd {
+            session_id: Some("s-1".to_string()),
+            text: "done".to_string(),
+        }
+    }
+
+    #[test]
+    fn only_the_two_events_that_end_a_turn_are_held_back() {
+        let hold = TerminalHold::default();
+        // Everything else goes straight out: a held `tool_end` would leave a card spinning, and a
+        // held `Info` would arrive after the user has already stopped watching for it.
+        for event in [
+            FrontendEvent::TurnStart {
+                session_id: Some("s-1".to_string()),
+            },
+            FrontendEvent::Info {
+                session_id: Some("s-1".to_string()),
+                message: "elf gate re-checking".to_string(),
+            },
+            FrontendEvent::SubagentEnd {
+                session_id: Some("s-1".to_string()),
+                id: "sub-9".to_string(),
+                depth: 1,
+            },
+        ] {
+            let kind = std::mem::discriminant(&event);
+            assert!(
+                hold.route(event)
+                    .is_some_and(|e| std::mem::discriminant(&e) == kind),
+                "a non-boundary event was held, or mangled on its way out"
+            );
+        }
+        assert!(hold.route(boundary("provider died")).is_none());
+        assert!(hold.route(ended()).is_none());
+        let drained = hold.take();
+        assert_eq!(drained.len(), 2, "both boundaries, and nothing else");
+        assert!(drained.iter().all(is_turn_boundary));
+        assert!(
+            hold.take().is_empty(),
+            "taking hands the held notices over, it does not copy them"
+        );
+    }
+
+    #[test]
+    fn a_failed_turn_holds_its_error_and_its_end_in_the_order_they_were_emitted() {
+        // The mid-stream failure path emits `error` and then `turn_end`. Reversed, the frontend
+        // would close the slot and then re-open it with the same turn's text.
+        let hold = TerminalHold::default();
+        hold.route(boundary("provider died"));
+        hold.route(ended());
+        let drained = hold.take();
+        assert_eq!(drained.len(), 2);
+        assert!(matches!(drained[0], FrontendEvent::Error { .. }));
+        assert!(matches!(drained[1], FrontendEvent::TurnEnd { .. }));
+        assert!(
+            hold.take().is_empty(),
+            "a second drain would send the same turn's end twice"
         );
     }
 }

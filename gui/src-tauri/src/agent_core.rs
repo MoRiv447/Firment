@@ -1,11 +1,10 @@
 use std::sync::Arc;
 
 use firment_core::{Agent, Config, Session};
-use tauri::Emitter;
 
 use crate::events::FrontendEvent;
 use crate::state::{CancelHandles, Shared};
-use crate::ui::{GuiAsker, GuiPermission, GuiSink};
+use crate::ui::{route_event, GuiAsker, GuiPermission, GuiSink, TerminalHold};
 
 /// Build the agent around a session, wiring GUI sinks for events,
 /// permissions and questions. All agent knobs (registries, plan-mode policy,
@@ -13,12 +12,17 @@ use crate::ui::{GuiAsker, GuiPermission, GuiSink};
 /// module so the GUI, TUI and CLI stay behaviourally identical.
 ///
 /// Returns the cancellation handles alongside the agent: `run_turn` holds
-/// the agent lock for the whole turn, so cancel must be able to fire them
+/// the agent lock for the whole turn, so cancel must be able to fire these
 /// directly without contending for that lock. The caller stores them in the
 /// session's [`crate::state::AgentSlot`].
+///
+/// `terminal` is where the turn's closing notices are parked instead of sent — see
+/// [`crate::ui::TerminalHold`]. The caller owns it and drains it after releasing the slot, and
+/// everything else this function emits goes through it so there is one door.
 pub fn build_agent(
     shared: &Arc<Shared>,
     session: Session,
+    terminal: &Arc<TerminalHold>,
 ) -> anyhow::Result<(Agent, CancelHandles)> {
     let config = shared
         .config
@@ -27,7 +31,11 @@ pub fn build_agent(
         .clone();
     let merged = config.merged_for(&session.cwd);
 
-    let sink: Arc<GuiSink> = Arc::new(GuiSink::new(shared.clone(), session.id.clone()));
+    let sink: Arc<GuiSink> = Arc::new(GuiSink::new(
+        shared.clone(),
+        session.id.clone(),
+        terminal.clone(),
+    ));
     let permission: Arc<GuiPermission> = Arc::new(GuiPermission {
         shared: shared.clone(),
         session_id: session.id.clone(),
@@ -60,8 +68,9 @@ pub fn build_agent(
     for refusal in assembly.plugin_refusals.drain(..) {
         // A plugin the user configured that quietly does nothing is a plugin they believe is
         // working. The CLI prints these and the TUI emits them; the GUI showed neither.
-        let _ = shared.app.emit(
-            "agent-event",
+        route_event(
+            shared,
+            terminal,
             FrontendEvent::Info {
                 session_id: Some(session_id.clone()),
                 message: refusal,
@@ -72,8 +81,9 @@ pub fn build_agent(
     for warning in &merged.config_warnings {
         // Same reason as above, one layer down: a project file that exists but cannot be used
         // leaves the turn running on settings the user believes are in effect.
-        let _ = shared.app.emit(
-            "agent-event",
+        route_event(
+            shared,
+            terminal,
             FrontendEvent::Info {
                 session_id: Some(session_id.clone()),
                 message: warning.clone(),
@@ -82,8 +92,12 @@ pub fn build_agent(
     }
 
     if let Some(error) = assembly.provider_error.take() {
-        let _ = shared.app.emit(
-            "agent-event",
+        // Held, like every other way this turn can end: the slot is already reserved by the time
+        // this line runs, so a window reading `running_sessions` right now would be told about a
+        // turn whose notice it has already had.
+        route_event(
+            shared,
+            terminal,
             FrontendEvent::Error {
                 session_id: Some(session_id.clone()),
                 message: error,

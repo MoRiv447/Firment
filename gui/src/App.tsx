@@ -30,6 +30,7 @@ import { SessionSidebar } from './views/SessionSidebar';
 import { SettingsView } from './views/SettingsView';
 import { sessionChanges } from './lib/changes';
 import { workflowSteps } from './lib/steps';
+import { relightable } from './lib/relight';
 import { useNewSessionShortcut } from './lib/shortcuts';
 import { initialTurnState, turnsReducer } from './lib/turnReducer';
 import type { TurnMap } from './lib/turnReducer';
@@ -295,6 +296,10 @@ export default function App() {
   // to the latest session so turn_end can refresh the transcript.
   const sessionRef = useRef(session);
   sessionRef.current = session;
+  // Which sessions have already had their turn END inside this window. Read once, by the mount
+  // re-light below, because that snapshot can land after the notice it contradicts — see
+  // `lib/relight.ts` for why that is not a theoretical ordering.
+  const endedTurns = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     // Single fetch on mount; the restore below re-checks after its await so
@@ -312,10 +317,16 @@ export default function App() {
     // would be invisible (no spinner, input re-enabled). Re-light the
     // indicator for every session whose agent still has a live turn; the
     // streamed text/tools return with the next event.
+    //
+    // The list is a snapshot taken an IPC round trip ago, and a `turn_end` can be delivered to
+    // this window before the snapshot's reply is — `relightable` drops those, or the closed turn
+    // would be lit again with nothing left to ever stop it.
     void api
       .runningSessions()
       .then((ids) => {
-        for (const id of ids) dispatchTurn({ type: 'turn_start', session_id: id });
+        for (const id of relightable(ids, endedTurns.current)) {
+          dispatchTurn({ type: 'turn_start', session_id: id });
+        }
       })
       .catch(console.error);
     // Info banners self-expire: a stall warning that outlives its cause
@@ -374,6 +385,11 @@ export default function App() {
           (e as { session_id?: string | null }).session_id ||
           sessionRef.current?.id ||
           null;
+        // Recorded before anything else looks at it: these two are the only notices that end a
+        // turn, and the mount re-light has to know whether one has already arrived here.
+        if ((e.type === 'turn_end' || e.type === 'error') && sid) {
+          endedTurns.current.add(sid);
+        }
         switch (e.type) {
           case 'turn_start':
             setInfos((prev) => prev.filter((i) => i.sid !== sid));

@@ -10,6 +10,7 @@ use crate::agent_core::{build_agent, default_provider_model};
 use crate::events::{session_dto, session_summary_dto, FrontendEvent};
 use crate::hardware;
 use crate::state::{AgentSlot, Shared};
+use crate::ui::TerminalHold;
 
 // ---------- session lifecycle ----------
 
@@ -59,6 +60,9 @@ pub async fn start_turn(
         slot.clone()
     };
     let _reservation = RunningGuard(slot.running.clone());
+    // The turn's closing notices are parked here and sent once `running` is down; see
+    // [`TerminalHold`] for why the ordering is the point.
+    let terminal = std::sync::Arc::new(TerminalHold::default());
 
     // Build the agent fresh from the CURRENT session snapshot and config:
     // settings/provider changes therefore apply on the very next turn
@@ -71,7 +75,8 @@ pub async fn start_turn(
             .clone();
         let session = store.load(&session_id).map_err(|e| e.to_string())?;
         let budget = session.context_budget_chars;
-        let (mut agent, handles) = build_agent(&shared, session).map_err(|e| e.to_string())?;
+        let (mut agent, handles) =
+            build_agent(&shared, session, &terminal).map_err(|e| e.to_string())?;
         if budget > 0 {
             agent.set_context_budget_chars(budget);
         }
@@ -81,6 +86,9 @@ pub async fn start_turn(
         Ok(v) => v,
         Err(e) => {
             drop(_reservation); // release before returning
+                                // After the release, in both directions: the flag going down is what makes it safe
+                                // for the window to see the turn's end.
+            drain_terminal(&shared, &terminal);
             return Err(e);
         }
     };
@@ -116,14 +124,20 @@ pub async fn start_turn(
         // handles in it, where the next Stop would find them.
         release_slot_handles(&shared, &session_id);
         drop(_reservation); // clears running on success AND on panic unwind
+                            // The turn's own closing notice has been waiting for exactly this line. `run_turn` emitted
+                            // it inside the call above, and the flag it belongs to only came down here — so sending it
+                            // any earlier lets a window that mounts in between be told "this session is running" about
+                            // a turn it has already seen end, which is a spinner nothing can ever stop.
+        let said_by_agent = drain_terminal(&shared, &terminal);
         if let Err(e) = result {
             // A provider failure has already been emitted by the agent through its sink, with the
             // same message: emitting here too showed two identical banners for one failure, and
             // the "rolled back this turn's edits" note appeared under only the first — so the pair
             // read as two events rather than one, described twice. Everything else (max
-            // iterations, a transcript that would not save) reaches the user from here alone.
-            let surfaced_by_agent = matches!(e, firment_core::AgentError::Provider(_));
-            if !surfaced_by_agent {
+            // iterations, a transcript that would not save, a timer that cut a wave short)
+            // reaches the user from here alone. The question is now asked of the events rather
+            // than of the error variant: what mattered was always whether the notice went out.
+            if !said_by_agent {
                 let _ = shared.app.emit(
                     "agent-event",
                     FrontendEvent::Error {
@@ -168,6 +182,23 @@ fn release_slot_handles(shared: &Shared, session_id: &str) {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
     }
+}
+
+/// Send whatever the turn held back, in the order the agent produced it, and report whether an
+/// `error` notice was among them — which is the one thing the caller needs before it decides to
+/// say the same thing itself.
+///
+/// Only ever called once the slot's `running` flag is down; that is the whole reason the hold
+/// exists. See [`TerminalHold`].
+fn drain_terminal(shared: &Arc<Shared>, terminal: &TerminalHold) -> bool {
+    let held = terminal.take();
+    let said_error = held
+        .iter()
+        .any(|event| matches!(event, FrontendEvent::Error { .. }));
+    for event in held {
+        let _ = shared.app.emit("agent-event", event);
+    }
+    said_error
 }
 
 /// Where a Stop goes: fire it at the running turn, park it for a turn whose agent is still being
@@ -921,6 +952,12 @@ pub async fn firm_run(
 /// once on mount: after a window reload mid-turn the reducer is empty and
 /// the running turn would be invisible (no spinner, input re-enabled) until
 /// the next event.
+///
+/// The promise a re-light has to have is that an end is still coming, and that is what
+/// [`TerminalHold`] buys: a turn's `turn_end`/`error` cannot reach a window before this answers,
+/// because both are held until the flag read here goes down. Without it a mount landing in the
+/// teardown of a turn asked for a turn whose notice it had already had, and drew a spinner nothing
+/// could stop.
 #[tauri::command]
 pub async fn running_sessions(
     shared: tauri::State<'_, Arc<Shared>>,
