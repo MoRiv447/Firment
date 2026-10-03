@@ -2910,3 +2910,78 @@ async fn max_tokens_truncation_is_surfaced_without_rollback() {
         "expected a normal TurnEnd, got: {events:?}"
     );
 }
+
+/// A provider stream that dies after sending part of the reply.
+struct DyingProvider;
+
+#[async_trait]
+impl Provider for DyingProvider {
+    async fn stream(&self, _request: ChatRequest) -> Result<ProviderStream, ProviderError> {
+        Ok(Box::pin(futures::stream::iter(vec![
+            Ok(ProviderEvent::Text("so far so good".to_string())),
+            Err(ProviderError::StreamEnded("connection reset".to_string())),
+        ])))
+    }
+
+    fn model(&self) -> &str {
+        "fake"
+    }
+}
+
+/// Every other way out of `run_turn` persisted the session and ended the turn. The mid-body
+/// provider error returned to the caller with neither, so the question the user had just asked
+/// existed only in memory — a reload lost it — and a client that clears its running flag on
+/// `turn_end` waited for an event that was never going to arrive.
+#[tokio::test]
+async fn a_provider_error_mid_reply_still_persists_and_ends_the_turn() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    let id = session.id.clone();
+    let mut agent = Agent::new(
+        Some(Box::new(DyingProvider)),
+        registry_with(Vec::new()),
+        session,
+        store.clone(),
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(events.clone())),
+        10,
+    );
+
+    let err = agent.run_turn("write me a driver").await.unwrap_err();
+    assert!(
+        matches!(err, AgentError::Provider(_)),
+        "the caller still has to see the failure: {err}"
+    );
+
+    let seen = events.lock().unwrap();
+    assert!(
+        seen.iter().any(|e| matches!(e, AgentEvent::Error(_))),
+        "the error is reported: {seen:?}"
+    );
+    assert!(
+        matches!(seen.last(), Some(AgentEvent::TurnEnd { .. })),
+        "the turn has to end for the client too: {seen:?}"
+    );
+    drop(seen);
+
+    let loaded = store.load(&id).expect("the session was written");
+    let roles: Vec<&str> = loaded
+        .messages
+        .iter()
+        .map(|m| match m {
+            ChatMessage::User { .. } => "user",
+            ChatMessage::Assistant { .. } => "assistant",
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(roles, vec!["user", "assistant"], "{roles:?}");
+    let ChatMessage::Assistant { content, .. } = &loaded.messages[1] else {
+        panic!("an assistant message was expected");
+    };
+    assert_eq!(
+        content, "so far so good",
+        "what the model managed to say is progress, not nothing"
+    );
+}

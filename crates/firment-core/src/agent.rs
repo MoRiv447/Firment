@@ -153,6 +153,15 @@ pub enum AgentError {
     Session(#[from] crate::session::SessionError),
     #[error("reached max iterations ({0})")]
     MaxIterations(usize),
+    /// The turn did not finish on its own terms: a timer ended it. `String` says which one and
+    /// what was already on disk when it did.
+    ///
+    /// This is an error rather than an `Ok(String::new())` because a one-shot `firm -y "…"` runs
+    /// behind a script, and `main.rs:827` turns this `Err` into a non-zero exit. A timed-out turn
+    /// answered with exit 0 tells that script the work succeeded. A *cancelled* turn still returns
+    /// `Ok`: somebody pressed Ctrl-C, which is not a failure.
+    #[error("timed out: {0}")]
+    TimedOut(String),
     #[error("provider not configured: run /apikey <key> or /provider <name> inside the TUI")]
     NoProvider,
     #[error("no final text produced")]
@@ -1082,6 +1091,25 @@ impl Agent {
             self.ledger_seq_appended = last_seq;
             self.ledger_prefix = format!("[change ledger]\n{delta}\n\n");
         }
+        // A blocking size change the *last* turn never resolved cannot be resolved by this one's
+        // answer: the hard gate below only lets a turn finish after the gate has been re-run, and
+        // the gate is re-run only when something has been edited. So a carried-over `required`
+        // meant a turn that only talks — "now write the README" after an unrelated flash blow-up —
+        // was answered with "elf gate: still blocked" thirty times over, and then fell off the end
+        // of the iteration budget with the user's request never touched. Carry the question, not
+        // the verdict: the next attempt to end this turn re-runs the gate against the binary as it
+        // is now, which blocks again if the firmware is still over threshold.
+        if self.elf_gate_required {
+            self.elf_gate_required = false;
+            self.elf_gate_dirty = true;
+            self.sink
+                .event(AgentEvent::Info(
+                    "elf gate: the previous turn ended with a blocking size change unresolved — \
+                     re-checking before this turn finishes"
+                        .to_string(),
+                ))
+                .await;
+        }
         self.session.push(ChatMessage::User {
             content: input.to_string(),
         });
@@ -1201,7 +1229,12 @@ impl Agent {
                             text: String::new(),
                         })
                         .await;
-                    return Ok(String::new());
+                    // Not `Ok`: the turn produced nothing because a timer stopped it, and the
+                    // one-shot CLI reads the `Ok` as a completed request.
+                    return Err(AgentError::TimedOut(format!(
+                        "the provider sent no event within {}s",
+                        self.stream_timeout.as_secs()
+                    )));
                 }
             };
             let mut content = String::new();
@@ -1210,6 +1243,7 @@ impl Agent {
             let mut cancelled = false;
             let mut stalled = false;
             let mut stop_reason: Option<StopReason> = None;
+            let mut stream_error: Option<crate::provider::ProviderError> = None;
 
             while let Some(event) = tokio::select! {
                 next = stream.next() => next,
@@ -1232,16 +1266,11 @@ impl Agent {
             } {
                 let event = match event {
                     Ok(event) => event,
+                    // Collected rather than returned from here: the exits below are the ones that
+                    // persist and close the turn, and this arm used to return past all of them.
                     Err(e) => {
-                        // An empty journal means nothing was rolled back —
-                        // saying "rolled back: no file changes" reads like a
-                        // second failure on top of the real one.
-                        let message = match journal.rolled_back_clause() {
-                            Some(clause) => format!("provider error; {clause}"),
-                            None => format!("provider error: {e}"),
-                        };
-                        self.sink.event(AgentEvent::Error(message)).await;
-                        return Err(AgentError::Provider(e));
+                        stream_error = Some(e);
+                        break;
                     }
                 };
                 match event {
@@ -1263,6 +1292,37 @@ impl Agent {
                     // the UI during a long generation.
                     ProviderEvent::Activity => {}
                 }
+            }
+
+            if let Some(e) = stream_error {
+                // Every other way out of this loop saves the session and ends the turn. This one
+                // returned straight to the caller, so three things were simply lost: what the
+                // model had already said, the user's own message from the top of `run_turn`
+                // (pushed into the session but never written, so a reload did not show the
+                // question that was asked), and the `TurnEnd` that tells a client the turn is
+                // over — which is why the GUI could sit waiting on a session whose agent had
+                // already returned.
+                if !content.is_empty() {
+                    self.session.push(ChatMessage::Assistant {
+                        content: content.clone(),
+                        tool_calls: Vec::new(),
+                        thinking_blocks,
+                    });
+                }
+                // An empty journal means nothing was rolled back — saying "rolled back: no file
+                // changes" reads like a second failure on top of the real one.
+                let message = match journal.rolled_back_clause() {
+                    Some(clause) => format!("provider error; {clause}"),
+                    None => format!("provider error: {e}"),
+                };
+                self.sink.event(AgentEvent::Error(message)).await;
+                let _ = self.store.save(&self.session);
+                self.sink
+                    .event(AgentEvent::TurnEnd {
+                        text: String::new(),
+                    })
+                    .await;
+                return Err(AgentError::Provider(e));
             }
 
             // Never persist tool calls that were never executed: an assistant
@@ -1555,7 +1615,13 @@ impl Agent {
                         text: String::new(),
                     })
                     .await;
-                return Ok(String::new());
+                // Not `Ok`: the wave was cut off, nothing after it ran and no final text was ever
+                // produced. `main.rs:827` reads an `Ok` as a finished request and exits 0, which
+                // tells a script the job is done when a timer stopped it.
+                return Err(AgentError::TimedOut(format!(
+                    "the tool wave ran past {}s; the turn ended unfinished",
+                    self.tool_wave_timeout.as_secs()
+                )));
             }
             mutations_since_verify += stats.mutations;
             if stats.mutations > 0 {
@@ -1881,8 +1947,18 @@ impl Agent {
     }
 }
 
+/// Which calls change the workspace, as far as a turn's bookkeeping is concerned.
+///
+/// The set is defined by one fact about the tools: they take a journal backup. Two jobs read this
+/// answer and both go wrong for a tool that writes files and is missing here — a turn re-arms the
+/// verify gate and the elf gate only after a mutation, and a wave orders a call against a
+/// concurrent read of the same path only if it is a mutation. `rename_symbol` was missing when
+/// this list was written, so the most wide-reaching edit tool in the set did neither: a call that
+/// rewrote thirty files neither triggered a verification nor waited for the reads beside it.
+/// `no_tool_that_backs_up_a_file_is_left_out_of_the_mutation_list` reads the tool sources rather
+/// than trusting this comment.
 fn is_mutation_tool(name: &str) -> bool {
-    matches!(name, "write_file" | "edit_file")
+    matches!(name, "write_file" | "edit_file" | "rename_symbol")
 }
 
 /// Errors that mean "this call itself was rejected before touching the file":
@@ -1962,6 +2038,17 @@ fn spawn_self_review(
                 return;
             }
         };
+        // The notes are statements about the review rather than the code — what could not be
+        // checked. They are not in `Review`, which carries findings to a card, and dropping them
+        // is how "the dependency database was unreachable" arrives looking like a clean pass.
+        // `Info` is the one event every surface already prints, and a note is a sentence.
+        if !report.notes.is_empty() {
+            sink.event(AgentEvent::Info(format!(
+                "self-review could not check: {}",
+                report.notes.join("; ")
+            )))
+            .await;
+        }
         sink.event(AgentEvent::Review {
             seq,
             owner,
@@ -3081,7 +3168,7 @@ mod tests {
         registry: ToolRegistry,
         stream_timeout: Duration,
         wave_timeout: Duration,
-    ) -> (Arc<Mutex<Vec<AgentEvent>>>, tokio::task::JoinHandle<()>) {
+    ) -> (Arc<Mutex<Vec<AgentEvent>>>, tokio::task::JoinHandle<bool>) {
         let dir = tempfile::tempdir().unwrap();
         let store = SessionStore::new(dir.path().to_path_buf());
         let session = Session::new(dir.path().to_path_buf(), "mock", "mock");
@@ -3099,7 +3186,10 @@ mod tests {
         agent.set_tool_wave_timeout(wave_timeout);
         agent.set_tool_cancel_grace(Duration::from_millis(50));
         let handle = tokio::spawn(async move {
-            let _ = agent.run_turn("go").await;
+            // Whether the turn failed, rather than the turn: the callers here assert on the
+            // events for *how* it ended, and the timeout tests on the fact that a timer ending a
+            // turn is a failure and not an empty success.
+            agent.run_turn("go").await.is_err()
         });
         (events, handle)
     }
@@ -3299,10 +3389,15 @@ mod tests {
             Duration::from_secs(600),
             Duration::from_millis(300),
         );
-        tokio::time::timeout(Duration::from_secs(10), task)
+        let failed = tokio::time::timeout(Duration::from_secs(10), task)
             .await
             .expect("turn must end promptly after the tool wave timeout")
             .unwrap();
+        assert!(
+            failed,
+            "a wave that a timer stopped is not a completed turn: `main.rs:827` reads an `Ok` as \
+             success and exits 0, so a scripted `firm -y` was told the work finished"
+        );
         let events = events.lock().unwrap();
         let timed_out_ends: Vec<&AgentEvent> = events
             .iter()
@@ -3660,6 +3755,61 @@ mod tests {
                 .iter()
                 .any(|c| c.contains("outside the workspace")),
             "the [Permission] error must be visible, got: {tool_contents:?}"
+        );
+    }
+
+    #[test]
+    fn the_mutation_list_names_every_tool_that_takes_a_backup() {
+        for name in ["write_file", "edit_file", "rename_symbol"] {
+            assert!(is_mutation_tool(name), "{name} changes the workspace");
+        }
+        for name in ["read_file", "grep", "build", "flash", "verify"] {
+            assert!(!is_mutation_tool(name), "{name} records no backup");
+        }
+    }
+
+    /// The list above is a hand-written copy of a fact the tools state better, so this reads
+    /// their sources and asks which of them call `journal.begin` at all. A new writing tool that
+    /// is not listed fails here instead of quietly not being verified at the end of a turn.
+    #[test]
+    fn no_tool_that_backs_up_a_file_is_left_out_of_the_mutation_list() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../firment-tools/src/tools");
+        let mut backing_up = 0usize;
+        for entry in std::fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("reading {}: {e}", dir.display()))
+            .flatten()
+        {
+            let path = entry.path();
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            // The chained form splits `ctx.journal` and `.begin(…)` over lines, so test the file
+            // rather than a line.
+            if !text.contains(".begin(") || !text.contains("journal") {
+                continue;
+            }
+            backing_up += 1;
+            let name = text
+                .split("fn name(&self)")
+                .nth(1)
+                .and_then(|rest| rest.split('"').nth(1))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{} takes a backup but has no `fn name` to read",
+                        path.display()
+                    )
+                });
+            assert!(
+                is_mutation_tool(name),
+                "{name} records a journal backup and is not listed as a mutation, so the turn \
+                 neither re-verifies after it nor orders it against a concurrent read"
+            );
+        }
+        assert!(
+            backing_up >= 3,
+            "the scan found {backing_up} tools taking backups; a scan that finds nothing must not \
+             read as a pass"
         );
     }
 }
