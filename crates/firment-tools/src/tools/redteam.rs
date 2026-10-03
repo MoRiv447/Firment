@@ -1299,9 +1299,35 @@ impl Tool for Redteam {
         if !campaign_note.is_empty() {
             out.push_str(&format!("  campaign: {campaign_note}\n"));
         }
+        // "reached level 5 (physical)" was asserted on every run of this function, and nothing in
+        // the tool records a level at all: a suite that never touched hardware, or one that found
+        // nothing, read as a physically-verified ladder reached. The tool's own description makes
+        // captured evidence the whole standard ("report only what the captured output proves"),
+        // and `finalize` already decides per finding whether it has that evidence — so the summary
+        // says that count instead. This is the line `9c58bd2` removed from `hil`'s summary and
+        // left here.
+        let total = outcome.findings.len();
+        let cited = outcome
+            .findings
+            .iter()
+            .filter(|f| f.confidence == "HIGH")
+            .count();
+        let evidence = if total == 0 {
+            "no finding this run".to_string()
+        } else if cited == total {
+            format!(
+                "{total}/{total} finding(s) cite capture files under {}",
+                outcome.dir.display()
+            )
+        } else {
+            format!(
+                "{cited}/{total} finding(s) cite capture files under {}; {} UNVERIFIED",
+                outcome.dir.display(),
+                total - cited
+            )
+        };
         out.push_str(&format!(
-            "\nevidence: reached level 5 (physical) — findings cite captured output\nreplay: \
-             redteam replay {}  |  list: redteam replay list",
+            "\nevidence: {evidence}\nreplay: redteam replay {}  |  list: redteam replay list",
             outcome.run_id
         ));
         Ok(ToolOutput {

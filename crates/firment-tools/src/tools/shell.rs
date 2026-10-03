@@ -18,10 +18,6 @@ const METAPROGRAMMING_PATTERNS: &[(&str, &str)] = &[
     (">(", "process substitution >()"),
     ("=(", "zsh process substitution =()"),
     ("IFS=", "IFS injection"),
-    (
-        "%",
-        "cmd-style env expansion %VAR% (cannot be verified statically)",
-    ),
     ("/proc/self/", "sensitive /proc access"),
     ("/etc/passwd", "sensitive file access"),
     ("/etc/shadow", "sensitive file access"),
@@ -31,6 +27,32 @@ const METAPROGRAMMING_PATTERNS: &[(&str, &str)] = &[
     ("id_dsa", "credential access"),
     ("authorized_keys", "credential access"),
 ];
+
+/// Whether `command` holds the `%NAME%` shape that `cmd /C` expands.
+///
+/// The pair, not the character: a single `%` is a format specifier and `%%` is a literal percent,
+/// neither of which cmd substitutes anything in. A name runs up to the closing `%` and stops at
+/// anything cmd would not carry in a variable name, and two characters is the floor — one-letter
+/// references (`%s`, `%h%n`, `%d%%`) are format specifiers in every command line anyone has ever
+/// grepped for, while the environment this rule protects holds names like `USERPROFILE` and
+/// `TEMP`. That floor is a judgement, and it is the one that lets `git log --format=%h%n` run
+/// without a flag.
+fn expands_cmd_variable(command: &str) -> bool {
+    let bytes = command.as_bytes();
+    let mut from = 0;
+    while let Some(offset) = bytes[from..].iter().position(|byte| *byte == b'%') {
+        let open = from + offset;
+        let mut name = open + 1;
+        while name < bytes.len() && (bytes[name].is_ascii_alphanumeric() || bytes[name] == b'_') {
+            name += 1;
+        }
+        if name > open + 2 && bytes.get(name) == Some(&b'%') {
+            return true;
+        }
+        from = open + 1;
+    }
+    false
+}
 
 /// Returns a short reason when the shell command looks destructive. Used to
 /// warn in interactive approval popups and to hard-block in one-shot mode
@@ -48,6 +70,15 @@ pub fn dangerous_reason(command: &str) -> Option<&'static str> {
         if lower.contains(pattern) {
             return Some(why);
         }
+    }
+    // `%` was in the table above, which made it a substring test on the whole command line —
+    // and `%` is what every format specifier writes: `git log --format=%H`, `date +%Y%m%d`,
+    // `printf "%s"`. None of those expand anywhere `run_command` sends the line (`sh -c` passes
+    // a `%` through literally), so the rule blocked ordinary work in one-shot mode and pushed
+    // people toward `--allow-dangerous` to get past a guard that was never protecting them.
+    // What actually needs flagging is the pair, on the one platform that expands it.
+    if cfg!(windows) && expands_cmd_variable(&lower) {
+        return Some("cmd-style env expansion %VAR% (cannot be verified statically)");
     }
     let normalized = lower.replace('\\', "/").replace(['"', '\''], " ");
     let tokens: Vec<&str> = normalized
@@ -576,6 +607,34 @@ mod tests {
             "git checkout HEAD~1",
         ] {
             assert!(dangerous_reason(cmd).is_none(), "should allow safe: {cmd}");
+        }
+    }
+
+    #[test]
+    fn a_format_specifier_is_not_an_environment_expansion() {
+        // The `%` rule used to be a substring test over the whole command line, so anything
+        // writing a format looked like cmd metaprogramming — `git log --format=%H` was refused in
+        // one-shot mode on every platform, including the ones where a `%` is literal text and
+        // nothing expands it.
+        for cmd in [
+            "git log --oneline --format=%H",
+            "git log --format=%h%n",
+            "date +\"%Y-%m-%d\"",
+            "printf \"done %d%%\\n\" 7",
+            "sort -k2 file.txt",
+        ] {
+            assert!(dangerous_reason(cmd).is_none(), "should allow safe: {cmd}");
+        }
+        // The pair is still the pair, on the one platform that expands it.
+        if cfg!(windows) {
+            for cmd in ["echo %USERPROFILE%", "del %TMP%\\x"] {
+                assert!(dangerous_reason(cmd).is_some(), "should detect: {cmd}");
+            }
+        } else {
+            assert!(
+                dangerous_reason("echo %USERPROFILE%").is_none(),
+                "sh passes a % through literally"
+            );
         }
     }
 

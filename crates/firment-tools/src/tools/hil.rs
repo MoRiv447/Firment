@@ -965,6 +965,79 @@ pub(crate) async fn run_flash_step(
     }
 }
 
+/// What a step declares it expects to see, resolved the same way for every step kind.
+///
+/// The check used to live inside `run_monitor_step` and nowhere else, so a `run` step carrying
+/// `expect_contains` had its firmware started, any output at all accepted, and a passing line
+/// written into the report: an expectation the suite paid for and never got. Both kinds now
+/// resolve and evaluate through here, so the second one cannot be added and forgotten again.
+#[derive(Debug)]
+struct Expectation {
+    contains: Option<String>,
+    /// Compiled from `regex_src`, which is kept because the failure text quotes what was wanted.
+    regex: Option<regex::Regex>,
+    regex_src: Option<String>,
+    count: usize,
+}
+
+impl Expectation {
+    /// `None` when the step declares nothing to check. An `expect_regex` that does not compile is
+    /// an error rather than a silently unchecked expectation.
+    fn of(step: &HilStep) -> Result<Option<Self>, String> {
+        let contains = step
+            .expect_contains
+            .clone()
+            .or_else(|| step.expect.as_ref().and_then(|e| e.contains.clone()));
+        let regex_src = step
+            .expect_regex
+            .clone()
+            .or_else(|| step.expect.as_ref().and_then(|e| e.regex.clone()));
+        if contains.is_none() && regex_src.is_none() {
+            return Ok(None);
+        }
+        let regex = match &regex_src {
+            Some(src) => Some(
+                regex::Regex::new(src)
+                    .map_err(|e| format!("[InvalidInput] expect_regex invalid: {e}"))?,
+            ),
+            None => None,
+        };
+        Ok(Some(Self {
+            contains,
+            regex,
+            regex_src,
+            count: step
+                .expect_count
+                .or_else(|| step.expect.as_ref().and_then(|e| e.count))
+                .unwrap_or(1)
+                // expect_count = 0 would pass vacuously before any byte arrives.
+                .max(1),
+        }))
+    }
+
+    /// `[HIL_EXPECT:PASS|FAIL] …` against captured output — `(passed, text)`.
+    fn verdict(&self, what: &str, captured: &str) -> (bool, String) {
+        let (matched, _total) =
+            evaluate_expect(captured, self.contains.as_deref(), self.regex.as_ref());
+        let ok = matched >= self.count;
+        let marker = if ok { "PASS" } else { "FAIL" };
+        let head = format!(
+            "[HIL_EXPECT:{marker}] {what} expect matched {matched}/{}",
+            self.count
+        );
+        if ok {
+            return (true, head);
+        }
+        (
+            false,
+            format!(
+                "{head} — wanted contains={:?} regex={:?} in:\n{captured}",
+                self.contains, self.regex_src
+            ),
+        )
+    }
+}
+
 async fn run_run_step(
     step: &HilStep,
     ctx: &ToolContext,
@@ -1009,21 +1082,58 @@ async fn run_run_step(
         args.push(p);
     }
     args.push(resolved.to_string_lossy().to_string());
-    match crate::tools::util::run_probe_rs(args, &ctx.cwd, timeout, Some(ctx.cancel.clone()), &[])
-        .await
-    {
-        Ok((text, Some(0))) => Ok(format!(
-            "run finished (exit 0)\n{}",
-            crate::forensic::append_fault_marker(text)
+    // Resolved before the run so an invalid `expect_regex` fails the step rather than being
+    // dropped after the board has already been touched.
+    let expectation = Expectation::of(step)?;
+    let outcome =
+        crate::tools::util::run_probe_rs(args, &ctx.cwd, timeout, Some(ctx.cancel.clone()), &[])
+            .await;
+    match outcome {
+        Ok((text, Some(0))) => Ok(with_expect(
+            &expectation,
+            format!(
+                "run finished (exit 0)\n{}",
+                crate::forensic::append_fault_marker(text.clone())
+            ),
+            &text,
+            "run",
         )),
         Ok((text, Some(c))) => Err(format!("[Io] run failed (exit {c})\n{text}")),
-        Ok((text, None)) => Ok(format!(
-            "run timed out after {timeout} ms; captured:\n{text}"
+        Ok((text, None)) => Ok(with_expect(
+            &expectation,
+            format!("run timed out after {timeout} ms; captured:\n{text}"),
+            &text,
+            "run",
         )),
-        Err(e) if e.contains("[Timeout]") => Ok(format!(
-            "run captured {timeout} ms (window closed, probe-rs timed out)\n{e}"
+        Err(e) if e.contains("[Timeout]") => Ok(with_expect(
+            &expectation,
+            format!("run captured {timeout} ms (window closed, probe-rs timed out)\n{e}"),
+            &e,
+            "run",
         )),
         Err(e) => Err(crate::tools::util::probe_rs_err(e).message),
+    }
+}
+
+/// A step's text with its expectation's marker appended, when it declared one. The verdict is
+/// taken on `captured` — the program's own output — rather than on the decorated body, so a header
+/// word cannot satisfy an expectation the firmware never met.
+///
+/// The marker is the whole reporting mechanism here: a failed expectation is not an error from the
+/// step, it is a line the orchestrator reads, so a run that produced the wrong output still hands
+/// back the output it produced.
+fn with_expect(
+    expectation: &Option<Expectation>,
+    body: String,
+    captured: &str,
+    what: &str,
+) -> String {
+    match expectation {
+        Some(e) => {
+            let (_ok, marker) = e.verdict(what, captured);
+            format!("{body}\n{marker}")
+        }
+        None => body,
     }
 }
 
@@ -1051,13 +1161,18 @@ async fn run_monitor_step(
         } else {
             port_raw.clone()
         };
-        let contains = step
-            .expect_contains
-            .clone()
-            .or_else(|| step.expect.as_ref().and_then(|e| e.contains.clone()));
-        if let Some(pat) = contains {
+        // Both halves of the declaration count. This used to read `expect_contains` alone, so a
+        // monitor step whose expectation was a regex rehearsed as "simulated" with no verdict at
+        // all — the dry run reporting nothing asked for, when something had been asked.
+        if let Some(e) = Expectation::of(step)? {
+            let wanted = match (e.contains.as_deref(), e.regex_src.as_deref()) {
+                (Some(pat), None) => format!("expect_contains={pat:?}"),
+                (None, Some(pat)) => format!("expect_regex={pat:?}"),
+                (Some(c), Some(r)) => format!("expect_contains={c:?} expect_regex={r:?}"),
+                (None, None) => "nothing".to_string(),
+            };
             return Ok(format!(
-                "[dry-run] monitor {port_display} simulated ({timeout} ms) — would check expect_contains=\"{pat}\"\n[HIL_EXPECT:FAIL] dry-run cannot verify hardware output (no data)"
+                "[dry-run] monitor {port_display} simulated ({timeout} ms) — would check {wanted}\n[HIL_EXPECT:FAIL] dry-run cannot verify hardware output (no data)"
             ));
         }
         return Ok(format!(
@@ -1087,35 +1202,20 @@ async fn run_monitor_step(
         None
     };
 
-    // Expect config
-    let expect_contains = step
-        .expect_contains
-        .clone()
-        .or_else(|| step.expect.as_ref().and_then(|e| e.contains.clone()));
-    let expect_regex = step
-        .expect_regex
-        .clone()
-        .or_else(|| step.expect.as_ref().and_then(|e| e.regex.clone()));
-    let expect_count = step
-        .expect_count
-        .or_else(|| step.expect.as_ref().and_then(|e| e.count))
+    // Expect config, resolved through the same path the `run` step uses — see `Expectation`.
+    let expectation = Expectation::of(step)?;
+    let expect_count = expectation
+        .as_ref()
+        .map(|e| e.count)
         .unwrap_or(1)
         // expect_count = 0 would pass vacuously before any byte arrives.
         .max(1);
-    let regex_obj = if let Some(rx) = &expect_regex {
-        Some(
-            regex::Regex::new(rx)
-                .map_err(|e| format!("[InvalidInput] expect_regex invalid: {e}"))?,
-        )
-    } else {
-        None
-    };
 
     // Run blocking serial read in spawn_blocking, but with expect-aware early exit
     let port_clone = port.clone();
     let cancel = ctx.cancel.clone();
-    let expected_text = expect_contains.clone();
-    let regex_for_thread = regex_obj.clone();
+    let expected_text = expectation.as_ref().and_then(|e| e.contains.clone());
+    let regex_for_thread = expectation.as_ref().and_then(|e| e.regex.clone());
     let captured = tokio::task::spawn_blocking(move || {
         read_serial_with_expect(
             &port_clone,
@@ -1135,20 +1235,9 @@ async fn run_monitor_step(
     .map_err(|e| format!("[Io] {e}"))?;
 
     // Evaluate expectations
-    if expect_contains.is_some() || expect_regex.is_some() {
-        let (matched, _total) =
-            evaluate_expect(&captured, expect_contains.as_deref(), regex_obj.as_ref());
-        let ok = matched >= expect_count;
-        let marker = if ok { "PASS" } else { "FAIL" };
-        let detail = if ok {
-            format!("[HIL_EXPECT:{marker}] monitor expect matched {matched}/{expect_count}")
-        } else {
-            format!(
-                "[HIL_EXPECT:{marker}] monitor expect matched {matched}/{expect_count} — wanted contains={:?} regex={:?} in:\n{captured}",
-                expect_contains, expect_regex
-            )
-        };
+    if let Some(e) = &expectation {
         // Append marker so the orchestrator can detect failure while still returning text
+        let (_ok, detail) = e.verdict("monitor", &captured);
         return Ok(format!(
             "monitor {port} ({baud} baud, {timeout} ms)\n{captured}\n{detail}"
         ));
@@ -1226,44 +1315,24 @@ async fn run_trace_step(
         Err(e) if e.contains("[Timeout]") => (String::new(), None),
         Err(e) => return Err(crate::tools::util::probe_rs_err(e).message),
     };
-    // Expectations are read once, and graded whichever way the capture window closed.
-    let expect_contains = step
-        .expect_contains
-        .clone()
-        .or_else(|| step.expect.as_ref().and_then(|e| e.contains.clone()));
-    let expect_regex = step
-        .expect_regex
-        .clone()
-        .or_else(|| step.expect.as_ref().and_then(|e| e.regex.clone()));
-    let expect_count = step
-        .expect_count
-        .or_else(|| step.expect.as_ref().and_then(|e| e.count))
-        .unwrap_or(1)
-        // Same clamp as the monitor step: expect_count = 0 would pass
-        // vacuously before any byte arrives.
-        .max(1);
+    // Expectations are read once, and graded whichever way the capture window closed. The
+    // resolution goes through `Expectation` like every other step that accepts `expect_*`; the
+    // wording below stays trace's own, because its report line has always carried the wanted
+    // pattern even when it matched.
+    let expectation = Expectation::of(step)?;
     // The note used to be built only inside the exit-0 arm below. A target that never writes ITM
     // ends its window through the timeout arm — the normal shape of a dead or quiet trace stream —
     // and there the expectation was never checked: no `[HIL_EXPECT:FAIL]` marker, so
     // `expect_failed` stayed false and the suite reported level 4 (runtime) as reached while the
     // firmware had printed nothing at all.
-    let expect_note = if expect_contains.is_some() || expect_regex.is_some() {
-        let regex_obj = if let Some(rx) = &expect_regex {
-            Some(
-                regex::Regex::new(rx)
-                    .map_err(|e| format!("[InvalidInput] expect_regex invalid: {e}"))?,
-            )
-        } else {
-            None
-        };
-        let (matched, _) = evaluate_expect(&text, expect_contains.as_deref(), regex_obj.as_ref());
+    let expect_note = if let Some(e) = &expectation {
+        let (matched, _) = evaluate_expect(&text, e.contains.as_deref(), e.regex.as_ref());
         Some(format!(
-            "\n[HIL_EXPECT:{}] trace expect matched {matched}/{expect_count} — wanted contains={expect_contains:?} regex={expect_regex:?}",
-            if matched >= expect_count {
-                "PASS"
-            } else {
-                "FAIL"
-            }
+            "\n[HIL_EXPECT:{}] trace expect matched {matched}/{} — wanted contains={:?} regex={:?}",
+            if matched >= e.count { "PASS" } else { "FAIL" },
+            e.count,
+            e.contains,
+            e.regex_src,
         ))
     } else {
         None
@@ -2402,6 +2471,60 @@ elf = "build/fw.elf"
         let tool = Hil;
         let err = tool.run(json!({"suite": "blink"}), &c).await.unwrap_err();
         assert!(err.message.contains("hil"), "got: {}", err.message);
+    }
+
+    /// A `run` step accepts `expect_contains` / `expect_regex` / `expect_count` and used to ignore
+    /// all three: the check lived inside `run_monitor_step` only, so a suite that declared what it
+    /// expected to see from a run got a passing step whatever the firmware printed.
+    #[test]
+    fn a_declared_expectation_grades_whatever_output_a_step_produced() {
+        let step = HilStep {
+            kind: "run".to_string(),
+            expect_contains: Some("boot ok".to_string()),
+            ..Default::default()
+        };
+        let expect = Expectation::of(&step)
+            .expect("resolves")
+            .expect("the step declared one");
+        let (ok, text) = expect.verdict("run", "reset\nboot ok\nready\n");
+        assert!(ok, "{text}");
+        assert!(
+            text.contains("[HIL_EXPECT:PASS] run expect matched 1/1"),
+            "{text}"
+        );
+
+        let (ok, text) = expect.verdict("run", "silence");
+        assert!(!ok, "nothing matched, so the step did not pass: {text}");
+        assert!(text.contains("[HIL_EXPECT:FAIL]"), "{text}");
+
+        // Nothing declared is not a failed check; an unusable pattern is an error rather than an
+        // expectation that quietly goes unmade.
+        assert!(Expectation::of(&HilStep::default()).unwrap().is_none());
+        let bad = HilStep {
+            expect_regex: Some("(".to_string()),
+            ..Default::default()
+        };
+        assert!(
+            Expectation::of(&bad)
+                .unwrap_err()
+                .contains("expect_regex invalid")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dry_run_reports_an_expectation_it_cannot_check_even_as_a_regex() {
+        let dir = tempdir().unwrap();
+        let step = HilStep {
+            kind: "monitor".to_string(),
+            port: Some("COM9".to_string()),
+            expect_regex: Some("LED ON".to_string()),
+            ..Default::default()
+        };
+        let out = run_monitor_step(&step, &ctx(dir.path()), true, 60_000)
+            .await
+            .unwrap();
+        assert!(out.contains("expect_regex=\"LED ON\""), "got: {out}");
+        assert!(out.contains("[HIL_EXPECT:FAIL]"), "got: {out}");
     }
 
     #[tokio::test]

@@ -643,7 +643,12 @@ fn edit_by_hashline(
     };
     let mut out: Vec<&str> = Vec::new();
     out.extend_from_slice(&lines[..start]);
-    out.extend(new_text.split('\n'));
+    // The same rule the `start_line` splice learned: `"".split('\n')` is one empty item, which
+    // joins back as a blank line — so deleting a hashline range left an empty line where the range
+    // had been, and the model had to delete that too. Two splices, one fix, is how this drifted.
+    if !new_text.is_empty() {
+        out.extend(new_text.split('\n'));
+    }
     out.extend_from_slice(&lines[end + 1..]);
     let mut joined = out.join("\n");
     if trailing_newline {
@@ -798,6 +803,33 @@ mod tests {
             "BOM must survive the edit: {content:?}"
         );
         assert_eq!(content, "\u{FEFF}int app_main(void)\n{\n}\n");
+    }
+
+    #[tokio::test]
+    async fn deleting_a_hashline_range_removes_it_without_leaving_a_blank_line() {
+        // The other splice of the same rule (see `deleting_a_range_removes_it_without_leaving_a_blank_line`
+        // below): the fix landed in the line-number branch and the hashline branch kept inserting
+        // the split of an empty string, which is one empty line.
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "one\ntwo\nthree\nfour\nfive\n").unwrap();
+        let from = firment_core::hash::sha256_hex(b"two");
+        let to = firment_core::hash::sha256_hex(b"four");
+        EditFile
+            .run(
+                json!({
+                    "path": "a.txt",
+                    "hashline": &from[..8],
+                    "end_hashline": &to[..8],
+                    "new_text": ""
+                }),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "one\nfive\n"
+        );
     }
 
     #[tokio::test]
