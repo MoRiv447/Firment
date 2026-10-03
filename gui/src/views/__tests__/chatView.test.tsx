@@ -202,6 +202,21 @@ describe('ChatView: the composer', () => {
     setup({ infos: [{ id: 1, text: 'link error: retrying in 3s' }] });
     expect(screen.getByText(/retrying in 3s/)).toBeInTheDocument();
   });
+
+  it('keeps the live region in the DOM before there is anything to say', () => {
+    // A `role="status"` element that appears together with its first sentence is read as content
+    // appearing, not as a status -- the announcement is lost exactly when it matters, because the
+    // notice is the thing nobody could have looked for. So the region is always mounted.
+    setup();
+    const region = screen.getByRole('status');
+    expect(region).toHaveAttribute('aria-live', 'polite');
+    expect(region.textContent).toBe('');
+  });
+
+  it('announces a refused send through that region, not only in pixels', () => {
+    setup({ infos: [{ id: 1, text: 'Not sent: this session already has a turn running' }] });
+    expect(screen.getByRole('status')).toHaveTextContent('Not sent');
+  });
 });
 
 describe('ChatView: the counter above the transcript', () => {

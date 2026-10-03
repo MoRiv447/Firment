@@ -332,16 +332,31 @@ export function ChatView({
                 )}
               </div>
             )}
-            {infos.map((i) => (
-              <Callout key={i.id} tone="warn">
-                {i.text}
-              </Callout>
-            ))}
-            {stuck && (
-              <Callout tone="warn" title={notice.message}>
-                {notice.description}
-              </Callout>
-            )}
+            {/*
+             * One live region for what the interface tells the person about this chat. It is in
+             * the DOM even while it holds nothing, and that is the part that makes it work: a
+             * `role="status"` element that appears together with its first sentence reads to a
+             * screen reader as content appearing, not as a status, and the notice goes unsaid.
+             * These are the sentences nobody can see coming -- "Not sent: …", a stream that timed
+             * out, the elf gate still blocked, the link to the SBC being down -- and every one of
+             * them currently exists only as pixels above the composer.
+             *
+             * `polite` rather than `assertive`: these land while the agent is answering, and
+             * interrupting the transcript to announce a stall would be worse than waiting for the
+             * sentence being read to finish.
+             */}
+            <div role="status" aria-live="polite">
+              {infos.map((i) => (
+                <Callout key={i.id} tone="warn">
+                  {i.text}
+                </Callout>
+              ))}
+              {stuck && (
+                <Callout tone="warn" title={notice.message}>
+                  {notice.description}
+                </Callout>
+              )}
+            </div>
             {turn && (
               <div className={styles.column}>
             {steps && <StepProgress steps={steps} />}

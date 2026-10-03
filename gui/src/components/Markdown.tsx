@@ -33,18 +33,40 @@ const OPENABLE = /^(?:https?:|mailto:|tel:)/i;
  * a link is agent-authored text, so nothing here trusts its shape.
  */
 function Link({ href, children, ...rest }: AnchorHTMLAttributes<HTMLAnchorElement>) {
+  if (!href || !OPENABLE.test(href)) {
+    // Then it is not a link at all, because this app has nowhere for it to go. A relative path
+    // or a `file:` URL replaces the app's own document, and a `javascript:` one runs inside the
+    // webview -- the same document that holds the IPC bridge, so text the model wrote would be
+    // handing out commands. Declining to *open* such an href while still rendering the anchor
+    // left the click to the browser's default action and did the damage anyway, which is why
+    // the check moved from the handler to the element.
+    return <span>{children}</span>;
+  }
   return (
     <a
       {...rest}
       href={href}
       className={styles.link}
       onClick={(event) => {
-        if (!href || !OPENABLE.test(href)) return;
+        // A modified or non-primary click is the reader asking for something other than "go
+        // there" -- new tab, new window, copy link -- and this handler cannot serve any of
+        // those, so the only honest move is to get out of the way. Taking them over would make
+        // `Ctrl+click` open the URL inside the app's own window: the one thing this component
+        // exists to prevent.
+        if (
+          event.ctrlKey ||
+          event.metaKey ||
+          event.shiftKey ||
+          event.altKey ||
+          event.button !== 0
+        ) {
+          return;
+        }
         event.preventDefault();
         void openUrl(href).catch(() => {
           // No host (a browser tab in development): let the anchor do what an
           // anchor does.
-          if (href) window.location.href = href;
+          window.location.href = href;
         });
       }}
     >
