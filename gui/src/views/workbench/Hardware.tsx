@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { RotateCw } from 'lucide-react';
 
 import type { HardwareInfoDto } from '../../types';
+import { isComposing } from '../../lib/ime';
 import { Button, Card, Chip, TextInput, Tooltip, useTooltip } from '../../ui';
 import styles from './Hardware.module.css';
 
@@ -90,7 +91,7 @@ export function Hardware({
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') void save();
+                  if (e.key === 'Enter' && !isComposing(e)) void save();
                 }}
               />
               <Button size="sm" tier="primary" disabled={busy} onClick={() => void save()}>

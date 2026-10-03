@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Plus, X } from 'lucide-react';
 
 import type { DeviceBindingDto, DeviceEntry } from '../../types';
+import { isComposing } from '../../lib/ime';
 import { Button, Card, Chip, IconButton, Select, TextInput } from '../../ui';
 import styles from './Bindings.module.css';
 
@@ -120,7 +121,7 @@ export function Bindings({
           value={role}
           onChange={(e) => setRole(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') void submit();
+            if (e.key === 'Enter' && !isComposing(e)) void submit();
           }}
         />
         <Button size="sm" icon={Plus} disabled={busy || !node.trim()} onClick={() => void submit()}>

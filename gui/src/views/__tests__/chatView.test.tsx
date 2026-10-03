@@ -99,6 +99,23 @@ describe('ChatView: the composer', () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
+  it('does not send on the Enter that confirms an input-method candidate', () => {
+    // Typing 我要 in pinyin ends with Enter — the keystroke that picks the candidate, not the one
+    // that means "send this". The field's value is no guard: during composition the candidate has
+    // not been written into it yet, so an unguarded handler ships a message the person is still
+    // writing, and the transcript then holds a half sentence nobody typed on purpose.
+    const { onSend } = setup();
+    const field = screen.getByRole('textbox', { name: 'Ask the agent' });
+    fireEvent.change(field, { target: { value: 'wo yao' } });
+    fireEvent.keyDown(field, { key: 'Enter', isComposing: true });
+    expect(onSend).not.toHaveBeenCalled();
+    expect(field).toHaveValue('wo yao');
+
+    // The real Enter, one keystroke later, still sends: the guard is not a disabled button.
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(onSend).toHaveBeenCalledWith('wo yao');
+  });
+
   it('offers Stop instead of Send while running', () => {
     setup({ running: true });
     // Both actions are a glyph in a square now, so the name exists only as an

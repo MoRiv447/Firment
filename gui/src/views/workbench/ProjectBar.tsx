@@ -1,4 +1,5 @@
 import { pathKey } from '../../lib/paths';
+import { isComposing } from '../../lib/ime';
 import { Button, Callout, TextInput } from '../../ui';
 import styles from './ProjectBar.module.css';
 
@@ -42,7 +43,7 @@ export function ProjectBar({
           value={cwd}
           onChange={(e) => onCwd(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') onOpen();
+            if (e.key === 'Enter' && !isComposing(e)) onOpen();
           }}
         />
         <Button tier="primary" size="lg" loading={busy} onClick={onOpen}>

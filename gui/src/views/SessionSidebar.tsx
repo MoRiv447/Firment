@@ -3,6 +3,7 @@ import { Bot, FolderOpen, MoreHorizontal, Pencil, ShieldCheck, Trash2, Zap } fro
 import type { CSSProperties } from 'react';
 
 import pkg from '../../package.json';
+import { isComposing } from '../lib/ime';
 import type { SessionSummaryDto } from '../types';
 import {
   confirm,
@@ -292,6 +293,10 @@ function SessionRow({
           onChange={(e) => setDraft(e.target.value)}
           onFocus={() => setDraft(name)}
           onKeyDown={(e) => {
+            // Both keys belong to the input method while a candidate is open: Enter confirms the
+            // candidate and Escape closes the candidate window. Treated as field commands they
+            // would commit a half-written name and throw the edit away.
+            if (isComposing(e)) return;
             if (e.key === 'Enter') {
               e.preventDefault();
               commit();

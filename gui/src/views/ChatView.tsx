@@ -7,6 +7,7 @@ import { AgentTurn, MessageList } from '../components/MessageList';
 import { StepProgress } from '../components/StepProgress';
 import { TurnVerdict } from '../components/TurnVerdict';
 import { formatDuration } from '../lib/format';
+import { isComposing } from '../lib/ime';
 import { shouldShowStallNotice, stallNotice } from '../lib/stallHint';
 import { workflowSteps } from '../lib/steps';
 import { recordCompleted } from '../lib/timing';
@@ -431,7 +432,10 @@ export function ChatView({
               maxRows={8}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
+                // Enter sends; the Enter that confirms an input-method candidate does not. During
+                // composition the field's own value has not received the candidate yet, so
+                // trimming is no guard: this would send half a sentence.
+                if (e.key === 'Enter' && !e.shiftKey && !isComposing(e)) {
                   e.preventDefault();
                   send();
                 }

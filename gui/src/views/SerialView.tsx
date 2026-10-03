@@ -2,6 +2,7 @@ import { Play, RefreshCw, Send, Square } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { api, onMonitorExited } from '../lib/api';
+import { isComposing } from '../lib/ime';
 import type { MonitorLine } from '../types';
 import { Button, Card, Checkbox, Chip, Field, NumberField, Select, TextInput } from '../ui';
 import { toStream } from './serial/stream';
@@ -179,7 +180,9 @@ export function SerialView({ lines }: { lines: Record<string, MonitorLine[]> }) 
             value={sendText}
             onChange={(e) => setSendText(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') void send();
+              // This one writes bytes to a running device: an Enter that was really the IME
+              // confirming a candidate would send a line the operator never finished typing.
+              if (e.key === 'Enter' && !isComposing(e)) void send();
             }}
             placeholder="Type data to send… (Enter to send)"
             disabled={!open}

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { isComposing } from '../../lib/ime';
 import { Button, Modal, TextInput } from '../../ui';
 import styles from './BranchDialog.module.css';
 
@@ -71,7 +72,7 @@ export function BranchDialog({
         onChange={(e) => setTitle(e.target.value)}
         onKeyDown={(e) => {
           // Enter is not disabled by `busy` the way the button is.
-          if (e.key === 'Enter') void create();
+          if (e.key === 'Enter' && !isComposing(e)) void create();
         }}
       />
       <p className={styles.note}>

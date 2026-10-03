@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { X } from 'lucide-react';
 
 import type { BoardPinmapDto } from '../../types';
+import { isComposing } from '../../lib/ime';
 import { Button, Card, Chip, IconButton, TextInput } from '../../ui';
 import styles from './Pinmap.module.css';
 
@@ -84,7 +85,7 @@ export function Pinmap({
           value={boardDraft}
           onChange={(e) => setBoardDraft(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') useBoard();
+            if (e.key === 'Enter' && !isComposing(e)) useBoard();
           }}
         />
         <Button size="sm" disabled={busy || !boardDraft.trim()} onClick={useBoard}>
@@ -126,7 +127,7 @@ export function Pinmap({
               value={pinDraft}
               onChange={(e) => setPinDraft(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') void claim();
+                if (e.key === 'Enter' && !isComposing(e)) void claim();
               }}
             />
             <TextInput
@@ -135,7 +136,7 @@ export function Pinmap({
               value={funcDraft}
               onChange={(e) => setFuncDraft(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') void claim();
+                if (e.key === 'Enter' && !isComposing(e)) void claim();
               }}
             />
             {/* Enter is not disabled by `busy` the way the button is, and the

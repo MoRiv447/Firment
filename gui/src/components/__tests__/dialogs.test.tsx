@@ -171,6 +171,24 @@ describe('AskDialog', () => {
     expect(askSpy).not.toHaveBeenCalled();
   });
 
+  it('does not answer on a keystroke that belongs to the input method', () => {
+    // This dialog is the one place a person types into a turn the agent is blocked on, and the
+    // answer goes to the kernel the moment Enter is read as a submit. Confirming a candidate IS
+    // an Enter: `isComposing` on the standard path, keyCode 229 on the engines that never raise
+    // the flag when the composition ends. Both have to be refused, or the same field works in one
+    // browser and answers a question with half a word in another.
+    open();
+    const field = screen.getByRole('textbox');
+    fireEvent.change(field, { target: { value: 'na ge' } });
+    fireEvent.keyDown(field, { key: 'Enter', isComposing: true });
+    fireEvent.keyDown(field, { key: 'Enter', keyCode: 229 });
+    expect(askSpy).not.toHaveBeenCalled();
+    expect(field).toHaveValue('na ge');
+
+    // Once the candidate is committed the same Enter is an answer again.
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(askSpy).toHaveBeenCalledWith(9, 'na ge');
+  });
   it('will not send blank free text, and takes Dismiss as the explicit null', async () => {
     askSpy.mockResolvedValue(undefined);
     const { onClose } = open();

@@ -3,6 +3,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 
 import { cx } from './cx';
+import { isComposing } from '../lib/ime';
 import frame from './control.module.css';
 import rows from './floating.module.css';
 import { Icon } from './Icon';
@@ -118,6 +119,11 @@ export function MultiSelect({
   });
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    // While a candidate window is open every one of these keys belongs to the input method:
+    // Backspace deletes a letter of the pinyin, not the last chip; ArrowDown walks candidates,
+    // not options; Enter commits the candidate, it does not open the list. `preventDefault()` on
+    // any of them breaks the IME mid-edit, so the keystroke goes back untouched.
+    if (isComposing(event)) return;
     // Backspace on an empty query is how you take back the last choice -- the
     // usual gesture for this control, and the only keyboard way to remove one
     // without arrowing to it.

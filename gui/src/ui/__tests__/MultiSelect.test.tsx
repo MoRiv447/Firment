@@ -99,6 +99,23 @@ describe('MultiSelect', () => {
     expect(onChange).toHaveBeenCalledWith(['read_file']);
   });
 
+  it('leaves every keystroke of an open composition to the input method', () => {
+    // Typing the filter in pinyin means Backspace is deleting a letter of the syllable, Enter is
+    // picking a candidate and ArrowDown is walking them. Read as control keys here they would
+    // drop a chosen chip, open a panel the person never asked for, and `preventDefault()` the
+    // keystroke the IME is still using -- so the guard is the whole handler, not one branch.
+    const { onChange, box } = setup({ value: ['read_file', 'shell'] });
+    for (const key of ['Backspace', 'Enter', 'ArrowDown']) {
+      fireEvent.keyDown(box(), { key, isComposing: true });
+    }
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.queryAllByRole('option')).toHaveLength(0);
+
+    // And the control still answers its own keys the moment the composition is closed.
+    fireEvent.keyDown(box(), { key: 'ArrowDown' });
+    expect(screen.queryAllByRole('option').length).toBeGreaterThan(0);
+  });
+
   it('does NOT take anything back while there is text to delete', () => {
     const { onChange, box, typeText } = setup({ value: ['read_file'] });
     fireEvent.click(box());

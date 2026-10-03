@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Plus, X } from 'lucide-react';
 
 import type { DecisionEntryDto } from '../../types';
+import { isComposing } from '../../lib/ime';
 import { Button, Card, Chip, IconButton, TextInput } from '../../ui';
 import styles from './Decisions.module.css';
 
@@ -90,7 +91,7 @@ export function Decisions({
           value={body}
           onChange={(e) => setBody(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') submit();
+            if (e.key === 'Enter' && !isComposing(e)) submit();
           }}
         />
         <Button size="sm" icon={Plus} disabled={busy || !title.trim()} onClick={submit}>

@@ -2,6 +2,7 @@ import { Trash2 } from 'lucide-react';
 import { useRef, useState } from 'react';
 
 import type { ProviderEntryDto } from '../../types';
+import { isComposing } from '../../lib/ime';
 import { Button, Card, Chip, IconButton, PopConfirm, Select, TextInput } from '../../ui';
 import styles from './ProvidersCard.module.css';
 
@@ -123,7 +124,7 @@ export function ProvidersCard({
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') void add();
+              if (e.key === 'Enter' && !isComposing(e)) void add();
             }}
           />
           <Select
@@ -146,7 +147,7 @@ export function ProvidersCard({
             value={model}
             onChange={(e) => setModel(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') void add();
+              if (e.key === 'Enter' && !isComposing(e)) void add();
             }}
           />
           <Button tier="primary" disabled={busy || !complete} onClick={() => void add()}>

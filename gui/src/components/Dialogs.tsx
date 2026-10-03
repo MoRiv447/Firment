@@ -1,6 +1,7 @@
 import { useState } from 'react';
 
 import { api } from '../lib/api';
+import { isComposing } from '../lib/ime';
 import type { AskRequest, PermissionRequest, ToolCardState } from '../types';
 import { Button, Callout, Chip, Modal, TextArea } from '../ui';
 import styles from './Dialogs.module.css';
@@ -178,7 +179,10 @@ export function AskDialog({ req, onClose }: { req: AskRequest; onClose: () => vo
             value={custom}
             onChange={(e) => setCustom(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key !== 'Enter' || e.shiftKey) return;
+              // The Enter that picks an IME candidate is not the Enter that answers. This field
+              // is where a person types a free-form reply to a question the agent is blocked on,
+              // and the answer goes to the kernel on this keystroke.
+              if (e.key !== 'Enter' || e.shiftKey || isComposing(e)) return;
               // Prevent the newline as well as sending the answer: a box that
               // keeps the character the user pressed Enter for is showing an
               // answer that is not the one that was sent.

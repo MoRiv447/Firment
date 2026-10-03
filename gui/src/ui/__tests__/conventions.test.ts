@@ -452,6 +452,29 @@ describe('Primitive layer and shell conventions', () => {
     }
   });
 
+  it('guards every text-field Enter against the input method', () => {
+    // A person confirming a pinyin candidate presses Enter. To the field that is an ordinary
+    // `keydown`, and the text it holds is not what they meant to send -- so an unguarded Enter
+    // handler ships a half-written message, a serial line to a running board, or a name in the
+    // middle of being typed. The guard is one function (`lib/ime.ts`); what this checks is that
+    // no file with a text field answers Enter without it, which is the copy-drift this repo
+    // keeps hitting and a diff never shows.
+    const textField = /<(TextInput|TextArea|Input)\b|<input\b|<textarea\b/;
+    const answersEnter = /(?:e|event)\.key\s*[!=]==?\s*['"]Enter['"]/;
+    const offenders = tsxFiles
+      .filter((path) => textField.test(read(path)) && answersEnter.test(read(path)))
+      .filter((path) => !read(path).includes('isComposing'))
+      .map(canonical);
+    expect(offenders).toEqual([]);
+    // Not vacuous, in either direction: the Enter pattern has to match the handlers it was
+    // written for, and the guard has to be what makes them pass.
+    const guarded = tsxFiles.filter(
+      (path) => textField.test(read(path)) && answersEnter.test(read(path)),
+    );
+    expect(guarded.length).toBeGreaterThanOrEqual(12);
+    expect(guarded.every((path) => read(path).includes('isComposing'))).toBe(true);
+  });
+
   it('exports every component from the barrel, so a file can be split without a diff', () => {
     const barrel = read('../index.ts');
     /** Not a primitive a view is meant to reach for; it is a dialog's backdrop. */

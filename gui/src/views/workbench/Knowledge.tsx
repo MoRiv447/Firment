@@ -1,6 +1,7 @@
 import { useState } from 'react';
 
 import type { KbEntryDto } from '../../types';
+import { isComposing } from '../../lib/ime';
 import { Button, Card, Select, TextArea, TextInput } from '../../ui';
 import styles from './Knowledge.module.css';
 
@@ -63,7 +64,7 @@ export function Knowledge({
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') void create();
+              if (e.key === 'Enter' && !isComposing(e)) void create();
             }}
           />
           <Button
