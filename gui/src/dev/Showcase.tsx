@@ -686,6 +686,7 @@ export function Showcase() {
           <Stack>
             <div className={styles.pane}>
               <ChatView
+                now={at(2_100)}
                 session={COMPOSER_SESSION}
                 running={false}
                 turn={null}
@@ -696,6 +697,7 @@ export function Showcase() {
             </div>
             <div className={styles.pane}>
               <ChatView
+                now={at(2_100)}
                 session={COMPOSER_SESSION}
                 running
                 turn={{

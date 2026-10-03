@@ -65,6 +65,7 @@ export function ChatView({
   onThinking,
   progress,
   onOpenChanges,
+  now,
 }: {
   session: SessionDto | null;
   running: boolean;
@@ -85,6 +86,16 @@ export function ChatView({
    * first.
    */
   progress?: { done: number; total: number } | null;
+  /**
+   * The clock every duration in this pane is measured against.
+   *
+   * Same rule `LiveRun` already follows, for the reason written there: a component
+   * that reads `Date.now()` during render can only be drawn at the instant it
+   * happens to re-render, so a fixture pinned to a past timestamp prints a
+   * two-year-old run as `25257h 45m`, and no test can freeze a running turn.
+   * Absent, the pane keeps its own one-second ticker, which is what the app wants.
+   */
+  now?: number;
 }) {
   const [input, setInput] = useState('');
   const [thinkOpen, setThinkOpen] = useState(false);
@@ -199,7 +210,8 @@ export function ChatView({
   // than tracked separately -- see `lib/steps.ts`. Null for a chat that never
   // builds anything, so the row does not appear as empty furniture. `nowMs` is what
   // makes a running step's elapsed count up.
-  const steps = workflowSteps(toolList, nowMs);
+  const clock = now ?? nowMs;
+  const steps = workflowSteps(toolList, clock);
   /*
    * Every tool call the transcript already holds.
    *
@@ -284,7 +296,7 @@ export function ChatView({
                   {lastRunning
                     ? // The RUNNING TOOL's own elapsed, not time since the last
                       // visible event.
-                      `tool ${formatDuration(Date.now() - (lastRunning.startedAt ?? Date.now()))}`
+                      `tool ${formatDuration(clock - (lastRunning.startedAt ?? clock))}`
                     : `idle ${formatDuration(idleSecs * 1000)}`}
                 </span>
                 {shouldShowStallNotice(idleSecs) && (
@@ -310,7 +322,7 @@ export function ChatView({
             {steps && <StepProgress steps={steps} />}
             <LiveRun
               tools={toolList}
-              now={nowMs}
+              now={clock}
               onAction={onSend}
               onOpenChanges={onOpenChanges}
               turnStartedAt={turn?.startedAt}
@@ -339,7 +351,7 @@ export function ChatView({
             {turn && Object.values(turn.tools).length > 0 && (
               <TurnVerdict
                 tools={Object.values(turn.tools)}
-                now={nowMs}
+                now={clock}
                 turnStartedAt={turn.startedAt}
               />
             )}

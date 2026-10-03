@@ -116,6 +116,26 @@ describe('ChatView: the composer', () => {
     expect(send).toHaveTextContent('');
   });
 
+  it('measures a running tool against the clock it was handed', () => {
+    // The row beside the spinner used to call `Date.now()` during render, so a
+    // fixture pinned to a past timestamp printed a two-year-old build, and no test
+    // could freeze a running turn to ask what it says at nine seconds.
+    const started = 1_700_000_000_000;
+    setup({
+      running: true,
+      now: started + 9_000,
+      turn: {
+        text: '',
+        tools: { 1: { seq: 1, name: 'build', args: {}, status: 'running', startedAt: started } },
+        thinking: '',
+        startedAt: started,
+        finished: false,
+      },
+    });
+    const row = screen.getByText(/^tool /);
+    expect(row.textContent).toMatch(/^tool 9/);
+  });
+
   it('is one box: the text, the settings and the action share a frame', () => {
     // The composer used to be a frameless field with a row of readings under both
     // it and the button -- three things stacked where the design has one object.
