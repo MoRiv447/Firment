@@ -489,11 +489,14 @@ async fn main() -> anyhow::Result<()> {
                     .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
                 let config = load_config(&cli)?.merged_for(&cwd);
                 let path = cli.config.clone().unwrap_or_else(config_path);
-                if *json {
+                // Which probes each format runs is the only difference between the two branches;
+                // the verdict is taken once, below, from the checks either way produced.
+                let checks = if *json {
                     // Machine-readable: only the toolchain report on stdout, so
                     // a caller does not have to strip prose before parsing.
                     let checks = doctor::doctor_tools(&cwd, &config.tools, true);
                     println!("{}", serde_json::to_string_pretty(&checks)?);
+                    checks
                 } else {
                     let probes = doctor::doctor(&config, &path).await?;
                     doctor::doctor_install();
@@ -508,14 +511,19 @@ async fn main() -> anyhow::Result<()> {
                         "\n{}",
                         doctor::capabilities(&probes, &locals, &config).await
                     );
-                    // Exit code: 0 clean, 2 something REQUIRED is missing.
-                    // Warnings stay 0 -- a missing logic analyser is not a
-                    // failure, and turning it into one would make `doctor`
-                    // useless as a setup gate.
-                    if let Some(missing) = doctor::first_required_missing(&checks) {
-                        eprintln!("\n✗ required tool missing: {missing}");
-                        std::process::exit(2);
-                    }
+                    checks
+                };
+                // Exit code: 0 clean, 2 something REQUIRED is missing.
+                // Warnings stay 0 -- a missing logic analyser is not a
+                // failure, and turning it into one would make `doctor`
+                // useless as a setup gate.
+                //
+                // One site for both formats, because `--json` is the caller that ACTS on the code
+                // rather than reading the prose, and its own help line promises "exit code still
+                // set" -- which was false while this block lived inside the human-readable branch.
+                if let Some(missing) = doctor::first_required_missing(&checks) {
+                    eprintln!("\n✗ required tool missing: {missing}");
+                    std::process::exit(2);
                 }
             }
             Command::Hil {

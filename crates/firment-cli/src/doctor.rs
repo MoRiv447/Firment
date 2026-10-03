@@ -1300,6 +1300,40 @@ mod tests {
         );
     }
 
+    /// `--json` exists for a caller that reads the exit code rather than the prose, so the two
+    /// views must block on the same gap — and they can only agree if the machine-readable one runs
+    /// the same probes. Asserted as a comparison between the two modes, so it holds identically on
+    /// a box with the whole toolchain installed and on one with none of it.
+    #[test]
+    fn the_json_view_blocks_on_what_the_prose_view_blocks_on() {
+        let blocking = |checks: &[Check]| -> Vec<String> {
+            checks
+                .iter()
+                .filter(|c| c.state.is_blocking())
+                .map(|c| c.name.clone())
+                .collect()
+        };
+        let tools = firment_core::config::ToolsConfig::default();
+        for marker in [None, Some("platformio.ini")] {
+            let dir = tempdir().unwrap();
+            if let Some(name) = marker {
+                std::fs::write(dir.path().join(name), "").unwrap();
+            }
+            let json = doctor_tools(dir.path(), &tools, true);
+            let prose = doctor_tools(dir.path(), &tools, false);
+            assert_eq!(
+                blocking(&json),
+                blocking(&prose),
+                "the two views disagree about what blocks in {marker:?}"
+            );
+            assert_eq!(
+                first_required_missing(&json).as_deref(),
+                first_required_missing(&prose).as_deref(),
+                "the exit code would depend on which format was asked for ({marker:?})"
+            );
+        }
+    }
+
     #[test]
     fn a_firmware_checkout_promotes_the_cross_compiler() {
         // An empty directory is not a firmware project: nothing is required

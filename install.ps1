@@ -1,4 +1,4 @@
-# Firment 一键安装脚本（Windows / PowerShell）
+﻿# Firment 一键安装脚本（Windows / PowerShell）
 # 用法:
 #   irm https://raw.githubusercontent.com/MoRiv447/Firment/main/install.ps1 | iex
 # 可选环境变量:
@@ -68,20 +68,28 @@ try {
         throw "下载失败（$DownloadUrl）：可能该版本尚未发布或平台不支持"
     }
 
+    # Verification is the promise this step prints in the dry-run plan, so a missing
+    # checksum file is an error rather than a silent pass: the installer would otherwise
+    # run an unverified binary and report success. Same rule as install.sh, which fails
+    # closed for the same reason.
     try {
         $sumsText = (Invoke-WebRequest -UseBasicParsing -Uri $SumsUrl).Content
     } catch {
-        $sumsText = ''
+        throw "无法取得校验文件（$SumsUrl）：无法校验安装包，已中止"
     }
-    if ($sumsText) {
-        $line = ($sumsText -split "`n" | Where-Object { $_ -match [regex]::Escape($AssetName) } | Select-Object -First 1)
-        if ($line) {
-            $expected = ($line -split '\s+')[0].ToLowerInvariant()
-            $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($actual -ne $expected) {
-                throw "SHA256 校验失败: $AssetName"
-            }
-        }
+    # Match the FILENAME FIELD exactly, the way install.sh's `$2 == a` does. A substring
+    # test here would also accept a companion row -- `firm-x86_64-...zip.asc`, or the
+    # aarch64 asset of the same name shape -- and then compare the zip against a hash of
+    # something else.
+    $line = $sumsText -split "`n" | ForEach-Object { $_.Trim() } |
+        Where-Object { ($_ -split '\s+')[1] -eq $AssetName } | Select-Object -First 1
+    if (-not $line) {
+        throw "校验文件中没有 $AssetName 这一行：该平台/版本未被发布校验，已中止"
+    }
+    $expected = ($line -split '\s+')[0].ToLowerInvariant()
+    $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne $expected) {
+        throw "SHA256 校验失败: $AssetName"
     }
 
     Expand-Archive -LiteralPath $zip -DestinationPath $tmp

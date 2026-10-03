@@ -64,18 +64,19 @@ trap 'rm -rf "$TMP"' EXIT
 TARBALL="$TMP/$ASSET"
 curl -fL "$ASSET_URL" -o "$TARBALL" || { echo "下载失败（$ASSET_URL）：可能该版本尚未发布或平台不支持" >&2; exit 1; }
 
+# 校验是这一步的承诺，不是可选项：dry-run 里写着「下载 -> SHA256 校验 -> 解压」，
+# 而取不到校验文件时静默跳过，等于装了来路不明的二进制还报告成功。缺文件、缺这一行
+# 都是错误 —— 安装包和 SHA256SUMS 由同一次 release 产出，缺一个就说明拿错了地方。
 SUMS="$(curl -fsSL "$SUM_URL" 2>/dev/null || true)"
-if [ -n "$SUMS" ]; then
-    EXPECTED="$(printf '%s\n' "$SUMS" | awk -v a="$ASSET" '$2 == a { print $1 }' | head -n 1)"
-    if [ -n "$EXPECTED" ]; then
-        if command -v sha256sum >/dev/null 2>&1; then
-            ACTUAL="$(sha256sum "$TARBALL" | awk '{print $1}')"
-        else
-            ACTUAL="$(shasum -a 256 "$TARBALL" | awk '{print $1}')"
-        fi
-        [ "$ACTUAL" = "$EXPECTED" ] || { echo "SHA256 校验失败: $ASSET" >&2; exit 1; }
-    fi
+[ -n "$SUMS" ] || { echo "无法取得校验文件（$SUM_URL）：无法校验安装包，已中止" >&2; exit 1; }
+EXPECTED="$(printf '%s\n' "$SUMS" | awk -v a="$ASSET" '$2 == a { print $1 }' | head -n 1)"
+[ -n "$EXPECTED" ] || { echo "校验文件中没有 $ASSET 这一行：该平台/版本未被发布校验，已中止" >&2; exit 1; }
+if command -v sha256sum >/dev/null 2>&1; then
+    ACTUAL="$(sha256sum "$TARBALL" | awk '{print $1}')"
+else
+    ACTUAL="$(shasum -a 256 "$TARBALL" | awk '{print $1}')"
 fi
+[ "$ACTUAL" = "$EXPECTED" ] || { echo "SHA256 校验失败: $ASSET" >&2; exit 1; }
 
 mkdir -p "$INSTALL_DIR"
 tar -xzf "$TARBALL" -C "$TMP"
@@ -88,9 +89,13 @@ case "${SHELL:-}" in
     *bash*) RC="$HOME/.bashrc" ;;
     *) RC="$HOME/.profile" ;;
 esac
-if ! grep -qF '.firment/bin' "$RC" 2>/dev/null; then
-    printf '\n# firment\nexport PATH="$HOME/.firment/bin:$PATH"\n' >> "$RC"
-    echo "已把 PATH 写入 $RC，新终端生效"
+# The directory the binary actually landed in, not the default one: with
+# FIRMENT_INSTALL_DIR set, the old line put a path on PATH that nothing had been
+# installed into and still reported success. Same string on both sides of the
+# check, so a second run does not append a second copy.
+if ! grep -qF "$INSTALL_DIR" "$RC" 2>/dev/null; then
+    printf '\n# firment\nexport PATH="%s:$PATH"\n' "$INSTALL_DIR" >> "$RC"
+    echo "已把 $INSTALL_DIR 加入 PATH（写入 $RC，新终端生效）"
 fi
 
 echo "Firment $TAG 安装完成: $INSTALL_DIR/firm"
