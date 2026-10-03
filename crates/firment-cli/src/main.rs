@@ -340,7 +340,7 @@ async fn main() -> anyhow::Result<()> {
                     .clone()
                     .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
                 let config = load_config(&cli)?.merged_for(&cwd);
-                run_direct_tool(&config, cli.cwd.clone(), "build", serde_json::json!({})).await?;
+                run_direct_tool(&config, &cli, "build", serde_json::json!({})).await?;
             }
             Command::Flash { file, chip, probe } => {
                 let cwd = cli
@@ -356,13 +356,7 @@ async fn main() -> anyhow::Result<()> {
                 if let Some(probe) = probe {
                     args.insert("probe".to_string(), serde_json::json!(probe));
                 }
-                run_direct_tool(
-                    &config,
-                    cli.cwd.clone(),
-                    "flash",
-                    serde_json::Value::Object(args),
-                )
-                .await?;
+                run_direct_tool(&config, &cli, "flash", serde_json::Value::Object(args)).await?;
             }
             Command::Run {
                 file,
@@ -387,13 +381,7 @@ async fn main() -> anyhow::Result<()> {
                     "timeout_ms".to_string(),
                     serde_json::json!(timeout.saturating_mul(1000)),
                 );
-                run_direct_tool(
-                    &config,
-                    cli.cwd.clone(),
-                    "run",
-                    serde_json::Value::Object(args),
-                )
-                .await?;
+                run_direct_tool(&config, &cli, "run", serde_json::Value::Object(args)).await?;
             }
             Command::Monitor {
                 port,
@@ -568,14 +556,7 @@ async fn main() -> anyhow::Result<()> {
                 if *dry_run {
                     args.insert("dry_run".to_string(), serde_json::json!(true));
                 }
-                match run_direct_tool(
-                    &config,
-                    cli.cwd.clone(),
-                    "hil",
-                    serde_json::Value::Object(args),
-                )
-                .await
-                {
+                match run_direct_tool(&config, &cli, "hil", serde_json::Value::Object(args)).await {
                     Ok(()) => {}
                     Err(e) => {
                         // hil returns Err on suite FAIL (with full log in the message); show it instead of a one-line error
@@ -612,13 +593,8 @@ async fn main() -> anyhow::Result<()> {
                 if *live {
                     args.insert("live".to_string(), serde_json::json!(true));
                 }
-                match run_direct_tool(
-                    &config,
-                    cli.cwd.clone(),
-                    "redteam",
-                    serde_json::Value::Object(args),
-                )
-                .await
+                match run_direct_tool(&config, &cli, "redteam", serde_json::Value::Object(args))
+                    .await
                 {
                     Ok(()) => {}
                     Err(e) => {
@@ -2246,22 +2222,35 @@ fn load_config(cli: &Cli) -> anyhow::Result<Config> {
     Ok(Config::load_or_create(&config_path)?)
 }
 
-/// Run a tool directly with the user's explicit invocation (firm build/flash):
-/// permission is granted, dangerous guard still applies inside the tools.
+/// Run a tool directly with the user's explicit invocation (`firm build` / `flash` / `run` /
+/// `hil` / `redteam`).
+///
+/// Permission is granted outright: the human typed the command, so there is no request to ask
+/// about. What is *not* granted is the destructive-command guard, which was hard-wired open here
+/// while the flag that governs it (`--allow-dangerous`, and one-shot chat honours it at
+/// `one_shot_auto_approve`'s caller) sat in the same struct. The guard exists for a build command
+/// that contains `rm -rf`, and this is the path that runs exactly such a command: it reads
+/// `build_command` out of `.firment.toml`, which a checked-out repo supplies, and stripping
+/// `build` from `auto_approve` does not reach a run where approval is not the question. It now
+/// takes the flag, and `firm build` in a directory naming a destructive command stops unless
+/// `--allow-dangerous` says otherwise.
 async fn run_direct_tool(
     config: &Config,
-    cwd: Option<PathBuf>,
+    cli: &Cli,
     tool: &str,
     args: serde_json::Value,
 ) -> anyhow::Result<()> {
-    let cwd = cwd.unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let cwd = cli
+        .cwd
+        .clone()
+        .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     let ctx = firment_core::ToolContext {
         cwd: cwd.clone(),
         // A one-shot `firm <tool>` run has no turn to report phases into.
         progress: None,
         device_log_dir: Some(firment_core::config::config_dir()),
         permission: Arc::new(firment_core::AutoApprove::everything()),
-        allow_dangerous: true,
+        allow_dangerous: cli.allow_dangerous,
         journal: Arc::new(Mutex::new(firment_core::EditJournal::new(
             env::temp_dir().join("firm-cli-journal"),
         ))),

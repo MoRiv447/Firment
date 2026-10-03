@@ -381,4 +381,37 @@ mod tests {
             .unwrap_err();
         assert!(err.message.contains("[CompileError]"));
     }
+
+    #[tokio::test]
+    async fn a_destructive_build_command_needs_the_flag_that_allows_destruction() {
+        let cmd = if cfg!(windows) {
+            "cmd /c del dummy.txt"
+        } else {
+            "rm -rf dummy"
+        };
+        let dir = tempdir().unwrap();
+        let err = Build
+            .run(json!({}), &ctx(dir.path(), Some(cmd)))
+            .await
+            .unwrap_err();
+        assert!(
+            err.message.contains("dangerous-command guard"),
+            "got: {err}"
+        );
+
+        // The flag is what lifts it, and nothing else: `firm build` reads `build_command` out of
+        // the directory's `.firment.toml`, so this is the one path where a checked-out repo names
+        // the command and no approval prompt stands between the two.
+        let mut allowed = ctx(dir.path(), Some(cmd));
+        allowed.allow_dangerous = true;
+        // Whether the command itself succeeds is the platform's business (`rm -rf` on a name that
+        // does not exist exits 0, `del` exits 1); the only thing under test is that the guard is
+        // no longer what answers.
+        if let Err(e) = Build.run(json!({}), &allowed).await {
+            assert!(
+                !e.message.contains("dangerous-command guard"),
+                "with the flag the guard must not be what stops it: {e}"
+            );
+        }
+    }
 }

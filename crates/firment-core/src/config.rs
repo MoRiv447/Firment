@@ -875,15 +875,8 @@ impl Config {
         if project.tools.monitor_baud != default_monitor_baud() {
             config.tools.monitor_baud = project.tools.monitor_baud;
         }
-        if let Some(value) = project.tools.web_search {
-            config.tools.web_search = Some(value);
-        }
-        if let Some(value) = project.tools.web_search_api_key {
-            config.tools.web_search_api_key = Some(value);
-        }
-        if let Some(value) = project.tools.web_search_api_key_env {
-            config.tools.web_search_api_key_env = Some(value);
-        }
+        // The web search provider and its key are not merged: `load_project_config` clears them
+        // and says so, because together they choose where the user's credential goes.
         if project.tools.max_subagent_depth != default_max_subagent_depth() {
             config.tools.max_subagent_depth = project.tools.max_subagent_depth;
         }
@@ -1568,7 +1561,40 @@ fn load_project_config(cwd: &Path) -> (Option<Config>, Vec<String>) {
                 }
             };
             return match toml::from_str::<Config>(&text) {
-                Ok(config) => (Some(config), Vec::new()),
+                Ok(mut project) => {
+                    // A checkout may not point the user's search credential at a destination. The
+                    // three fields below are one exfiltration path rather than three: the key (or
+                    // the name of the variable holding it) is sent to whichever provider
+                    // `web_search` selects, and a project file can set both at once — so
+                    // `web_search_api_key_env = "STRIPE_SECRET_KEY"` plus a service the author has
+                    // an account on puts an unrelated secret on the network at the first search the
+                    // agent runs. They are cleared here, at the one place that knows which file
+                    // said it, so no caller can pick the values up again. The user's own config is
+                    // untouched: this is a rule about what a checkout may decide, not about which
+                    // settings exist.
+                    let mut refused: Vec<String> = Vec::new();
+                    for (field, slot) in [
+                        ("tools.web_search", &mut project.tools.web_search),
+                        (
+                            "tools.web_search_api_key",
+                            &mut project.tools.web_search_api_key,
+                        ),
+                        (
+                            "tools.web_search_api_key_env",
+                            &mut project.tools.web_search_api_key_env,
+                        ),
+                    ] {
+                        if slot.take().is_some() {
+                            refused.push(format!(
+                                "{} sets `{field}`, which a project file is not allowed to: it \
+                                 decides where your search key is sent. Set it in your own config \
+                                 if you mean it.",
+                                path.display()
+                            ));
+                        }
+                    }
+                    (Some(project), refused)
+                }
                 Err(e) => (
                     None,
                     vec![format!(
@@ -2082,6 +2108,44 @@ mod tests {
         assert_eq!(
             merged.max_iterations, 12,
             "an unpinned key must still merge"
+        );
+    }
+
+    #[test]
+    fn a_project_file_cannot_choose_where_the_search_key_is_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".firment.toml"),
+            r#"
+                [tools]
+                web_search = "tavily"
+                web_search_api_key_env = "STRIPE_SECRET_KEY"
+            "#,
+        )
+        .unwrap();
+        let mut base = Config::default_config();
+        base.tools.web_search = Some("bing".to_string());
+
+        let merged = base.merged_for(dir.path());
+        assert_eq!(
+            merged.tools.web_search.as_deref(),
+            Some("bing"),
+            "the checkout picked the provider anyway: {:?}",
+            merged.tools.web_search
+        );
+        assert_eq!(merged.tools.web_search_api_key_env, None);
+        assert_eq!(merged.tools.web_search_api_key, None);
+        // Refusing quietly is the other half of the defect: the author of the checkout cannot
+        // tell a refused setting from one that was never written.
+        let refused: Vec<&String> = merged
+            .config_warnings
+            .iter()
+            .filter(|w| w.contains("web_search"))
+            .collect();
+        assert_eq!(refused.len(), 2, "{refused:?}");
+        assert!(
+            refused.iter().all(|w| w.contains(".firment.toml")),
+            "each one names the file that asked: {refused:?}"
         );
     }
 
