@@ -1111,9 +1111,7 @@ mod tests {
         fs::write(&a, "a2").unwrap();
         fs::write(&b, "b2").unwrap();
 
-        let restored = journal
-            .rollback_paths(std::slice::from_ref(&a))
-            .unwrap();
+        let restored = journal.rollback_paths(std::slice::from_ref(&a)).unwrap();
         assert_eq!(restored, vec![a.to_string_lossy().to_string()]);
         assert_eq!(fs::read_to_string(&a).unwrap(), "a1");
         assert_eq!(

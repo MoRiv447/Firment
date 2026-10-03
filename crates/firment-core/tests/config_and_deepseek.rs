@@ -296,7 +296,7 @@ fn auth_roundtrip_and_resolution_order() {
     );
 
     // 4. env var is the last fallback
-    let mut auth = load_auth();
+    let mut auth = load_auth().unwrap();
     auth.remove("default");
     save_auth(&auth).unwrap();
     unsafe { std::env::set_var("DEEPSEEK_TEST_KEY", "sk-env") };

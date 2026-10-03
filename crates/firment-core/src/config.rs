@@ -641,7 +641,10 @@ impl ToolsConfig {
 /// provider with keys in both places made discovery probe with a different key than
 /// the turn it was listing models for.
 pub fn provider_endpoints(config: &Config) -> Vec<crate::tool::ProviderEndpoint> {
-    let auth = crate::load_auth();
+    // Read-only, and a failure here costs discovery one thing: no key, so the probe answers 401.
+    // The keys are still on disk — this path never writes, which is the difference between
+    // falling back to an empty map and the fallback `load_auth` refuses to be.
+    let auth = crate::load_auth().unwrap_or_default();
     config
         .providers
         .iter()
@@ -737,6 +740,8 @@ pub enum ConfigError {
     UnknownType(String, String),
     #[error("provider '{0}': API key missing; set {1}, add api_key to config, or run /apikey")]
     MissingApiKey(String, String),
+    #[error("the key store {0} does not parse as JSON: {1}")]
+    AuthStore(String, String),
     #[error("models endpoint returned HTTP {status}: {message}")]
     ListModels { status: u16, message: String },
 }
@@ -755,6 +760,10 @@ pub enum ApiKeySource {
     EnvEmpty(String),
     /// `api_key_env` names a variable that is not in the environment at all.
     EnvUnset(String),
+    /// `auth.json` exists but cannot be parsed, so no provider can read its keys. Not folded
+    /// into `None`: "you never set a key" and "your key file is broken" are different things to
+    /// type, and only one of them is fixed by `/apikey`.
+    StoreUnreadable(String),
     /// Neither `api_key` nor `api_key_env` is configured.
     None,
 }
@@ -768,6 +777,9 @@ impl ApiKeySource {
             ApiKeySource::Env(name) => format!("configured via ${name}"),
             ApiKeySource::EnvEmpty(name) => format!("MISSING (${name} is empty)"),
             ApiKeySource::EnvUnset(name) => format!("MISSING (${name} not set)"),
+            ApiKeySource::StoreUnreadable(reason) => {
+                format!("MISSING (the key store could not be read: {reason})")
+            }
             ApiKeySource::None => "MISSING (no api_key or api_key_env)".to_string(),
         }
     }
@@ -1088,7 +1100,7 @@ impl Config {
         provider: &ProviderConfig,
         name: &str,
     ) -> (Option<String>, ApiKeySource) {
-        self.resolve_api_key_with(provider, name, &load_auth())
+        self.resolve_from_store(provider, name, load_auth().as_ref())
     }
 
     /// [`Config::resolve_api_key`] with the auth map already loaded, for a caller that resolves
@@ -1099,24 +1111,37 @@ impl Config {
         name: &str,
         auth: &AuthMap,
     ) -> (Option<String>, ApiKeySource) {
+        self.resolve_from_store(provider, name, Ok(auth))
+    }
+
+    /// The ladder itself, with the key store handed to it as it came back from the disk — which
+    /// is the part that has to be a `Result` here: a store that cannot be read is a fact about
+    /// the user's setup, and a resolver that only ever sees an empty map cannot say it.
+    fn resolve_from_store(
+        &self,
+        provider: &ProviderConfig,
+        name: &str,
+        store: Result<&AuthMap, &ConfigError>,
+    ) -> (Option<String>, ApiKeySource) {
         if let Some(key) = provider.api_key.as_deref().filter(|k| !k.is_empty()) {
             return (Some(key.to_string()), ApiKeySource::Inline);
         }
+        let auth = match store {
+            Ok(auth) => auth,
+            // The store holds no key this turn can use, but that is not the end of the ladder: a
+            // variable that is set still has to work because `auth.json` happens to be malformed.
+            Err(why) => {
+                let (key, source) = key_from_env(provider);
+                return match key {
+                    Some(key) => (Some(key), source),
+                    None => (None, ApiKeySource::StoreUnreadable(why.to_string())),
+                };
+            }
+        };
         if let Some(key) = auth.get(name) {
             return (Some(key.clone()), ApiKeySource::Auth);
         }
-        let Some(env_name) = provider.api_key_env.as_deref() else {
-            return (None, ApiKeySource::None);
-        };
-        match env::var(env_name) {
-            // An empty-but-set variable is treated as unset, matching the inline-key rule above
-            // and `resolved_web_search_api_key`.
-            Ok(value) if !value.is_empty() => {
-                (Some(value), ApiKeySource::Env(env_name.to_string()))
-            }
-            Ok(_) => (None, ApiKeySource::EnvEmpty(env_name.to_string())),
-            Err(_) => (None, ApiKeySource::EnvUnset(env_name.to_string())),
-        }
+        key_from_env(provider)
     }
 
     /// Sources that are set but **losing** to a higher-priority one.
@@ -1130,7 +1155,10 @@ impl Config {
         let (_, winner) = self.resolve_api_key(provider, name);
         let mut conflicts = Vec::new();
 
-        let auth = load_auth().contains_key(name);
+        // A store that cannot be read holds no key as far as a conflict is concerned. The resolver
+        // has already said so — `ApiKeySource::StoreUnreadable` — and this function's job is only
+        // to name the places that *do* hold one.
+        let auth = load_auth().is_ok_and(|auth| auth.contains_key(name));
         let env_name = provider
             .api_key_env
             .as_deref()
@@ -1162,10 +1190,24 @@ impl Config {
 
     /// Persist an API key to `auth.json` (kept separate from config.toml so
     /// provider definitions stay readable).
+    ///
+    /// The store is read first because this writes the whole map back. A read that answered "no
+    /// keys" for a file it could not parse would make the next `/apikey` delete every key that
+    /// file still held — so an unreadable store has to stop here rather than be replaced.
     pub fn set_api_key(&self, provider: &str, key: &str) -> Result<(), ConfigError> {
-        let mut auth = load_auth();
+        self.set_api_key_at(&auth_path(), provider, key)
+    }
+
+    /// [`Config::set_api_key`] against a store the caller names.
+    pub fn set_api_key_at(
+        &self,
+        store: &Path,
+        provider: &str,
+        key: &str,
+    ) -> Result<(), ConfigError> {
+        let mut auth = load_auth_at(store)?;
         auth.insert(provider.to_string(), key.to_string());
-        save_auth(&auth)
+        save_auth_at(store, &auth)
     }
 
     /// Add or update a provider definition (type, base URL, model) and persist
@@ -1347,27 +1389,67 @@ pub fn auth_path() -> PathBuf {
 
 pub type AuthMap = HashMap<String, String>;
 
-pub fn load_auth() -> AuthMap {
-    let path = auth_path();
-    let Ok(text) = fs::read_to_string(&path) else {
-        return HashMap::new();
+/// The last rung of the key ladder: whatever `api_key_env` names, in the environment.
+fn key_from_env(provider: &ProviderConfig) -> (Option<String>, ApiKeySource) {
+    let Some(env_name) = provider.api_key_env.as_deref() else {
+        return (None, ApiKeySource::None);
     };
-    serde_json::from_str(&text).unwrap_or_default()
+    match env::var(env_name) {
+        // An empty-but-set variable is treated as unset, matching the inline-key rule in
+        // `Config::resolve_from_store` and `resolved_web_search_api_key`.
+        Ok(value) if !value.is_empty() => (Some(value), ApiKeySource::Env(env_name.to_string())),
+        Ok(_) => (None, ApiKeySource::EnvEmpty(env_name.to_string())),
+        Err(_) => (None, ApiKeySource::EnvUnset(env_name.to_string())),
+    }
 }
 
-pub fn save_auth(auth: &AuthMap) -> Result<(), ConfigError> {
-    let path = auth_path();
+/// [`load_auth`] at a path the caller chose, so the store's rules can be tested without moving
+/// the real one.
+pub fn load_auth_at(path: &Path) -> Result<AuthMap, ConfigError> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        // No file is not a failure: a fresh install has no keys, and nothing here writes.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(AuthMap::new()),
+        Err(e) => return Err(e.into()),
+    };
+    if text.trim().is_empty() {
+        // The signature of a write that died half-way, since a save always writes JSON. An
+        // existing-but-empty file is exactly as much a loss as one that does not parse, and the
+        // caller has to be able to tell that apart from "there were never any keys".
+        return Err(ConfigError::AuthStore(
+            path.display().to_string(),
+            "the file is empty".to_string(),
+        ));
+    }
+    serde_json::from_str(&text)
+        .map_err(|e| ConfigError::AuthStore(path.display().to_string(), e.to_string()))
+}
+
+/// [`save_auth`] at a path the caller chose.
+pub fn save_auth_at(path: &Path, auth: &AuthMap) -> Result<(), ConfigError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(&path, serde_json::to_string_pretty(auth)?)?;
+    // Atomic: the old `fs::write` truncated the store before filling it back in, so a crash or a
+    // killed process left an empty or half-written `auth.json` where every key had been. The read
+    // side now reports that file instead of accepting it, which is the other half of the same
+    // rule: a lost key is recoverable only if nothing pretends it was never there.
+    crate::session::write_atomic(path, &serde_json::to_string_pretty(auth)?)?;
     // API keys are secrets: never world-readable (Unix).
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
     }
     Ok(())
+}
+
+pub fn load_auth() -> Result<AuthMap, ConfigError> {
+    load_auth_at(&auth_path())
+}
+
+pub fn save_auth(auth: &AuthMap) -> Result<(), ConfigError> {
+    save_auth_at(&auth_path(), auth)
 }
 
 pub fn default_config_text() -> &'static str {
@@ -1590,6 +1672,10 @@ mod tests {
             "MISSING ($K not set)"
         );
         assert_eq!(
+            ApiKeySource::StoreUnreadable("boom".into()).label(),
+            "MISSING (the key store could not be read: boom)"
+        );
+        assert_eq!(
             ApiKeySource::None.label(),
             "MISSING (no api_key or api_key_env)"
         );
@@ -1652,6 +1738,98 @@ mod tests {
         assert!(env_only.api_key_conflicts(&provider, GHOST).is_empty());
 
         unsafe { std::env::remove_var(ENV_NAME) };
+    }
+
+    #[test]
+    fn an_unreadable_store_is_reported_and_never_answered_as_an_empty_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("auth.json");
+        // Truncated mid-object: the shape a save that died half-way leaves behind.
+        std::fs::write(&store, "{ \"openai\": \"sk-one\", ").unwrap();
+
+        let err = load_auth_at(&store).expect_err("a store that does not parse is not no keys");
+        assert!(
+            err.to_string().contains("auth.json"),
+            "the message has to name the file: {err}"
+        );
+
+        // Why the read had to become fallible. Saving one key rewrites the whole map, and the map
+        // it rewrote came from a read that had answered "empty" — so the keys still in the file
+        // were deleted by the command that only meant to add one.
+        let config = Config::default_config();
+        let before = std::fs::read_to_string(&store).unwrap();
+        let refused = config
+            .set_api_key_at(&store, "anthropic", "sk-two")
+            .expect_err("refusing to write is the whole fix");
+        assert!(refused.to_string().contains("does not parse"), "{refused}");
+        assert_eq!(
+            std::fs::read_to_string(&store).unwrap(),
+            before,
+            "the store on disk is untouched"
+        );
+    }
+
+    #[test]
+    fn an_empty_store_file_is_a_loss_not_a_missing_key() {
+        // A write truncates before it fills, so an empty `auth.json` is what a killed save looks
+        // like, and treating it as "there were never any keys" is the same lie in shorter form.
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("auth.json");
+        std::fs::write(&store, "").unwrap();
+        assert!(load_auth_at(&store).is_err());
+        // A file that was never created is still not a failure — a fresh install has no keys.
+        assert!(load_auth_at(&dir.path().join("absent.json")).is_ok_and(|auth| auth.is_empty()));
+    }
+
+    #[test]
+    fn a_second_key_is_added_without_losing_the_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("auth.json");
+        let config = Config::default_config();
+        config
+            .set_api_key_at(&store, "openai", "sk-one")
+            .expect("a store that parses");
+        config
+            .set_api_key_at(&store, "anthropic", "sk-two")
+            .expect("and again");
+        let auth = load_auth_at(&store).unwrap();
+        assert_eq!(auth.get("openai").map(String::as_str), Some("sk-one"));
+        assert_eq!(auth.get("anthropic").map(String::as_str), Some("sk-two"));
+        // Written whole, not appended into: no temp file is left beside it.
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_broken_store_still_lets_the_environment_supply_a_key() {
+        // Precedence cannot become a lie: a store that will not parse is a reason to say *why* a
+        // key is missing, not a reason to ignore a variable that is set.
+        const ENV_NAME: &str = "FIRMENT_TEST_BROKEN_STORE_9D31";
+        let broken: Result<AuthMap, ConfigError> = Err(ConfigError::AuthStore(
+            "/tmp/auth.json".into(),
+            "expected value at line 1 column 3".into(),
+        ));
+
+        unsafe { std::env::set_var(ENV_NAME, "sk-env") };
+        let (config, provider) = ghost_config(&format!("api_key_env = \"{ENV_NAME}\"\n"));
+        let (key, source) = config.resolve_from_store(&provider, GHOST, broken.as_ref());
+        assert_eq!(key.as_deref(), Some("sk-env"), "{source:?}");
+        assert_eq!(source, ApiKeySource::Env(ENV_NAME.into()));
+        unsafe { std::env::remove_var(ENV_NAME) };
+
+        // With nothing left on the ladder, the answer names the broken file instead of claiming
+        // the user never configured a key.
+        let (config, provider) = ghost_config("");
+        let (key, source) = config.resolve_from_store(&provider, GHOST, broken.as_ref());
+        assert_eq!(key, None);
+        assert!(
+            matches!(source, ApiKeySource::StoreUnreadable(_)),
+            "{source:?}"
+        );
+        assert!(
+            source.label().contains("expected value"),
+            "{}",
+            source.label()
+        );
     }
 
     use super::*;
