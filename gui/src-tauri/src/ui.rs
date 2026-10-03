@@ -67,8 +67,9 @@ pub struct GuiSink {
 #[async_trait]
 impl EventSink for GuiSink {
     async fn event(&self, event: AgentEvent) {
-        let fe = frontend_event(&event, Some(&self.session_id));
-        let _ = self.shared.app.emit("agent-event", fe);
+        if let Some(fe) = frontend_event(&event, Some(&self.session_id)) {
+            let _ = self.shared.app.emit("agent-event", fe);
+        }
     }
 }
 

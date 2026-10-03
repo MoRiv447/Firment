@@ -103,10 +103,18 @@ pub async fn start_turn(
             }
         }
     }
-    tauri::async_runtime::spawn(async move {
+    let watched_session = session_id.clone();
+    // Cloned before the task moves `shared`: this is the handle that reports a panic.
+    let watcher = shared.clone();
+    let task = tauri::async_runtime::spawn(async move {
         let mut agent = agent;
         let result = agent.run_turn(&input).await;
         drop(agent);
+        // Put this turn's cancellation handles back to empty while the slot is still ours —
+        // before the guard releases `running`, so the next turn cannot have published its own
+        // handles for us to erase. A slot outliving its turn used to leave the dead turn's
+        // handles in it, where the next Stop would find them.
+        release_slot_handles(&shared, &session_id);
         drop(_reservation); // clears running on success AND on panic unwind
         if let Err(e) = result {
             // A provider failure has already been emitted by the agent through its sink, with the
@@ -130,6 +138,64 @@ pub async fn start_turn(
             // run_turn, so we must not emit a duplicate here either.
         }
     });
+    // Nothing awaited that task, so a panic inside a turn died without one word to the frontend:
+    // the `RunningGuard` released the slot on unwind, but with no `agent-event` of any kind a
+    // chat that had drawn a running turn kept drawing it. Watch the handle and say what happened
+    // instead of leaving the UI to infer it from silence.
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = task.await {
+            let _ = watcher.app.emit(
+                "agent-event",
+                FrontendEvent::Error {
+                    session_id: Some(watched_session),
+                    message: format!("the turn ended unexpectedly: {e}"),
+                },
+            );
+        }
+    });
+    Ok(())
+}
+
+/// Empty a slot's cancellation handles when its turn is over.
+fn release_slot_handles(shared: &Shared, session_id: &str) {
+    let map = shared
+        .agents
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(slot) = map.get(session_id) {
+        *slot
+            .cancel
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    }
+}
+
+/// Where a Stop goes: fire it at the running turn, park it for a turn whose agent is still being
+/// built, or say that there is nothing to stop.
+///
+/// Taken out of `cancel_turn` because those three cases are the whole behaviour and they are
+/// testable without a Tauri runtime. The third one used to be missing: the slot outlives its
+/// turn, so after any turn had run once `cancel` still held that turn's handles — a Stop on an
+/// idle session fired a dead agent's channel, answered `Ok`, and the UI reported "cancelled" for
+/// a turn that had already finished.
+fn apply_cancel(slot: &AgentSlot) -> Result<(), String> {
+    if !slot.running.load(Ordering::SeqCst) {
+        return Err("no turn is running in this session".to_string());
+    }
+    match slot
+        .cancel
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+    {
+        Some(handles) => fire_cancel(&handles),
+        // The agent is still being built: remember the Stop, start_turn will
+        // fire it the moment the handles exist (before the first provider call
+        // can produce output).
+        None => {
+            slot.cancel_requested.store(true, Ordering::SeqCst);
+        }
+    }
     Ok(())
 }
 
@@ -152,21 +218,7 @@ pub async fn cancel_turn(
     let slot = map
         .get(&session_id)
         .ok_or_else(|| format!("no turn has been started for session {session_id}"))?;
-    match slot
-        .cancel
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone()
-    {
-        Some(handles) => fire_cancel(&handles),
-        // The agent is still being built: remember the Stop, start_turn will
-        // fire it the moment the handles exist (before the first provider call
-        // can produce output).
-        None => {
-            slot.cancel_requested.store(true, Ordering::SeqCst);
-        }
-    }
-    Ok(())
+    apply_cancel(slot)
 }
 
 #[tauri::command]
@@ -880,4 +932,61 @@ pub async fn running_sessions(
         .filter(|(_, slot)| slot.running.load(Ordering::SeqCst))
         .map(|(id, _)| id.clone())
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::CancelHandles;
+
+    /// Handles plus a window on the flag `fire_cancel` is supposed to move.
+    fn handles() -> (CancelHandles, firment_core::Cancellable) {
+        let (tx, _rx) = tokio::sync::watch::channel(false);
+        let signal = firment_core::Cancellable::new();
+        ((tx, signal.clone()), signal)
+    }
+
+    #[test]
+    fn a_stop_on_a_session_that_is_not_running_is_refused() {
+        // The slot outlives its turn, and a Stop used to find the finished turn's handles still
+        // parked in it: they fired into a dropped agent, the command answered `Ok`, and the UI
+        // reported a cancellation for a turn that had already ended.
+        let slot = AgentSlot::new();
+        let (h, _signal) = handles();
+        *slot.cancel.lock().unwrap() = Some(h);
+        let err = apply_cancel(&slot).expect_err("nothing is running");
+        assert!(err.contains("no turn is running"), "{err}");
+        assert!(
+            !slot.cancel_requested.load(Ordering::SeqCst),
+            "a refusal parks nothing for the next turn to honour"
+        );
+    }
+
+    #[test]
+    fn a_stop_landing_while_the_agent_is_built_is_parked() {
+        let slot = AgentSlot::new();
+        slot.running.store(true, Ordering::SeqCst);
+        apply_cancel(&slot).expect("a running turn can be stopped");
+        assert!(
+            slot.cancel_requested.load(Ordering::SeqCst),
+            "start_turn honours the parked Stop as soon as it publishes the handles"
+        );
+    }
+
+    #[test]
+    fn a_stop_with_handles_fires_the_running_turn() {
+        let slot = AgentSlot::new();
+        slot.running.store(true, Ordering::SeqCst);
+        let (h, signal) = handles();
+        *slot.cancel.lock().unwrap() = Some(h);
+        apply_cancel(&slot).expect("fired");
+        assert!(
+            signal.is_cancelled(),
+            "the core flag is what the tools watch"
+        );
+        assert!(
+            !slot.cancel_requested.load(Ordering::SeqCst),
+            "a Stop that fired is not also parked"
+        );
+    }
 }

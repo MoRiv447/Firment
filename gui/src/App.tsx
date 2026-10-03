@@ -463,9 +463,6 @@ export default function App() {
             // startup restore, escalation handler all route here).
             setWorkbenchOpen(false);
             break;
-          case 'sessions':
-            setSessions(e.sessions);
-            break;
           case 'device_frame': {
             // Notification center source: guard alerts from any node.
             if (e.kind === 'alert') {
@@ -507,13 +504,7 @@ export default function App() {
           // as `device_frame` above, so aggregating it here would only duplicate
           // state that is already rendered.
           //
-          // `settings` and `models` have no reader anywhere: SettingsView loads
-          // both through `api.settings()` / `api.fetchModels()`. They are ignored
-          // out loud rather than forwarded to a reducer that would drop them,
-          // because an emitted event nobody consumes is a claim about a feature.
           case 'guard_status':
-          case 'settings':
-          case 'models':
             break;
           // Everything left is a turn kind — the ones `TURN_FLOW_KINDS` names —
           // and this is the only door to the reducer. Classifying a new kind is

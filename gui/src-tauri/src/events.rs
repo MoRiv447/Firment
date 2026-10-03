@@ -120,18 +120,6 @@ pub enum FrontendEvent {
     GuardStatus {
         frame: String,
     },
-    Settings {
-        provider: Option<String>,
-        model: Option<String>,
-        thinking: Option<String>,
-        mode: Option<String>,
-    },
-    Models {
-        models: Vec<String>,
-    },
-    Sessions {
-        sessions: Vec<SessionSummaryDto>,
-    },
     SessionLoaded {
         session: SessionDto,
     },
@@ -195,9 +183,14 @@ pub fn session_summary_dto(s: &SessionSummary) -> SessionSummaryDto {
     }
 }
 
-pub fn frontend_event(e: &AgentEvent, session_id: Option<&str>) -> FrontendEvent {
+/// The wire event for one agent event, or `None` when this application has nothing to send.
+///
+/// `None` is a real arm, not a fallthrough: see the note where the three TUI-only kinds are
+/// handled. A total mapping would have to invent an event for them, and an event that can never
+/// arrive is how a dead code path keeps looking like a feature.
+pub fn frontend_event(e: &AgentEvent, session_id: Option<&str>) -> Option<FrontendEvent> {
     let sid = session_id.map(|s| s.to_string());
-    match e {
+    let event = match e {
         AgentEvent::TurnStart => FrontendEvent::TurnStart { session_id: sid },
         AgentEvent::TextDelta(text) => FrontendEvent::TextDelta {
             session_id: sid,
@@ -281,23 +274,15 @@ pub fn frontend_event(e: &AgentEvent, session_id: Option<&str>) -> FrontendEvent
             id: id.clone(),
             depth: *depth,
         },
-        AgentEvent::Settings {
-            provider,
-            model,
-            thinking,
-            mode,
-        } => FrontendEvent::Settings {
-            provider: provider.clone(),
-            model: model.clone(),
-            thinking: thinking.map(|t| t.label().to_string()),
-            mode: mode.map(|m| m.label().to_string()),
-        },
-        AgentEvent::Models(models) => FrontendEvent::Models {
-            models: models.clone(),
-        },
-        AgentEvent::Sessions(sessions) => FrontendEvent::Sessions {
-            sessions: sessions.iter().map(session_summary_dto).collect(),
-        },
+        // Three kinds the *TUI's* slash commands emit and nothing in this application does: the
+        // GUI writes settings through `save_settings`/`set_provider`, the model list is fetched by
+        // the view that shows it, and the session list is refreshed by its own commands. They used
+        // to be forwarded as `settings` / `models` / `sessions` wire events with no producer and,
+        // on the far side, a `case 'sessions'` that could never run — a contract nothing could
+        // fulfil, which reads as a feature to whoever meets it next.
+        AgentEvent::Settings { .. } | AgentEvent::Models(_) | AgentEvent::Sessions(_) => {
+            return None
+        }
         AgentEvent::SessionLoaded(session) => FrontendEvent::SessionLoaded {
             session: session_dto(session),
         },
@@ -305,7 +290,8 @@ pub fn frontend_event(e: &AgentEvent, session_id: Option<&str>) -> FrontendEvent
             session_id: sid,
             message: message.clone(),
         },
-    }
+    };
+    Some(event)
 }
 
 #[cfg(test)]
@@ -323,7 +309,8 @@ mod tests {
             owner: None,
             waited_ms,
         };
-        serde_json::to_value(frontend_event(&end, Some("sess-1"))).expect("a tool end serialises")
+        serde_json::to_value(frontend_event(&end, Some("sess-1")).expect("a tool end is sent"))
+            .expect("a tool end serialises")
     }
 
     #[test]

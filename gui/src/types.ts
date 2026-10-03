@@ -276,9 +276,6 @@ export type FrontendEvent =
   | { type: 'subagent_end'; session_id?: string | null; id: string; depth: number }
   | { type: 'device_frame'; node: string; kind: string; frame: string }
   | { type: 'guard_status'; frame: string }
-  | { type: 'settings'; provider: string | null; model: string | null; thinking: string | null; mode: string | null }
-  | { type: 'models'; models: string[] }
-  | { type: 'sessions'; sessions: SessionSummaryDto[] }
   | { type: 'session_loaded'; session: SessionDto }
   | { type: 'error'; session_id?: string | null; message: string };
 
