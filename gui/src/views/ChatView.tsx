@@ -318,7 +318,6 @@ export function ChatView({
             )}
             {turn && (
               <div className={styles.column}>
-              <AgentTurn>
             {steps && <StepProgress steps={steps} />}
             <LiveRun
               tools={toolList}
@@ -327,6 +326,8 @@ export function ChatView({
               onOpenChanges={onOpenChanges}
               turnStartedAt={turn?.startedAt}
             />
+            {(!!turn?.thinking || !!turn?.text) && (
+              <AgentTurn>
             {!!turn?.thinking && !turn.text && (
               <div className={styles.thinking}>
                 <Icon src={Brain} tone="muted" />
@@ -343,6 +344,8 @@ export function ChatView({
               </details>
             )}
             {!!turn?.text && <Markdown>{turn.text}</Markdown>}
+              </AgentTurn>
+            )}
             {/*
               The sentence at the end of the turn. Only once there are cards to
               summarise: a turn that answered in prose alone has no workflow to
@@ -355,7 +358,6 @@ export function ChatView({
                 turnStartedAt={turn.startedAt}
               />
             )}
-              </AgentTurn>
               </div>
             )}
           </>
