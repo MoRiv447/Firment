@@ -43,6 +43,36 @@
   文字色分两档:填充用 logo 色(深 #b4f779 / 浅 #4d7c0f),文字另取可读值
   (深 #b4f779 / 浅 #476f0e)—— 浅色 #4d7c0f 当文字压在卡片底上只有 4.33:1,
   现状 GUI 也有同样的坑(#107d98 压 --raised #f0f0f0 = 4.18:1)。
+
+  ── 2026-10-02 之后的对账 ────────────────────────────────────────────
+
+  这一版之后 app 又往前走了一段,这份稿子**没有**跟着改的东西列在下面 —— 它仍是
+  "当时想要的样子",不是当前实现。当前实现以 `gui/src/styles/tokens.css` 为准,
+  断言它的是 `gui/src/styles/__tests__/` 那三个门。
+
+  app 有、这份稿子没有的:
+    · `--measure: 864px` —— 存储消息、实时 turn、composer 共用一个阅读宽度,
+      左边界是一条线(稿子里各块是各自排的)。
+    · 说话者是一枚 28px 磁贴(`AgentTurn`),不只是 `.who` 那行小字。
+    · 用户气泡三圆一方(尾巴指向来话方向)。
+    · 转写区 `scrollbar-gutter: stable`,首条回复不会把自己挤窄一个滚动条宽。
+    · composer 上方是 28px 渐隐,不是硬边;"Enter to send" 从 title 挪到了可见文字。
+    · 发送 / 停止是 36px 方形图标按钮,名字走 aria-label。
+    · 标题栏路径是描边 chip;运行药丸是 99px 圆角 + 抬高层;运行中的点带 3px 光晕。
+    · 状态栏 Context 读数带一条 64px 进度条(条给一眼看,百分号给引用)。
+    · 会话行选中时除描边外,栏左还有一道 3px 酸色竖条。
+    · `Ctrl N` 开新会话(权限弹窗 / 提问 / 设置抽屉打开时不响应)。
+    · 窄于 968px 时 inspector 收起 —— 收的是状态,不是 `display:none`,
+      否则那个开关就成了"按了没反应"。
+
+  参考稿(Firment UI redesign)里**没采纳**的,连同理由:
+    · 它的中性灰底 + #b4ee3c + IBM Plex Sans + 8/9/14 圆角 —— 本仓库的橄榄色阶、
+      DM Sans、3/4/5/6/8 是量过、写进 `tokens.md`、被三门断言的,换它是把刚验过的
+      东西再赌一次,换来的只是更软。
+    · Board 页的 Adapter / Target / Core 与 `.text`/`.rodata`/`.data` 分段条 ——
+      GUI 侧没有这些字段:probe 身份、芯片容量、section 明细都还没从 Rust 暴露出来
+      (`ElfCardDto` 只有 flash_bytes / ram_bytes / functions)。这是后端活,不是排版活。
+    · 两栏能力网格(`.rows` / `.grp`)—— 那是某一条回答的**内容**排版,不是界面结构。
 -->
 <style>
   * { box-sizing: border-box; }
