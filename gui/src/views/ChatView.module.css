@@ -181,6 +181,7 @@
  * in the same box, and the border is drawn once.
  */
 .composer {
+  position: relative;
   flex: 0 0 auto;
   padding: 10px 22px 14px;
   /* No band. The strip of `--surface` and its hairline used to say "the input
@@ -188,6 +189,37 @@
      second rectangle around the first one. The 22px gutter is the transcript
      column's, so the field lines up with what is above it. */
   background: transparent;
+}
+
+/*
+ * The transcript dissolves into the composer instead of being cut off by it: 28px
+ * of gradient above the field, and no line. What this replaces was a band -- a
+ * `--surface` strip with a hairline -- which drew a second rectangle around the
+ * field's own one.
+ */
+.composer::before {
+  content: '';
+  position: absolute;
+  inset: -28px 12px auto 0;
+  height: 28px;
+  background: linear-gradient(transparent, var(--bg));
+  pointer-events: none;
+}
+
+/*
+ * The shortcut, said out loud.
+ *
+ * It used to live only in the field's `title`, which is a tooltip a person has to
+ * already know to go hunting for. "Enter to send" is the one thing worth spending
+ * a line of the footer on, because getting it wrong on the first message sends
+ * nothing and explains itself as a broken app.
+ */
+.hint {
+  /* The chips stay on the left with the field's own settings; the keys and the
+     action go to the right edge together, which is where a hand already is. */
+  margin-inline-start: auto;
+  color: var(--dim);
+  font-size: var(--fs-minor);
 }
 
 /*

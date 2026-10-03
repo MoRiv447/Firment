@@ -9,7 +9,7 @@
   display: grid;
   place-items: center;
   align-content: center;
-  gap: var(--sp-1);
+  gap: var(--sp-3);
   min-height: 0;
   height: 100%;
   padding: var(--sp-6);
@@ -52,7 +52,7 @@
   margin: 0;
   color: var(--ink);
   font-size: var(--fs-title);
-  font-weight: var(--fw-label);
+  font-weight: var(--fw-medium);
   letter-spacing: var(--tracking-title);
   line-height: var(--lh-tight);
 }
@@ -62,7 +62,7 @@
    with the title it is explaining. */
 .hint {
   margin: 0;
-  max-width: 46ch;
+  max-width: 34ch;
   color: var(--dim);
   font-size: var(--fs-minor);
   line-height: var(--lh-body);

@@ -32,7 +32,8 @@
   flex: none;
   padding: 0 10px;
   border: 1px solid var(--border-strong);
-  border-radius: var(--r-btn);
+  border-radius: var(--r-round);
+  background: var(--surface-raised);
   color: var(--muted);
   font-family: var(--ff-mono);
   font-weight: var(--fw-mono);

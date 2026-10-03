@@ -215,7 +215,10 @@ export function AgentTurn({ children }: { children: ReactNode }) {
       <span aria-hidden className={styles.avatar}>
         <LogoMark />
       </span>
-      <div className={styles.turn}>{children}</div>
+      <div className={styles.turn}>
+        <span className={styles.who}>Firment</span>
+        {children}
+      </div>
     </div>
   );
 }
@@ -299,10 +302,6 @@ export const MessageList = memo(function MessageList({
         if (m.role === 'assistant') {
           return (
             <AgentTurn key={key}>
-              {/* Who is speaking, in the machine voice, beside the tile that says the
-                  same thing without words. Both are kept: the label is what a screen
-                  reader reads, the tile is what the eye finds after a scroll. */}
-              <span className={styles.who}>Firment</span>
               {!!m.tool_calls?.length && <CallList calls={m.tool_calls} onAction={onAction} onOpenChanges={onOpenChanges} />}
               {m.content && <Markdown>{m.content}</Markdown>}
             </AgentTurn>

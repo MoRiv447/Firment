@@ -3,7 +3,7 @@ import { ArrowDown, Bot, Brain, Send, Square } from 'lucide-react';
 
 import { LiveRun } from '../components/LiveRun';
 import { Markdown } from '../components/Markdown';
-import { MessageList } from '../components/MessageList';
+import { AgentTurn, MessageList } from '../components/MessageList';
 import { StepProgress } from '../components/StepProgress';
 import { TurnVerdict } from '../components/TurnVerdict';
 import { formatDuration } from '../lib/format';
@@ -304,6 +304,8 @@ export function ChatView({
                 {notice.description}
               </Callout>
             )}
+            {turn && (
+              <AgentTurn>
             {steps && <StepProgress steps={steps} />}
             <LiveRun
               tools={toolList}
@@ -339,6 +341,8 @@ export function ChatView({
                 now={nowMs}
                 turnStartedAt={turn.startedAt}
               />
+            )}
+              </AgentTurn>
             )}
           </>
         ) : (
@@ -423,10 +427,11 @@ export function ChatView({
                   thinking · {session.thinking}
                 </button>
               </span>
+              <span className={styles.hint}>Enter to send, Shift+Enter for a new line</span>
               {running ? (
                 <IconButton
                   tier="danger"
-                  size="sm"
+                  size="md"
                   icon={Square}
                   label="Stop this turn"
                   onClick={onCancel}
@@ -450,7 +455,7 @@ export function ChatView({
                  * state is kept where it means something real: `SerialView` disables
                  * Start while the port is not open.
                  */
-                <IconButton tier="primary" size="sm" icon={Send} label="Send" onClick={send} />
+                <IconButton tier="primary" size="md" icon={Send} label="Send" onClick={send} />
               )}
             </div>
             <Menu

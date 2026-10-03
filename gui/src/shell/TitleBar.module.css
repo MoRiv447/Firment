@@ -49,6 +49,11 @@
 .project {
   max-width: 420px;
   min-width: 0;
+  /* A chip, not bare text: the bar carries three scopes (brand, project, session) and the
+     middle one is the only thing with a frame, so it can be found without reading. */
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
   overflow: hidden;
   color: var(--dim);
   font-family: var(--ff-mono);
