@@ -759,14 +759,32 @@ impl Drop for ProbeLease {
 ///
 /// `list`, `info` and `hardware` read a scan rather than a target, so they are not leased.
 /// Anything that writes to, runs on, or attaches to the chip is.
-fn exclusive_probe_subcommand(args: &[String]) -> Option<&'static str> {
-    match args.first().map(String::as_str) {
+///
+/// Asked of the program and its first argument rather than of a `Vec<String>` the caller has to
+/// already hold, because the decision belongs at the spawn: it used to sit in the two
+/// `run_probe_rs*` wrappers, and `run` streamed straight past them into `run_streaming` with an
+/// exclusive subcommand and no lease -- so the tool that flashes AND runs was the one tool that
+/// could start on top of a flash in progress.
+fn probe_activity(program: &str, first: Option<&std::ffi::OsStr>) -> Option<&'static str> {
+    if program != "probe-rs" {
+        return None;
+    }
+    match first.and_then(std::ffi::OsStr::to_str) {
         Some("download") => Some("a flash"),
         Some("run") => Some("a run"),
         Some("reset") => Some("a target reset"),
         Some("attach") | Some("debug") => Some("a debug session"),
         Some("profile") | Some("gdb-server") => Some("a profiling session"),
         _ => None,
+    }
+}
+
+/// Take the lease a spawn needs, or say who holds it. `None` when the call may run concurrently.
+/// The holder is returned, not held here: it has to outlive the child, which is the caller's stack.
+fn probe_lease(program: &str, first: Option<&str>) -> Result<Option<ProbeLease>, String> {
+    match probe_activity(program, first.map(std::ffi::OsStr::new)) {
+        Some(what) => ProbeLease::acquire(what).map(Some),
+        None => Ok(None),
     }
 }
 
@@ -786,9 +804,6 @@ pub(crate) async fn run_probe_rs(
     cancel: Option<Cancellable>,
     envs: &[(String, String)],
 ) -> Result<(String, Option<i32>), String> {
-    let _lease = exclusive_probe_subcommand(&args)
-        .map(ProbeLease::acquire)
-        .transpose()?;
     run_argv("probe-rs", args, cwd, timeout_ms, cancel, envs, None).await
 }
 
@@ -805,9 +820,6 @@ pub(crate) async fn run_probe_rs_watching(
     envs: &[(String, String)],
     on_line: Option<LineObserver>,
 ) -> Result<(String, Option<i32>), String> {
-    let _lease = exclusive_probe_subcommand(&args)
-        .map(ProbeLease::acquire)
-        .transpose()?;
     run_argv("probe-rs", args, cwd, timeout_ms, cancel, envs, on_line).await
 }
 
@@ -825,6 +837,9 @@ pub(crate) async fn run_argv(
     envs: &[(String, String)],
     on_line: Option<LineObserver>,
 ) -> Result<(String, Option<i32>), String> {
+    // The lease is taken here, at the spawn, rather than by whichever wrapper happens to know
+    // about it: `let _lease` has to outlive the child, so it lives on this stack frame.
+    let _lease = probe_lease(program, args.first().map(String::as_str))?;
     let mut cmd = Command::new(program);
     cmd.args(&args)
         .current_dir(cwd)
@@ -933,6 +948,9 @@ pub(crate) async fn run_streaming(
     timeout_ms: u64,
     cancel: &Cancellable,
 ) -> Result<(String, Option<i32>, End), String> {
+    // Same rule as `run_argv`: whatever names a program here asks the probe first. This is the
+    // path the `run` tool takes, and it used to reach the chip with no lease at all.
+    let _lease = probe_lease(program, args.first().and_then(|arg| arg.to_str()))?;
     let mut cmd = Command::new(program);
     cmd.args(args);
     #[cfg(windows)]
@@ -1557,7 +1575,9 @@ mod tests {
 
     #[test]
     fn only_the_subcommands_that_touch_a_target_take_the_probe() {
-        let cmd = |name: &str| vec![name.to_string(), "--chip".to_string()];
+        use std::ffi::OsStr;
+        let activity =
+            |program: &str, name: &str| probe_activity(program, Some(OsStr::new(name))).is_some();
         for name in [
             "download",
             "run",
@@ -1568,17 +1588,81 @@ mod tests {
             "gdb-server",
         ] {
             assert!(
-                exclusive_probe_subcommand(&cmd(name)).is_some(),
+                activity("probe-rs", name),
                 "{name} writes to, runs on, or attaches to the chip"
             );
         }
         for name in ["list", "info", "hardware", "self-update"] {
             assert!(
-                exclusive_probe_subcommand(&cmd(name)).is_none(),
+                !activity("probe-rs", name),
                 "{name} reads a scan rather than a target"
             );
         }
-        assert!(exclusive_probe_subcommand(&[]).is_none());
+        assert!(probe_activity("probe-rs", None).is_none());
+        // The other program that runs through the same spawn function: a logic analyser is not
+        // the debug probe, and leasing it would refuse a capture next to a flash for no reason.
+        for name in ["--version", "capture", "analyze"] {
+            assert!(
+                !activity("sigrok-cli", name),
+                "sigrok-cli is not the probe: {name}"
+            );
+        }
+    }
+
+    /// Every place this crate names `probe-rs` as a program to run, stated with why it may.
+    ///
+    /// A direct `Command::new` of the probe reaches the chip without ever asking the lease, which
+    /// is how a second concurrent spawn would re-open this hole after the fix. There are exactly
+    /// three such places today and all three read `--version` to answer "is probe-rs installed" --
+    /// a scan, not a target. Anything added here has to say which of those it is. (The pattern is
+    /// spelled out below rather than in this comment: the scan reads this file, prose included,
+    /// and it caught its own description on the first run.)
+    #[test]
+    fn no_site_spawns_probe_rs_outside_the_leased_functions() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut direct: Vec<String> = Vec::new();
+        let mut leased: Vec<String> = Vec::new();
+        let mut stack = vec![root];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("the crate's own src is readable") {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(std::ffi::OsStr::to_str) != Some("rs") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).unwrap();
+                let lines: Vec<&str> = text.lines().collect();
+                for (number, line) in lines.iter().enumerate() {
+                    let where_ = format!("{}:{}", path.display(), number + 1);
+                    if line.contains("Command::new(\"probe-rs\")") {
+                        // A version probe may spawn it directly: it reads whether the binary is
+                        // installed, which is a scan and not a target. The `.arg("--version")`
+                        // sits on the following line in rustfmt's layout, so the lookahead is
+                        // three lines rather than this one.
+                        let ahead = lines[number..(number + 3).min(lines.len())].join(" ");
+                        if ahead.contains("\"--version\"") {
+                            continue;
+                        }
+                        direct.push(where_);
+                    } else if line.contains("run_argv(\"probe-rs\"")
+                        || line.contains("run_streaming(\"probe-rs\"")
+                    {
+                        leased.push(where_);
+                    }
+                }
+            }
+        }
+        assert!(
+            direct.is_empty(),
+            "these spawn probe-rs without passing the lease: {direct:?}"
+        );
+        assert!(
+            leased.len() >= 3,
+            "expected the leased spawn sites to still be found; saw {leased:?}"
+        );
     }
 
     #[tokio::test]
@@ -1597,6 +1681,26 @@ mod tests {
         .expect_err("the probe is held");
         assert!(err.starts_with("[Busy]"), "{err}");
         assert!(err.contains("a flash"), "{err}");
+
+        // The other way onto the chip: the `run` tool streams, and streaming went through
+        // `run_streaming`, which was not one of the two wrappers that knew about the lease. Before
+        // the fix this call reached the spawn (probe-rs installed or not) and answered with a
+        // spawn or chip-lookup failure instead of the holder's name.
+        let streamed = run_streaming(
+            "probe-rs",
+            &[
+                std::ffi::OsString::from("run"),
+                std::ffi::OsString::from("--chip"),
+                std::ffi::OsString::from("nonexistent-chip"),
+            ],
+            std::path::Path::new("."),
+            1_000,
+            &firment_core::Cancellable::new(),
+        )
+        .await
+        .expect_err("`run` holds the probe too, so a second holder must be refused");
+        assert!(streamed.starts_with("[Busy]"), "{streamed}");
+
         drop(lease);
         ProbeLease::acquire("a flash")
             .expect("the lease is given back by Drop, not by the call finishing well");
