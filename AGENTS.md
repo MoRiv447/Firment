@@ -391,6 +391,16 @@ two variables above are the whole available route.
   tests stayed green. `Agent::run_turn` now guarantees the pair on every `Err` it returns
   (a panic is still the caller's to close). When a rule has to be remembered at several call
   sites, move it to the place that cannot be skipped and delete the reminders.
+- **A stored message holds what was said; anything added for the request goes in `build_request`.**
+  The compaction digest used to be spliced into the first surviving `User` message, so that
+  Anthropic alternation had one turn to reject instead of two, and that made the transcript carry
+  bookkeeping: `retry_last` resent the digest as though the user had typed it, their own bubble
+  showed a summary of their earlier conversation, and every later compaction prepended another
+  digest to the same message. `Session::compaction_digest` plus `build_request` is the pair now,
+  which is the route the change-ledger delta already took. The rule is about the *stored* file
+  rather than the request because `SessionStore::load` merges consecutive user messages on purpose:
+  an injection that lives in the transcript cannot afterwards be told apart from what the user
+  typed, and `message_size` charges it against the context budget forever.
 - **A regression test has to fail before the fix, and on this machine the proof cannot
   always be run.** Re-inserting a just-fixed bug to show the test catches it is refused
   by the sandbox's command classifier, which reads the edit as an unauthorised

@@ -73,6 +73,17 @@ pub struct Session {
     /// session-scoped. Persisted, so a reopened session resumes its own numbering
     /// instead of reissuing numbers the journal has already recorded.
     pub tool_seq: u64,
+    /// What compaction kept of the messages it removed, injected into the request rather than into
+    /// the transcript.
+    ///
+    /// A session field and not a `ChatMessage` for the same reason the change ledger is one: a
+    /// stored message has to stay the user's own words. Merged into the first surviving User message
+    /// when the compaction ran, the digest travelled with `retry_last` (which resends exactly that
+    /// message), showed up inside the user's bubble, and was prepended again by the next compaction
+    /// -- so a long session accumulated digests of digests inside what looks like a question.
+    /// `build_request` folds it into the first user message on the way out, where role alternation is
+    /// already enforced and where the ledger prefix already goes.
+    pub compaction_digest: Option<String>,
 }
 
 impl Session {
@@ -93,6 +104,7 @@ impl Session {
             messages: Vec::new(),
             title: None,
             tool_seq: 0,
+            compaction_digest: None,
         }
     }
 
@@ -376,6 +388,11 @@ struct MetaLine {
     /// increasing rather than guessing at it.
     #[serde(default)]
     tool_seq: u64,
+    /// See `Session::compaction_digest`. `default` keeps every transcript written before it
+    /// loadable, which is also what makes the fix testable: an old session that already carries a
+    /// digest inside a user message loads unchanged.
+    #[serde(default)]
+    compaction_digest: Option<String>,
     created_at: u64,
     updated_at: u64,
 }
@@ -551,6 +568,7 @@ impl SessionStore {
             messages,
             title: meta.title,
             tool_seq: meta.tool_seq,
+            compaction_digest: meta.compaction_digest,
         };
         if model != meta.model {
             // deepseek-chat / deepseek-reasoner were deprecated on 2026-07-24;
@@ -826,6 +844,7 @@ fn serialize_session(session: &Session) -> Result<String, SessionError> {
         parent_session: session.parent_session.clone(),
         session_kind: session.kind,
         tool_seq: session.tool_seq,
+        compaction_digest: session.compaction_digest.clone(),
         created_at: session.created_at,
         updated_at: session.updated_at,
     };
@@ -1134,6 +1153,57 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_compaction_digest_survives_a_save_and_a_load() {
+        // The digest is sent on every request, so a field that did not persist would quietly
+        // truncate the conversation at the next reopen: the summarized rounds are gone from the
+        // transcript, and this string is all that stands for them.
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().join("sessions"));
+        let mut session = Session::new(dir.path().to_path_buf(), "p", "m");
+        session.push(user_msg("the question as typed"));
+        session.compaction_digest = Some(
+            "[compacted context] summary:
+six earlier rounds"
+                .into(),
+        );
+        store.save(&session).unwrap();
+
+        let back = store.load(&session.id).unwrap();
+        assert_eq!(
+            back.compaction_digest.as_deref(),
+            Some(
+                "[compacted context] summary:
+six earlier rounds"
+            )
+        );
+        assert_eq!(
+            back.messages.len(),
+            1,
+            "the digest must not have become a message of its own on the way round"
+        );
+        match &back.messages[0] {
+            ChatMessage::User { content } => assert_eq!(content, "the question as typed"),
+            other => panic!("expected the user turn back, got {other:?}"),
+        }
+
+        // A transcript written before the field existed loads, and reports nothing digested: that
+        // is every session on disk today.
+        let path = store.path_for(&session.id);
+        let text = std::fs::read_to_string(&path).expect("the transcript file");
+        let stripped = text.replace("compaction_digest", "field_from_a_future_version");
+        assert_ne!(
+            stripped, text,
+            "the saved meta line carries no digest field to remove"
+        );
+        std::fs::write(&path, stripped).unwrap();
+        let older = store.load(&session.id).unwrap();
+        assert!(
+            older.compaction_digest.is_none(),
+            "an old file gained a digest"
+        );
+        assert_eq!(older.messages.len(), 1);
+    }
     fn user_msg(text: &str) -> ChatMessage {
         ChatMessage::User {
             content: text.to_string(),

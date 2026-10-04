@@ -1536,14 +1536,23 @@ async fn model_based_compaction_uses_provider_summary() {
     agent.set_context_budget_chars(1000);
 
     let _ = agent.run_turn("final").await.unwrap();
-    let first = &agent.session().messages[0];
-    match first {
-        ChatMessage::User { content } => {
-            assert!(content.contains("MODEL SUMMARY CONTENT"), "got: {content}");
-            assert!(content.contains("[compacted context]"), "got: {content}");
-        }
-        _ => panic!("expected a compaction summary message"),
-    }
+    let digest = agent
+        .session()
+        .compaction_digest
+        .clone()
+        .expect("the provider's summary has to survive the compaction");
+    assert!(
+        digest.contains("MODEL SUMMARY CONTENT"),
+        "the summarising call was made and its answer thrown away: {digest}"
+    );
+    assert!(digest.contains("[compacted context]"), "got: {digest}");
+    assert!(
+        agent.session().messages.iter().all(|m| match m {
+            ChatMessage::User { content } => !content.contains("[compacted context]"),
+            _ => true,
+        }),
+        "the digest went back into a stored message, which is what it no longer is"
+    );
 }
 
 #[tokio::test]
@@ -1637,11 +1646,16 @@ async fn pinned_files_survive_compaction() {
 
     let _ = agent.run_turn("hi").await.unwrap();
     let messages = &agent.session().messages;
+    // The pins ride the compaction digest, which `build_request` folds into the first user turn;
+    // they are no longer spliced into a stored message, so the digest is where survival shows.
+    let digest = agent
+        .session()
+        .compaction_digest
+        .clone()
+        .unwrap_or_default();
     assert!(
-        messages
-            .iter()
-            .any(|m| matches!(m, ChatMessage::User { content } if content.contains("[pinned files") && content.contains("critical register map"))),
-        "pinned file must be re-injected, got first: {:?}",
+        digest.contains("[pinned files") && digest.contains("critical register map"),
+        "pinned file must be re-injected, got digest: {digest:?}, first message: {:?}",
         messages.first()
     );
 
@@ -1714,14 +1728,25 @@ async fn compaction_strategy_drop_discards_oldest_rounds() {
 
     let _ = agent.run_turn("hi").await.unwrap();
     let messages = &agent.session().messages;
+    let digest = agent
+        .session()
+        .compaction_digest
+        .clone()
+        .unwrap_or_default();
     assert!(
-        messages
-            .iter()
-            .any(|m| matches!(m, ChatMessage::User { content } if content.contains("per the 'drop' strategy"))),
-        "drop marker missing"
+        digest.contains("per the 'drop' strategy"),
+        "drop marker missing from the digest: {digest}"
     );
-    // summary merged into the first surviving user message + last 3 rounds verbatim
+    // The surviving rounds are verbatim and the count is what it always was: the summary was merged
+    // into the first of them before, and is session state now, so neither shape added a message.
     assert_eq!(messages.len(), 4, "got {} messages", messages.len());
+    assert!(
+        messages.iter().all(|m| match m {
+            ChatMessage::User { content } => !content.contains("per the 'drop' strategy"),
+            _ => true,
+        }),
+        "the drop note is in the digest now, not inside the user's message"
+    );
 }
 
 #[tokio::test]

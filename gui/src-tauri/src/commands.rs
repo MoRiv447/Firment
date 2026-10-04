@@ -600,7 +600,9 @@ pub async fn session_context_usage(
     let system_chars = firment_core::context::system_prompt_for(&session.cwd, session.mode)
         .chars()
         .count() as u64;
-    let messages_chars: u64 = session
+    // The compaction digest rides the transcript's number here as well: it is sent inside the first
+    // user turn on every request, so a reading that ignored it would shrink when the session grows.
+    let transcript_chars: u64 = session
         .messages
         .iter()
         .map(|m| match m {
@@ -610,6 +612,12 @@ pub async fn session_context_usage(
             | firment_core::types::ChatMessage::Tool { content, .. } => content.chars().count(),
         })
         .sum::<usize>() as u64;
+    let messages_chars = transcript_chars
+        + session
+            .compaction_digest
+            .as_ref()
+            .map(|digest| digest.chars().count() as u64)
+            .unwrap_or(0);
     let budget = if session.context_budget_chars > 0 {
         session.context_budget_chars as u64
     } else {

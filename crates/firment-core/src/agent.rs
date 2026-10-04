@@ -673,11 +673,22 @@ impl Agent {
             .map(|s| s.chars().count())
             .unwrap_or(0);
         let messages_chars: usize = self.session.messages.iter().map(message_size).sum();
-        let total = system_chars + tools_chars + messages_chars;
+        // The compaction digest is not a message any more, but it is still sent on every request, so
+        // leaving it out of this report would understate usage by exactly the part that grows when a
+        // long session compacts.
+        let digest_chars = self
+            .session
+            .compaction_digest
+            .as_ref()
+            .map(String::len)
+            .unwrap_or(0);
+        let total = system_chars + tools_chars + messages_chars + digest_chars;
         let budget = self.context_budget_chars.max(1);
         let pct = total as f64 * 100.0 / budget as f64;
         format!(
-            "context usage ({total} chars, {pct:.0}% of budget {budget}):\n  system prompt: {system_chars}\n  tool schemas:  {tools_chars}\n  messages:      {messages_chars}"
+            "context usage ({total} chars, {pct:.0}% of budget {budget}):\n  system prompt: \
+             {system_chars}\n  tool schemas:  {tools_chars}\n  messages:      {messages_chars}\n  \
+             compaction:    {digest_chars}"
         )
     }
 
@@ -1077,6 +1088,19 @@ impl Agent {
         // a branch can add another.
         let mut messages = self.session.messages.clone();
         crate::session::normalize_role_alternation(&mut messages);
+        // The compaction digest rides the first user message instead of being one of its own: an
+        // alternation-strict provider would see `[user, user]` where this sees one user turn, and the
+        // transcript keeps the user's words as the user wrote them. Applied after the merge above, so
+        // a digest that would have opened a consecutive pair sits inside the survivor rather than
+        // beside it.
+        if let Some(digest) = &self.session.compaction_digest
+            && let Some(first) = messages
+                .iter()
+                .position(|m| matches!(m, ChatMessage::User { .. }))
+            && let ChatMessage::User { content } = &mut messages[first]
+        {
+            *content = format!("{digest}\n\n{content}");
+        }
         if let Some(i) = messages
             .iter()
             .rposition(|m| matches!(m, ChatMessage::User { .. }))
@@ -1757,7 +1781,18 @@ impl Agent {
         const DIGEST_CHARS: usize = 6000;
         const ROUNDS_KEPT: usize = 3;
         const DROP_EXTRA_ROUNDS: usize = 5;
-        let total: usize = self.session.messages.iter().map(message_size).sum();
+        let total: usize = self
+            .session
+            .messages
+            .iter()
+            .map(message_size)
+            .sum::<usize>()
+            + self
+                .session
+                .compaction_digest
+                .as_ref()
+                .map(String::len)
+                .unwrap_or(0);
         if total <= self.context_budget_chars {
             return;
         }
@@ -1810,25 +1845,23 @@ impl Agent {
             }
             Ok(None) => {}
         }
-        let mut messages = Vec::with_capacity(self.session.messages.len() + 1);
-        let mut inserted = false;
-        for msg in self.session.messages.iter().cloned() {
-            if !inserted && matches!(msg, ChatMessage::User { .. }) {
-                let ChatMessage::User { content: old } = msg else {
-                    unreachable!()
-                };
-                messages.push(ChatMessage::User {
-                    content: format!("{}\n\n{old}", content),
-                });
-                inserted = true;
-            } else {
-                messages.push(msg);
+        // Stored as session state rather than spliced into the first surviving message, which is
+        // what this used to do: the digest then travelled with `retry_last`, showed up inside the
+        // user's own bubble, and was prepended again by the next compaction, so a long session ended
+        // up with digests of digests inside what looks like a question. `build_request` folds it into
+        // that message on the way out, where the ledger prefix already goes and where role
+        // alternation is already enforced.
+        let content = match self.session.compaction_digest.take() {
+            // A second compaction folds the first into itself: the messages that digest summarised
+            // have left the transcript, so this string is all that survives them. Capped on the way
+            // in, or every compaction would add another full digest to the front of the last.
+            Some(earlier) => {
+                let earlier: String = earlier.chars().take(DIGEST_CHARS).collect();
+                format!("{earlier}\n\n(later) {content}")
             }
-        }
-        if !inserted {
-            messages.insert(0, ChatMessage::User { content });
-        }
-        self.session.messages = messages;
+            None => content,
+        };
+        self.session.compaction_digest = Some(content);
     }
 
     /// Pinned files re-injected with full content after compaction.
@@ -2668,10 +2701,17 @@ fn round_cut_index(messages: &[ChatMessage]) -> Option<(usize, usize)> {
         .filter(|(_, m)| matches!(m, ChatMessage::User { .. }))
         .map(|(i, _)| i)
         .collect();
-    if round_starts.len() <= ROUNDS_TO_KEEP {
+    // Keep the newest three rounds when there are three to keep, and one less than that when there
+    // are not. A short session is not a small one: two prompts that each pulled a huge tool result
+    // are past the budget on their own, and answering "nothing to do" here left the agent resending
+    // all of it on every request with compaction nominally on. The floor is one round kept, because
+    // cutting at the first would summarise nothing; a session with a single round still has no head
+    // to remove and reports nothing to do.
+    let keep = ROUNDS_TO_KEEP.min(round_starts.len().saturating_sub(1));
+    if keep == 0 {
         return None;
     }
-    let keep_from = round_starts[round_starts.len() - ROUNDS_TO_KEEP];
+    let keep_from = round_starts[round_starts.len() - keep];
     if keep_from == 0 {
         None
     } else {
@@ -4056,5 +4096,148 @@ mod tests {
                 "{tag} means the workspace may be holding something wrong"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn compaction_leaves_the_users_own_words_alone() {
+        struct Silent;
+
+        #[async_trait::async_trait]
+        impl Provider for Silent {
+            async fn stream(&self, _request: ChatRequest) -> Result<ProviderStream, ProviderError> {
+                Ok(Box::pin(futures::stream::iter(vec![])))
+            }
+
+            fn model(&self) -> &str {
+                "silent"
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+        let mut session = Session::new(dir.path().to_path_buf(), "mock", "mock");
+        let ask = |t: &str| ChatMessage::User {
+            content: t.to_string(),
+        };
+        let answer = |t: &str| ChatMessage::Assistant {
+            content: t.to_string(),
+            tool_calls: Vec::new(),
+            thinking_blocks: Vec::new(),
+        };
+        session.push(ask("first question"));
+        session.push(answer(&"a ".repeat(400)));
+        session.push(ask("second question"));
+        session.push(answer(&"b ".repeat(400)));
+        session.push(ask("third question"));
+        session.push(answer("last answer"));
+        let mut agent = Agent::new(
+            Some(Box::new(Silent)),
+            Arc::new(ToolRegistry::new()),
+            session,
+            store,
+            Arc::new(AutoApprove::everything()),
+            Arc::new(crate::NullSink),
+            4,
+        );
+        agent.set_context_budget_chars(500);
+        agent.compact_if_needed().await;
+
+        let users: Vec<&str> = agent
+            .session
+            .messages
+            .iter()
+            .filter_map(|m| match m {
+                ChatMessage::User { content } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            users.iter().all(|u| !u.contains("compacted context")),
+            "the digest was spliced into a stored user message: {users:?}"
+        );
+        assert!(
+            users.contains(&"third question"),
+            "the newest round is untouched: {users:?}"
+        );
+        let digest = agent
+            .session
+            .compaction_digest
+            .as_ref()
+            .expect("what compaction removed has to be kept somewhere");
+        assert!(digest.contains("[compacted context]"), "{digest}");
+
+        // The request is where the digest rides now, so the model still gets it -- and as part of
+        // the user's turn, not as a second consecutive user turn, which is what the splice in the
+        // transcript existed to avoid.
+        let request = agent.build_request();
+        let sent: Vec<String> = request
+            .messages
+            .iter()
+            .filter_map(|m| match m {
+                ChatMessage::User { content } => Some(content.clone()),
+                _ => None,
+            })
+            .collect();
+        let stored_users = agent
+            .session
+            .messages
+            .iter()
+            .filter(|m| matches!(m, ChatMessage::User { .. }))
+            .count();
+        assert_eq!(
+            sent.len(),
+            stored_users,
+            "the digest rode as a user turn of its own instead of inside one: {sent:?}"
+        );
+        for pair in request.messages.windows(2) {
+            assert!(
+                !(matches!(pair[0], ChatMessage::User { .. })
+                    && matches!(pair[1], ChatMessage::User { .. })),
+                "two consecutive user turns is the 400 the splice existed to avoid: {sent:?}"
+            );
+        }
+        assert!(
+            sent[0].contains("[compacted context]") && sent[0].contains("second question"),
+            "the request has to carry both the summary and the surviving turns: {}",
+            sent[0]
+        );
+
+        // A second compaction folds the first into itself instead of dropping it, and the fold is
+        // capped rather than additive without end.
+        agent.session.push(ask("fourth question"));
+        agent.session.push(answer(&"c ".repeat(400)));
+        agent.compact_if_needed().await;
+        let folded = agent.session.compaction_digest.as_ref().unwrap();
+        assert!(
+            folded.contains("(later)"),
+            "the first digest was replaced, so everything it stood for is gone: {folded}"
+        );
+        assert!(
+            folded.chars().count() < 30_000,
+            "the fold grows without bound: {} chars after two compactions",
+            folded.chars().count()
+        );
+    }
+
+    #[test]
+    fn a_short_but_fat_session_still_has_a_cut() {
+        let ask = |t: &str| ChatMessage::User {
+            content: t.to_string(),
+        };
+        // Three rounds used to be the floor for any cut at all, whatever one round had pulled in.
+        let three = vec![ask("a"), ask("b"), ask("c")];
+        let (cut, rounds) = round_cut_index(&three).expect("three rounds have a head to cut");
+        assert_eq!(cut, 1, "keep the newest two, summarise the first");
+        assert_eq!(rounds, 3);
+
+        let two = vec![ask("a"), ask("b")];
+        let (cut, _) = round_cut_index(&two).expect("two huge rounds are still over budget");
+        assert_eq!(cut, 1, "the floor is one round kept, not three");
+
+        let one = vec![ask("a")];
+        assert!(
+            round_cut_index(&one).is_none(),
+            "a single round has nothing before it to summarise"
+        );
     }
 }
