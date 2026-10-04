@@ -30,12 +30,16 @@ pub(crate) struct PermissionRequest {
 pub(crate) struct TuiPermission {
     pub(crate) req_tx: mpsc::Sender<PermissionRequest>,
     pub(crate) always: Arc<Mutex<HashSet<String>>>,
+    /// `-y` on the command line. Checked at this one door rather than by growing `always` with
+    /// every tool name, because a name list is never as current as the registry it is meant to
+    /// cover — a plugin registered after the set was built would still ask.
+    pub(crate) yes: bool,
 }
 
 #[async_trait]
 impl PermissionChecker for TuiPermission {
     async fn confirm(&self, tool: &str, _args: &serde_json::Value, reason: &str) -> Approval {
-        if self.already_approved(tool) {
+        if self.yes || self.already_approved(tool) {
             // Nobody was asked this time, so this call has no waiting time — even
             // though the answer arrived as instantly as one that did.
             return Approval::auto(Ok(()));

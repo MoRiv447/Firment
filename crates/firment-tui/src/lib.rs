@@ -8,7 +8,7 @@ use crossterm::terminal::{
 };
 use firment_core::{
     AgentEvent, Asker, Config, PermissionChecker, PlanModePermission, QuestionRequest, Session,
-    SessionStore,
+    SessionStore, ToolVerbosity,
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -40,6 +40,19 @@ use device::Device;
 use motion::Motion;
 use util::{GitInfo, git_info};
 
+/// What the command line said about the session beyond the session itself.
+///
+/// Until now the answer was "nothing": `firm -y` and `firm -q` both started an interactive session
+/// in which neither flag applied, and the parser had no way to say so. One struct rather than two
+/// more positional arguments, because `run` already takes four and a sixth `bool` would be
+/// guessable at the call site.
+pub struct Launch {
+    /// `-y`: nothing asks, because the person at the terminal already said yes.
+    pub yes: bool,
+    /// `-q` / `-v`, when the command line named one. `None` keeps `[ui] tool_verbosity`.
+    pub verbosity: Option<ToolVerbosity>,
+}
+
 pub async fn run(
     config: Config,
     config_path: std::path::PathBuf,
@@ -47,14 +60,18 @@ pub async fn run(
     // `--no-anim`: turn animation off even on a capable terminal. The policy
     // itself is decided here, once, rather than re-read per frame.
     no_anim: bool,
+    launch: Launch,
 ) -> anyhow::Result<()> {
     // Keep the user-level config untouched so `/model` & co. only ever write
     // the user's own settings to the global file — project `.firment.toml`
     // overrides (build_command, default_chip, …) must not leak out of the
     // project's scope.
     let base_config = config;
-    // Read before `base_config` is moved into the agent assembly below.
-    let tool_verbosity = base_config.ui.tool_verbosity;
+    // Read before `base_config` is moved into the agent assembly below. The command line outranks
+    // the file, which is what the flag promises; `resolve_verbosity`'s "not a terminal, so one
+    // line" rule deliberately does NOT reach here, because this is the path that has a terminal.
+    let auto_yes = launch.yes;
+    let tool_verbosity = launch.verbosity.unwrap_or(base_config.ui.tool_verbosity);
     let config = base_config.clone().merged_for(&session.cwd);
     let store = SessionStore::default();
 
@@ -69,6 +86,7 @@ pub async fn run(
     let tui_permission: Arc<dyn PermissionChecker> = Arc::new(TuiPermission {
         req_tx: perm_tx,
         always: always.clone(),
+        yes: auto_yes,
     });
     let plan_permission: Arc<dyn PermissionChecker> =
         Arc::new(PlanModePermission::new(tui_permission.clone()));
@@ -103,6 +121,16 @@ pub async fn run(
         // invisible, and the settings it held are simply not in effect.
         for warning in &config.config_warnings {
             hints.push(format!("⚠ {warning}"));
+        }
+        // `-y` turns the approval card off, which is the one thing about this session the user
+        // cannot discover by trying it: nothing will ever be asked, so nothing shows what was
+        // skipped. Said once, on the same banner the provider and plugin failures use.
+        if auto_yes {
+            hints.push(
+                "-y given: every tool call is approved without asking for this session \
+                 (plan mode's read-only rules still apply)"
+                    .to_string(),
+            );
         }
         if hints.is_empty() {
             None
@@ -2989,6 +3017,53 @@ mod tests {
         assert!(
             !repeated,
             "a second verdict for the same failed turn: {tags:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_yes_flag_approves_at_the_door_that_decides() {
+        // `-y` was read by the one-shot arm alone, so `firm -y` that started an interactive session
+        // left every approval card in place and said nothing. The exemption lives in `TuiPermission`
+        // rather than in a name list seeded with every tool, because a plugin registered after that
+        // list was built would still have asked.
+        let (tx, mut rx) = mpsc::channel::<adapters::PermissionRequest>(4);
+        let yes = TuiPermission {
+            req_tx: tx,
+            always: Arc::new(Mutex::new(HashSet::new())),
+            yes: true,
+        };
+        let approval =
+            PermissionChecker::confirm(&yes, "shell", &serde_json::json!({}), "rm -rf build").await;
+        assert!(approval.decision.is_ok(), "-y has to approve");
+        assert!(
+            approval.asked.is_none(),
+            "nobody was asked, so no part of this call is human reading time"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "a card queued and answered in the same breath is a card the user never saw"
+        );
+
+        // The same door with the flag off, so the branch above is not a return-Ok that any test
+        // would pass: the request has to reach the UI, and closing the UI has to deny rather than
+        // hang.
+        let (tx, mut rx) = mpsc::channel::<adapters::PermissionRequest>(4);
+        let asked = TuiPermission {
+            req_tx: tx,
+            always: Arc::new(Mutex::new(HashSet::new())),
+            yes: false,
+        };
+        let task = tokio::spawn(async move {
+            PermissionChecker::confirm(&asked, "shell", &serde_json::json!({}), "rm -rf build")
+                .await
+        });
+        let req = rx.recv().await.expect("the popup is the decision point");
+        assert_eq!(req.tool, "shell");
+        drop(req.reply);
+        let outcome = task.await.unwrap();
+        assert!(
+            outcome.decision.is_err(),
+            "a dismissed card is a refusal, not an approval"
         );
     }
 }

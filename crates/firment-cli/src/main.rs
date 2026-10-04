@@ -732,20 +732,7 @@ async fn main() -> anyhow::Result<()> {
         } else {
             id.clone()
         };
-        let mut session = store.load(&id)?;
-        if cli.cwd.is_some() {
-            session.cwd = cwd;
-        }
-        if cli.plan {
-            session.mode = SessionMode::Plan;
-        }
-        if let Some(model) = &cli.model {
-            session.model = model.clone();
-        }
-        if let Some(thinking) = cli.thinking {
-            session.thinking = thinking;
-        }
-        session
+        apply_resume_overrides(store.load(&id)?, &cli, &config, cwd)
     } else {
         let provider = cli
             .provider
@@ -779,9 +766,74 @@ async fn main() -> anyhow::Result<()> {
         )
         .await?;
     } else {
-        firment_tui::run(config, config_path, session, cli.no_anim).await?;
+        firment_tui::run(
+            config,
+            config_path,
+            session,
+            cli.no_anim,
+            firment_tui::Launch {
+                yes: cli.yes,
+                verbosity: cli_verbosity(&cli),
+            },
+        )
+        .await?;
     }
     Ok(())
+}
+
+/// What the command line says about a session that already exists on disk.
+///
+/// Its own function so the list is something a test can count. The overrides used to be written
+/// inline one at a time — cwd, plan, model, thinking — and `--provider` was never added to them, so
+/// `firm -c <id> --provider anthropic` resumed on the provider the transcript was written with and
+/// said nothing about it. The same shape as the fresh-session branch below, and the two have to
+/// agree about what a provider implies for a model.
+fn apply_resume_overrides(
+    mut session: Session,
+    cli: &Cli,
+    config: &Config,
+    cwd: PathBuf,
+) -> Session {
+    if cli.cwd.is_some() {
+        session.cwd = cwd;
+    }
+    if cli.plan {
+        session.mode = SessionMode::Plan;
+    }
+    if let Some(provider) = &cli.provider {
+        session.provider = provider.clone();
+        // The model travels with the provider unless this command line named one. A resumed
+        // session carries the old provider's model name, and pairing it with the new provider is a
+        // request that cannot be answered; a fresh session derives its model the same way.
+        if cli.model.is_none()
+            && let Ok(p) = config.provider(Some(provider))
+        {
+            session.model = p.model.clone();
+        }
+    }
+    if let Some(model) = &cli.model {
+        session.model = model.clone();
+    }
+    if let Some(thinking) = cli.thinking {
+        session.thinking = thinking;
+    }
+    session
+}
+
+/// `-q` / `-v` as the interactive session should hear them: `None` unless this command line named
+/// one, so `[ui] tool_verbosity` from the file still wins when it did not.
+///
+/// Not `resolve_verbosity`: its first rule is "stdout is not a terminal, so one line per call", and
+/// the TUI only runs where there IS a terminal. Reusing it would also spend the one-shot answer on
+/// a surface that renders panels rather than prints.
+fn cli_verbosity(cli: &Cli) -> Option<ToolVerbosity> {
+    if cli.quiet {
+        Some(ToolVerbosity::Summary)
+    } else if cli.verbose {
+        Some(ToolVerbosity::Expanded)
+    } else {
+        None
+    }
 }
 
 /// One-shot mode has no chat loop to fall back on, so the completion-gate
@@ -3279,5 +3331,166 @@ mod tests {
         assert_eq!(short_id("0f3a9b2c-1111-2222"), "0f3a9b2c");
         assert_eq!(short_id("abc"), "abc");
         assert_eq!(short_id(""), "");
+    }
+
+    #[test]
+    fn resuming_onto_another_provider_takes_its_model_with_it() {
+        // `firm -c <id> --provider anthropic` applied cwd, plan, model and thinking to the resumed
+        // session and left the provider alone: the transcript kept deciding which endpoint the run
+        // went to, and the flag naming another one reported nothing.
+        let config = {
+            let mut c = Config::default_config();
+            for (name, model) in [
+                ("deepseek", "deepseek-chat"),
+                ("anthropic", "claude-sonnet-4"),
+            ] {
+                c.providers.insert(
+                    name.to_string(),
+                    firment_core::ProviderConfig {
+                        r#type: name.to_string(),
+                        base_url: None,
+                        api_key_env: None,
+                        api_key: None,
+                        model: model.to_string(),
+                        max_tokens: None,
+                        temperature: None,
+                    },
+                );
+            }
+            c
+        };
+        let held = || Session::new(PathBuf::from("/old"), "deepseek", "deepseek-chat");
+
+        let cli = Cli::parse_from(["firm", "--continue", "abc", "--provider", "anthropic"]);
+        let got = apply_resume_overrides(held(), &cli, &config, PathBuf::from("/new"));
+        assert_eq!(got.provider, "anthropic", "the flag names the endpoint");
+        assert_eq!(
+            got.model, "claude-sonnet-4",
+            "the old provider's model name cannot be answered by the new one"
+        );
+        // A resumed session keeps the directory it was recorded in unless this command line names
+        // one: `-c latest` from another checkout must not move a session's transcript sideways.
+        assert_eq!(got.cwd, PathBuf::from("/old"), "no --cwd given");
+        let cli = Cli::parse_from([
+            "firm",
+            "--continue",
+            "abc",
+            "--provider",
+            "anthropic",
+            "--cwd",
+            "/new",
+        ]);
+        let got = apply_resume_overrides(held(), &cli, &config, PathBuf::from("/new"));
+        assert_eq!(
+            got.cwd,
+            PathBuf::from("/new"),
+            "and --cwd is honoured when given"
+        );
+
+        // The other direction in the same run: an explicit --model is the user's own words and
+        // beats the derivation, which is what the fresh-session branch does too.
+        let cli = Cli::parse_from([
+            "firm",
+            "--continue",
+            "abc",
+            "--provider",
+            "anthropic",
+            "--model",
+            "mine",
+        ]);
+        let got = apply_resume_overrides(held(), &cli, &config, PathBuf::from("/new"));
+        assert_eq!(got.model, "mine");
+    }
+
+    #[test]
+    fn the_verbosity_flags_answer_for_the_interactive_session_too() {
+        assert_eq!(
+            cli_verbosity(&Cli::parse_from(["firm", "--quiet"])),
+            Some(ToolVerbosity::Summary)
+        );
+        assert_eq!(
+            cli_verbosity(&Cli::parse_from(["firm", "--verbose"])),
+            Some(ToolVerbosity::Expanded)
+        );
+        assert_eq!(
+            cli_verbosity(&Cli::parse_from(["firm"])),
+            None,
+            "neither flag leaves [ui] tool_verbosity in charge"
+        );
+        assert!(
+            Cli::try_parse_from(["firm", "-q", "-v"]).is_err(),
+            "the two contradict each other and the parser has to say so"
+        );
+    }
+
+    /// The class this finding belongs to: a flag that changes one way to run and not the other.
+    /// Per-instance tests above check `-y` today; this is the one that notices tomorrow.
+    #[test]
+    fn a_flag_that_changes_a_run_reaches_both_ways_or_is_exempted_by_name() {
+        // The checkout can hold either line ending, so the anchors below are written against a
+        // normalised copy rather than a guess about which one this machine checked out.
+        let nl = char::from(10u8);
+        let raw = include_str!("main.rs");
+        let source: String = raw.chars().filter(|c| *c != char::from(13u8)).collect();
+        let call = |anchor: &str| -> String {
+            let start = source
+                .find(anchor)
+                .unwrap_or_else(|| panic!("`{anchor}` is gone from main.rs"));
+            let end = source[start..]
+                .find(".await?;")
+                .unwrap_or_else(|| panic!("`{anchor}` is no longer a call this test can read"));
+            source[start..start + end].to_string()
+        };
+        let once = call(&format!("run_once({nl}            &config,"));
+        let tui = call(&format!("firment_tui::run({nl}            config,"));
+
+        // Read by exactly one of the two arms, with the reason it stays that way.
+        const ONE_SIDE: [&str; 2] = [
+            // The hard guard exists for a run with nobody in front of it; the TUI's own comment
+            // says the popup is where the decision happens there.
+            "allow_dangerous",
+            // A rendering knob; the one-shot path prints no frames to skip.
+            "no_anim",
+        ];
+        let names = |text: &str| -> Vec<String> {
+            let mut out: Vec<String> = Vec::new();
+            let mut at = 0usize;
+            while let Some(found) = text[at..].find("cli.") {
+                let from = at + found + 4;
+                let ident: String = text[from..]
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                if !ident.is_empty() && !out.contains(&ident) {
+                    out.push(ident);
+                }
+                at = from;
+            }
+            out
+        };
+        let (a, b) = (names(&once), names(&tui));
+        assert!(
+            !a.is_empty() && !b.is_empty(),
+            "the scrape found no `cli.` reads on the two calls, so it cannot be wrong about any"
+        );
+        assert!(
+            a.contains(&"yes".to_string()) && b.contains(&"yes".to_string()),
+            "-y is back to reaching one arm only: one-shot {a:?}, interactive {b:?}"
+        );
+        for name in a
+            .iter()
+            .filter(|n| !b.contains(n))
+            .chain(b.iter().filter(|n| !a.contains(n)))
+        {
+            assert!(
+                ONE_SIDE.contains(&name.as_str()),
+                "`cli.{name}` is read by one way to run and not the other, and is not in the \
+                 exempted list with a reason"
+            );
+        }
+        assert!(
+            once.contains("verbosity") && tui.contains("verbosity"),
+            "the verbosity answer has to reach both arms: {once:?} / {tui:?}"
+        );
     }
 }
