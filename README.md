@@ -78,7 +78,7 @@ Firment separates responsibilities instead of treating the model as a shell scri
 - **Engineering-grade system prompt**: communication, engineering principles, tool policy, verification, and safety sections, plus `AGENTS.md` / `FIRMENT.md` project instructions
 - **Session management**: JSONL persistence, `--continue`, `--list`, interactive `/sessions` picker, change-ledger + `/undo`
 - **Copy support**: left-drag select, right-click copy, `Ctrl+Shift+C` copies the last reply
-- **Global install**: `firm install` adds PATH + completions; `firm update` self-updates
+- **Global install**: `firm install` adds PATH + completions; `firm update` re-installs the binary you are already running
 
 ### Embedded toolchain
 
@@ -241,9 +241,9 @@ Project-scoped config (`.firment/config.toml` in a repo) is merged on top; the m
 firm            start a new session
 firm --continue resume the last session
 firm --plan     read-only plan mode
-firm /sessions  interactive session picker
+firm --list     list saved sessions (the picker itself is /sessions, typed in the TUI)
 firm install    add to PATH + completions
-firm update     self-update
+firm update     copy the running binary into the install dir and verify it
 firm config     interactively pick a provider from the neutral catalog (endpoints + key, writes config.toml)
 firm build      run the configured build command
 firm flash      flash a firmware ELF via probe-rs

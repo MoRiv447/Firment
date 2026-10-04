@@ -327,6 +327,26 @@ enum Command {
     },
 }
 
+/// What `firm doctor`'s two flags owe the caller, decided once.
+///
+/// `--json` is a promise about stdout — its own help line says "machine-readable toolchain
+/// report on stdout" — and the SBC stage prints prose with per-stage fix hints that no field of
+/// that report holds. Running both would put prose in the machine channel, for a caller that
+/// parses it; skipping the board would drop a stage the caller named by word. Neither is a
+/// choice the flag parser can make, so the pair is refused here and the refusal says which form
+/// gives which half. If the board stage ever grows structured output, this function is the one
+/// to delete and both `doctor` arms are the places to update.
+fn doctor_formats(sbc: bool, json: bool) -> anyhow::Result<()> {
+    if sbc && json {
+        anyhow::bail!(
+            "`doctor --json` reports the toolchain only, and the SBC data-plane checks print \
+             prose: run `firm doctor --sbc` for the board, or `firm doctor --json` for the \
+             machine-readable report"
+        );
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -483,6 +503,7 @@ async fn main() -> anyhow::Result<()> {
                 run_board(action.as_deref().unwrap_or("list"), name.as_deref(), &path)?;
             }
             Command::Doctor { sbc, json } => {
+                doctor_formats(*sbc, *json)?;
                 let cwd = cli
                     .cwd
                     .clone()
@@ -671,6 +692,14 @@ async fn main() -> anyhow::Result<()> {
         // truths about one checkout.
         let cwd = cli.cwd.clone().unwrap_or(env::current_dir()?);
         let config = config.merged_for(&cwd);
+        // The verdict comes after every stage the caller asked for, which is the order the
+        // subcommand form already had and this one did not. Taken inside the `--doctor` half,
+        // as it used to be, `firm --doctor --sbc` on a machine missing a required tool printed
+        // its exit-2 and never reached the board stage the same command line had named: the
+        // one reader who wants to know whether the SBC still answers is the one whose toolchain
+        // just failed, so the form degraded worst exactly when it mattered. `every_doctor_entry_
+        // probes_the_board_before_it_exits` holds the two copies to one order.
+        let mut missing: Option<String> = None;
         if cli.doctor {
             let probes = doctor::doctor(&config, &config_path).await?;
             doctor::doctor_install();
@@ -680,13 +709,14 @@ async fn main() -> anyhow::Result<()> {
                 "\n{}",
                 doctor::capabilities(&probes, &locals, &config).await
             );
-            if let Some(missing) = doctor::first_required_missing(&checks) {
-                eprintln!("\n✗ required tool missing: {missing}");
-                std::process::exit(2);
-            }
+            missing = doctor::first_required_missing(&checks);
         }
         if cli.sbc {
             doctor::doctor_sbc(&config).await;
+        }
+        if let Some(missing) = missing {
+            eprintln!("\n✗ required tool missing: {missing}");
+            std::process::exit(2);
         }
         return Ok(());
     }
@@ -2594,6 +2624,178 @@ mod tests {
             action.contains("grep -c '^# Review:\\|^Not run:'"),
             "the step refuses to report a count it could not read"
         );
+    }
+
+    /// Both `doctor` entry points are one sequence written twice, and the copies drifted.
+    ///
+    /// The flag form took its missing-tool verdict — `process::exit(2)` and all — *before*
+    /// reaching the SBC stage the same command line had asked for. So the reader whose
+    /// toolchain is broken, who is the one person wanting to know whether the board still
+    /// answers, got a status code and nothing about the board. No build and no unit test can
+    /// see that from a distance, so the order is asserted over the source that states it.
+    #[test]
+    fn every_doctor_entry_probes_the_board_before_it_exits() {
+        let source = include_str!("main.rs");
+        // Braces inside this file's strings and format args are balanced, which is what makes
+        // a plain scan honest here; a block that does not close is reported rather than guessed.
+        fn block_span(source: &str, open_brace: usize) -> usize {
+            let bytes = source.as_bytes();
+            let mut depth = 0;
+            let mut at = open_brace;
+            while at < bytes.len() {
+                if bytes[at] == b'{' {
+                    depth += 1;
+                } else if bytes[at] == b'}' {
+                    depth -= 1;
+                    if depth == 0 {
+                        return at + 1 - open_brace;
+                    }
+                }
+                at += 1;
+            }
+            panic!("the block opened at byte {open_brace} never closes");
+        }
+
+        let mut ordered = 0;
+        for anchor in [
+            "Command::Doctor { sbc, json } => {",
+            "if cli.doctor || cli.sbc {",
+        ] {
+            let start = source.find(anchor).unwrap_or_else(|| {
+                panic!(
+                    "the doctor entry `{anchor}` is gone or renamed. This test guards an order \
+                     that broke once between two copies; if the copies merged, point it at the one."
+                )
+            });
+            let open = start + anchor.len() - 1;
+            let block = &source[open..open + block_span(source, open)];
+            match (
+                block.find("doctor::doctor_sbc("),
+                block.find("process::exit("),
+            ) {
+                (Some(sbc), Some(exit)) => {
+                    ordered += 1;
+                    assert!(
+                        sbc < exit,
+                        "`{anchor}` exits before the board probe the same command line asked for",
+                    );
+                }
+                (Some(_), None) => panic!("`{anchor}` probes the board and never decides"),
+                (None, Some(_)) => panic!(
+                    "`{anchor}` decides a verdict with no board stage left to order; \
+                     if the probe moved, move this test with it"
+                ),
+                (None, None) => panic!("`{anchor}` does neither"),
+            }
+        }
+        assert_eq!(
+            ordered, 2,
+            "both entry points were expected to probe the board and to decide a verdict"
+        );
+    }
+
+    /// The README's CLI block is what a newcomer copies from, and it advertised a command that
+    /// has never existed: `firm /sessions` — a TUI slash command typed at a shell, which clap
+    /// refuses. The list of what exists is taken from the parser itself rather than from a
+    /// second list somebody has to keep current, so the document cannot drift from the binary
+    /// it documents without a test noticing.
+    ///
+    /// What it reads: the first word after `firm` on a line that starts with `firm` (the
+    /// command-reference block), plus any later word that is itself a long flag. Prose is not a
+    /// command form and is not read — "`firm update` self-updates" is a description, and a
+    /// description is not something this test can decide.
+    #[test]
+    fn the_readme_command_block_only_names_commands_that_exist() {
+        use clap::CommandFactory;
+        let command = Cli::command();
+        let subcommands: Vec<String> = command
+            .get_subcommands()
+            .map(|sub| sub.get_name().to_lowercase())
+            .collect();
+        let flags: Vec<String> = command
+            .get_arguments()
+            .filter_map(|arg| arg.get_long().map(|long| format!("--{long}")))
+            .collect();
+        assert!(
+            subcommands.len() > 10,
+            "the parser should expose its surface; found {} subcommands",
+            subcommands.len()
+        );
+
+        for (name, text) in [
+            ("README.md", include_str!("../../../README.md")),
+            ("README.zh-CN.md", include_str!("../../../README.zh-CN.md")),
+        ] {
+            let mut checked = 0;
+            for line in text.lines() {
+                let Some(after) = line.trim_start().strip_prefix("firm") else {
+                    continue;
+                };
+                // `firm` the program, not `firm` the prefix of a path: a line opening with
+                // `firment-core/` is prose about the crate, and reading `ent-core/` out of it
+                // as a subcommand is how this test first failed.
+                let Some(rest) = after.strip_prefix(char::is_whitespace) else {
+                    continue;
+                };
+                // The block is column-aligned: one space then the arguments, and the
+                // description padded to its own column. Two spaces after `firm` therefore mean
+                // the line documents the bare invocation, and what follows it is prose -- the
+                // shape that once made "start a new session" read as a subcommand named `start`.
+                if after.starts_with("  ") {
+                    continue;
+                }
+                let mut words = rest.split_whitespace();
+                let Some(first) = words.next() else {
+                    continue;
+                };
+                let tail: Vec<&str> = words.collect();
+                if first.starts_with('-') {
+                    assert!(
+                        flags.iter().any(|flag| flag == first),
+                        "{name} runs `firm {first}`, which this binary has no flag for"
+                    );
+                } else {
+                    assert!(
+                        subcommands.iter().any(|sub| sub == first),
+                        "{name} runs `firm {first}`, which is not a subcommand of this binary \
+                         (the TUI's slash commands are typed in the chat, not at the shell)"
+                    );
+                }
+                checked += 1;
+                for word in tail {
+                    if let Some(flag) = word.strip_prefix("--") {
+                        let flag = format!("--{flag}");
+                        assert!(
+                            flags.contains(&flag),
+                            "{name} passes `{flag}` on a line that also says `{first}`; \
+                             no such flag exists"
+                        );
+                    }
+                }
+            }
+            assert!(
+                checked >= 12,
+                "{name} was expected to document the command surface; found {checked} lines"
+            );
+        }
+    }
+
+    /// `firm doctor --json --sbc` used to mean "print the JSON report" and nothing more: the
+    /// board stage sits in the prose branch, so the flag was taken, dropped, and no output said
+    /// either way. Refusing is the only reading that keeps both help lines true at once.
+    #[test]
+    fn doctor_refuses_to_be_json_and_probe_the_board() {
+        // Neither flag on its own is the refusal, and neither is refused today.
+        assert!(doctor_formats(false, false).is_ok());
+        assert!(doctor_formats(true, false).is_ok());
+        assert!(doctor_formats(false, true).is_ok());
+
+        let refusal = doctor_formats(true, true).unwrap_err().to_string();
+        assert!(refusal.contains("--json"), "{refusal}");
+        assert!(refusal.contains("prose"), "{refusal}");
+        // A refusal nobody can act on is a shrug: it has to name the two forms that do work.
+        assert!(refusal.contains("firm doctor --sbc"), "{refusal}");
+        assert!(refusal.contains("firm doctor --json"), "{refusal}");
     }
 
     #[test]

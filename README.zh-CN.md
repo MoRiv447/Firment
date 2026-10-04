@@ -78,7 +78,7 @@ Firment 不把模型当 shell 脚本生成器，而是明确分工：
 - **工程级系统提示词**：沟通、工程原则、工具策略、验证、安全等分节，支持 `AGENTS.md` / `FIRMENT.md` 项目指令
 - **会话管理**：JSONL 持久化、`--continue`、`--list`、交互式 `/sessions` 选择器、变更台账 + `/undo`
 - **复制支持**：左键拖选、右键复制、`Ctrl+Shift+C` 复制最后一条回复
-- **全局安装**：`firm install` 加入 PATH + 补全；`firm update` 自更新
+- **全局安装**：`firm install` 加入 PATH + 补全；`firm update` 重新安装你正在运行的这个 binary
 
 ### 嵌入式工具链
 
@@ -236,9 +236,9 @@ elf = "build/fw.elf"                  # 自动建立 elf_analyze 基线
 firm           开始新会话
 firm --continue 恢复上次会话
 firm --plan    只读计划模式
-firm /sessions 交互式会话选择器
+firm --list 列出已保存的会话（选择器本身在 TUI 里，命令是 /sessions）
 firm install   加入 PATH + 补全
-firm update    自更新
+firm update    把正在运行的 binary 复制到安装目录并校验版本
 firm config    从内置中立目录交互式选择 provider（端点 + key，写入 config.toml）
 firm build     运行配置的构建命令
 firm flash     通过 probe-rs 烧录固件 ELF
