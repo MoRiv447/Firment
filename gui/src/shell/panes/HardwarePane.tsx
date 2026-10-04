@@ -57,7 +57,19 @@ export function HardwarePane({ monitorLines }: { monitorLines: Record<string, Mo
         )}
       </div>
       <div className={styles.body}>
-        {tab === 'serial' ? <SerialView lines={monitorLines} /> : <FlashView />}
+        {/* Both views stay mounted and the inactive one is hidden. This used to be a
+            ternary, so switching tabs unmounted the other view: the flash form (file, chip,
+            probe, timeout) and its permanent result panel went back to blank every time you
+            stepped over to the serial port and came back — which is precisely the trip you
+            make while a flash is running, to watch the port. `hidden` takes the DOM out
+            without unmounting, so the form state and FlashView's `onHardwareExit`
+            subscription both survive the switch. */}
+        <div hidden={tab !== 'serial'}>
+          <SerialView lines={monitorLines} />
+        </div>
+        <div hidden={tab !== 'flash'}>
+          <FlashView />
+        </div>
       </div>
     </div>
   );

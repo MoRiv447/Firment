@@ -447,6 +447,14 @@ export interface RunningTurn {
    * finished reply stays rendered (no blank flash) until `turn_synced`.
    */
   finished?: boolean;
+  /**
+   * The turn ended in an error, so its text carries a `⚠ …` line that exists
+   * nowhere else: the backend persists the transcript, not the failure notice.
+   * `turn_synced` therefore keeps a turn marked `errored` instead of dropping it
+   * -- dropping it was how a chat that failed while you were elsewhere showed a
+   * clean-looking transcript the moment you opened it to read the failure.
+   */
+  errored?: boolean;
 }
 
 export interface MonitorLine {

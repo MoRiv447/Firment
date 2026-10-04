@@ -530,6 +530,12 @@ export default function App() {
           // `progress`, `review` and `subagent_*` were when they shipped with a
           // working reducer and no caller.
           default:
+            // The buffered deltas go first, exactly as every other arm that dispatches does:
+            // a frame opened in this batch holds text that is only in the buffer, so
+            // dispatching without flushing let a turn kind this switch does not name
+            // (a `turn_end`, a new kind added to `TURN_FLOW_KINDS`) close the turn while the
+            // sentence that arrived with it was still waiting for the 50ms timer.
+            flushDeltas();
             dispatchTurn(e);
             break;
         }

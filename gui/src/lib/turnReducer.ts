@@ -316,6 +316,12 @@ export function turnReducer(state: TurnState, e: TurnFlowEvent): TurnState {
       // `subagents` SURVIVES the drop: it is the record of what ran, and the
       // inspector shows it until the next turn replaces it.
       if (state.running) return state;
+      // An errored turn is kept: its `⚠` line is the only copy that exists (the
+      // transcript the refresh brings back carries the reply, not the failure), so
+      // dropping it here answered "why did this chat fail?" with nothing -- and only
+      // when the chat was in the background, since a chat you are watching never gets
+      // a `turn_synced` it can lose the message to.
+      if (state.turn?.errored) return state;
       return { ...state, turn: null };
 
     case 'error':
@@ -333,6 +339,7 @@ export function turnReducer(state: TurnState, e: TurnFlowEvent): TurnState {
           ? {
               ...state.turn,
               text: `${state.turn.text}\n⚠ ${e.message}`,
+              errored: true,
               tools: Object.fromEntries(
                 Object.entries(state.turn.tools).map(([seq, t]) => [
                   seq,
@@ -340,7 +347,13 @@ export function turnReducer(state: TurnState, e: TurnFlowEvent): TurnState {
                 ]),
               ),
             }
-          : { text: `⚠ ${e.message}`, thinking: '', tools: {}, startedAt: Date.now() },
+          : {
+              text: `⚠ ${e.message}`,
+              thinking: '',
+              tools: {},
+              startedAt: Date.now(),
+              errored: true,
+            },
         ...closeAll(state, CLOSED_BY_ERROR),
       };
 
