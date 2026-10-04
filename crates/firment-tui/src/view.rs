@@ -592,44 +592,21 @@ impl App {
         self.device.rows()
     }
 
-    /// The LA block's rows: what a capture would use, then what the last
-    /// measurement actually found.
+    /// The LA block's rows: what the next capture would use.
     ///
-    /// Both halves are shown rather than one replacing the other: the
-    /// configuration is what the next capture will do, the reading is what the
-    /// last one proved. Only the fields the tool reported appear -- a blank
-    /// value reads as a bug, and a guessed one reads as data.
+    /// This used to append a second half — the last measurement's channel, frequency range,
+    /// duty, edge count and a one-period schematic — parsed out of `ToolEnd::detail` for the
+    /// `la` tool. The producer fills `detail` for diff tools only (see
+    /// `firment_core::agent::is_diff_tool`), so that half could not be reached by a real run:
+    /// the panel was dead code with three green fixtures that hand-built the field it read.
+    /// Configuration is what this block can honestly show, because configuration is what the
+    /// `Device` the rest of the UI reads actually holds.
     pub(crate) fn la_rows(&self) -> Vec<(&'static str, String)> {
-        let mut rows = self
-            .device
+        self.device
             .la
             .as_ref()
             .map(|la| la.rows())
-            .unwrap_or_default();
-        let Some(reading) = &self.la_reading else {
-            return rows;
-        };
-        if !reading.channel.is_empty() {
-            rows.push(("channel", reading.channel.clone()));
-        }
-        if let Some(frequency) = reading.frequency() {
-            rows.push(("freq", frequency));
-        }
-        if let Some(duty) = reading.duty_pct {
-            rows.push(("duty", format!("{duty:.1}%")));
-        }
-        if let Some(edges) = reading.rising_edges {
-            rows.push(("edges", edges.to_string()));
-        }
-        if let Some(confidence) = &reading.confidence {
-            rows.push(("conf", confidence.clone()));
-        }
-        if reading.duty_pct.is_some() {
-            // One period at the measured duty. A shape, explicitly not a
-            // capture: the samples are in a .sr that nothing here parses.
-            rows.push(("wave", crate::la::schematic(reading.duty_pct, 16)));
-        }
-        rows
+            .unwrap_or_default()
     }
 
     /// The EVIDENCE column: how far up the verification ladder this session got.
@@ -692,14 +669,6 @@ impl App {
         let mut parts = vec!["Firment".to_string()];
         if let Some(chip) = &self.device.chip {
             parts.push(chip.clone());
-        }
-        // The measurement is the only physical evidence the UI can put here, and
-        // it is named as what it is: the analyzer's reading, not the device's
-        // current state.
-        if let Some(reading) = &self.la_reading
-            && let Some(frequency) = reading.frequency()
-        {
-            parts.push(frequency);
         }
         if !self.follow {
             parts.push(format!("↑ {}", self.scroll));

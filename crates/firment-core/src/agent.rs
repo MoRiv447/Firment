@@ -2067,7 +2067,13 @@ fn spawn_self_review(
 /// "Edited <path> (N lines -> M lines)" header — the diff IS the body).
 /// Deliberately narrow: an unbounded `detail` on a chatty tool would put
 /// megabytes on the event channel (`AgentEvent::ToolEnd`/`detail` doc).
-fn is_diff_tool(name: &str) -> bool {
+///
+/// Public because it is a contract a consumer can write a branch against: any UI
+/// that reads `ToolEnd::detail` keyed on a tool name is only reachable for a name
+/// this answers true for. `crates/firment-tui/tests/detail_fixtures_match_the_producer.rs`
+/// holds the TUI's own fixtures to it, which is where a branch on `la` sat for a
+/// whole audit round rendering nothing while three hand-built events said otherwise.
+pub fn is_diff_tool(name: &str) -> bool {
     matches!(name, "edit_file" | "write_file")
 }
 

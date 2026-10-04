@@ -24,7 +24,6 @@ mod app;
 mod commands;
 mod device;
 mod evidence;
-mod la;
 mod motion;
 mod paste;
 mod pickers;
@@ -1298,17 +1297,6 @@ mod tests {
 
         app.device.chip = Some("stm32f407vetx".to_string());
         assert_eq!(app.frame_title(), " Firment · stm32f407vetx ");
-
-        app.la_reading = Some(crate::la::LaReading {
-            channel: "0".to_string(),
-            low_hz: Some(998.0),
-            high_hz: Some(1002.0),
-            ..Default::default()
-        });
-        assert_eq!(
-            app.frame_title(),
-            " Firment · stm32f407vetx · 998 .. 1002 Hz "
-        );
     }
 
     #[test]
@@ -1464,63 +1452,6 @@ mod tests {
         // The value comes off the clock, so the assertion is that it *exists*: two
         // runs of the same tool are what makes a third one predictable at all.
         assert!(crate::step_time::estimate(&app.tool_runs, "flash").is_some());
-    }
-
-    #[test]
-    fn a_measurement_from_the_analyzer_reaches_the_la_block() {
-        let mut app = test_app();
-        app.on_agent(AgentEvent::ToolEnd {
-            owner: None,
-            name: "la".to_string(),
-            ok: true,
-            summary: String::new(),
-            detail: Some(
-                "[la] measure capture=pwm channel=0 (frequency)\n  samples: 8000\n  frequency: 998 \
-                 .. 1002 Hz (~1000.00)\n  rising edges: 10\n  confidence: high — exact repeat\n"
-                    .to_string(),
-            ),
-            seq: 1,
-            waited_ms: None,
-        });
-        let rows = app.la_rows();
-        // The range, not a midpoint: it is what the tool is willing to claim.
-        assert!(
-            rows.iter()
-                .any(|(l, v)| *l == "freq" && v == "998 .. 1002 Hz"),
-            "got {rows:?}"
-        );
-        assert!(
-            rows.iter().any(|(l, v)| *l == "edges" && v == "10"),
-            "got {rows:?}"
-        );
-        assert!(
-            rows.iter().any(|(l, v)| *l == "conf" && v == "high"),
-            "got {rows:?}"
-        );
-        // A frequency measurement reports no duty, so there is no shape to draw.
-        assert!(!rows.iter().any(|(l, _)| *l == "wave"), "got {rows:?}");
-    }
-
-    #[test]
-    fn a_capture_does_not_become_a_measurement_in_the_panel() {
-        let mut app = test_app();
-        app.on_agent(AgentEvent::ToolEnd {
-            owner: None,
-            name: "la".to_string(),
-            ok: true,
-            summary: String::new(),
-            detail: Some(
-                "[la] capture capture=pwm channels=0,1 samples=8000\n  saved: x.sr\n".to_string(),
-            ),
-            seq: 1,
-            waited_ms: None,
-        });
-        // Nothing was measured, so the block gains no measured rows.
-        assert!(
-            app.la_rows()
-                .iter()
-                .all(|(l, _)| *l == "driver" || *l == "rate" || *l == "channels")
-        );
     }
 
     #[test]
@@ -2239,6 +2170,23 @@ mod tests {
         mpsc::Receiver<AgentEvent>,
         tokio::task::JoinHandle<()>,
     ) {
+        spawn_agent_task_harness_with(provider, Arc::new(ToolRegistry::new()))
+    }
+
+    /// The same turn machinery with a registry the caller picks.
+    ///
+    /// The harness used to hand `Agent` an empty registry, which meant no tool could ever run in
+    /// it — so it could prove things about the event channel while proving nothing about what
+    /// comes out of a tool call. A test that wants the producer's own decisions (which calls get
+    /// a `detail`, what the summary line says) has to give it tools to call.
+    fn spawn_agent_task_harness_with(
+        provider: Box<dyn firment_core::Provider>,
+        registry: Arc<ToolRegistry>,
+    ) -> (
+        mpsc::Sender<AgentCmd>,
+        mpsc::Receiver<AgentEvent>,
+        tokio::task::JoinHandle<()>,
+    ) {
         let (event_tx, event_rx) = mpsc::channel(256);
         // Unique per invocation: two harness tests run in parallel and must
         // not race each other's session files.
@@ -2251,7 +2199,7 @@ mod tests {
         let session = Session::new(dir, "default", "stall");
         let agent = Agent::new(
             Some(provider),
-            Arc::new(ToolRegistry::new()),
+            registry,
             session,
             store.clone(),
             Arc::new(firment_core::AutoApprove::everything()),
@@ -2286,6 +2234,174 @@ mod tests {
             Arc::new(firment_core::AutoApprove::everything()),
         );
         (cmd_tx, event_rx, task)
+    }
+
+    /// A tool whose output is shaped like the writer's: a one-line header, then a unified diff.
+    /// Only the NAME decides whether the agent attaches a `detail`, so standing in for the body
+    /// is honest here -- the decision under test is the agent's, reached through `run_turn`.
+    struct DiffShaped;
+
+    #[async_trait]
+    impl firment_core::Tool for DiffShaped {
+        fn name(&self) -> &'static str {
+            "write_file"
+        }
+
+        fn description(&self) -> &'static str {
+            "test stand-in for the writer"
+        }
+
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+
+        async fn run(
+            &self,
+            _args: serde_json::Value,
+            _ctx: &firment_core::ToolContext,
+        ) -> Result<firment_core::ToolOutput, firment_core::ToolError> {
+            Ok(firment_core::ToolOutput {
+                text: "Created blink.c (0 lines -> 1 lines)\n--- /dev/null\n+++ blink.c\n\
+                       @@ -0,0 +1 @@\n+void blink(void) {}\n"
+                    .to_string(),
+            })
+        }
+    }
+
+    /// The other half of the pair: long output that is not a diff. `detail` has to stay absent
+    /// for it, or every `grep` and `shell` call would put its whole log on the event channel.
+    struct Chatty;
+
+    #[async_trait]
+    impl firment_core::Tool for Chatty {
+        fn name(&self) -> &'static str {
+            "shell"
+        }
+
+        fn description(&self) -> &'static str {
+            "test stand-in for a chatty tool"
+        }
+
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+
+        async fn run(
+            &self,
+            _args: serde_json::Value,
+            _ctx: &firment_core::ToolContext,
+        ) -> Result<firment_core::ToolOutput, firment_core::ToolError> {
+            Ok(firment_core::ToolOutput {
+                text: format!("built\n{}", "warning: unused variable i\n".repeat(200)),
+            })
+        }
+    }
+
+    /// Hands out one scripted round of provider events per `stream` call.
+    struct Scripted {
+        rounds: Arc<Mutex<std::collections::VecDeque<Vec<firment_core::ProviderEvent>>>>,
+    }
+
+    #[async_trait]
+    impl firment_core::Provider for Scripted {
+        async fn stream(
+            &self,
+            _request: firment_core::ChatRequest,
+        ) -> Result<firment_core::ProviderStream, firment_core::ProviderError> {
+            let round = self.rounds.lock().unwrap().pop_front();
+            Ok(Box::pin(futures::stream::iter(
+                round.unwrap_or_default().into_iter().map(Ok),
+            )))
+        }
+
+        fn model(&self) -> &str {
+            "scripted"
+        }
+    }
+
+    /// A turn whose events come from the agent rather than from the test author.
+    ///
+    /// This is the pairing the deleted `la` panel could not survive: it read `ToolEnd::detail`
+    /// for a tool the producer never attaches one to, and three fixtures supplied that field by
+    /// hand, so the panel was unreachable in a real session and green in the suite at the same
+    /// time. Here a real `run_turn` emits both kinds of call, and the assertions are made on
+    /// what actually arrived and on what the transcript therefore draws.
+    #[tokio::test]
+    async fn a_real_run_attaches_a_diff_body_only_to_the_diff_tool() {
+        use firment_core::{ProviderEvent, StopReason, ToolCall};
+        let rounds = Arc::new(Mutex::new(std::collections::VecDeque::from([
+            vec![
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "call_write".to_string(),
+                    name: "write_file".to_string(),
+                    arguments: serde_json::json!({"path": "blink.c"}),
+                }),
+                ProviderEvent::ToolCall(ToolCall {
+                    id: "call_shell".to_string(),
+                    name: "shell".to_string(),
+                    arguments: serde_json::json!({"command": "make"}),
+                }),
+                ProviderEvent::Stop(StopReason::ToolUse),
+            ],
+            vec![ProviderEvent::Stop(StopReason::EndTurn)],
+        ])));
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(DiffShaped));
+        registry.register(Arc::new(Chatty));
+        let (cmd_tx, mut event_rx, task) =
+            spawn_agent_task_harness_with(Box::new(Scripted { rounds }), Arc::new(registry));
+        cmd_tx
+            .send(AgentCmd::User("blink the led".to_string()))
+            .await
+            .unwrap();
+
+        let mut app = test_app();
+        let mut bodies: Vec<(String, Option<String>)> = Vec::new();
+        let mut ended = false;
+        for _ in 0..64 {
+            let next = tokio::time::timeout(Duration::from_secs(10), event_rx.recv())
+                .await
+                .expect("the scripted turn must not hang")
+                .expect("the event channel stays open until the turn ends");
+            let terminal = matches!(next, AgentEvent::TurnEnd { .. } | AgentEvent::Error(_));
+            if let AgentEvent::ToolEnd { name, detail, .. } = &next {
+                bodies.push((name.clone(), detail.clone()));
+            }
+            app.on_agent(next);
+            if terminal {
+                ended = true;
+                break;
+            }
+        }
+        drop(cmd_tx);
+        task.await.unwrap();
+        assert!(ended, "the turn never ended");
+
+        let body_of = |wanted: &str| {
+            bodies
+                .iter()
+                .find(|(name, _)| name == wanted)
+                .unwrap_or_else(|| panic!("no ToolEnd for `{wanted}`; got {bodies:?}"))
+                .1
+                .clone()
+        };
+        let written = body_of("write_file").expect("a diff tool owes the UI its body");
+        assert!(
+            written.contains("@@ -0,0 +1 @@") && written.contains("+void blink(void)"),
+            "the diff was reshaped on the way out: {written}"
+        );
+        assert!(
+            body_of("shell").is_none(),
+            "a non-diff tool put its whole log on the event channel"
+        );
+
+        // The consumer's half: the transcript has to draw the detail that did arrive. A card
+        // that never opens would leave this assertion as unsatisfiable as the panel it replaces.
+        let rows: Vec<String> = app.render_rows(100).iter().map(|l| l.to_string()).collect();
+        assert!(
+            rows.iter().any(|row| row.contains("+void blink(void)")),
+            "the diff never reached the rendered transcript: {rows:?}"
+        );
     }
 
     #[tokio::test]
@@ -2725,14 +2841,6 @@ mod tests {
                 waited_ms: None,
             });
         }
-        app.la_reading = Some(crate::la::LaReading {
-            channel: "D0".to_string(),
-            low_hz: Some(998.0),
-            high_hz: Some(1002.0),
-            duty_pct: Some(50.0),
-            rising_edges: Some(8),
-            confidence: Some("high".to_string()),
-        });
         // Two runs of `build`, so the estimate exists and can be checked for survival.
         let took = std::time::Duration::from_secs(4);
         for _ in 0..2 {
@@ -2754,7 +2862,6 @@ mod tests {
             None,
             "a new session opened wearing the last one's ✓"
         );
-        assert!(app.la_reading.is_none(), "stale analyser reading survived");
         assert!(app.active_tools.is_empty(), "rows still marked running");
         assert!(app.selection.is_none(), "a selection into deleted rows");
         // The estimates are the one thing that carries over: how long a build takes

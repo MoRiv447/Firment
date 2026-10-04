@@ -7,7 +7,6 @@ use crate::adapters::PermissionRequest;
 use crate::commands::AgentCmd;
 use crate::device::Device;
 use crate::evidence::Evidence;
-use crate::la::{LaReading, parse_measure};
 use crate::paste::{EnterAction, PasteBlock, PasteBurst, PasteOut};
 use crate::pickers::{ModelPicker, Selection, SessionPicker};
 use crate::rail::{FileRow, SessionRow};
@@ -51,11 +50,9 @@ pub(crate) struct App {
     /// How far up the verification ladder this session has got. Fed by the same
     /// two tool events as `active_tools`, drawn by the EVIDENCE panel.
     pub(crate) evidence: Evidence,
-    /// Left rail: the sessions in this workspace, and the files under the cwd.
-    /// The last logic-analyzer measurement, if one has been taken.
-    pub(crate) la_reading: Option<LaReading>,
     /// The configured target and analyzer, for the DEVICE block.
     pub(crate) device: Device,
+    /// Left rail: the sessions in this workspace, and the files under the cwd.
     pub(crate) rail_sessions: Vec<SessionRow>,
     pub(crate) rail_files: Vec<FileRow>,
     /// The session being typed into, so the rail can mark its row.
@@ -169,7 +166,6 @@ impl App {
             active_tools: Vec::new(),
             tool_runs: crate::step_time::Runs::new(),
             evidence: Evidence::default(),
-            la_reading: None,
             device: Device::default(),
             rail_sessions: Vec::new(),
             rail_files: Vec::new(),
@@ -270,18 +266,16 @@ impl App {
 
     /// Forget what the previous conversation proved.
     ///
-    /// The EVIDENCE ladder, the logic-analyser reading and the live tool rows describe the
-    /// session being replaced: leaving them set made a brand-new session open showing
-    /// ✓ code / ✓ build / ✓ deploy, with the frame title still quoting the old session's sample
-    /// rate — the false completion claim `evidence.rs` exists to prevent. A leftover `selection`
-    /// kept highlighting rows of the new transcript that were never clicked.
+    /// The EVIDENCE ladder and the live tool rows describe the session being replaced: leaving
+    /// them set made a brand-new session open showing ✓ code / ✓ build / ✓ deploy — the false
+    /// completion claim `evidence.rs` exists to prevent. A leftover `selection` kept
+    /// highlighting rows of the new transcript that were never clicked.
     ///
     /// The step-time estimates are deliberately NOT cleared: how long `build` takes is a property
     /// of the tool and the board, not of the conversation, and a session boundary does not
     /// change it — that was the decision behind the 2026-09-18 ledger fix.
     fn forget_session_view_state(&mut self) {
         self.evidence = Evidence::default();
-        self.la_reading = None;
         self.active_tools.clear();
         self.selection = None;
     }
@@ -395,13 +389,12 @@ impl App {
                     self.active_tools.remove(pos);
                 }
                 self.evidence.finish(&name, ok);
-                // The measurement text is the only place the numbers exist; see
-                // la.rs for why this is parsed rather than carried structurally.
-                if name == "la"
-                    && let Some(reading) = detail.as_deref().and_then(parse_measure)
-                {
-                    self.la_reading = Some(reading);
-                }
+                // No tool name is special-cased on `detail` here, and that is deliberate: the
+                // producer fills `detail` for `is_diff_tool` names only, so a branch keyed on
+                // another name could never run. An `la` measurement branch lived here until the
+                // 2026-10-04 round (with a panel, a parser and three green fixtures that hand-built
+                // the detail the agent never emits); `crates/firment-tui/tests/
+                // detail_fixtures_match_the_producer.rs` is what keeps such a branch out.
                 // Decided before the loop: `should_auto_expand` borrows `self`,
                 // which the mutable item iteration below already holds.
                 let auto_expand = self.should_auto_expand(detail.as_deref());
