@@ -937,20 +937,32 @@ impl Config {
         if project.compaction_strategy != CompactionStrategy::default() {
             config.compaction_strategy = project.compaction_strategy;
         }
+        // Cost ceilings are TIGHTEN-only, the same rule the LA caps above apply with `.min()`: a
+        // checkout may ask for a smaller answer, a shallower budget, fewer calls per turn. It may
+        // not raise any of them, because `max_iterations = 100000` in a cloned repo is not a
+        // preference but a bill, and `context_budget_chars` uncaped is how much of the user's
+        // work goes out on every request. Where the user set no value there is nothing to
+        // tighten, so the project's number is not adopted either.
         if project.max_output_tokens.is_some() {
-            config.max_output_tokens = project.max_output_tokens;
+            config.max_output_tokens = match (config.max_output_tokens, project.max_output_tokens) {
+                (Some(user), Some(p)) => Some(user.min(p)),
+                (None, Some(_)) => None,
+                (user, None) => user,
+            };
         }
         // Per-run behavior knobs from the project config. auto_approve is
         // deliberately NOT merged: a project checkout must never grant itself
         // tool auto-approval (build/verify already opt out above).
         if project.max_iterations != default_max_iterations() {
-            config.max_iterations = project.max_iterations;
+            config.max_iterations = config.max_iterations.min(project.max_iterations);
         }
         if project.thinking != ThinkingLevel::default() {
             config.thinking = project.thinking;
         }
         if project.context_budget_chars != default_context_budget() {
-            config.context_budget_chars = project.context_budget_chars;
+            config.context_budget_chars = config
+                .context_budget_chars
+                .min(project.context_budget_chars);
         }
         // Timeout knobs: availability, not trust — a project may legitimately
         // need a slower stream budget (it cannot grant itself any tool).
@@ -2084,6 +2096,67 @@ mod tests {
         let la = merged.tools.la.expect("la merged");
         assert_eq!(la.max_samples, 500, "a tighter project cap wins");
         assert_eq!(la.max_time_ms, 1000);
+    }
+
+    #[test]
+    fn a_project_file_may_lower_the_cost_ceilings_and_never_raise_them() {
+        // The three money knobs: how many provider calls one turn may make, how many tokens
+        // each may answer with, and how much history leaves the machine on every request.
+        // `merged_for` assigned all three straight from the project file
+        // (`if project.x != default { config.x = project.x }`), so `max_iterations = 100000`
+        // in a cloned checkout was legal — while the same function tightens the LA disk and
+        // time caps with `.min()` two dozen lines earlier.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".firment.toml"),
+            "max_iterations = 100000\nmax_output_tokens = 4000000\ncontext_budget_chars = 999000000\n",
+        )
+        .unwrap();
+        let mut base = Config::default_config();
+        base.max_output_tokens = Some(4096);
+        let budget = base.context_budget_chars;
+        let user_iterations = base.max_iterations;
+
+        let merged = base.merged_for(dir.path());
+        assert_eq!(
+            merged.max_iterations, user_iterations,
+            "a checkout may not multiply the provider calls behind the user's back"
+        );
+        assert_eq!(
+            merged.max_output_tokens,
+            Some(4096),
+            "nor raise the answer ceiling past what the user set"
+        );
+        assert_eq!(
+            merged.context_budget_chars, budget,
+            "nor uncap how much context goes out per request"
+        );
+
+        // Tighter is legitimate, and is what the knob is for: a small model, a shallow budget,
+        // a repo that wants a turn to stop early.
+        std::fs::write(
+            dir.path().join(".firment.toml"),
+            "max_iterations = 4\ncontext_budget_chars = 4096\n",
+        )
+        .unwrap();
+        let merged = base.merged_for(dir.path());
+        assert_eq!(merged.max_iterations, 4, "a lower project value still wins");
+        assert_eq!(merged.context_budget_chars, 4096);
+
+        // A user who set no output ceiling is not a blank check: with nothing to tighten
+        // against, the project's number is simply not adopted.
+        std::fs::write(
+            dir.path().join(".firment.toml"),
+            "max_output_tokens = 120000\n",
+        )
+        .unwrap();
+        let mut bare = Config::default_config();
+        bare.max_output_tokens = None;
+        assert_eq!(
+            bare.merged_for(dir.path()).max_output_tokens,
+            None,
+            "a project cannot set the one ceiling the user left unset"
+        );
     }
 
     #[test]
