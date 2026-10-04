@@ -2506,6 +2506,96 @@ mod tests {
         );
     }
 
+    /// The two numbers the action exports are the only part of a review that a machine
+    /// reads, and they grepped for a line shape the renderer does not produce.
+    ///
+    /// One run exercises both directions: the pattern the action now uses must match real
+    /// markdown, and the pattern it used before must match none of it. The second assert is
+    /// the fail-before — it states what the shipped action computed on every run, without
+    /// anyone having to re-insert the bug to find out.
+    #[test]
+    fn the_action_counts_findings_in_the_shape_the_renderer_emits() {
+        use firment_core::review::{Finding, ReviewReport, Severity};
+
+        let action = include_str!("../../../.github/actions/firment-review/action.yml");
+
+        // A report of a known shape. `static: <scope>` is what
+        // `firm review <path> --markdown` writes, so this is the file the step counts.
+        let mut report = ReviewReport::new("static: src");
+        report.push(Finding::new(
+            "a",
+            "A high thing",
+            Severity::High,
+            "static",
+            "what was observed",
+        ));
+        report.push(Finding::new(
+            "b",
+            "A medium thing",
+            Severity::Medium,
+            "static",
+            "what was observed",
+        ));
+        let markdown = report.to_markdown();
+
+        assert!(
+            markdown.starts_with("# Review: "),
+            "the header the step counts must be every report's first line"
+        );
+        assert_eq!(
+            markdown
+                .lines()
+                .filter(|line| line.starts_with("## ■") || line.starts_with("## □"))
+                .count(),
+            2,
+            "both findings are countable lines"
+        );
+        assert_eq!(
+            markdown
+                .lines()
+                .filter(|line| line.starts_with("## ■"))
+                .count(),
+            1,
+            "and a high one is tellable from a medium one"
+        );
+
+        // The negative control: the glyphs on a line of their own, which is what the action
+        // used to search for.
+        assert_eq!(
+            markdown
+                .lines()
+                .filter(|line| line.starts_with('■') || line.starts_with('□'))
+                .count(),
+            0,
+            "a bare glyph never starts a rendered line, so the old count was structurally 0"
+        );
+
+        // And the action must use the patterns that work, over both reports: counting only
+        // the static review dropped every dependency finding.
+        assert!(
+            action.contains("grep -c '^## [■□]' review-all.md"),
+            "the finding count must use the rendered shape over the merged report"
+        );
+        assert!(
+            action.contains("grep -c '^## ■' review-all.md"),
+            "the high count must use the rendered shape over the merged report"
+        );
+        assert!(
+            action.contains("cat static.md deps.md > review-all.md"),
+            "both reports are counted, not just the static one"
+        );
+        assert!(
+            !action.contains("grep -c '^■'"),
+            "the pattern that could only ever answer 0 is gone"
+        );
+        // The sanity check has to be able to fail. One line per report: a rendered header,
+        // or the named reason `deps` was skipped.
+        assert!(
+            action.contains("grep -c '^# Review:\\|^Not run:'"),
+            "the step refuses to report a count it could not read"
+        );
+    }
+
     #[test]
     fn the_doctor_summary_answers_the_question_it_was_written_for() {
         // The offline design review's §4.3: five sections of detail, no answer to the one

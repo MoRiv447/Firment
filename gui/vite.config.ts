@@ -42,5 +42,12 @@ export default defineConfig(async () => ({
       // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],
     },
+    // One test reads the design-token document at the repository root and compares the
+    // ratios it quotes against the stylesheet that implements them -- the only way that
+    // comparison cannot agree with itself. Vite serves nothing outside `gui/` by default,
+    // so this names the one directory rather than widening to the parent.
+    fs: {
+      allow: ["../docs"],
+    },
   },
 }));

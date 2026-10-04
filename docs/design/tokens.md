@@ -20,10 +20,14 @@ bare hex or px in any `.ts`/`.tsx` under `gui/src`. Both exist because "there is
 place a design value is written down" decays one inline literal at a time.
 
 The token names below are the custom properties as they are written, so anything in a
-table can be grepped in `gui/src/styles/tokens.css`. **Every ratio quoted here is
-asserted in `gui/src/styles/__tests__/tokens.test.ts`**, which reads the values out
-of the stylesheet rather than out of this document — so a table row that disagrees
-with the code fails rather than misleads.
+table can be grepped in `gui/src/styles/tokens.css`. A ratio pair in a table is written
+`dark / light`, matching the column order, and it ends by naming the token it was measured
+on — `1.61 / 1.48 on --surface`, the ground in backticks in the row itself — because
+`gui/src/styles/__tests__/tokens.test.ts` scrapes these tables and recomputes every quoted
+number out of the stylesheet. It compares the hexes in the table against the stylesheet as
+well, and the key count this document announces below. What that gate does **not** cover is
+a ratio written as prose instead of as a tabulated pair: the scraper never sees it, so an
+untabulated number is a claim, not a measurement.
 
 ## Choosing a scheme
 
@@ -57,8 +61,10 @@ The two schemes now each match a logo that already existed:
 | dark | `#b4f779` | `gui/public/icons/logo-*.png` |
 | light | `#4d7c0f` | `gui/public/icons/logo-w-*.png` |
 
-Both scheme blocks carry **the same 46 keys**, and the count is asserted — adding a
-key to one scheme and forgetting the other is the bug that test exists to catch.
+Both scheme blocks carry **the same 48 keys**, and the count is asserted — by
+`tokens-css.test.ts` against the stylesheet, and by `tokens.test.ts` against this number —
+because adding a key to one scheme and forgetting the other is the bug that test exists to
+catch.
 
 ### Grounds and surfaces
 
@@ -83,10 +89,10 @@ in light only.
 
 | Token | dark | light | On | Ratio |
 |---|---|---|---|---|
-| `--line` | `#242c1e` | `#e2e6da` | inside a card | 1.30 / 1.17 |
-| `--border` | `#2f3c25` | `#c8d0b9` | a card's own edge | 1.61 / 1.48 |
-| `--border-strong` | `#3a472e` | `#bcc4ab` | a panel, a window, a field | 1.99 / 1.75 |
-| `--border-active` | `#88b366` | `#6d8c4a` | a selected or running thing | 7.79 / 3.54 |
+| `--line` | `#242c1e` | `#e2e6da` | inside a card | 1.30 / 1.17 on `--surface` |
+| `--border` | `#2f3c25` | `#c8d0b9` | a card's own edge | 1.61 / 1.48 on `--surface` |
+| `--border-strong` | `#3a472e` | `#bcc4ab` | a panel, a window, a field | 1.99 / 1.75 on `--bg` |
+| `--border-active` | `#88b366` | `#6d8c4a` | a selected or running thing | 7.79 / 3.54 on `--surface` |
 
 `--border-strong` is the renamed `--outline`: same role, a name that says which tier
 it is. A test asserts the ladder is strictly increasing in both schemes, because two
@@ -98,12 +104,12 @@ cannot be one (see Interaction).
 
 ### Text — four levels
 
-| Token | dark | light | On surface | Use |
+| Token | dark | light | Ratio | Use |
 |---|---|---|---|---|
-| `--ink` | `#eef1e8` | `#1a1e15` | 16.49 / 15.68 | headings, prose, tool names |
-| `--ink-soft` | `#d3d9c9` | `#3a4230` | 12.73 / 9.71 | secondary prose |
-| `--muted` | `#a9b09f` | `#5c6353` | 8.43 / 5.78 | labels, counts, structure |
-| `--dim` | `#828f70` | `#656c58` | 5.48 / 5.06 | paths, times, counters, an empty state's aside |
+| `--ink` | `#eef1e8` | `#1a1e15` | 16.49 / 15.68 on `--surface` | headings, prose, tool names |
+| `--ink-soft` | `#d3d9c9` | `#3a4230` | 13.04 / 9.71 on `--surface` | secondary prose |
+| `--muted` | `#a9b09f` | `#5c6353` | 8.43 / 5.78 on `--surface` | labels, counts, structure |
+| `--dim` | `#828f70` | `#656c58` | 5.48 / 5.06 on `--surface` | paths, times, counters, an empty state's aside |
 
 There were two (`ink` and `muted`), which meant a path and a heading could only be
 told apart by size. `--dim` is the rung that binds: it is the quietest, and it still
@@ -121,8 +127,8 @@ applied by every `:disabled` rule, listed and checked in `conventions.test.ts`.
 | Token | dark | light | Use |
 |---|---|---|---|
 | `--brand-acid` | `#b4f779` | `#4d7c0f` | the fill; equal to the logo in each scheme |
-| `--on-acid` | `#15200d` | `#ffffff` | the label on that fill (13.28 / 4.99) |
-| `--brand-ink` | `#b4f779` | `#476f0e` | brand-coloured **text** (14.82 / 5.48 on surface) |
+| `--on-acid` | `#15200d` | `#ffffff` | the label on that fill (13.28 / 4.99 on `--brand-acid`) |
+| `--brand-ink` | `#b4f779` | `#476f0e` | brand-coloured **text** (14.82 / 5.48 on `--surface`) |
 
 They are the same colour only in dark. In light, the logo's own green as text on a
 card ground is 4.33:1 — under AA — so text takes a darker value. This is the same
@@ -164,7 +170,7 @@ acid would be 4.85:1 as a *fill* and a 2px rule is not a fill.
 | `--wash-resting` | `#ffffff14` | `transparent` | a control with nothing else to sit on |
 | `--field-bg` | `#ffffff0f` | `--surface` | a translucent white, never an opaque grey |
 | `--selection` | `#1a2613` | `#dff0c2` | an active surface |
-| `--on-selection` | `#eef1e8` | `#1a1e15` | text on it (13.82 / 14.01) |
+| `--on-selection` | `#eef1e8` | `#1a1e15` | text on it (13.82 / 14.01 on `--selection`) |
 | `--focus-ring` | `#b4f779` | `#476f0e` | ≥3:1 as a shape, in both |
 
 **`--selection` is a surface and the fill is auxiliary.** Its value is the darkest

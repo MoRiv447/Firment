@@ -385,9 +385,17 @@ two variables above are the whole available route.
   disabled state, and the machine-voice files (the ones that set `var(--ff-mono)`).
   A new component that fits one of them and does not edit the list fails the suite —
   that is the point of the list, not an oversight in it.
-  `gui/src/styles/__tests__/tokens.test.ts` holds the other half: every contrast ratio
-  quoted in `docs/design/tokens.md` or in a comment inside `tokens.css` is asserted
-  against the stylesheet itself, so changing a value means moving the document with it.
+  `gui/src/styles/__tests__/tokens.test.ts` holds the other half: it scrapes the contrast
+  ratios quoted in `docs/design/tokens.md`'s tables and in the comments inside `tokens.css`,
+  recomputes each one from the stylesheet, and fails the row that disagrees — so changing a
+  value means moving the document with it. The shape is the boundary: a claim is read when it
+  is written `<ratio>:1 on|vs <ground>` with a ground that resolves to a declared token (or a
+  literal hex). A number phrased any other way — `1.43:1 against the row ground`, or a `2.74:1`
+  that never says what it sits on — is invisible to it, so write a new measurement in the read
+  shape or call it a claim. Both files quoted a wrong number on the day this became true: the
+  document had `--ink-soft` on the dark surface at 12.73 (that is its on-raised figure, the
+  surface is 13.04), and `tokens.css` had light `--surface-raised` at "1.07:1 vs bg" (1.07 is
+  vs `--surface`; vs `bg` it is 1.12).
   Both exist because the failures they catch are invisible in a diff.
 - `web/src/lib/tools/specs.json` is a committed snapshot of the Rust tool
   registry. If you change any tool's `input_schema()` or `description()`

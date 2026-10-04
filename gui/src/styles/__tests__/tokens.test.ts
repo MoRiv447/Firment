@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { named } from './readPalette';
+import { body, named, scheme } from './readPalette';
 
 /** The palette as it is shipped: read out of `tokens.css`, not a copy of it. */
 const dark = named('dark');
@@ -20,10 +20,11 @@ const Lt = light;
 /**
  * The palette, held to the two rules that cannot be reviewed by eye.
  *
- * Contrast is arithmetic, so it is checked here rather than trusted: the values
- * come from docs/design/tokens.md, and a well-meaning tweak to one hex -- "this
- * grey looks a bit dark" -- is exactly the change that quietly drops a label
- * under AA. The ratios quoted in that document are asserted below.
+ * Contrast is arithmetic, so it is checked here rather than trusted. The `cases` table
+ * below measures the shipped palette against the floors it has to clear; the block at the
+ * end of this file reads `docs/design/tokens.md` and recomputes every ratio that document
+ * tabulates, which is the half that used to be a transcription and therefore could not be
+ * wrong about anything, including the time it was wrong.
  */
 
 /** WCAG 2.1 relative luminance. */
@@ -45,6 +46,18 @@ function contrast(fg: string, bg: string): number {
 
 /** AA for body text. */
 const AA = 4.5;
+
+/**
+ * Whether a measurement rounds to the number a claim quotes.
+ *
+ * Both the document and the stylesheet's comments quote two decimals, so that is the
+ * precision a claim is made at and the precision it has to hold. Subtracting half a step of
+ * the last quoted digit — the bound this file used to use, inherited from `toBeCloseTo(_, 1)` —
+ * is exactly the wrong shape near white, where the differences worth arguing about are 0.05
+ * apart: `1.07:1` and `1.12:1` are two different grounds and two different decisions.
+ * Rounding is compared rather than subtracted, so 4.7350 still counts as the quoted 4.74.
+ */
+const agrees = (actual: number, quoted: number) => actual.toFixed(2) === quoted.toFixed(2);
 
 describe('the palette cannot drift between schemes', () => {
   it('defines the same key set in dark and light', () => {
@@ -209,6 +222,300 @@ describe('the edges, which carry what a fill cannot', () => {
     // AA on top of it.
     expect(contrast(dark.borderActive, dark.surface)).toBeGreaterThanOrEqual(3);
     expect(contrast(light.borderActive, light.surface)).toBeGreaterThanOrEqual(3);
+  });
+});
+
+/**
+ * The document's own numbers, read out of the document.
+ *
+ * `docs/design/tokens.md` quotes a contrast ratio for the pairs it tabulates, and until now
+ * the quoting ran one way: this file transcribed the numbers it wanted to check, so a table
+ * row could disagree with the stylesheet and nothing would notice. Two did, on the day this
+ * was written -- `--ink-soft` on the dark surface is 13.04:1 while the table printed 12.73,
+ * which is its measurement on `--surface-raised`, and both blocks carry 48 keys while the
+ * document still announced 46. A transcription agrees with itself, which is not the same
+ * thing as agreeing with the palette.
+ *
+ * So the rows are scraped from the markdown and computed from `tokens.css` in one run, and
+ * nothing in between is hand-written: the token, its two hexes, both ratios and the ground
+ * token all come from the document's own line, and every colour comes from the stylesheet.
+ * A quoted pair that names no ground is an error rather than a skip, because skipping is how
+ * coverage goes missing without anyone deciding to lose it.
+ *
+ * What this cannot check is stated in the document too: a ratio written as prose instead of
+ * as a tabulated pair is nobody's responsibility, and the scraper will not see it appear.
+ */
+
+const DOC = import.meta.glob('../../../../docs/design/tokens.md', {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+}) as Record<string, string>;
+
+const docText = (): string => {
+  const found = Object.entries(DOC).find(([path]) => path.endsWith('docs/design/tokens.md'));
+  if (!found) {
+    throw new Error(
+      `docs/design/tokens.md was not read (files found: ${Object.keys(DOC).join(', ') || 'none'})`,
+    );
+  }
+  return found[1];
+};
+
+/** `--ink-soft` -> `inkSoft`, which is the name `named()` gives the same colour. */
+const camel = (token: string): string =>
+  token.replace(/^--/, '').replace(/-([a-z0-9])/g, (_, c: string) => c.toUpperCase());
+
+type Quoted = {
+  /** The document's line, for the failure message. */
+  line: string;
+  token: string;
+  darkHex: string;
+  lightHex: string;
+  darkRatio: number;
+  lightRatio: number;
+  ground: string;
+};
+
+/** A table row whose first cell names exactly one token. */
+const TOKEN_CELL = /^\|\s*`(--[a-z][-\w]*)`\s*\|/;
+const HEX_CELL = /^`#([0-9a-fA-F]{6})`$/;
+const RATIO_PAIR = /(\d+\.\d+)\s*\/\s*(\d+\.\d+)/;
+const GROUND = /on `(--[-\w]+)`/;
+
+/** Every tabulated `dark / light` ratio pair, in the order the columns give it. */
+const quotedPairs = (): Quoted[] =>
+  docText()
+    .split('\n')
+    .reduce<Quoted[]>((rows, line) => {
+      const token = line.match(TOKEN_CELL)?.[1];
+      if (!token) return rows;
+      const cells = line.split('|').map((cell) => cell.trim());
+      const darkHex = cells[2]?.match(HEX_CELL)?.[1];
+      const lightHex = cells[3]?.match(HEX_CELL)?.[1];
+      const pair = line.match(RATIO_PAIR);
+      if (!darkHex || !lightHex || !pair) return rows;
+      rows.push({
+        line,
+        token,
+        darkHex: `#${darkHex}`,
+        lightHex: `#${lightHex}`,
+        darkRatio: Number(pair[1]),
+        lightRatio: Number(pair[2]),
+        ground: line.match(GROUND)?.[1] ?? '',
+      });
+      return rows;
+    }, []);
+
+/** The `--`-prefixed declarations one scheme block carries. */
+const declaredKeys = (name: 'dark' | 'light'): string[] =>
+  Object.keys(scheme(name)).filter((key) => key.startsWith('--'));
+
+/**
+ * Every way one quoted row can disagree with the palette: a stale hex, a ratio the colours
+ * do not produce, a token or ground the stylesheet never declared.
+ *
+ * Pure, so the same check runs over the document and over a row invented below to prove the
+ * check can fail.
+ */
+const check = (row: Quoted): string[] => {
+  const key = camel(row.token);
+  const groundKey = camel(row.ground);
+  if (!(key in dark) || !(key in light)) return [`${row.token} is declared by neither scheme`];
+  if (!row.ground) return [`${row.token}'s quoted pair names no ground`];
+  if (!(groundKey in dark) || !(groundKey in light)) {
+    return [`the ground ${row.ground} ${row.token} is quoted on is not a declared token`];
+  }
+  const problems: string[] = [];
+  if (dark[key] !== row.darkHex) {
+    problems.push(`${row.token} is ${dark[key]} in dark; the document writes ${row.darkHex}`);
+  }
+  if (light[key] !== row.lightHex) {
+    problems.push(`${row.token} is ${light[key]} in light; the document writes ${row.lightHex}`);
+  }
+  const darkActual = contrast(dark[key], dark[groundKey]);
+  const lightActual = contrast(light[key], light[groundKey]);
+  if (!agrees(darkActual, row.darkRatio)) {
+    problems.push(
+      `${row.token} on ${row.ground} measures ${darkActual.toFixed(2)}:1 in dark; the document quotes ${row.darkRatio}`,
+    );
+  }
+  if (!agrees(lightActual, row.lightRatio)) {
+    problems.push(
+      `${row.token} on ${row.ground} measures ${lightActual.toFixed(2)}:1 in light; the document quotes ${row.lightRatio}`,
+    );
+  }
+  return problems;
+};
+
+describe('the document quotes the palette rather than a memory of it', () => {
+  it('has a document to read, and rows worth reading', () => {
+    // The two floors this test would rather not need: a glob that silently reads nothing is
+    // a green suite that checks nothing, and so is a document whose tables went prose.
+    expect(docText()).toContain('# Design tokens');
+    const rows = quotedPairs();
+    expect(rows.length).toBeGreaterThanOrEqual(10);
+  });
+
+  it('agrees with the stylesheet on every row', () => {
+    expect(quotedPairs().flatMap(check)).toEqual([]);
+  });
+
+  it('names a ground for every pair it quotes', () => {
+    // A pair with no ground is not unmeasured, it is unfalsifiable: any number passes.
+    expect(quotedPairs().filter((row) => !row.ground).map((row) => row.line)).toEqual([]);
+  });
+
+  it('announces the key count the blocks really carry', () => {
+    // The document says "the same N keys, and the count is asserted". Both halves are
+    // checked: that it still says it, and that the number it says is the number there are.
+    const claim = docText().match(/the same (\d+) keys/);
+    expect(claim, 'the document should keep stating the key count').not.toBeNull();
+    const n = Number(claim?.[1]);
+    expect(declaredKeys('dark')).toHaveLength(n);
+    expect(declaredKeys('light')).toHaveLength(n);
+  });
+
+  it('can fail, which is the whole reason it exists', () => {
+    const rows = quotedPairs();
+    // Same row, one ratio moved by a rounding nobody would question.
+    const first = rows[0];
+    expect(check({ ...first, darkRatio: first.darkRatio + 0.2 })).not.toEqual([]);
+    // A hex the palette no longer has, which is the change a reviewer cannot see in a diff.
+    expect(check({ ...first, darkHex: '#000000' })).not.toEqual([]);
+    // A pair whose ground was never declared.
+    expect(check({ ...first, ground: '--nonsense' })).not.toEqual([]);
+    // And dark/light transposed, the error the column order makes easy to write. Every row
+    // here is measurable differently in the two schemes, so all of them must be caught.
+    const distinguishable = rows.filter((row) => Math.abs(row.darkRatio - row.lightRatio) > 0.1);
+    expect(distinguishable.length).toBeGreaterThanOrEqual(8);
+    for (const row of distinguishable) {
+      expect(
+        check({ ...row, darkRatio: row.lightRatio, lightRatio: row.darkRatio }),
+        `a swapped ${row.token} should not read as correct`,
+      ).not.toEqual([]);
+    }
+  });
+});
+
+/**
+ * The same kind of claim, made a second time inside the stylesheet.
+ *
+ * `tokens.css` justifies its colours in comments that quote a ratio -- `5.48:1 on surface`,
+ * `1.07:1 vs bg` -- and those numbers are the third copy of a fact this file already holds
+ * twice (once in the table above, once in the document below it). They drift the same way the
+ * document drifted: `--surface-raised` in light is 1.07:1 against `--surface` and 1.12:1
+ * against `--bg`, and its comment had attached the smaller number to the larger gap. Nothing
+ * noticed, because a comment cannot fail a build.
+ *
+ * So a comment claim is parsed, resolved to a declared token, and recomputed. The shape is
+ * the boundary and it is worth stating plainly: only `<ratio>:1 on|vs <ground>` is read. A
+ * figure written any other way -- "the white ink reads 1.42:1 and even `--muted` only reaches
+ * 4.40:1", or the `2.74:1` beside `--scroll-thumb` that never says what it is measured on --
+ * is invisible here, and those are claims, not measurements.
+ */
+
+type Claim = {
+  scheme: 'dark' | 'light';
+  /** The custom property the comment belongs to. */
+  token: string;
+  ratio: number;
+  /** Whatever the comment called the ground, in its own words. */
+  ground: string;
+};
+
+/** Words the comments use instead of naming the custom property. */
+const GROUND_WORDS: Record<string, string> = {
+  bg: '--bg',
+  surface: '--surface',
+  raised: '--surface-raised',
+  acid: '--brand-acid',
+  'the dim fill': '--brand-acid-dim',
+  'success-bg': '--success-bg',
+  'info-bg': '--info-bg',
+  'warn-bg': '--warn-bg',
+};
+
+/**
+ * Which declaration a comment describes: the one it follows on the same line, or, when it
+ * stands on its own, the one it introduces.
+ */
+const claimsIn = (name: 'dark' | 'light'): Claim[] => {
+  const text = body(name);
+  const declarations = [...text.matchAll(/(--[-\w]+)\s*:\s*[^;]+;/g)].map((m) => ({
+    token: m[1],
+    start: m.index ?? 0,
+    end: (m.index ?? 0) + m[0].length,
+  }));
+  const claims: Claim[] = [];
+  for (const comment of text.matchAll(/\/\*([\s\S]*?)\*\//g)) {
+    const at = comment.index ?? 0;
+    const sameLine = declarations.find(
+      (d) => d.end <= at && !text.slice(d.end, at).includes('\n'),
+    );
+    const owner = sameLine ?? declarations.find((d) => d.start > at);
+    if (!owner) continue;
+    for (const claim of comment[1].matchAll(/(\d+\.\d+):1 (?:on|vs) ([^,.;\n:]+)/g)) {
+      // `-- = ` is how a comment adds a aside ("on the dim fill -- = `--muted`"), so the
+      // ground ends where the dash-dash begins.
+      const ground = claim[2].trim().split(' -- ')[0];
+      claims.push({ scheme: name, token: owner.token, ratio: Number(claim[1]), ground });
+    }
+  }
+  return claims;
+};
+
+/** A ground as a colour: a declared token, a literal hex, or nothing. */
+const groundColour = (claim: Claim): string | null => {
+  const words = claim.ground.replace(/`/g, '').trim();
+  if (/^#[0-9a-f]{6}$/i.test(words)) return words;
+  const token = words.startsWith('--')
+    ? words
+    : words === 'its own fill'
+      ? claim.token.endsWith('-ink')
+        ? `${claim.token.slice(0, -4)}-bg`
+        : ''
+      : (GROUND_WORDS[words] ?? '');
+  if (!token) return null;
+  const key = camel(token);
+  const palette = claim.scheme === 'dark' ? dark : light;
+  return key in palette ? palette[key] : null;
+};
+
+/** The one failure mode a resolved colour still has: the ratio itself. */
+const claimProblem = (claim: Claim): string | null => {
+  const palette = claim.scheme === 'dark' ? dark : light;
+  const key = camel(claim.token);
+  if (!(key in palette)) return `${claim.token} in ${claim.scheme} is not a declared token`;
+  const ground = groundColour(claim);
+  if (!ground) {
+    return `the ground "${claim.ground}" of the ${claim.scheme} ${claim.token} claim is not resolvable`;
+  }
+  const actual = contrast(palette[key], ground);
+  return agrees(actual, claim.ratio)
+    ? null
+    : `${claim.scheme} ${claim.token} on ${ground} measures ${actual.toFixed(2)}:1, the comment says ${claim.ratio}`;
+};
+
+describe('the stylesheet cannot quote a ratio its own colours deny', () => {
+  const claims = [...claimsIn('dark'), ...claimsIn('light')];
+
+  it('finds the claims it means to read', () => {
+    // The floor is the difference between a gate and a no-op: if the parsing above ever
+    // stops matching the comment style, this fails instead of passing on nothing.
+    expect(claims.length).toBeGreaterThanOrEqual(30);
+    expect(claims.filter((claim) => claim.scheme === 'dark').length).toBeGreaterThanOrEqual(15);
+  });
+
+  it('resolves every ground it found', () => {
+    expect(claims.map(claimProblem).filter((problem) => problem !== null)).toEqual([]);
+  });
+
+  it('can fail', () => {
+    const claim = claims.find((c) => c.ground === '--surface') ?? claims[0];
+    expect(claimProblem({ ...claim, ratio: claim.ratio + 0.3 })).not.toBeNull();
+    expect(claimProblem({ ...claim, ground: 'the far side of the ramp' })).not.toBeNull();
+    expect(claimProblem({ ...claim, token: '--not-a-token' })).not.toBeNull();
   });
 });
 

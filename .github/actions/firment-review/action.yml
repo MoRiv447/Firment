@@ -96,11 +96,24 @@ runs:
           printf 'Not run: no `Cargo.toml` in this repository (or `deps: false`).\n' > deps.md
         fi
 
-        findings=$(grep -c '^\(□\|■\)' static.md || true)
-        high=$(grep -c '^■' static.md || true)
+        # These two numbers are the action's only machine-readable output, so they are the
+        # part a reader trusts. They used to grep `^■`, which the renderer never emits -- it
+        # writes `## ■ <title>` (review.rs's `to_markdown`) -- so both were 0 on every run,
+        # and a count that cannot be wrong is not a gate. The shape is therefore checked
+        # before it is counted: two report headers must be present -- one per report, either
+        # a rendered `# Review:` or the named reason `deps` was skipped -- and anything else
+        # fails the step rather than reporting zero findings from a file nobody read.
+        cat static.md deps.md > review-all.md
+        headers=$(grep -c '^# Review:\|^Not run:' review-all.md || true)
+        if [ "$headers" != "2" ]; then
+          echo "::error::could not read the review output ($headers report headers, expected 2) -- refusing to report a finding count"
+          exit 1
+        fi
+        findings=$(grep -c '^## [■□]' review-all.md || true)
+        high=$(grep -c '^## ■' review-all.md || true)
         {
-          echo "findings=${findings:-0}"
-          echo "high=${high:-0}"
+          echo "findings=$findings"
+          echo "high=$high"
         } >> "$GITHUB_OUTPUT"
 
         {

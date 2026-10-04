@@ -48,7 +48,7 @@
  */
 
 /* ------------------------------------------------------------------ */
-/* Colour and elevation. Both blocks carry the same 47 keys -- the test
+/* Colour and elevation. Both blocks carry the same 48 keys -- the test
    that checks this also checks the count, so a key added to one scheme
    and forgotten in the other cannot land.                        */
 /* ------------------------------------------------------------------ */
@@ -218,7 +218,7 @@
 :root[data-scheme="light"] {
   --bg: #fbfcf8;                     /* warm off-white: the same hue, turned up */
   --surface: #f5f7f0;
-  --surface-raised: #edf0e6;         /* 1.07:1 vs bg: separation is the hairline */
+  --surface-raised: #edf0e6;         /* 1.07:1 vs surface: separation is the hairline */
   --code-bg: #e9ede1;                /* one step down, as in dark */
 
   --line: #e2e6da;
