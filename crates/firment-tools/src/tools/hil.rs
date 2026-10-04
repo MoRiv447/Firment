@@ -361,6 +361,12 @@ impl Tool for Hil {
             let remaining =
                 total_timeout.saturating_sub(overall_start.elapsed().as_millis() as u64);
 
+            // Refused before the step runs its hardware: a suite whose `expect_regex` does not
+            // compile must not spend a flash to find out, and a step that cannot be checked is
+            // not a step that passed.
+            let expectation = Expectation::of(&step.inner)
+                .map_err(|e| ToolError::new(format!("step {} ({kind}): {e}", idx + 1)))?;
+
             let result: Result<String, String> = match kind {
                 "build" => run_build_step(&step.inner, ctx, dry_run, remaining).await,
                 "flash" => run_flash_step(&step.inner, ctx, dry_run, remaining).await,
@@ -402,9 +408,7 @@ impl Tool for Hil {
             let elapsed = step_start.elapsed().as_millis() as u64;
             match result {
                 Ok(text) => {
-                    // Check monitor expectations: run_monitor_step returns text but also embeds
-                    // [HIL_EXPECT: ...] marker when expectations fail; we detect it to mark overall fail
-                    let expect_failed = text.contains("[HIL_EXPECT:FAIL]");
+                    let (text, expect_failed) = step_verdict(kind, expectation, text);
                     if expect_failed {
                         failed_expect = true;
                         overall_ok = false;
@@ -814,6 +818,39 @@ fn resolve_steps(
 // ---------------------------------------------------------------------------
 // Step runners
 // ---------------------------------------------------------------------------
+
+/// Which kinds have already answered for the `expect_contains`/`expect_regex`/`expect_count`
+/// triple inside their own runner.
+///
+/// `run`, `monitor` and `trace` do -- they read the port or the RTT stream and report against it.
+/// Nothing else did: `build` and `flash` accepted the triple in their schema and ignored it, so a
+/// suite could ask that the build log mention something and be told PASS by a build that never
+/// mentioned it; `observe`, `la` and `elf_analyze` ignore it too, each for its own richer fields.
+/// A new kind therefore defaults to "checked here", because forgetting in this list means the
+/// dispatcher checks the step -- the safe direction.
+fn answers_for_itself(kind: &str) -> bool {
+    matches!(kind, "run" | "monitor" | "trace")
+}
+
+/// One step's text and whether it failed its declared expectation.
+///
+/// The tail is where the question gets asked once, rather than at each runner's option. For the
+/// kinds that answer for themselves the marker they embed is the verdict, and the triple is NOT
+/// re-checked here: their own text quotes what was wanted, so re-running `contains` over it would
+/// find the expected string in the report of the failure and call it a pass.
+fn step_verdict(kind: &str, expectation: Option<Expectation>, text: String) -> (String, bool) {
+    if answers_for_itself(kind) {
+        let failed = text.contains("[HIL_EXPECT:FAIL]");
+        return (text, failed);
+    }
+    match expectation {
+        Some(exp) => {
+            let (passed, verdict) = exp.verdict(kind, &text);
+            (format!("{text}\n{verdict}"), !passed)
+        }
+        None => (text, false),
+    }
+}
 
 async fn run_build_step(
     step: &HilStep,
@@ -2476,6 +2513,79 @@ elf = "build/fw.elf"
     /// A `run` step accepts `expect_contains` / `expect_regex` / `expect_count` and used to ignore
     /// all three: the check lived inside `run_monitor_step` only, so a suite that declared what it
     /// expected to see from a run got a passing step whatever the firmware printed.
+    /// The tail that decides, for the kinds that never decided for themselves.
+    #[test]
+    fn a_build_or_flash_step_that_ignores_its_expectation_no_longer_passes() {
+        let contains = |kind: &str, needle: &str| {
+            Expectation::of(&HilStep {
+                kind: kind.to_string(),
+                expect_contains: Some(needle.to_string()),
+                ..Default::default()
+            })
+            .expect("resolves")
+            .expect("the step declared one")
+        };
+        let regex = |kind: &str, pattern: &str| {
+            Expectation::of(&HilStep {
+                kind: kind.to_string(),
+                expect_regex: Some(pattern.to_string()),
+                ..Default::default()
+            })
+            .expect("compiles")
+            .expect("the step declared one")
+        };
+
+        // The case that used to be a silent pass: a build that finished and never mentioned the
+        // figure the suite asked for.
+        let (text, failed) = step_verdict(
+            "build",
+            Some(contains("build", "Flash: 81% used")),
+            "Compiling board.c\nFinished in 4.2s\n".to_string(),
+        );
+        assert!(failed, "an unmet expectation must fail the step: {text}");
+        assert!(text.contains("[HIL_EXPECT:FAIL]"), "{text}");
+        assert!(
+            text.contains("Flash: 81% used"),
+            "the report must name what was wanted: {text}"
+        );
+
+        let (text, failed) = step_verdict(
+            "flash",
+            Some(regex("flash", "Download completed")),
+            "probe-rs download\nWrote 4096 bytes in 0.8s\n".to_string(),
+        );
+        assert!(
+            failed,
+            "flash accepted `expect_regex` and read it nowhere: {text}"
+        );
+
+        // Met, so the tail is not simply failing everything: the same step with the line present.
+        let (text, failed) = step_verdict(
+            "flash",
+            Some(regex("flash", "Download completed")),
+            "probe-rs download\nDownload completed in 0.8s\n".to_string(),
+        );
+        assert!(!failed, "{text}");
+        assert!(text.contains("[HIL_EXPECT:PASS]"), "{text}");
+
+        // The trap that keeps the kinds which grade themselves out of this tail: their own text
+        // quotes the expectation, so re-checking `contains` over it would find the wanted string
+        // in the report of a failure. A `run` step's marker is the verdict, unchanged.
+        let self_graded = "rtt: expected boot ok\n[HIL_EXPECT:FAIL] run expect matched 0/1\n";
+        let (text, failed) = step_verdict(
+            "run",
+            Some(contains("run", "boot ok")),
+            self_graded.to_string(),
+        );
+        assert!(failed, "the step's own verdict still decides: {text}");
+        assert_eq!(text, self_graded, "and it is not graded a second time");
+
+        // Nothing declared is not a failure, for either family of kind.
+        let (text, failed) = step_verdict("build", None, "ok\n".to_string());
+        assert!(!failed);
+        assert_eq!(text, "ok\n");
+    }
+
     #[test]
     fn a_declared_expectation_grades_whatever_output_a_step_produced() {
         let step = HilStep {
