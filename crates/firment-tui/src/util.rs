@@ -97,6 +97,50 @@ pub(crate) fn is_diff_body(detail: &str) -> bool {
     firment_core::review::self_review::looks_like_diff(detail)
 }
 
+/// The changed lines of a diff: `(added, removed)`, file headers excluded.
+///
+/// `--- a/src/main.c` starts with `-` and `+++ b/src/main.c` with `+`, so counting those lines
+/// as changes charges every diff one removal and one addition it never made. `diff_is_small`
+/// already excluded them for the collapse decision; the card's `+N -M` label did not, which is
+/// the same rule written twice with one of them wrong -- so a one-line edit was reported as
+/// `+2 -1` next to a summary saying one line changed.
+pub(crate) fn diff_line_counts(detail: &str) -> (usize, usize) {
+    let mut added = 0;
+    let mut removed = 0;
+    for line in detail.lines() {
+        if line.starts_with('-') && !line.starts_with("---") {
+            removed += 1;
+        } else if line.starts_with('+') && !line.starts_with("+++") {
+            added += 1;
+        }
+    }
+    (added, removed)
+}
+
+/// What `/ledger --export` does with a rendered patch.
+///
+/// The order is the whole point: an empty ledger must not reach the filesystem. Writing first and
+/// checking afterwards created a zero-byte file at the path the user named -- a patch that applies
+/// cleanly to nothing -- and then said there had been nothing to export. And a failed write was
+/// reported as a notice the same colour as the success it contradicted, so `Could not write` read
+/// as part of the answer rather than as the absence of one.
+#[derive(Debug)]
+pub(crate) enum Export {
+    Empty,
+    Written(usize),
+    Failed(String),
+}
+
+pub(crate) fn export_ledger_to(dest: &std::path::Path, diff: &str) -> Export {
+    if diff.is_empty() {
+        return Export::Empty;
+    }
+    match std::fs::write(dest, diff) {
+        Ok(()) => Export::Written(diff.len()),
+        Err(e) => Export::Failed(format!("Could not write {}: {e}", dest.display())),
+    }
+}
+
 /// A diff small enough to show without being asked (the breathing-LED case in
 /// the TUI mockup is three changed lines: one `-` line plus two `+`). Larger
 /// diffs collapse to the summary and wait for the expand key.
@@ -104,14 +148,8 @@ pub(crate) fn is_diff_body(detail: &str) -> bool {
 /// The `--- `/`+++ ` FILE HEADERS must not count: they are two extra lines on
 /// every diff, and counting them made a one-line edit look like four changes.
 pub(crate) fn diff_is_small(detail: &str) -> bool {
-    detail
-        .lines()
-        .filter(|l| {
-            (l.starts_with('-') && !l.starts_with("---"))
-                || (l.starts_with('+') && !l.starts_with("+++"))
-        })
-        .count()
-        <= 4
+    let (added, removed) = diff_line_counts(detail);
+    added + removed <= 4
 }
 
 pub(crate) fn truncate_tail(text: &str, max: usize) -> String {
@@ -267,6 +305,88 @@ pub(crate) async fn git_info(cwd: &Path) -> Option<GitInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One line changed is one line counted, not three.
+    #[test]
+    fn the_file_headers_of_a_diff_are_not_changes() {
+        // The shape `firment_tools::tools::util::simple_diff` and the permission previews emit:
+        // two header lines, a hunk marker, then the actual change.
+        let one_line_edit =
+            "--- a/src/main.c\n+++ b/src/main.c\n@@ -12,1 +12,1 @@\n-    on = 1;\n+    on = 2;\n";
+        assert_eq!(diff_line_counts(one_line_edit), (1, 1));
+        // Counting the headers would have called this `+2 -2`, beside a summary saying one line
+        // changed -- the label and the sentence disagreeing about the same edit.
+        assert!(diff_is_small(one_line_edit));
+
+        // A context line and a removed-only hunk, so the two halves are not one number split.
+        assert_eq!(
+            diff_line_counts("--- a\n+++ b\n@@ -1,3 +1,2 @@\n keep\n-went\n"),
+            (0, 1)
+        );
+        assert_eq!(
+            diff_line_counts("--- a\n+++ b\n@@ -0,0 +1,3 @@\n+n\n+n\n+n\n"),
+            (3, 0)
+        );
+        // Nothing to report is nothing counted, headers or no headers.
+        assert_eq!(diff_line_counts(""), (0, 0));
+    }
+
+    /// The collapse decision and the label are the same number, now that both read one rule.
+    #[test]
+    fn the_card_label_and_the_collapse_agree_on_what_a_change_is() {
+        let exactly_four = "--- a\n+++ b\n@@ -1,4 +1,4 @@\n-a\n-b\n+c\n+d\n";
+        let five_more = "--- a\n+++ b\n@@ -1,5 +1,5 @@\n-a\n-b\n-c\n+d\n+e\n";
+        assert_eq!(diff_line_counts(exactly_four), (2, 2));
+        assert_eq!(diff_line_counts(five_more), (2, 3));
+        assert!(diff_is_small(exactly_four), "four changes auto-expand");
+        assert!(
+            !diff_is_small(five_more),
+            "five do not, and both labels are the same two numbers the collapse decided on"
+        );
+    }
+
+    /// An export with nothing in it writes nothing at all.
+    #[test]
+    fn an_empty_ledger_export_does_not_create_the_file_it_refuses_to_fill() {
+        let dir = std::env::temp_dir().join(format!(
+            "firment-tui-export-{}-{}",
+            std::process::id(),
+            std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("changes.patch");
+        match export_ledger_to(&dest, "") {
+            Export::Empty => {}
+            other => panic!("an empty ledger is Empty, got {other:?}"),
+        }
+        assert!(
+            !dest.exists(),
+            "the export wrote {} for a ledger with no committed edits",
+            dest.display()
+        );
+
+        // A real patch is written and reports its size.
+        let written = export_ledger_to(&dest, "--- a\n+++ b\n@@ -1 +1 @@\n-x\n+y\n");
+        assert!(matches!(written, Export::Written(_)), "{written:?}");
+        assert_eq!(
+            std::fs::read_to_string(&dest).unwrap(),
+            "--- a\n+++ b\n@@ -1 +1 @@\n-x\n+y\n"
+        );
+
+        // And a write that cannot happen is a failure naming the path, not a notice shaped like
+        // the success line. Writing onto a directory is the refusal this machine actually gives
+        // (os error 5), and it does not depend on the sandbox's write rules outside the checkout.
+        let bad = dir.join("a-directory");
+        std::fs::create_dir_all(&bad).unwrap();
+        match export_ledger_to(&bad, "x") {
+            Export::Failed(why) => {
+                assert!(why.contains("a-directory"), "{why}");
+                assert!(why.starts_with("Could not write"), "{why}");
+            }
+            other => panic!("a refused write must be Failed, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_progress_line_shows_only_the_numbers_the_tool_knows() {

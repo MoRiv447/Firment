@@ -564,15 +564,21 @@ pub(crate) fn spawn_agent_task(
                         let agent = agent.lock().await;
                         agent.export_ledger(std::path::Path::new(&agent.session().cwd))
                     };
-                    let lines = match std::fs::write(&dest, &diff) {
-                        Ok(()) if diff.is_empty() => vec![
-                            "No committed edits in this session yet — nothing to export"
-                                .to_string(),
-                        ],
-                        Ok(()) => {
+                    let (lines, failure) = match crate::util::export_ledger_to(
+                        std::path::Path::new(&dest),
+                        &diff,
+                    ) {
+                        crate::util::Export::Empty => (
+                            vec![
+                                "No committed edits in this session yet — nothing to export"
+                                    .to_string(),
+                            ],
+                            None,
+                        ),
+                        crate::util::Export::Failed(why) => (Vec::new(), Some(why)),
+                        crate::util::Export::Written(bytes) => {
                             let mut lines = vec![format!(
-                                "Exported {} byte(s) of changes to {}",
-                                diff.len(),
+                                "Exported {bytes} byte(s) of changes to {}",
                                 dest.display()
                             )];
                             if !truncated.is_empty() {
@@ -588,13 +594,17 @@ pub(crate) fn spawn_agent_task(
                                         .join(", ")
                                 ));
                             }
-                            lines
+                            (lines, None)
                         }
-                        Err(e) => vec![format!("Could not write {}: {e}", dest.display())],
                     };
                     let agent = agent.lock().await;
                     for line in lines {
                         agent.emit(AgentEvent::Info(line)).await;
+                    }
+                    if let Some(why) = failure {
+                        // A refusal, not a notice: the file is not there, and an `Info` line sat
+                        // in the same colour as the success it contradicted.
+                        agent.emit(AgentEvent::Error(why)).await;
                     }
                 }
                 AgentCmd::Pin { path } => {

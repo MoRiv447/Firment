@@ -332,8 +332,10 @@ impl App {
                 };
                 let body = detail.as_deref().filter(|b| crate::util::is_diff_body(b));
                 let counts = body.map(|b| {
-                    let added = b.lines().filter(|l| l.starts_with('+')).count();
-                    let removed = b.lines().filter(|l| l.starts_with('-')).count();
+                    // `crate::util::diff_line_counts`: the same exclusion `diff_is_small` uses to
+                    // decide whether to collapse, so the label and the collapse cannot disagree
+                    // about what a changed line is.
+                    let (added, removed) = crate::util::diff_line_counts(b);
                     format!("  +{added} -{removed}")
                 });
                 let marker = if body.is_some() {
