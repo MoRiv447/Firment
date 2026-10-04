@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { Bot, Diff } from 'lucide-react';
@@ -113,6 +113,63 @@ describe('Inspector', () => {
     );
     expect(screen.getByRole('tab', { name: /Subagents/ })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('tabpanel')).toHaveAccessibleName(/Subagents/);
+  });
+
+  it('keeps a pane mounted when you switch away, because its state is the point', () => {
+    // The Hardware pane holds a live serial monitor: `busy`, the flash result and the
+    // `onHardwareExit` listener all live inside it. Reading a diff used to unmount that, which
+    // is not "the tab is in the background", it is the port quietly no longer being watched.
+    let alive = 0;
+    function Watcher() {
+      // Counted in the effect, not the render body: a render is not a mount, and a count that
+      // moved on renders would answer a different question than "is it still up".
+      useEffect(() => {
+        alive += 1;
+        return () => {
+          alive -= 1;
+        };
+      }, []);
+      return <span>the monitor</span>;
+    }
+    const watched: InspectorTab[] = [
+      { key: 'changes', label: 'Changes', icon: Diff, content: <div>the diff</div> },
+      // `fill` because the pane that holds the serial monitor is the fill one, and a `display: flex`
+      // rule of its own is exactly what can make an element ignore `hidden`. The stylesheet is
+      // stubbed in this suite (vitest does not inject CSS), so this cannot measure that — it is the
+      // case written down, with the layout carried by `.pane[hidden]` / `.fillPane[hidden]` in the
+      // sheet.
+      { key: 'hardware', label: 'Hardware', icon: Bot, fill: true, content: <Watcher /> },
+    ];
+    const view = (active: string) => (
+      <Inspector
+        tabs={watched}
+        active={active}
+        onActiveChange={() => {}}
+        open
+        onToggle={() => {}}
+        width={320}
+        onResize={() => {}}
+      />
+    );
+    const { rerender } = render(view('hardware'));
+    expect(alive, 'the pane must be up while its tab is showing').toBe(1);
+    rerender(view('changes'));
+    expect(alive, 'leaving the tab unmounted the pane that holds the port').toBe(1);
+    expect(screen.getByText('the monitor')).not.toBeVisible();
+    expect(screen.getByText('the diff')).toBeVisible();
+    expect(screen.getAllByRole('tabpanel')).toHaveLength(1);
+  });
+
+  it('points every tab control at a panel that exists', () => {
+    // `aria-controls` named an element that was only in the DOM while its own tab was up, so two
+    // of the three pointed nowhere. Mounting every pane is what makes the third resolve; this is
+    // the assertion that keeps it that way.
+    render(<Harness />);
+    for (const tab of screen.getAllByRole('tab')) {
+      const id = tab.getAttribute('aria-controls');
+      expect(id, `${tab.textContent} names no panel`).toBeTruthy();
+      expect(document.getElementById(id!), `${id} is not in the document`).toBeTruthy();
+    }
   });
 
   it('collapses to a rail that reopens the pane you chose, not the first one', () => {

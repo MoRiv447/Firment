@@ -156,12 +156,32 @@ export function Inspector({
         <div
           data-ui="inspector-body"
           data-fill={current?.fill ? 'true' : undefined}
-          id={`${prefix}-panel-${current?.key}`}
-          role="tabpanel"
-          aria-labelledby={`${prefix}-tab-${current?.key}`}
           className={styles.body}
         >
-          {current?.content}
+          {/*
+            Every pane is mounted and the inactive ones are hidden, because rendering only
+            `current.content` — which is what this did — unmounts a pane the moment you look away.
+            For the Hardware pane that is not a cosmetic loss: it holds the serial monitor and the
+            flash view, their `busy` flags and results, and the `onHardwareExit` listener that tells
+            the app the monitor closed. Leave Hardware to read a diff and come back to a port nobody
+            is watching, with no message saying why it stopped.
+  
+            Each wrapper carries the panel role and the id `Tabs` points `aria-controls` at, so the
+            three tabs' controls all resolve — they used to name an element that existed only while
+            that tab was up.
+          */}
+          {tabs.map((tab) => (
+            <div
+              key={tab.key}
+              hidden={tab.key !== current?.key}
+              className={tab.fill ? styles.fillPane : styles.pane}
+              id={`${prefix}-panel-${tab.key}`}
+              role="tabpanel"
+              aria-labelledby={`${prefix}-tab-${tab.key}`}
+            >
+              {tab.content}
+            </div>
+          ))}
         </div>
       </aside>
     </>

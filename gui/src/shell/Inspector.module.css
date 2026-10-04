@@ -92,6 +92,35 @@
 }
 
 /*
+ * One wrapper per pane, since every pane stays mounted (see `Inspector.tsx`).
+ *
+ * The prose panes need the wrapper to add nothing, so it is a plain block with a
+ * `min-width` to keep a long diff line from widening the column. The fill pane is the
+ * body's flex child and has to take the box the way its content used to take it
+ * directly.
+ *
+ * `[hidden]` is restated against both because an author `display` rule beats the UA
+ * sheet's `[hidden] { display: none }`, and a fill pane that ignored `hidden` would
+ * sit on top of the diff you switched to — the bug this layout exists to fix, in the
+ * rule that fixes it.
+ */
+.pane {
+  min-width: 0;
+}
+
+.fillPane {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.pane[hidden],
+.fillPane[hidden] {
+  display: none;
+}
+
+/*
  * Collapsed, the column is a strip of icons rather than a bare chevron: the strip
  * is how you get back, and it says what is behind it.
  */
