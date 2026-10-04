@@ -1,4 +1,4 @@
-# 本地打包（Windows x64 优先；Linux/macOS 由 GitHub Actions 自动构建）
+﻿# 本地打包（Windows x64 优先；Linux/macOS 由 GitHub Actions 自动构建）
 # 用法: powershell -ExecutionPolicy Bypass -File release\pack.ps1
 param(
     [switch]$SkipBuild

@@ -114,9 +114,16 @@ jobs:
           # still publishes.
           TAG="${GITHUB_REF_NAME}"
           awk -v pat="^## ${TAG} " '$0 ~ pat {flag=1; next} /^## / {if (flag) exit} flag' \
-            CHANGELOG.md > RELEASE_NOTES.md || true
+            CHANGELOG.md > RELEASE_NOTES.md
           if [ ! -s RELEASE_NOTES.md ]; then
-            echo "_See [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/main/CHANGELOG.md) for details._" > RELEASE_NOTES.md
+            # This used to write a link to CHANGELOG.md and publish happily. That is the
+            # silently-skipped check AGENTS.md forbids: the release that reaches a user with no
+            # section of its own gets the notes nobody wrote, and nothing downstream can tell --
+            # `awk` exits 0 for an empty match, so even the `|| true` was never the failure
+            # signal. The heading and the tag have to match character for character; say so and
+            # stop, and let whoever tagged it fix the CHANGELOG or the tag.
+            echo "::error::CHANGELOG.md has no \"## ${TAG} \" section -- the release notes would be a fallback nobody reviewed. Add the section (heading must match the tag exactly) or retag."
+            exit 1
           fi
           cat RELEASE_NOTES.md
       - name: Remove empty placeholder release

@@ -19,7 +19,10 @@ machine — read the "why" so you don't re-create the problem.
   it. After touching anything under `gui/src-tauri/src/`, run inside that
   directory:
   `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo check`
-  (CI runs exactly this via `gui-check`.)
+  (CI runs fmt, clippy `--all-targets` and `cargo test --lib` there via `gui-check` — the test
+  line landed on 2026-10-04; until then no CI job had ever *compiled* that workspace's tests,
+  while this file claimed the clippy gate ran there too. A claim about a gate is checked by
+  reading the workflow, not by remembering to write it.)
 - **On this machine the linker is configured globally**, so a link needs no
   environment variable: `~/.cargo/config.toml` names the MSVC `link.exe` and
   sets `LIB` (see the end of this file for why, and for the version numbers that
@@ -364,6 +367,20 @@ two variables above are the whole available route.
   the file shipped broken: the only route anyone tested was the one that worked.
   Measured on this machine with PS 5.1 (no PowerShell 7 installed here to compare, so
   that half is unverified); adding the BOM made the same parse report clean.
+  **A generated `.ps1` is a shipped `.ps1`.** `firm install` writes
+  `firm.completions.ps1` for the profile to dot-source, and `clap_complete` emits the parser's
+  help verbatim with no BOM — 38 of this CLI's help lines carry non-ASCII, so the generated file
+  had the same exposure `install.ps1` shipped with. Both are gated now by
+  `every_shipped_powershell_script_carries_a_utf8_bom`, which walks the repository for `*.ps1`
+  (skipping `target`, `.git`, `node_modules`, `dist`) so a third script cannot appear unchecked,
+  and by `the_completions_script_installs_with_a_bom_and_needs_one`, which additionally asserts a
+  non-ASCII byte in the body — a BOM guarding an ASCII-only file is ceremony, and the test says
+  which case it is. Related and deliberately NOT fixed: `release/pack.ps1` writes
+  `dist/SHA256SUMS` with CRLF line endings, and `install.sh` matches a sums row by field
+  (`$2 == a`), so a hand-built `dist/` directory served as a mirror needs the CR stripped before
+  `install.sh` will read it. Changing the generator would alter the byte form of any existing
+  mirror's sums file, so the newline is left alone and recorded here; the BOM half of that finding
+  was fixed.
 - **Where the copies are the callers, put the invariant in the callee.** The 2026-10-04 round
   found `run_turn`'s failure exits emitting no turn boundary (max iterations said nothing, and
   `ok_or(NoProvider)?` leaves through the question mark), which left every caller to compensate —

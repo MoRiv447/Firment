@@ -102,8 +102,28 @@ pub fn install_files(source: &Path, dir: &Path) -> Result<(PathBuf, PathBuf)> {
             )
         })?;
     }
+    let completions = write_completions(dir)?;
+    Ok((target, completions))
+}
+
+/// The bytes a PowerShell script must begin with to be decoded as UTF-8 by Windows
+/// PowerShell 5.1, which reads a BOM-less file in the ANSI codepage.
+const PS1_BOM: &[u8; 3] = b"\xEF\xBB\xBF";
+
+/// Write `firm.completions.ps1` into `dir` and hand back its path.
+///
+/// The BOM is the reason this is a function rather than four lines in `install`: the file is
+/// dot-sourced from the PowerShell profile, so it is a shipped `.ps1` like `install.ps1`, and the
+/// rule AGENTS.md records for those applies -- an em dash arriving as two ANSI bytes can eat a
+/// quote terminator. `clap_complete` writes the parser's help verbatim and emits no BOM, and 38
+/// of this CLI's help lines carry non-ASCII (`—`, `§`, `→`), so "it usually works" is not a
+/// property of the file, it is a property of the machine's codepage.
+pub(crate) fn write_completions(dir: &Path) -> Result<PathBuf> {
     let completions = dir.join("firm.completions.ps1");
-    let mut file = fs::File::create(&completions)?;
+    let mut file = fs::File::create(&completions)
+        .with_context(|| format!("failed to create {}", completions.display()))?;
+    file.write_all(PS1_BOM)
+        .with_context(|| format!("failed to write the UTF-8 BOM to {}", completions.display()))?;
     let mut cmd = crate::Cli::command();
     clap_complete::generate(
         clap_complete::shells::PowerShell,
@@ -111,7 +131,7 @@ pub fn install_files(source: &Path, dir: &Path) -> Result<(PathBuf, PathBuf)> {
         "firm",
         &mut file,
     );
-    Ok((target, completions))
+    Ok(completions)
 }
 
 pub fn update(source: Option<PathBuf>, to: Option<PathBuf>) -> Result<()> {

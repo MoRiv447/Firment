@@ -2783,6 +2783,88 @@ mod tests {
     /// `firm doctor --json --sbc` used to mean "print the JSON report" and nothing more: the
     /// board stage sits in the prose branch, so the flag was taken, dropped, and no output said
     /// either way. Refusing is the only reading that keeps both help lines true at once.
+    /// A `.ps1` that ships without a BOM is a script Windows PowerShell decodes in the ANSI
+    /// codepage, which is how `install.ps1` shipped broken for a whole release: a multi-byte
+    /// sequence swallowed a quote terminator, and the only route anyone had tested (`irm | iex`)
+    /// worked because the HTTP response declared UTF-8.
+    ///
+    /// This checks every script in the repository rather than the one that got the bug fixed,
+    /// including the generated one below, and it walks the tree so a third `.ps1` cannot appear
+    /// untested-by-default.
+    #[test]
+    fn every_shipped_powershell_script_carries_a_utf8_bom() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("the repository root, two levels above the crate");
+        let mut scripts = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()))
+            {
+                let path = entry.unwrap().path();
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if path.is_dir() {
+                    // The three trees that are not source: a build directory and two dependency
+                    // caches can each hold somebody else's `.ps1`.
+                    if !matches!(name, "target" | ".git" | "node_modules" | "dist") {
+                        stack.push(path);
+                    }
+                    continue;
+                }
+                if name.ends_with(".ps1") {
+                    scripts.push(path);
+                }
+            }
+        }
+        assert!(
+            scripts.len() >= 2,
+            "expected install.ps1 and release/pack.ps1 at least; found {scripts:?}"
+        );
+        for path in &scripts {
+            let bytes = std::fs::read(path).unwrap();
+            assert!(
+                bytes.starts_with(b"\xEF\xBB\xBF"),
+                "{} has no UTF-8 BOM; PowerShell 5.1 will read it in the ANSI codepage",
+                path.display()
+            );
+        }
+    }
+
+    /// The generated completions file is a shipped `.ps1` too, and `clap_complete` writes none.
+    #[test]
+    fn the_completions_script_installs_with_a_bom_and_needs_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = install::write_completions(dir.path()).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(
+            bytes.starts_with(b"\xEF\xBB\xBF"),
+            "{} starts with {:02x?} -- a profile that dot-sources this gets whatever the codepage \
+             makes of it",
+            path.display(),
+            &bytes[..bytes.len().min(4)]
+        );
+        // The BOM is load-bearing here, not decorative: the script quotes this CLI's own help,
+        // and that help is not ASCII. Without a non-ASCII body the assert below would be the
+        // signal that the BOM had become ceremony.
+        let body = &bytes[3..];
+        assert!(
+            body.len() > 500,
+            "the generated script is implausibly short: {} bytes",
+            body.len()
+        );
+        assert!(
+            body.iter().any(|b| *b >= 0x80),
+            "no non-ASCII byte in the completions body -- the BOM would be guarding nothing"
+        );
+        let text = String::from_utf8(body.to_vec()).expect("valid UTF-8 after the BOM");
+        assert!(
+            text.contains("Register-ArgumentCompleter"),
+            "not a PowerShell completion script: {text}"
+        );
+    }
+
     #[test]
     fn doctor_refuses_to_be_json_and_probe_the_board() {
         // Neither flag on its own is the refusal, and neither is refused today.

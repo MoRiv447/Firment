@@ -92,7 +92,13 @@ jobs:
           # fmt must be gated here: the root-workspace fmt job never covers
           # this independent workspace (AGENTS.md requires it locally).
           cargo fmt --check
-          cargo check
+          # `check` alone compiled nothing but the library: clippy is the gate
+          # AGENTS.md has claimed runs here all along, and without `--all-targets`
+          # it never saw the test modules. `cargo test --lib` is the line that
+          # makes this workspace's tests evidence at all -- before it, the 15 (now
+          # 17) tests here had never been compiled, let alone run, by any CI.
+          cargo clippy --all-targets -- -D warnings
+          cargo test --lib
 
   # Security advisories (v1.0 plan, item 6): the one gate that needs the network on
   # purpose -- the advisory database is a live feed, so caching it locally would be
