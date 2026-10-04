@@ -1,8 +1,7 @@
+use super::util::WorkbenchTx;
 use async_trait::async_trait;
 use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
-
-use firment_core::WorkbenchConfig;
 
 pub struct Decision;
 
@@ -59,16 +58,39 @@ impl Tool for Decision {
         })
     }
 
+    fn approval(&self, args: &Value) -> Option<String> {
+        let action = args
+            .get("action")
+            .and_then(|a| a.as_str())
+            .unwrap_or("list")
+            .to_lowercase();
+        // The same rule `pinmap` now applies to the same file: both actions below rewrite all of
+        // `.firment/workbench.toml`, so a guard on one and not the other is the sibling drift this
+        // project keeps having to find again. `list` reads.
+        match action.as_str() {
+            "add" => Some(format!(
+                "decision add: {}",
+                args.get("title")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("(no title given)")
+            )),
+            "remove" => Some(format!(
+                "decision remove #{} from the project decision log",
+                args.get("index").and_then(|i| i.as_u64()).unwrap_or(0)
+            )),
+            _ => None,
+        }
+    }
+
     async fn run(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let action = args
             .get("action")
             .and_then(|a| a.as_str())
             .unwrap_or("list")
             .to_lowercase();
-        let root = ctx.cwd.clone();
+        let (mut cfg, tx) = WorkbenchTx::open(ctx)?;
         match action.as_str() {
             "list" => {
-                let cfg = WorkbenchConfig::load(&root).map_err(tool_err)?;
                 if cfg.decision.is_empty() {
                     return Ok(ToolOutput {
                         text: "no decisions recorded yet for this project.".into(),
@@ -102,14 +124,13 @@ impl Tool for Decision {
                     .unwrap_or_default()
                     .trim()
                     .to_string();
-                let mut cfg = WorkbenchConfig::load(&root).map_err(tool_err)?;
                 cfg.decision.push(firment_core::DecisionEntry {
                     title,
                     body,
                     date: now_date(),
                 });
                 let total = cfg.decision.len();
-                cfg.save(&root).map_err(tool_err)?;
+                tx.commit(ctx, &cfg)?;
                 Ok(ToolOutput {
                     text: format!(
                         "recorded (#{total}). Branches whose title matches will inherit it automatically."
@@ -122,7 +143,6 @@ impl Tool for Decision {
                     .and_then(|v| v.as_u64())
                     .ok_or_else(|| ToolError::new("[InvalidInput] missing 'index' (1-based)"))?
                     as usize;
-                let mut cfg = WorkbenchConfig::load(&root).map_err(tool_err)?;
                 if index == 0 || index > cfg.decision.len() {
                     return Err(ToolError::new(format!(
                         "[InvalidInput] index {index} out of range (1..={})",
@@ -130,7 +150,7 @@ impl Tool for Decision {
                     )));
                 }
                 let removed = cfg.decision.remove(index - 1);
-                cfg.save(&root).map_err(tool_err)?;
+                tx.commit(ctx, &cfg)?;
                 Ok(ToolOutput {
                     text: format!("removed #{}: {}", index, removed.title),
                 })
@@ -142,15 +162,10 @@ impl Tool for Decision {
     }
 }
 
-/// `WorkbenchConfig` errors are plain Strings; wrap without losing text.
-fn tool_err(e: String) -> ToolError {
-    ToolError::new(format!("[Decision] {e}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use firment_core::{AutoApprove, EditJournal};
+    use firment_core::{AutoApprove, EditJournal, WorkbenchConfig};
     use std::path::Path;
     use std::sync::{Arc, Mutex};
     use tempfile::tempdir;

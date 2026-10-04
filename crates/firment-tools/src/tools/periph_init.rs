@@ -206,20 +206,13 @@ impl Tool for PeriphInit {
                         if board_filter.as_deref().is_some_and(|f| board != f) {
                             continue;
                         }
-                        if let Some(entry) = board_pins.get(pin) {
-                            let f = entry.func.to_lowercase();
-                            // Same-peripheral claim (e.g. "USART1_TX" vs the
-                            // uart skeleton) is a confirmation, not a conflict.
-                            let related = peripheral == "uart" && f.contains("usart")
-                                || peripheral == "i2c" && f.contains("i2c")
-                                || peripheral == "spi" && f.contains("spi")
-                                || peripheral == "gpio";
-                            if !related {
-                                return Some(format!(
-                                    "{pin}: board '{board}' 已登记为 '{}'",
-                                    entry.func
-                                ));
-                            }
+                        if let Some(entry) = board_pins.get(pin)
+                            && !confirms_skeleton(&peripheral, &entry.func)
+                        {
+                            return Some(format!(
+                                "{pin}: board '{board}' 已登记为 '{}'",
+                                entry.func
+                            ));
                         }
                     }
                     None
@@ -234,6 +227,33 @@ impl Tool for PeriphInit {
         }
         Ok(ToolOutput { text })
     }
+}
+
+/// Peripheral families a registered pin function can name. Anything outside this list reads as a
+/// plain use of the pin ("user LED", "KEY1") rather than as hardware that owns it.
+const PERIPHERAL_TAGS: [&str; 7] = ["usart", "uart", "i2c", "spi", "tim", "adc", "dma"];
+
+/// Does an existing claim on the pin CONFIRM this skeleton, or sit in its way?
+///
+/// For a bus skeleton the answer is the function naming the same bus (`USART1_TX` for a `uart`
+/// skeleton). A GPIO skeleton is different: it drives whatever is wired there, so what stands in
+/// its way is a function naming ANY peripheral — that pin is spoken for by hardware, and bit-banging
+/// it breaks whoever claimed it. A label that names no peripheral is a plain pin use, which is
+/// exactly what a GPIO skeleton is for.
+///
+/// This arm used to be written inline as `... || peripheral == "gpio"`, and `||` binding looser
+/// than `&&` folded it into an expression that was true for EVERY gpio request: the conflict warning
+/// this block exists to print could not print for the peripheral people ask for most.
+fn confirms_skeleton(skeleton: &str, registered: &str) -> bool {
+    let registered = registered.to_lowercase();
+    if skeleton == "gpio" {
+        return !PERIPHERAL_TAGS.iter().any(|tag| registered.contains(tag));
+    }
+    if skeleton == "uart" {
+        // "USART1_TX" is the ST naming and "UART1_TX" the vendor-CUBES one; both are this bus.
+        return registered.contains("usart") || registered.contains("uart");
+    }
+    registered.contains(skeleton)
 }
 
 /// Map a part number to a seed-KB family prefix, e.g. stm32f103c8t6 -> stm32f1.
@@ -849,6 +869,107 @@ mod tests {
         assert!(
             note.contains("重复定义") || note.contains("两套 HAL"),
             "must warn about HAL duplication, got: {note}"
+        );
+    }
+
+    /// Both directions of the one rule the warning block rests on, at the rule itself.
+    #[test]
+    fn a_claim_confirms_a_skeleton_only_when_it_names_the_same_hardware() {
+        // The arm that was broken: `... || peripheral == "gpio"` folded, because `||` binds looser
+        // than `&&`, into "always related" — so `gpio` + `USART1_TX` answered `true` here and the
+        // warning below never fired for the peripheral people actually ask for.
+        assert!(
+            !confirms_skeleton("gpio", "USART1_TX"),
+            "bit-banging a pin someone registered as a UART transmit breaks their hardware"
+        );
+        assert!(
+            !confirms_skeleton("gpio", "SPI1_SCK"),
+            "…and this has to hold for every bus, not just the one that was reported"
+        );
+        // A label that names no peripheral IS a plain pin use, which is what a GPIO skeleton drives.
+        assert!(confirms_skeleton("gpio", "user LED"));
+        assert!(confirms_skeleton("gpio", "KEY1"));
+
+        // The directions that already worked, pinned so the fix is not merely an inversion.
+        assert!(confirms_skeleton("uart", "USART1_TX"));
+        assert!(confirms_skeleton("uart", "UART4_TX"));
+        assert!(confirms_skeleton("i2c", "I2C1_SCL"));
+        assert!(confirms_skeleton("spi", "SPI2_MOSI"));
+        assert!(confirms_skeleton("tim", "TIM2_CH1"));
+        assert!(confirms_skeleton("adc", "ADC1_IN5"));
+        assert!(!confirms_skeleton("i2c", "SPI1_SCK"));
+        assert!(!confirms_skeleton("tim", "USART1_TX"));
+    }
+
+    fn registry(dir: &std::path::Path) {
+        std::fs::create_dir_all(dir.join(".firment")).unwrap();
+        std::fs::write(
+            dir.join(".firment/workbench.toml"),
+            "[pinmap.node-a]\n\
+             PA9 = { func = \"USART1_TX\", owner = \"alice\" }\n\
+             PB6 = { func = \"user LED\", owner = \"alice\" }\n",
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_gpio_skeleton_walking_onto_a_bus_pin_is_warned_about() {
+        let dir = tempdir().unwrap();
+        registry(dir.path());
+        let out = PeriphInit
+            .run(
+                json!({"part": "stm32f103c8t6", "peripheral": "gpio", "pins": "PA9,PB6", "board": "node-a"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(
+            out.text.contains("引脚冲突") && out.text.contains("PA9: board 'node-a'"),
+            "the warning is the only thing that tells the model PA9 is taken: {}",
+            out.text
+        );
+        assert!(
+            !out.text.contains("PB6: board 'node-a'"),
+            "PB6 is a plain LED label, which is what this skeleton drives: {}",
+            out.text
+        );
+    }
+
+    #[tokio::test]
+    async fn a_bus_skeleton_is_warned_off_a_pin_another_bus_owns() {
+        // The confirmation direction on the same file: a uart skeleton onto USART1_TX is the claim
+        // agreeing with itself, so nothing may be reported.
+        let dir = tempdir().unwrap();
+        registry(dir.path());
+        let out = PeriphInit
+            .run(
+                json!({"part": "stm32f103c8t6", "peripheral": "uart", "pins": "PA9", "board": "node-a"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(
+            !out.text.contains("引脚冲突"),
+            "the pin is already claimed as exactly this: {}",
+            out.text
+        );
+        assert!(
+            out.text.contains("PA9"),
+            "the registry table still has to show it: {}",
+            out.text
+        );
+
+        let out = PeriphInit
+            .run(
+                json!({"part": "stm32f103c8t6", "peripheral": "i2c", "pins": "PA9", "board": "node-a"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        assert!(
+            out.text.contains("引脚冲突"),
+            "PA9 belongs to USART1_TX, which an I2C skeleton would take over: {}",
+            out.text
         );
     }
 }

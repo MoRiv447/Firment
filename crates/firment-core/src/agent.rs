@@ -2003,16 +2003,21 @@ impl Agent {
 
 /// Which calls change the workspace, as far as a turn's bookkeeping is concerned.
 ///
-/// The set is defined by one fact about the tools: they take a journal backup. Two jobs read this
-/// answer and both go wrong for a tool that writes files and is missing here — a turn re-arms the
-/// verify gate and the elf gate only after a mutation, and a wave orders a call against a
-/// concurrent read of the same path only if it is a mutation. `rename_symbol` was missing when
-/// this list was written, so the most wide-reaching edit tool in the set did neither: a call that
-/// rewrote thirty files neither triggered a verification nor waited for the reads beside it.
+/// The set is defined by one fact about the tools: they take a journal backup, either by hand or
+/// through a shared write tail (`WorkbenchTx` does it for the two writers of
+/// `.firment/workbench.toml`). Two jobs read this answer and both go wrong for a tool that writes
+/// files and is missing here — a turn re-arms the verify gate and the elf gate only after a
+/// mutation, and a wave orders a call against a concurrent read of the same path only if it is a
+/// mutation. `rename_symbol` was missing when this list was written, so the most wide-reaching edit
+/// tool in the set did neither: a call that rewrote thirty files neither triggered a verification
+/// nor waited for the reads beside it.
 /// `no_tool_that_backs_up_a_file_is_left_out_of_the_mutation_list` reads the tool sources rather
 /// than trusting this comment.
 fn is_mutation_tool(name: &str) -> bool {
-    matches!(name, "write_file" | "edit_file" | "rename_symbol")
+    matches!(
+        name,
+        "write_file" | "edit_file" | "rename_symbol" | "pinmap" | "decision"
+    )
 }
 
 /// Errors that mean "this call itself was rejected before touching the file":
@@ -3935,7 +3940,13 @@ mod tests {
 
     #[test]
     fn the_mutation_list_names_every_tool_that_takes_a_backup() {
-        for name in ["write_file", "edit_file", "rename_symbol"] {
+        for name in [
+            "write_file",
+            "edit_file",
+            "rename_symbol",
+            "pinmap",
+            "decision",
+        ] {
             assert!(is_mutation_tool(name), "{name} changes the workspace");
         }
         for name in ["read_file", "grep", "build", "flash", "verify"] {
@@ -3946,11 +3957,20 @@ mod tests {
     /// The list above is a hand-written copy of a fact the tools state better, so this reads
     /// their sources and asks which of them call `journal.begin` at all. A new writing tool that
     /// is not listed fails here instead of quietly not being verified at the end of a turn.
+    ///
+    /// The probe follows one hop, because a backup can be taken by a shared write tail rather than
+    /// by the tool: `WorkbenchTx::commit` journals on behalf of both writers of
+    /// `.firment/workbench.toml`. A list of tails is still a list, so it audits itself in both
+    /// directions — a file that journals without being a tool or a listed tail fails, and so does a
+    /// listed tail that has stopped journalling, which would leave the hop reading a call nobody
+    /// makes.
     #[test]
     fn no_tool_that_backs_up_a_file_is_left_out_of_the_mutation_list() {
+        // (file that takes the backup for others, the token its callers write)
+        const BACKUP_TAILS: [(&str, &str); 1] = [("util.rs", "WorkbenchTx")];
         let dir =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../firment-tools/src/tools");
-        let mut backing_up = 0usize;
+        let mut scanned: Vec<(String, Option<String>, bool, String)> = Vec::new();
         for entry in std::fs::read_dir(&dir)
             .unwrap_or_else(|e| panic!("reading {}: {e}", dir.display()))
             .flatten()
@@ -3959,32 +3979,63 @@ mod tests {
             let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
             };
+            let file = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("?")
+                .to_string();
+            // Test modules assemble configs by hand and register mock tools; the question this
+            // gate answers is about the product, so the file is cut at its test attribute.
+            let product = match text.find("#[cfg(test)]") {
+                Some(at) => text[..at].to_string(),
+                None => text.clone(),
+            };
             // The chained form splits `ctx.journal` and `.begin(…)` over lines, so test the file
             // rather than a line.
-            if !text.contains(".begin(") || !text.contains("journal") {
-                continue;
-            }
-            backing_up += 1;
-            let name = text
+            let journals = product.contains(".begin(") && product.contains("journal");
+            // A tool is a tool by the trait method it has to implement to be registered at all.
+            let tool_name = product
                 .split("fn name(&self)")
                 .nth(1)
                 .and_then(|rest| rest.split('"').nth(1))
-                .unwrap_or_else(|| {
-                    panic!(
-                        "{} takes a backup but has no `fn name` to read",
-                        path.display()
-                    )
-                });
+                .map(str::to_string);
+            if journals && tool_name.is_none() && !BACKUP_TAILS.iter().any(|(f, _)| f == &file) {
+                panic!(
+                    "{file} takes a backup, is not a tool, and is not listed in BACKUP_TAILS —                      either it is a new write tail (add the token its callers write) or a tool                      that lost its `fn name`"
+                );
+            }
+            scanned.push((file, tool_name, journals, product));
+        }
+        for (tail_file, _) in BACKUP_TAILS {
+            assert!(
+                scanned
+                    .iter()
+                    .any(|(file, name, journals, _)| file == tail_file
+                        && name.is_none()
+                        && *journals),
+                "{tail_file} is listed as a write tail but journals nothing, so the hop below is                  reading a call nobody makes"
+            );
+        }
+        let mut backing_up = 0usize;
+        for (file, tool_name, journals, product) in &scanned {
+            let Some(name) = tool_name else {
+                continue;
+            };
+            let calls_a_tail = BACKUP_TAILS
+                .iter()
+                .any(|(tail_file, token)| tail_file != file && product.contains(token));
+            if !(*journals || calls_a_tail) {
+                continue;
+            }
+            backing_up += 1;
             assert!(
                 is_mutation_tool(name),
-                "{name} records a journal backup and is not listed as a mutation, so the turn \
-                 neither re-verifies after it nor orders it against a concurrent read"
+                "{name} ({file}) records a journal backup and is not listed as a mutation, so the                  turn neither re-verifies after it nor orders it against a concurrent read"
             );
         }
         assert!(
-            backing_up >= 3,
-            "the scan found {backing_up} tools taking backups; a scan that finds nothing must not \
-             read as a pass"
+            backing_up >= 5,
+            "the scan found {backing_up} tools taking backups; a scan that finds nothing must not              read as a pass"
         );
     }
 

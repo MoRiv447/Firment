@@ -160,6 +160,87 @@ pub(crate) fn rel_str(root: &Path, path: &Path) -> String {
         .replace('\\', "/")
 }
 
+/// `.firment/workbench.toml` opened for read-modify-write as one transaction.
+///
+/// Every writer of this file rewrites ALL of it — one pin claim serialises the boards, branches,
+/// devices and decisions that share the file — so the two precautions an in-place source edit
+/// takes were mandatory here and present nowhere. They sit in one type because the alternative is
+/// each writer remembering them:
+///
+/// - [`commit`](Self::commit) refuses with `[ConcurrentChange]` unless the file on disk is still
+///   the bytes `open` read. Without that, a claim made by another session (or another board's
+///   device entry, or the GUI) between the read and the save disappears with no error and no
+///   trace, and the tool answers "claimed on 's3-node-1'".
+/// - the file enters the undo journal before it is written, so `/undo` gives back what this turn
+///   took. The registry is the one project file an agent edits by itself, so "I can undo my own
+///   edit" is worth more here than in the hand-written sources.
+/// - the path handed to the journal is absolute. The journal replays it from whatever directory a
+///   later `/undo` runs in, and [`firment_core::EditJournal::begin`] refuses a relative one —
+///   refusing is the point, so this resolves rather than forwarding the error.
+///
+/// Deliberately NOT here: the subagent write-scope check that [`resolve_write_scope`] applies.
+/// The file is inside `cwd` by construction, and a scope declared over `src/**` would then refuse
+/// the one action a delegated run needs to record what it took. `approval()` asks the human first.
+pub(crate) struct WorkbenchTx {
+    path: PathBuf,
+    read: Option<Vec<u8>>,
+}
+
+impl WorkbenchTx {
+    pub(crate) fn open(
+        ctx: &firment_core::ToolContext,
+    ) -> Result<(firment_core::WorkbenchConfig, Self), ToolError> {
+        let path = firment_core::WorkbenchConfig::path_for(&ctx.cwd);
+        let path = if path.is_absolute() {
+            path
+        } else {
+            fs::canonicalize(&path).map_err(|e| {
+                ToolError::new(format!(
+                    "[Workbench] {} is not an absolute path and cannot be resolved: {e}",
+                    path.display()
+                ))
+            })?
+        };
+        let (cfg, read) = firment_core::WorkbenchConfig::load_with_bytes(&ctx.cwd)
+            .map_err(|e| ToolError::new(format!("[Workbench] {e}")))?;
+        Ok((cfg, Self { path, read }))
+    }
+
+    pub(crate) fn commit(
+        &self,
+        ctx: &firment_core::ToolContext,
+        cfg: &firment_core::WorkbenchConfig,
+    ) -> Result<(), ToolError> {
+        // Compared before the journal, not after: a refusal has to leave nothing behind, and a
+        // backup of a file this call did not change is something.
+        let now = match fs::read(&self.path) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                return Err(ToolError::new(format!(
+                    "[Workbench] cannot re-read {}: {e}",
+                    self.path.display()
+                )));
+            }
+        };
+        if now != self.read {
+            return Err(ToolError::new(format!(
+                "[ConcurrentChange] {} changed after it was read, so this whole-file rewrite \
+                 would have dropped whatever landed in between. Re-read the current state \
+                 (pinmap list / decision list) and retry against it.",
+                self.path.display()
+            )));
+        }
+        ctx.journal
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .begin(&self.path)
+            .map_err(|e| ToolError::new(format!("[Workbench] undo journal: {e}")))?;
+        cfg.save(&ctx.cwd)
+            .map_err(|e| ToolError::new(format!("[Workbench] {e}")))
+    }
+}
+
 /// 8-hex prefix of the SHA-256 of a normalized line (no trailing CR/LF).
 /// `edit_file` hashline anchors use the same prefix (matched with starts_with).
 pub(crate) fn line_hash_prefix(line: &str) -> String {
@@ -1662,6 +1743,69 @@ mod tests {
         assert!(
             leased.len() >= 3,
             "expected the leased spawn sites to still be found; saw {leased:?}"
+        );
+    }
+
+    /// `.firment/workbench.toml` is rewritten WHOLE by whoever writes any part of it — a pin claim
+    /// serialises the branches, devices and decisions that share the file — so exactly one tail may
+    /// put it on disk, and it is [`WorkbenchTx::commit`]. A second door is a claim that lands on top
+    /// of another session's with no error and a success message.
+    ///
+    /// Lists who may NAME the config, not just who saves it: a reader that hand-rolls its own
+    /// load-and-write would show up as `pinmap.rs` here rather than as a stray `.save(`, because by
+    /// then the save lives in the tail it was supposed to reach.
+    #[test]
+    fn one_tail_writes_the_workbench_file() {
+        // `periph_init` renders the registry into its answer and `device_cmd` reads the quick
+        // commands; neither writes. Anything else that wants to must go through the transaction.
+        const MAY_NAME_WORKBENCH: [&str; 3] = ["util.rs", "periph_init.rs", "device_cmd.rs"];
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut savers: Vec<String> = Vec::new();
+        let mut outsiders: Vec<String> = Vec::new();
+        let mut stack = vec![root];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("the crate's own src is readable") {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(std::ffi::OsStr::to_str) != Some("rs") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).unwrap();
+                // Test code assembles a config by hand and saves it into a tempdir. That is the
+                // fixture setting up, not a second door.
+                let product = match text.find("#[cfg(test)]") {
+                    Some(at) => &text[..at],
+                    None => &text[..],
+                };
+                let file = path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+                for (number, line) in product.lines().enumerate() {
+                    // `.save(` with the dot: `hil_save(` is an image dump and `fn save` a helper,
+                    // and a gate that cries at those gets its exception list widened until it
+                    // cannot see the thing it was written for.
+                    if line.contains(".save(") {
+                        savers.push(format!("{}:{}", file, number + 1));
+                    }
+                }
+                if !MAY_NAME_WORKBENCH.contains(&file) && product.contains("WorkbenchConfig") {
+                    outsiders.push(file.to_string());
+                }
+            }
+        }
+        assert!(
+            savers.iter().all(|site| site.starts_with("util.rs:")),
+            "these write the workbench file without going through WorkbenchTx: {savers:?}"
+        );
+        assert!(
+            !savers.is_empty(),
+            "the scrape found no `.save(` at all, so this gate cannot be wrong about anything"
+        );
+        assert!(
+            outsiders.is_empty(),
+            "new files name WorkbenchConfig outside the closed list: {outsiders:?} — add one to \
+             MAY_NAME_WORKBENCH only if it reads and never writes"
         );
     }
 

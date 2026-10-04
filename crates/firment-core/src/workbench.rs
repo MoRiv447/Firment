@@ -244,20 +244,37 @@ impl WorkbenchConfig {
     /// (fresh project); a corrupt file is an error — the workbench must not
     /// silently invent state.
     pub fn load(root: &Path) -> Result<Self, String> {
+        Self::load_with_bytes(root).map(|(cfg, _)| cfg)
+    }
+
+    /// [`load`](Self::load), plus the exact bytes that were parsed (`None` when the file does
+    /// not exist yet).
+    ///
+    /// A reader that rewrites the whole file needs both halves: the value to edit and the content
+    /// to compare against before it overwrites the disk copy. One read is the point — `load`
+    /// followed by a separate `fs::read` leaves a window in which a write that lands between them
+    /// is adopted by the parser and then judged stale by the compare, so the safer-looking code
+    /// reports a conflict it did not have and hides the one it does.
+    pub fn load_with_bytes(root: &Path) -> Result<(Self, Option<Vec<u8>>), String> {
         let path = Self::path_for(root);
-        if !path.exists() {
-            return Ok(Self::default());
-        }
-        let text = std::fs::read_to_string(&path)
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => Some(b),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
+        };
+        let Some(bytes) = bytes else {
+            return Ok((Self::default(), None));
+        };
+        let text = std::str::from_utf8(&bytes)
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         let mut cfg: WorkbenchConfig =
-            toml::from_str(&text).map_err(|e| format!("corrupt {}: {e}", path.display()))?;
+            toml::from_str(text).map_err(|e| format!("corrupt {}: {e}", path.display()))?;
         // Heal files written before the GuardConfig default fix: an empty
         // escalate_sev would make the escalation threshold rank as "info".
         if cfg.workbench.guard.escalate_sev.trim().is_empty() {
             cfg.workbench.guard.escalate_sev = default_escalate_sev();
         }
-        Ok(cfg)
+        Ok((cfg, Some(bytes)))
     }
 
     /// Persist atomically to the repo root (tmp + rename), creating
@@ -300,6 +317,55 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cfg = WorkbenchConfig::load(dir.path()).unwrap();
         assert_eq!(cfg, WorkbenchConfig::default());
+    }
+
+    #[test]
+    fn the_bytes_read_are_the_bytes_on_disk() {
+        // The compare-at-commit guard is only as good as this: the bytes handed back have to BE
+        // the file's content at the instant of the parse, or a writer that adopts them proves a
+        // conflict against a document it never read.
+        let (_dir, root) = root_with("[project]\nname = \"fw\"\n");
+        let (cfg, bytes) = WorkbenchConfig::load_with_bytes(&root).unwrap();
+        assert_eq!(cfg.project.name, "fw");
+        assert_eq!(
+            bytes.as_deref(),
+            Some(
+                std::fs::read(WorkbenchConfig::path_for(&root))
+                    .unwrap()
+                    .as_slice()
+            )
+        );
+
+        // A fresh project has no bytes to be stale against, and "absent" must not be confused with
+        // "empty file" — a claim saved onto an empty file is a change, not an unchanged read.
+        let dir = tempfile::tempdir().unwrap();
+        let (cfg, bytes) = WorkbenchConfig::load_with_bytes(dir.path()).unwrap();
+        assert_eq!(cfg, WorkbenchConfig::default());
+        assert!(
+            bytes.is_none(),
+            "a file that is not there is not empty, it is absent"
+        );
+        std::fs::create_dir_all(dir.path().join(".firment")).unwrap();
+        std::fs::write(WorkbenchConfig::path_for(dir.path()), "").unwrap();
+        let (_, bytes) = WorkbenchConfig::load_with_bytes(dir.path()).unwrap();
+        assert_eq!(bytes.as_deref(), Some(&b""[..]));
+    }
+
+    #[test]
+    fn a_healed_field_does_not_become_a_healed_file() {
+        // `load` rewrites `escalate_sev` in the value it returns. The bytes must stay the ones on
+        // disk, or every save of an old file looks like a change someone else made.
+        let (_dir, root) = root_with(
+            "[workbench]\nguard = { enabled = true, standby_minutes = 30, escalate_sev = \"\" }\n",
+        );
+        let (cfg, bytes) = WorkbenchConfig::load_with_bytes(&root).unwrap();
+        assert_eq!(cfg.workbench.guard.escalate_sev, "warn");
+        assert!(
+            String::from_utf8(bytes.unwrap())
+                .unwrap()
+                .contains("escalate_sev = \"\""),
+            "the bytes must be the file, not the healed value re-serialised"
+        );
     }
 
     #[test]

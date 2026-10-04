@@ -1,14 +1,12 @@
+use super::util::WorkbenchTx;
 use async_trait::async_trait;
 use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
-use std::path::Path;
-
-use firment_core::WorkbenchConfig;
 
 pub struct Pinmap;
 
-/// Normalize a pin name for map keys: trim, uppercase, collapse inner
-/// whitespace — "pa5", "PA5" and "PA5 " all land on one entry.
+/// Normalize a pin name for map keys: trim the ends and uppercase, so "pa5", "PA5" and "PA5 "
+/// all land on one entry. Inner whitespace is kept, not collapsed — "PA 5" is a second key.
 fn normalize_pin(raw: &str) -> String {
     raw.trim().to_uppercase()
 }
@@ -24,15 +22,6 @@ fn parse_pins(raw: &str) -> Vec<String> {
         .map(normalize_pin)
         .filter(|p| !p.is_empty())
         .collect()
-}
-
-fn load(root: &Path) -> Result<WorkbenchConfig, ToolError> {
-    WorkbenchConfig::load(root).map_err(|e| ToolError::new(format!("[Pinmap] {e}")))
-}
-
-fn save(cfg: &WorkbenchConfig, root: &Path) -> Result<(), ToolError> {
-    cfg.save(root)
-        .map_err(|e| ToolError::new(format!("[Pinmap] {e}")))
 }
 
 /// Display form for an unset owner. Kept as a helper (not an inline
@@ -118,13 +107,37 @@ impl Tool for Pinmap {
         })
     }
 
+    fn approval(&self, args: &Value) -> Option<String> {
+        let action = args
+            .get("action")
+            .and_then(|a| a.as_str())
+            .unwrap_or("list")
+            .to_lowercase();
+        // The two actions that rewrite `.firment/workbench.toml`. Asking here rather than letting
+        // the write stand on its own is what makes this tool answer to the same rule `write_file`
+        // obeys for the identical path: the registry carries the branches, devices and decisions
+        // that share the file, so a silent claim was a silent rewrite of all of them.
+        match action.as_str() {
+            "claim" | "release" => Some(format!(
+                "pinmap {action}: {} on board '{}'",
+                args.get("pins")
+                    .and_then(|p| p.as_str())
+                    .unwrap_or("(no pins given)"),
+                args.get("board")
+                    .and_then(|b| b.as_str())
+                    .unwrap_or("(no board given)"),
+            )),
+            _ => None,
+        }
+    }
+
     async fn run(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let action = args
             .get("action")
             .and_then(|a| a.as_str())
             .unwrap_or("list")
             .to_lowercase();
-        let mut cfg = load(&ctx.cwd)?;
+        let (mut cfg, tx) = WorkbenchTx::open(ctx)?;
 
         match action.as_str() {
             "boards" => {
@@ -264,7 +277,7 @@ impl Tool for Pinmap {
                     .values()
                     .map(std::collections::BTreeMap::len)
                     .sum();
-                save(&cfg, &ctx.cwd)?;
+                tx.commit(ctx, &cfg)?;
                 Ok(ToolOutput {
                     text: format!(
                         "claimed on '{board}': {} -> {} ({} pins total across boards)",
@@ -289,7 +302,7 @@ impl Tool for Pinmap {
                         cfg.pinmap.remove(&board);
                     }
                 }
-                save(&cfg, &ctx.cwd)?;
+                tx.commit(ctx, &cfg)?;
                 Ok(ToolOutput {
                     text: format!(
                         "released on '{board}': {}",
@@ -312,7 +325,8 @@ impl Tool for Pinmap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use firment_core::{AutoApprove, EditJournal};
+    use firment_core::{AutoApprove, EditJournal, WorkbenchConfig};
+    use std::path::Path;
     use std::sync::{Arc, Mutex};
     use tempfile::tempdir;
 
@@ -466,5 +480,132 @@ mod tests {
         let cfg = WorkbenchConfig::load(dir.path()).unwrap();
         assert_eq!(cfg.pinmap["default"]["PA5"].func, "LED");
         assert_eq!(cfg.pinmap["default"]["PB7"].func, "SCL");
+    }
+
+    /// Both writing actions rewrite the WHOLE file — one claim serialises the boards, branches,
+    /// devices and decisions that share it — so a claim that landed while another was open used to
+    /// be overwritten and answered "claimed on 's3-node-1'".
+    #[tokio::test]
+    async fn a_write_against_stale_content_is_refused_and_leaves_nothing_behind() {
+        let dir = tempdir().unwrap();
+        let other = ctx(dir.path());
+        let mine = ctx(dir.path());
+
+        let (stale, tx) =
+            WorkbenchTx::open(&mine).expect("an absent registry opens as the default");
+        Pinmap
+            .run(
+                json!({"action": "claim", "board": "s3-node-1", "pins": "PC13", "func": "BTN"}),
+                &other,
+            )
+            .await
+            .expect("the other session claims its pin");
+        let on_disk = std::fs::read(WorkbenchConfig::path_for(dir.path())).unwrap();
+
+        let err = tx
+            .commit(&mine, &stale)
+            .expect_err("the content moved under this read");
+        assert!(
+            err.message.starts_with("[ConcurrentChange]"),
+            "the refusal has to carry the tag the retry rule already knows: {err}"
+        );
+        assert_eq!(
+            std::fs::read(WorkbenchConfig::path_for(dir.path())).unwrap(),
+            on_disk,
+            "a refusal that still wrote would have lost the claim anyway"
+        );
+        assert!(
+            mine.journal.lock().unwrap().is_empty(),
+            "a journalled refusal hands /undo a state this call never wrote"
+        );
+
+        // The other direction through the same tail, so this cannot become a gate that is only
+        // ever right: nothing in between, and the commit lands WITH the earlier claim intact.
+        let (mut cfg, tx) = WorkbenchTx::open(&mine).unwrap();
+        cfg.pinmap.entry("esp32".to_string()).or_default().insert(
+            "PA5".to_string(),
+            firment_core::PinEntry {
+                func: "LED".to_string(),
+                owner: "agent".to_string(),
+            },
+        );
+        tx.commit(&mine, &cfg)
+            .expect("nothing touched the file after this read");
+        let cfg = WorkbenchConfig::load(dir.path()).unwrap();
+        assert_eq!(
+            cfg.pinmap["s3-node-1"]["PC13"].func, "BTN",
+            "the point of refusing is that the other session's claim survives"
+        );
+        assert_eq!(cfg.pinmap["esp32"]["PA5"].func, "LED");
+    }
+
+    #[tokio::test]
+    async fn a_claim_is_undoable() {
+        let dir = tempdir().unwrap();
+        let undo = dir.path().join("undo");
+        let first = ctx(dir.path());
+        Pinmap
+            .run(
+                json!({"action": "claim", "board": "b1", "pins": "PA9", "func": "USART1_TX"}),
+                &first,
+            )
+            .await
+            .unwrap();
+        first
+            .journal
+            .lock()
+            .unwrap()
+            .commit_at_seq(1)
+            .expect("the turn commits");
+        let after_first = std::fs::read(WorkbenchConfig::path_for(dir.path())).unwrap();
+
+        let second = ctx(dir.path());
+        Pinmap
+            .run(
+                json!({"action": "claim", "board": "b1", "pins": "PA10", "func": "USART1_RX"}),
+                &second,
+            )
+            .await
+            .unwrap();
+        second.journal.lock().unwrap().commit_at_seq(2).unwrap();
+
+        let summary = EditJournal::undo_latest(&undo).unwrap();
+        assert_eq!(summary.files, 1, "{summary:?}");
+        assert_eq!(
+            std::fs::read(WorkbenchConfig::path_for(dir.path())).unwrap(),
+            after_first,
+            "undo gives back the registry as the undone turn found it"
+        );
+        let cfg = WorkbenchConfig::load(dir.path()).unwrap();
+        assert!(cfg.pinmap["b1"].contains_key("PA9"), "the older turn stays");
+        assert!(
+            !cfg.pinmap["b1"].contains_key("PA10"),
+            "the undone turn's claim is gone"
+        );
+    }
+
+    #[test]
+    fn only_the_two_actions_that_rewrite_the_file_ask() {
+        // A prompt on every call trains the person to type `y` without reading, which is how a
+        // guarded write stops being one. `check` reads; `claim` rewrites the file.
+        for read in ["boards", "list", "check"] {
+            assert!(
+                Pinmap.approval(&json!({"action": read})).is_none(),
+                "{read} writes nothing and asked anyway"
+            );
+        }
+        assert!(
+            Pinmap.approval(&json!({})).is_none(),
+            "no action means list, which writes nothing"
+        );
+        for write in ["claim", "release"] {
+            let reason = Pinmap
+                .approval(&json!({"action": write, "board": "s3-node-1", "pins": "PA9/PA10"}))
+                .unwrap_or_else(|| panic!("{write} rewrites workbench.toml and asked for nothing"));
+            assert!(
+                reason.contains("s3-node-1") && reason.contains("PA9/PA10"),
+                "the prompt has to name what is being taken: {reason}"
+            );
+        }
     }
 }
