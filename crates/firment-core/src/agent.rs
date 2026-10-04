@@ -1146,6 +1146,14 @@ impl Agent {
         // future sends. Cloning the persistent `cancel_rx` field would inherit
         // its stale version and make every turn look pre-cancelled.
         let mut cancel_rx = self.cancel_tx.subscribe();
+        // The question is recorded before anything can abandon the turn. It used to be pushed
+        // below the pre-cancel return, so a Stop landing in the instant between the UI
+        // submitting and the first provider call left no trace of what was asked: the message
+        // vanished from the transcript, and `retry_last` -- which rewinds to the last User
+        // message -- replayed the prompt before it.
+        self.session.push(ChatMessage::User {
+            content: input.to_string(),
+        });
         if *cancel_rx.borrow() {
             self.sink
                 .event(AgentEvent::Info(
@@ -1187,9 +1195,6 @@ impl Agent {
                 ))
                 .await;
         }
-        self.session.push(ChatMessage::User {
-            content: input.to_string(),
-        });
         self.emit_turn_start().await;
 
         // The turn's transaction: its own, or the one a parent handed down to a subagent.

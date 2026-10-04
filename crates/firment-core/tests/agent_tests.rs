@@ -1293,6 +1293,58 @@ async fn max_iterations_stops() {
 }
 
 #[tokio::test]
+async fn a_stop_before_the_turn_starts_still_records_the_question() {
+    // The pre-cancel branch used to return from above the `push(User)`, so a Stop arriving in
+    // the instant between submitting and the first provider call left the transcript with no
+    // record of what was asked: the bubble vanished, and `retry_last` -- which rewinds to the
+    // last User message -- replayed the prompt from before it.
+    let provider = FakeProvider {
+        queue: Arc::new(Mutex::new(VecDeque::new())),
+        model: "fake".to_string(),
+    };
+    let dir = tempdir().unwrap();
+    let store = SessionStore::new(dir.path().to_path_buf());
+    let session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    let id = session.id.clone();
+    let mut agent = Agent::new(
+        Some(Box::new(provider)),
+        registry_with(vec![Arc::new(EchoTool)]),
+        session,
+        store.clone(),
+        Arc::new(AutoApprove::everything()),
+        Arc::new(CollectSink(Arc::new(Mutex::new(Vec::new())))),
+        10,
+    );
+    agent.cancel();
+
+    let text = agent
+        .run_turn("make the timer 500 ms")
+        .await
+        .expect("a cancelled-before-start turn ends cleanly, it does not fail");
+    assert_eq!(text, "", "no work ran, so there is no answer");
+
+    let saved = store.load(&id).unwrap();
+    assert!(
+        saved.messages.iter().any(
+            |m| matches!(m, ChatMessage::User { content } if content == "make the timer 500 ms")
+        ),
+        "the transcript kept no record of a question the user did ask: {:?}",
+        saved.messages
+    );
+    // And nothing else was invented: the turn contributed exactly that one message.
+    assert_eq!(
+        saved
+            .messages
+            .iter()
+            .filter(|m| matches!(m, ChatMessage::User { .. }))
+            .count(),
+        1,
+        "{:?}",
+        saved.messages
+    );
+}
+
+#[tokio::test]
 async fn agent_without_provider_reports_clear_error() {
     let dir = tempdir().unwrap();
     let store = SessionStore::new(dir.path().to_path_buf());
