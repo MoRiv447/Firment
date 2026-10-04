@@ -13,7 +13,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::tools::util::{EnvPolicy, shell_command};
+use crate::tools::util::{EnvPolicy, PipeDrain, shell_command};
 
 /// How long a plugin call may take before it is killed.
 ///
@@ -141,7 +141,10 @@ impl Tool for PluginTool {
         // The same builder every other child in this crate goes through, with `Only`: the
         // plugin's environment is this list and nothing else.
         let mut cmd = shell_command(&line, &ctx.cwd, Some(EnvPolicy::Only(&env)));
-        cmd.stdin(std::process::Stdio::piped()).kill_on_drop(true);
+        cmd.stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
 
         let mut child = cmd
             .spawn()
@@ -175,13 +178,31 @@ impl Tool for PluginTool {
                 // Closing stdin is part of the protocol: a plugin reads until EOF.
                 drop(stdin);
             }
-            child
-                .wait_with_output()
+            // `wait_with_output` collected the child's output with no ceiling. The `2>&1` in
+            // `command_line` puts a plugin's own diagnostics on stdout, so stdout is where an
+            // unbounded writer lands: a plugin that prints without end (a crash loop that keeps
+            // answering, a `cat` of the wrong file) pushed gigabytes into the agent before
+            // `truncate` got to look at any of it, and `truncate` caps what the model SEES, not
+            // what the session HOLDS. These pipes now go through the same drain every other child
+            // in this crate is read by, which is where `CAPTURE_CAP_BYTES` lives.
+            let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
+                return Err("[Io] the plugin's output handles are gone".to_string());
+            };
+            let drain = PipeDrain::start(stdout, stderr);
+            let status = child
+                .wait()
                 .await
-                .map_err(|e| format!("[Io] the plugin could not be waited on: {e}"))
+                .map_err(|e| format!("[Io] the plugin could not be waited on: {e}"))?;
+            // The plugin is gone by here, so EOF is one closed pipe away; the grace is for a
+            // grandchild that inherited the write end, and it is bounded so no path through this
+            // call waits on anything that has no deadline of its own.
+            let (stdout, stderr, _drain_late) = drain.finish(Duration::from_secs(5)).await;
+            Ok((stdout, stderr, status.code()))
         });
-        let output = match tokio::time::timeout(self.timeout, waiter).await {
-            Ok(Ok(Ok(output))) => output,
+        let (stdout_bytes, stderr_bytes, code) = match tokio::time::timeout(self.timeout, waiter)
+            .await
+        {
+            Ok(Ok(Ok(captured))) => captured,
             Ok(Ok(Err(message))) => {
                 // The failure came from our own side of the pipe, so the child may still be
                 // alive: it goes the same way the timeout arm sends it.
@@ -202,8 +223,29 @@ impl Tool for PluginTool {
             }
         };
 
-        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        let text = parse_result(&stdout, 1).map_err(ToolError::new)?;
+        let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
+        let text = parse_result(&stdout, 1).map_err(|e| {
+            // Two facts the protocol error cannot see on its own. A plugin that exited nonzero and
+            // said nothing parseable did not break the protocol, it FAILED, and the exit code is
+            // the one thing the agent should be told. And the shell's own stderr is a separate
+            // pipe from the `2>&1` fold: a plugin path that no longer exists never reaches the
+            // fold at all, so without this a mistyped path reads as "the plugin produced no
+            // response" above an empty excerpt.
+            let mut message = e;
+            if let Some(code) = code
+                && code != 0
+            {
+                message.push_str(&format!(" (exit code {code})"));
+            }
+            let shell_err = String::from_utf8_lossy(&stderr_bytes).into_owned();
+            if !shell_err.trim().is_empty() {
+                message.push_str(&format!(
+                    "; the shell reported: {}",
+                    crate::tools::util::truncate(&shell_err, 1_000)
+                ));
+            }
+            ToolError::new(message)
+        })?;
 
         // Untrusted, and labelled (review §4 invariant 2): the model is told where this text
         // came from, in the same spirit as the redteam path's broker-payload warning.
@@ -323,6 +365,100 @@ mod tests {
             out.text.contains("UNTRUSTED"),
             "the label is the point: {}",
             out.text
+        );
+    }
+
+    /// Candidate 24's other half: the capture ceiling on the plugin's output.
+    #[tokio::test]
+    async fn a_plugin_that_prints_without_end_is_stopped_at_the_capture_ceiling() {
+        let dir = tempfile::tempdir().unwrap();
+        let answer = r#"{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"from the plugin"}]}}"#;
+        // One command line per platform, so the script body needs no line endings of its own.
+        let dump = if cfg!(windows) {
+            "type noise.txt"
+        } else {
+            "cat noise.txt"
+        };
+        let said = if cfg!(windows) {
+            format!("{dump} & echo {answer}")
+        } else {
+            format!("{dump}; echo '{answer}'")
+        };
+        let script = script(dir.path(), &said);
+        let tool = PluginTool::new(plugin_for(&script, &[])).unwrap();
+
+        let mut line = "x".repeat(199);
+        line.push(char::from(10u8));
+        std::fs::write(
+            dir.path().join("noise.txt"),
+            line.repeat(9 * 1024 * 1024 / 200 + 1),
+        )
+        .unwrap();
+        let err = tool
+            .run(serde_json::json!({}), &ctx(dir.path()))
+            .await
+            .expect_err("9 MiB of noise is not a response");
+        // The refusal quotes the head and then says how much there was, so the number it reports IS
+        // the amount the session held. Uncapped this reads 9 437 200; the drain's ceiling is 8 MiB
+        // plus the one sentinel that marks the loss.
+        let held: usize = err
+            .message
+            .rsplit('(')
+            .next()
+            .and_then(|tail| tail.split(' ').next())
+            .and_then(|digits| digits.parse().ok())
+            .unwrap_or_else(|| panic!("the refusal has to report the total: {}", err.message));
+        assert!(
+            held >= 8 * 1024 * 1024,
+            "the capture stopped at {held}, under one ceiling, so this proves nothing about the bound"
+        );
+        assert!(
+            held <= 8 * 1024 * 1024 + 128,
+            "the plugin path held {held} bytes: it is collecting without bound again"
+        );
+        assert!(
+            err.message.contains("produced no response"),
+            "the answer came after the ceiling, so this call must not pretend to have it: {}",
+            err.message
+        );
+
+        // The direction that keeps the assertions above from passing with a ceiling of one byte: a
+        // plugin with a 200 KiB log before its answer is a normal plugin, and it still answers.
+        std::fs::write(dir.path().join("noise.txt"), line.repeat(1_024)).unwrap();
+        let out = tool
+            .run(serde_json::json!({}), &ctx(dir.path()))
+            .await
+            .expect("200 KiB of log is not a flood");
+        assert!(out.text.contains("from the plugin"), "{}", out.text);
+    }
+
+    #[tokio::test]
+    async fn a_plugin_that_exits_nonzero_is_reported_as_a_failure_not_a_protocol_breach() {
+        // "produced no response" describes a plugin that broke the protocol. A plugin that ran,
+        // failed and printed its complaint (folded onto stdout by `command_line`) did something
+        // else, and the one fact that says so is the exit status -- which `wait_with_output`
+        // handed over and nothing read.
+        let dir = tempfile::tempdir().unwrap();
+        let said = if cfg!(windows) {
+            "echo nothing here & exit /b 3"
+        } else {
+            "echo nothing here; exit 3"
+        };
+        let script = script(dir.path(), said);
+        let tool = PluginTool::new(plugin_for(&script, &[])).unwrap();
+        let err = tool
+            .run(serde_json::json!({}), &ctx(dir.path()))
+            .await
+            .unwrap_err();
+        assert!(
+            err.message.contains("(exit code 3)"),
+            "the refusal must carry the status: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("nothing here"),
+            "and the plugin's own words: {}",
+            err.message
         );
     }
 
