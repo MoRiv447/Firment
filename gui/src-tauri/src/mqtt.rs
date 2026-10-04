@@ -45,10 +45,13 @@ pub fn spawn_if_configured(shared: Arc<Shared>) {
         cfg.mqtt.broker.trim().to_string()
     };
     trace(&shared, &format!("spawn: broker read as {broker:?}"));
-    set_status(
-        &shared,
-        "{\"connected\":false,\"error\":\"link starting\"}".to_string(),
-    );
+    // One call, deciding from the same `broker` the branch below reads, so there is no order left
+    // to get wrong. Written as two statements it used to be: `link starting` first, the emptiness
+    // check second, which meant a machine with no SBC was left holding a status that promised a link
+    // and never delivered one. The status frame is what a remounted card pulls, and the Info below
+    // is a one-shot message on a stream it may already have moved past, so "off" has to live in the
+    // frame itself.
+    set_status(&shared, initial_status(&broker));
     if broker.is_empty() {
         use tauri::Emitter as _;
         let _ = shared.app.emit(
@@ -294,6 +297,22 @@ fn status_json(
     obj.to_string()
 }
 
+/// What the status slot holds before the link thread has anything to say: a configured broker gets
+/// "link starting", an absent one gets the reason the link is off. Both name the broker they mean
+/// when there is one, because the card shows it.
+fn initial_status(broker: &str) -> String {
+    if broker.is_empty() {
+        status_json(
+            false,
+            None,
+            Some("no [mqtt] broker configured — link off"),
+            None,
+        )
+    } else {
+        status_json(false, Some(broker), Some("link starting"), None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,5 +339,30 @@ mod tests {
         assert!(route_topic("firment/collab/presence").is_none());
         assert!(route_topic("other/device/x/telemetry").is_none());
         assert!(route_topic("firment/device/x/telemetry/extra").is_none());
+    }
+
+    /// The status slot is the only thing a remounted card can ask, so an unconfigured machine must
+    /// not be handed a frame that promises a link.
+    #[test]
+    fn an_absent_broker_is_reported_as_off_not_as_starting() {
+        let off: serde_json::Value = serde_json::from_str(&initial_status("")).expect("valid JSON");
+        assert_eq!(off["connected"], serde_json::json!(false));
+        let error = off["error"].as_str().unwrap_or_default();
+        assert!(
+            error.contains("no [mqtt] broker configured"),
+            "the frame has to say why nothing is coming: {error}"
+        );
+        assert!(
+            !error.contains("starting"),
+            "a link that will never start must not read as one that is: {error}"
+        );
+
+        // The other direction, in the same run: configured does still announce the attempt, and
+        // names the broker it is attempting, or the card is back to showing nothing.
+        let going: serde_json::Value =
+            serde_json::from_str(&initial_status("192.168.1.40:1883")).expect("valid JSON");
+        assert_eq!(going["connected"], serde_json::json!(false));
+        assert_eq!(going["error"], serde_json::json!("link starting"));
+        assert_eq!(going["broker"], serde_json::json!("192.168.1.40:1883"));
     }
 }

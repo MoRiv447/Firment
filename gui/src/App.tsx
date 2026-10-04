@@ -29,6 +29,7 @@ import { ChatView } from './views/ChatView';
 import { SessionSidebar } from './views/SessionSidebar';
 import { SettingsView } from './views/SettingsView';
 import { sessionChanges } from './lib/changes';
+import { appendMonitorLines } from './lib/monitorLines';
 import { workflowSteps } from './lib/steps';
 import { relightable } from './lib/relight';
 import { useNewSessionShortcut } from './lib/shortcuts';
@@ -542,6 +543,22 @@ export default function App() {
       }),
     );
 
+    // The serial monitor's own copy of the coalescing above, for the same reason: one event per
+    // LINE of device output, so a board at 115200 baud that boots noisily re-rendered the whole
+    // shell — transcript, panes, everything — hundreds of times a second, and each render rebuilt
+    // every port's array. One flush per 50 ms costs ~20 renders/s whatever the baud.
+    const monitorBuffer: MonitorLine[] = [];
+    let monitorTimer: number | null = null;
+    const flushMonitor = () => {
+      if (monitorTimer !== null) {
+        window.clearTimeout(monitorTimer);
+        monitorTimer = null;
+      }
+      const buffered = monitorBuffer.splice(0);
+      if (buffered.length === 0) return;
+      setMonitorLines((prev) => appendMonitorLines(prev, buffered));
+    };
+
     unlisteners.push(
       onPermissionRequest((req) => setPermQueue((q) => [...q, req])),
       onAskRequest((req) => setAskQueue((q) => [...q, req])),
@@ -555,20 +572,22 @@ export default function App() {
         setAskQueue((q) => q.filter((r) => r.id !== id));
       }),
       onMonitorOutput((line) => {
-        setMonitorLines((prev) => ({
-          ...prev,
-          [line.port]: [...(prev[line.port] ?? []), line].slice(-2000),
-        }));
+        monitorBuffer.push(line);
+        if (monitorTimer === null) monitorTimer = window.setTimeout(flushMonitor, 50);
       }),
       onMonitorExited(({ port }) => {
-        setMonitorLines((prev) => ({
-          ...prev,
-          [port]: [...(prev[port] ?? []), { port, kind: 'stderr', line: '── monitor exited ──' }],
-        }));
+        // Same queue as the lines before it, and flushed on the spot. Appending the banner straight
+        // to the state would place it BEFORE up to 50 ms of output still sitting in the buffer, and
+        // a log that says "monitor exited" and then keeps printing is a log nobody trusts.
+        monitorBuffer.push({ port, kind: 'stderr', line: '── monitor exited ──' });
+        flushMonitor();
       }),
     );
 
     return () => {
+      // A timer left running would fire into a component that is gone; the buffer it was holding is
+      // state nothing can show any more, so it is dropped rather than flushed.
+      if (monitorTimer !== null) window.clearTimeout(monitorTimer);
       void Promise.all(unlisteners.map((p) => p.then((u) => u())));
     };
   }, []);
