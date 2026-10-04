@@ -1126,4 +1126,56 @@ mod tests {
             "a sender whose receiver vanished still reported success before this"
         );
     }
+
+    /// Every other lock in this workspace takes its value back out of a poison; one did not, and it
+    /// was the mainline switch. A panic elsewhere under that mutex therefore turned this command into
+    /// a second panic instead of the named refusal the frontend can show, and every later command
+    /// hitting the same mutex met the same unwrap waiting for it.
+    ///
+    /// The class is the one this round keeps finding: one sibling fixed, the copy beside it left. So
+    /// this reads the crate's own sources rather than trusting the count in its comment.
+    #[test]
+    fn a_poisoned_mutex_is_never_left_to_unwrap() {
+        // Spliced so the line that hunts the pattern is not itself an instance of it, and the scan is
+        // cut at `#[cfg(test)]` besides, because a test that panics on a lost lock is reporting a
+        // failure rather than causing one.
+        let needle = concat!(".lock().un", "wrap()");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut offenders: Vec<String> = Vec::new();
+        let mut recovered = 0usize;
+        let mut stack = vec![root];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("this crate's src is readable") {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(std::ffi::OsStr::to_str) != Some("rs") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).unwrap();
+                let product = match text.find("#[cfg(test)]") {
+                    Some(at) => &text[..at],
+                    None => &text[..],
+                };
+                for (number, line) in product.lines().enumerate() {
+                    if line.contains("unwrap_or_else(|poisoned") {
+                        recovered += 1;
+                    } else if line.contains(needle) {
+                        offenders.push(format!("{}:{}", path.display(), number + 1));
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "these unwrap a lock's poison instead of taking the value back: {offenders:?}"
+        );
+        assert!(
+            recovered >= 50,
+            "the scrape found only {recovered} recovering locks, so it is not looking at what it \
+             claims and a pass here would mean nothing"
+        );
+    }
 }

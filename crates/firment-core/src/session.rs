@@ -668,17 +668,28 @@ impl SessionStore {
     /// `Mainline`, and any OTHER Mainline session sharing its cwd is demoted
     /// back to Normal (one mainline per project). Errors if the target does
     /// not exist.
+    /// The sessions [`mark_mainline`] will rewrite besides the target: every other Mainline record
+    /// sharing the target's cwd, which it demotes to Normal.
+    ///
+    /// This is public and separate because the write is not confined to the session being promoted,
+    /// and a caller that has to refuse while a turn is running needs to know about every record the
+    /// call touches. A GUI command guarded the incoming session only and read this rule off a
+    /// comment, so a live turn's own save could be stepped on by the demotion beside it.
+    pub fn mainline_siblings(&self, session_id: &str) -> Result<Vec<String>, SessionError> {
+        let target = self.load(session_id)?;
+        self.list()?
+            .into_iter()
+            .filter(|s| s.id != target.id && s.kind == SessionKind::Mainline && s.cwd == target.cwd)
+            .map(|s| Ok(s.id))
+            .collect()
+    }
+
     pub fn mark_mainline(&self, session_id: &str) -> Result<(), SessionError> {
         let mut target = self.load(session_id)?;
-        for summary in self.list()? {
-            if summary.id != target.id
-                && summary.kind == SessionKind::Mainline
-                && summary.cwd == target.cwd
-            {
-                let mut demoted = self.load(&summary.id)?;
-                demoted.kind = SessionKind::Normal;
-                self.save(&demoted)?;
-            }
+        for id in self.mainline_siblings(session_id)? {
+            let mut demoted = self.load(&id)?;
+            demoted.kind = SessionKind::Normal;
+            self.save(&demoted)?;
         }
         target.kind = SessionKind::Mainline;
         self.save(&target)?;
@@ -1084,6 +1095,42 @@ mod tests {
         assert!(
             a.starts_with(&store.dir),
             "scratch lives beside the transcript"
+        );
+    }
+
+    /// The list a caller needs before it decides whether the promotion is safe: `mark_mainline`
+    /// writes the demoted sibling's record as well as the target's, and a guard that looked only at
+    /// the incoming session left that second write unguarded.
+    #[test]
+    fn marking_mainline_names_every_record_it_will_rewrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().join("sessions"));
+        let here = dir.path().join("project");
+        let mut first = Session::new(here.clone(), "p", "m");
+        first.id = "aaaa".into();
+        let mut second = Session::new(here.clone(), "p", "m");
+        second.id = "bbbb".into();
+        let mut other = Session::new(dir.path().join("elsewhere"), "p", "m");
+        other.id = "cccc".into();
+        for session in [&first, &second, &other] {
+            store.save(session).unwrap();
+        }
+
+        store.mark_mainline("bbbb").unwrap();
+        store.mark_mainline("cccc").unwrap();
+        assert_eq!(
+            store.mainline_siblings("aaaa").unwrap(),
+            vec!["bbbb".to_string()],
+            "the project's current mainline is the record the next promotion has to rewrite"
+        );
+
+        store.mark_mainline("aaaa").unwrap();
+        assert_eq!(store.load("aaaa").unwrap().kind, SessionKind::Mainline);
+        assert_eq!(store.load("bbbb").unwrap().kind, SessionKind::Normal);
+        assert_eq!(
+            store.load("cccc").unwrap().kind,
+            SessionKind::Mainline,
+            "another project's mainline is not this one's sibling and must survive untouched"
         );
     }
 

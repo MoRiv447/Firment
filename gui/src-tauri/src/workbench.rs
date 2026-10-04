@@ -142,17 +142,29 @@ pub async fn workbench_set_mainline(
     // mark_mainline promotes the target to Mainline and demotes any other
     // Mainline session sharing its cwd back to Normal. Both rewrites race a
     // running turn's own saves, so refuse while that session is live.
-    if crate::commands::is_session_running(&shared, &session_id) {
-        return Err(
-            "a turn is running in this session — set it as mainline after it finishes".to_string(),
-        );
-    }
-    shared
+    let store = shared
         .store
         .lock()
-        .unwrap()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Every record the call is about to write, not just the one being promoted. The guard used to
+    // ask only about `session_id`, so a turn still running in the session that currently HOLDS the
+    // role had its transcript saved by this demotion with nobody in front of it asked.
+    let mut written = store
+        .mainline_siblings(&session_id)
+        .map_err(|e| format!("cannot read the mainline: {e}"))?;
+    written.push(session_id.clone());
+    if let Some(busy) = written
+        .iter()
+        .find(|id| crate::commands::is_session_running(&shared, id))
+    {
+        return Err(format!(
+            "a turn is running in session {busy} - set the mainline after it finishes"
+        ));
+    }
+    store
         .mark_mainline(&session_id)
         .map_err(|e| format!("cannot set mainline: {e}"))?;
+    drop(store);
     let mut cfg = WorkbenchConfig::load(Path::new(&cwd))?;
     cfg.workbench.mainline_session = session_id;
     cfg.save(Path::new(&cwd))

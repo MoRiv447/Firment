@@ -30,6 +30,17 @@ fn parse_probe_percent(line: &str) -> Option<u64> {
     (pct <= 100).then_some(pct)
 }
 
+/// How many burn records the project's flash history keeps.
+///
+/// The GUI's `workbench_flash_history` reads this file whole to show its newest 200, and every flash
+/// appended one line to a file that never forgot anything: the read got slower and larger for as long
+/// as the project lived, with nothing bounding it. 500 is more than that reader can ever ask for.
+const FLASH_HISTORY_KEEP: usize = 500;
+
+/// Lines at which an append compacts the file. The read is cheap and bounded (the file cannot grow
+/// past this ceiling plus one line); it is the *rewrite* that is amortised, to once per 500 flashes.
+const FLASH_HISTORY_COMPACT_AT: usize = FLASH_HISTORY_KEEP * 2;
+
 /// Append one flash outcome to `<cwd>/.firment/work/flash-history.jsonl`
 /// (the project's burn history). Best-effort: a logging failure never
 /// breaks the flash itself.
@@ -58,13 +69,38 @@ fn record_flash_history(
         "ok": ok,
         "error": error,
     });
-    if let Ok(mut f) = std::fs::OpenOptions::new()
+    let path = dir.join("flash-history.jsonl");
+    let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(dir.join("flash-history.jsonl"))
-    {
-        let _ = writeln!(f, "{record}");
+        .open(&path)
+    else {
+        return;
+    };
+    let _ = writeln!(f, "{record}");
+    drop(f);
+    trim_flash_history(&path);
+}
+
+/// Drop everything older than the newest [`FLASH_HISTORY_KEEP`] records, once the file has grown
+/// past twice that. Same best-effort contract as the append: the flash already happened, and a
+/// history that cannot be trimmed is still a history.
+///
+/// Honest limit: this reads and replaces the whole file, so an append from a second process landing
+/// inside that window can be pruned by the rename. Flashing is serialised by the probe lease inside
+/// one agent, and the loss is one line of a convenience log; the alternative is the unbounded growth
+/// this exists to stop.
+fn trim_flash_history(path: &Path) {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.len() <= FLASH_HISTORY_COMPACT_AT {
+        return;
     }
+    let body = lines[lines.len() - FLASH_HISTORY_KEEP..].join("\n");
+    let body = format!("{body}\n");
+    let _ = firment_core::session::write_atomic(path, &body);
 }
 
 pub struct Flash;
@@ -429,6 +465,61 @@ mod tests {
             err.message.contains("probe-rs is not installed"),
             "got: {}",
             err.message
+        );
+    }
+
+    #[test]
+    fn the_burn_history_keeps_its_newest_records_and_no_more() {
+        // The file used to be append-only forever. Nothing read the whole of it on a phone-sized
+        // project, but a machine flashed daily for years is a `workbench_flash_history` call that
+        // parses every line to show twenty, and a `.firment/work` that never stops growing.
+        let dir = tempdir().unwrap();
+        let path = dir
+            .path()
+            .join(".firment")
+            .join("work")
+            .join("flash-history.jsonl");
+        let lines = || -> Vec<String> {
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .lines()
+                .map(str::to_string)
+                .collect()
+        };
+
+        for _ in 0..FLASH_HISTORY_KEEP {
+            record_flash_history(dir.path(), "esp32s3", "fw.bin", None, true, None);
+        }
+        assert_eq!(
+            lines().len(),
+            FLASH_HISTORY_KEEP,
+            "under the ceiling, nothing is touched"
+        );
+
+        for i in 0..=(FLASH_HISTORY_COMPACT_AT - FLASH_HISTORY_KEEP) {
+            record_flash_history(
+                dir.path(),
+                "esp32s3",
+                &format!("fw{i}.bin"),
+                None,
+                true,
+                None,
+            );
+        }
+        let kept = lines();
+        assert_eq!(
+            kept.len(),
+            FLASH_HISTORY_KEEP,
+            "the history is bounded at its ceiling, not one line over"
+        );
+        assert!(
+            kept.last().unwrap().contains("fw500.bin"),
+            "the newest record is the one a burn list shows first: {:?}",
+            kept.last()
+        );
+        assert!(
+            !kept.iter().any(|l| l.contains("\"fw.bin\"")),
+            "the oldest went with the trim, not the newest"
         );
     }
 }
