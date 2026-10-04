@@ -689,13 +689,19 @@ impl SessionStore {
     /// tool outputs, change ledger, pinned-file list).
     pub fn delete(&self, id: &str) -> Result<(), SessionError> {
         let id = sanitize_id(id);
+        // Ask the helpers that name these files for the names, instead of spelling them out
+        // again: the hand-written list had already lost two of them, and a file that outlives its
+        // session is both a data-retention bug and the previous session's scratch arriving in the
+        // next one to use the id.
         let mut removed = false;
         for candidate in [
-            self.dir.join(format!("{id}.jsonl")),
-            self.dir.join(format!("{id}.undo")),
-            self.dir.join(format!("{id}.spill")),
-            self.dir.join(format!("{id}.ledger.jsonl")),
-            self.dir.join(format!("{id}.pins.json")),
+            self.path_for(&id),
+            self.undo_dir(&id),
+            self.spill_dir(&id),
+            self.work_dir(&id),
+            self.ledger_path(&id),
+            self.event_log_path(&id),
+            self.pins_path(&id),
         ] {
             if candidate.is_dir() {
                 fs::remove_dir_all(&candidate)?;
@@ -983,6 +989,51 @@ fn relevant_decisions(
 mod tests {
     use super::*;
     use crate::ToolCall;
+
+    /// Deleting a session has to delete the session, not most of the files it named.
+    ///
+    /// `delete` spelled the file names out again beside the helpers that own them, and two
+    /// helpers had already drifted out of the hand-written list: the per-session work directory
+    /// (the `todo` list, HIL artifacts, debug snapshots, the ELF cache) and the event log
+    /// `replay` reads. Both survived a delete, so an id reused later opened on the previous
+    /// session's scratch, and the data outlived the session its owner had removed.
+    #[test]
+    fn delete_removes_every_path_the_store_names_for_a_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+        let id = "s1";
+        // Which of these are directories is stated rather than guessed from the suffix: three of
+        // the seven end in a dotted name (`s1.undo` looks like a file with extension "undo"), and
+        // an extension test here would silently write a file where the store keeps a directory.
+        let owned = [
+            (store.path_for(id), false),
+            (store.undo_dir(id), true),
+            (store.spill_dir(id), true),
+            (store.work_dir(id), true),
+            (store.ledger_path(id), false),
+            (store.event_log_path(id), false),
+            (store.pins_path(id), false),
+        ];
+        for (path, is_dir) in &owned {
+            if *is_dir {
+                std::fs::create_dir_all(path).unwrap();
+            } else {
+                std::fs::write(path, "").unwrap();
+            }
+        }
+
+        store.delete(id).unwrap();
+
+        for (path, _) in &owned {
+            assert!(!path.exists(), "{} survived the delete", path.display());
+        }
+        // Nothing of another session's goes with it: the list is per id, and one shared
+        // directory in it would turn a delete into a wipe.
+        let other = store.path_for("s2");
+        std::fs::write(&other, "").unwrap();
+        store.delete(id).unwrap_err();
+        assert!(other.exists(), "deleting s1 took s2's transcript with it");
+    }
 
     #[test]
     fn a_damaged_pin_list_is_an_error_rather_than_an_empty_one() {

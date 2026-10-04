@@ -261,6 +261,13 @@ pub struct Agent {
     /// `Agent::cancel` sets both this and the watch channel.
     cancel: Cancellable,
     max_iterations: usize,
+    /// Whether this turn has already told its sink how it ended.
+    ///
+    /// `run_turn` clears it on entry and checks it on the way out. A turn that fails without
+    /// saying so leaves every surface holding a spinner nothing can stop, and exits get added to
+    /// the loop faster than the callers can be found — so the guarantee belongs to the agent, not
+    /// to whoever happens to await it.
+    turn_closed: std::sync::atomic::AtomicBool,
     allow_dangerous: bool,
     verify_command: Option<String>,
     /// The policy for reviewing an edit as soon as it lands (plan §4-A), with the config
@@ -372,6 +379,7 @@ impl Agent {
             cancel_rx,
             cancel: Cancellable::new(),
             max_iterations,
+            turn_closed: std::sync::atomic::AtomicBool::new(false),
             allow_dangerous: false,
             verify_command: None,
             context_budget_chars: 256 * 1024,
@@ -518,6 +526,10 @@ impl Agent {
     }
 
     async fn emit_turn_end(&self, text: String) {
+        // Recorded whether or not this agent may say so: the flag answers "has this turn ended",
+        // and a nested run's turn has ended even though the notice belongs to its parent.
+        self.turn_closed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         if self.owns_turn_boundary() {
             self.sink.event(AgentEvent::TurnEnd { text }).await;
         }
@@ -1093,7 +1105,42 @@ impl Agent {
         }
     }
 
+    /// One turn of the agent, and the turn boundary that comes with it.
+    ///
+    /// Every way out of `run_turn_inner` that reports a failure now owes its sink the same two
+    /// events the paths that *know* they are failing already send. It did not: the iteration
+    /// budget ran out behind a single `Info` line, and asking for a provider when there is none
+    /// returned `Err` having said nothing at all, so each caller had to compensate — and the two
+    /// that do compensate compensate differently. The TUI answered any `Err` with its own
+    /// `Error` + `TurnEnd`, which is a second verdict for the failures that had already announced
+    /// themselves and a boundary emitted without asking whether this agent owns one; the GUI
+    /// asked the events first whether the agent had spoken and only filled the gap. Both were
+    /// right about some paths and wrong about others, and no test could see it because each copy
+    /// was consistent with itself.
+    ///
+    /// A turn that ends by panic is still the caller's to close (nothing here runs after it), and
+    /// the notice the caller sends then is not this function's business.
     pub async fn run_turn(&mut self, input: &str) -> Result<String, AgentError> {
+        self.turn_closed
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let outcome = self.run_turn_inner(input).await;
+        if outcome.is_err() && !self.turn_closed.load(std::sync::atomic::Ordering::SeqCst) {
+            // The message is the error's own words, which is what a caller that printed the
+            // `Err` was printing before; the paths with more to say (a rollback clause, which
+            // edits were kept) still send their own text and are not reached here.
+            let message = outcome
+                .as_ref()
+                .err()
+                .map(ToString::to_string)
+                .unwrap_or_default();
+            self.emit_turn_error(message).await;
+            let _ = self.store.save(&self.session);
+            self.emit_turn_end(String::new()).await;
+        }
+        outcome
+    }
+
+    async fn run_turn_inner(&mut self, input: &str) -> Result<String, AgentError> {
         // `subscribe()` (not `clone()`): the returned receiver's version is
         // pinned to the current channel version, so `changed()` only fires on
         // future sends. Cloning the persistent `cancel_rx` field would inherit
@@ -1681,13 +1728,18 @@ impl Agent {
                 Commit::Failed(e) => format!("failed to finalize the edit journal: {e}"),
             }
         };
-        self.sink
-            .event(AgentEvent::Info(format!(
-                "reached max iterations ({max}); {outcome}",
-                max = self.max_iterations
-            )))
-            .await;
+        // The budget running out is the turn's verdict, not a note beside it, so it travels as
+        // the boundary pair with the outcome clause inside: what the edits were doing (kept,
+        // rolled back, left to the parent) is the part a reader acts on, and it used to sit in an
+        // `Info` line while every caller wrote its own verdict from `e.to_string()` — which is
+        // the terse one, twice over in the TUI.
+        self.emit_turn_error(format!(
+            "reached max iterations ({max}); {outcome}",
+            max = self.max_iterations
+        ))
+        .await;
         let _ = self.store.save(&self.session);
+        self.emit_turn_end(String::new()).await;
         Err(AgentError::MaxIterations(self.max_iterations))
     }
 
@@ -2081,15 +2133,37 @@ pub fn is_diff_tool(name: &str) -> bool {
 /// spill threshold so a UI shows the same amount the transcript keeps inline.
 const DETAIL_MAX_CHARS: usize = 8000;
 
+/// The files a call names, under either key the tools use.
+///
+/// `path` is what a single-file tool sends; `paths` is the list `rename_symbol` rewrites as one
+/// transaction (and `observe` captures to). Reading only the first made every rename look like a
+/// call that touches nothing, so it shared a wave with an edit of one of those very files — see
+/// `a_rename_and_an_edit_of_the_same_file_never_run_in_one_wave`.
+fn tool_paths(call: &ToolCall) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = Vec::new();
+    if let Some(path) = call.arguments.get("path").and_then(|p| p.as_str()) {
+        paths.push(PathBuf::from(path));
+    }
+    if let Some(list) = call.arguments.get("paths").and_then(|v| v.as_array()) {
+        paths.extend(list.iter().filter_map(|v| v.as_str()).map(PathBuf::from));
+    }
+    paths
+}
+
+/// The one file a call names, when it names exactly one.
+///
+/// Two consumers want a single file rather than a set: the `read_file` duplicate-read check, and
+/// the line that names what a self-review should look at. Both are asked of this because
+/// `tool_paths` is the place that knows which keys exist — a second list of key names here is
+/// how the ordering and the readers drifted apart once already.
 fn tool_path(call: &ToolCall) -> Option<PathBuf> {
-    call.arguments
-        .get("path")
-        .and_then(|p| p.as_str())
-        .map(PathBuf::from)
+    let mut paths = tool_paths(call);
+    (paths.len() == 1).then(|| paths.pop()).flatten()
 }
 
 fn same_tool_path(a: &ToolCall, b: &ToolCall) -> bool {
-    matches!((tool_path(a), tool_path(b)), (Some(x), Some(y)) if x == y)
+    let (left, right) = (tool_paths(a), tool_paths(b));
+    left.iter().any(|path| right.contains(path))
 }
 
 /// Dependency edges between tool calls issued in the same turn:
@@ -2916,6 +2990,92 @@ fn thinking_opt(level: ThinkingLevel) -> Option<ThinkingLevel> {
 
 #[cfg(test)]
 mod tests {
+    /// A rename touches files, and the ordering only knew the one key.
+    ///
+    /// `tool_path` read `arguments["path"]`, which is what a single-file tool sends.
+    /// `rename_symbol` sends `paths` — an array, and the files it rewrites as one transaction —
+    /// so every rename looked to the scheduler like a call that touched nothing: it ran in the
+    /// same wave as an `edit_file` on one of those very files, and the transaction guarantee the
+    /// tool's own description makes is the thing that ordering exists to keep.
+    fn call(name: &str, arguments: serde_json::Value) -> ToolCall {
+        ToolCall {
+            id: format!("call_{name}"),
+            name: name.to_string(),
+            arguments,
+        }
+    }
+
+    #[test]
+    fn a_rename_and_an_edit_of_the_same_file_never_run_in_one_wave() {
+        let rename_first = tool_call_dependencies(&[
+            call(
+                "rename_symbol",
+                serde_json::json!({"from": "a", "to": "b", "paths": ["src/main.c"]}),
+            ),
+            call(
+                "edit_file",
+                serde_json::json!({"path": "src/main.c", "old_text": "x", "new_text": "y"}),
+            ),
+        ]);
+        assert_eq!(
+            rename_first[1],
+            vec![0],
+            "an edit after a rename of the same file must wait for it"
+        );
+
+        // The other direction is the same hazard: the rename has to read what the edit left.
+        let edit_first = tool_call_dependencies(&[
+            call(
+                "edit_file",
+                serde_json::json!({"path": "src/main.c", "old_text": "x", "new_text": "y"}),
+            ),
+            call(
+                "rename_symbol",
+                serde_json::json!({"from": "a", "to": "b", "paths": ["src/main.c"]}),
+            ),
+        ]);
+        assert_eq!(
+            edit_first[1],
+            vec![0],
+            "a rename must wait for an edit of its file"
+        );
+
+        // Two renames over disjoint files are still independent, or this fix would have bought
+        // serialisation nobody asked for.
+        let disjoint = tool_call_dependencies(&[
+            call(
+                "rename_symbol",
+                serde_json::json!({"from": "a", "to": "b", "paths": ["src/one.c"]}),
+            ),
+            call(
+                "rename_symbol",
+                serde_json::json!({"from": "c", "to": "d", "paths": ["src/two.c"]}),
+            ),
+        ]);
+        assert!(
+            disjoint[1].is_empty(),
+            "files that do not overlap must not be ordered: {:?}",
+            disjoint[1]
+        );
+
+        // And a list with one file in common is the whole reason the array is read at all.
+        let overlapping = tool_call_dependencies(&[
+            call(
+                "rename_symbol",
+                serde_json::json!({"from": "a", "to": "b", "paths": ["src/one.c", "src/two.c"]}),
+            ),
+            call(
+                "rename_symbol",
+                serde_json::json!({"from": "c", "to": "d", "paths": ["src/two.c"]}),
+            ),
+        ]);
+        assert_eq!(
+            overlapping[1],
+            vec![0],
+            "one shared file is enough to order them"
+        );
+    }
+
     /// A spill file the transcript still names must outlive the day.
     ///
     /// The reference used to be collected by splitting each message on whitespace and keeping the

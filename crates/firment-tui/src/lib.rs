@@ -2942,29 +2942,53 @@ mod tests {
         );
     }
 
+    /// One failed turn says so once, and closes itself once.
+    ///
+    /// This test asked "did an Error arrive, did a TurnEnd arrive", and both were true TWICE over:
+    /// the agent sent its verdict and boundary, and the task answered the returned `Err` with a
+    /// second identical pair. Two banners for one failure, and a boundary emitted without asking
+    /// whether this agent owns one -- the same hazard the previous round removed inside `Agent` and
+    /// left standing in this branch. So the question is now how many, not whether, and the read
+    /// keeps listening past the first boundary, because stopping at it would forgive exactly the
+    /// duplication this exists to catch.
     #[tokio::test]
     async fn turn_error_still_closes_the_turn() {
         let (cmd_tx, mut event_rx, task) = spawn_agent_task_harness(Box::new(ErrorProvider));
         cmd_tx.send(AgentCmd::User("go".to_string())).await.unwrap();
-        let mut saw_error = false;
-        let mut saw_turn_end = false;
-        for _ in 0..4 {
-            if saw_error && saw_turn_end {
+        let mut tags: Vec<&'static str> = Vec::new();
+        for _ in 0..8 {
+            let Ok(Some(event)) =
+                tokio::time::timeout(Duration::from_secs(5), event_rx.recv()).await
+            else {
+                break;
+            };
+            tags.push(match &event {
+                AgentEvent::Error(_) => "error",
+                AgentEvent::TurnEnd { .. } => "turn_end",
+                AgentEvent::TurnStart => "turn_start",
+                AgentEvent::Info(_) => "info",
+                _ => "other",
+            });
+            if tags.last() == Some(&"turn_end") {
                 break;
             }
-            match tokio::time::timeout(Duration::from_secs(5), event_rx.recv()).await {
-                Ok(Some(AgentEvent::Error(_))) => saw_error = true,
-                Ok(Some(AgentEvent::TurnEnd { .. })) => saw_turn_end = true,
-                Ok(Some(_)) => {}
-                _ => break,
-            }
         }
-        assert!(saw_error, "provider failure must surface as Error");
         assert!(
-            saw_turn_end,
-            "failed turn must still emit TurnEnd so the TUI un-busies"
+            tags.contains(&"error") && tags.contains(&"turn_end"),
+            "a failed turn must both say so and close: {tags:?}"
         );
+        let repeated = match tokio::time::timeout(Duration::from_millis(300), event_rx.recv()).await
+        {
+            Ok(Some(event)) => {
+                matches!(event, AgentEvent::Error(_) | AgentEvent::TurnEnd { .. })
+            }
+            _ => false,
+        };
         drop(cmd_tx);
         task.await.unwrap();
+        assert!(
+            !repeated,
+            "a second verdict for the same failed turn: {tags:?}"
+        );
     }
 }

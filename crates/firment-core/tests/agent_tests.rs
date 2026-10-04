@@ -365,6 +365,39 @@ impl EventSink for CollectSink {
     }
 }
 
+/// What an event was, by the four names this file counts. `AgentEvent` is not serializable (the
+/// wire shape is `src-tauri`'s `FrontendEvent`, built per field), so the names are spelled here;
+/// a renamed variant still has to be written down in this match to compile.
+fn kind(event: &AgentEvent) -> &'static str {
+    match event {
+        AgentEvent::TurnStart => "turn_start",
+        AgentEvent::TurnEnd { .. } => "turn_end",
+        AgentEvent::Error(_) => "error",
+        AgentEvent::Info(_) => "info",
+        _ => "other",
+    }
+}
+
+/// The last two things a turn said, which for every failure must be its verdict and its boundary.
+fn assert_closed_once(events: &[AgentEvent], exit: &str) {
+    let tags: Vec<&str> = events.iter().map(kind).collect();
+    assert!(
+        tags.len() >= 2,
+        "`{exit}` emitted nothing at all: the turn failed silently and every surface is still \
+         holding a spinner it cannot stop"
+    );
+    assert_eq!(
+        &tags[tags.len() - 2..],
+        &["error", "turn_end"],
+        "`{exit}` must end with exactly one verdict and one boundary; the whole turn said {tags:?}"
+    );
+    assert_eq!(
+        tags.iter().filter(|tag| **tag == "turn_end").count(),
+        1,
+        "`{exit}` closed a turn more than once; the whole turn said {tags:?}"
+    );
+}
+
 fn registry_with(tools: Vec<Arc<dyn Tool>>) -> Arc<ToolRegistry> {
     let mut registry = ToolRegistry::new();
     for tool in tools {
@@ -1232,12 +1265,31 @@ async fn max_iterations_stops() {
         session,
         store,
         Arc::new(AutoApprove::everything()),
-        Arc::new(CollectSink(events)),
+        Arc::new(CollectSink(events.clone())),
         2,
     );
 
     let err = agent.run_turn("loop").await.unwrap_err();
     assert!(matches!(err, AgentError::MaxIterations(2)));
+    // Running out of budget is the turn's own verdict, and the turn has to say it: this exit used
+    // to leave one `info` line behind and no boundary, so the surface that was told to start the
+    // turn was never told it had stopped -- and each caller compensated in its own way.
+    let held = events.lock().unwrap();
+    assert_closed_once(&held, "max iterations");
+    let said = held
+        .iter()
+        .find_map(|event| match event {
+            AgentEvent::Error(message) => Some(message.clone()),
+            _ => None,
+        })
+        .expect("the verdict carries no text");
+    assert!(
+        said.contains("reached max iterations (2)"),
+        "the verdict lost which budget ran out: {said}"
+    );
+    // The part a reader acts on -- what happened to this turn's edits -- travels with it, which
+    // is the thing a caller rebuilding the text from `err.to_string()` could never say.
+    assert!(said.contains(';'), "no outcome clause in {said}");
 }
 
 #[tokio::test]
@@ -1245,18 +1297,30 @@ async fn agent_without_provider_reports_clear_error() {
     let dir = tempdir().unwrap();
     let store = SessionStore::new(dir.path().to_path_buf());
     let session = Session::new(dir.path().to_path_buf(), "default", "fake");
+    let events = Arc::new(Mutex::new(Vec::new()));
     let mut agent = Agent::new(
         None,
         registry_with(vec![Arc::new(EchoTool)]),
         session,
         store,
         Arc::new(AutoApprove::everything()),
-        Arc::new(CollectSink(Arc::new(Mutex::new(Vec::new())))),
+        Arc::new(CollectSink(events.clone())),
         10,
     );
 
     let err = agent.run_turn("hi").await.unwrap_err();
     assert!(matches!(err, AgentError::NoProvider));
+    // The `?` on `ok_or(AgentError::NoProvider)` is the exit nobody wrote a farewell for: it
+    // leaves the loop through the question mark, so no path beside it emits a boundary. It is the
+    // reason the guarantee lives on `run_turn` rather than in the list of places that return.
+    let held = events.lock().unwrap();
+    assert_closed_once(&held, "no provider");
+    assert!(
+        held.iter()
+            .any(|event| matches!(event, AgentEvent::Error(message)
+                if message.contains("provider"))),
+        "the verdict lost the words that make it actionable: {held:?}"
+    );
 }
 
 #[tokio::test]

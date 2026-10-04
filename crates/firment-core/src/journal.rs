@@ -669,13 +669,36 @@ impl EditJournal {
     }
 }
 
+/// The before/after pair one entry of a turn, read off disk.
+///
+/// Both sides are read or the failure is reported — an unreadable backup is not an empty file.
+/// Returning `Ok` with an empty "before" wrote `sha256("")` into the ledger as though it had been
+/// measured, and `/undo` works from that row: the user would be handed back an emptied file and a
+/// hash proving it had always been empty. `new` is the exception with a reason: a file the turn
+/// deleted really is absent, which is the change, not a read error — so only `NotFound` reads as
+/// empty there, and anything else the OS refused is an error.
 fn ledger_change_for(dir: &Path, entry: &EntryRecord) -> Result<LedgerChange, String> {
     let old_bytes = if entry.existed {
-        fs::read(dir.join(&entry.backup)).unwrap_or_default()
+        fs::read(dir.join(&entry.backup)).map_err(|e| {
+            format!(
+                "cannot read the backup {} for {}: {e}",
+                dir.join(&entry.backup).display(),
+                entry.path.display()
+            )
+        })?
     } else {
         Vec::new()
     };
-    let new_bytes = fs::read(&entry.path).unwrap_or_default();
+    let new_bytes = match fs::read(&entry.path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => {
+            return Err(format!(
+                "cannot read {} as it stands now: {e}",
+                entry.path.display()
+            ));
+        }
+    };
     let old = String::from_utf8_lossy(&old_bytes).into_owned();
     let new = String::from_utf8_lossy(&new_bytes).into_owned();
     Ok(LedgerChange {
@@ -954,6 +977,58 @@ fn undo_candidates(dir: &Path) -> Result<Vec<PathBuf>, String> {
 
 #[cfg(test)]
 mod tests {
+    /// A backup that cannot be read is not an empty file.
+    ///
+    /// `ledger_change_for` turned both of its reads into `unwrap_or_default()`, so a backup the
+    /// OS would not hand over was written to the ledger as "this file used to be empty" -- with a
+    /// `sha256("")` beside it as though it had been measured. That row is what `/undo` and an
+    /// exported ledger believe afterwards, which is where a silent read failure becomes the
+    /// destruction of a file nobody meant to empty.
+    #[test]
+    fn an_unreadable_backup_is_not_recorded_as_an_empty_previous_file() {
+        use super::*;
+        let dir = tempfile::tempdir().unwrap();
+        let entry = EntryRecord {
+            path: dir.path().join("present.c"),
+            backup: "gone-backup".to_string(),
+            existed: true,
+        };
+        std::fs::write(dir.path().join("present.c"), "new").unwrap();
+        let why = ledger_change_for(dir.path(), &entry).unwrap_err();
+        // Named by file, because the reason a ledger append failed has to point at the byte
+        // somebody is going to have to go and look at.
+        assert!(why.contains("gone-backup"), "{why}");
+        assert!(why.contains("present.c"), "{why}");
+    }
+
+    /// The other half: a file the turn removed is a change with an empty end, not a read failure.
+    /// Refusing the unreadable backup must not be mistaken for refusing every absent file.
+    #[test]
+    fn a_file_the_turn_deleted_is_still_a_change_with_an_empty_end() {
+        use super::*;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("bk"), "old content").unwrap();
+        let entry = EntryRecord {
+            path: dir.path().join("removed.c"),
+            backup: "bk".to_string(),
+            existed: true,
+        };
+        let change = ledger_change_for(dir.path(), &entry)
+            .expect("a deleted file is a real change, and its end really is nothing");
+        assert_eq!(change.old_lines, 1, "{change:?}");
+        assert_eq!(change.new_lines, 0, "{change:?}");
+
+        // And a file the turn created then deleted: never existed, nothing on disk now.
+        let round_trip = EntryRecord {
+            path: dir.path().join("ghost.c"),
+            backup: String::new(),
+            existed: false,
+        };
+        let change = ledger_change_for(dir.path(), &round_trip)
+            .expect("no backup was owed and none was claimed");
+        assert_eq!((change.old_lines, change.new_lines), (0, 0), "{change:?}");
+    }
+
     #[test]
     fn turns_before_seq_refuses_a_store_whose_counter_restarted() {
         // What the GUI wrote while the call counter lived on the Agent and the Agent was rebuilt

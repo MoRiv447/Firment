@@ -115,16 +115,13 @@ pub(crate) fn spawn_agent_task(
                     .await;
                 match result {
                     Ok(Ok(_)) => {}
-                    Ok(Err(e)) => {
-                        agent.emit(AgentEvent::Error(e.to_string())).await;
-                        // Error paths of run_turn (max iterations, provider
-                        // failure, ...) emit no TurnEnd, so the TUI would
-                        // stay busy forever; close the turn explicitly.
-                        agent
-                            .emit(AgentEvent::TurnEnd {
-                                text: String::new(),
-                            })
-                            .await;
+                    Ok(Err(_)) => {
+                        // Nothing is emitted here. `run_turn` closes the turn it failed in, with
+                        // the message that explains it; answering the `Err` from this line is what
+                        // used to hand a provider failure two verdicts and two boundaries for one
+                        // turn, and a boundary sent from here never asked whether this agent owns
+                        // one — the hazard the previous round removed inside `Agent` and left in
+                        // this branch.
                         let _ = agent.save_session();
                     }
                     Err(panic_payload) => {

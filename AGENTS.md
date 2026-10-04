@@ -364,6 +364,16 @@ two variables above are the whole available route.
   the file shipped broken: the only route anyone tested was the one that worked.
   Measured on this machine with PS 5.1 (no PowerShell 7 installed here to compare, so
   that half is unverified); adding the BOM made the same parse report clean.
+- **Where the copies are the callers, put the invariant in the callee.** The 2026-10-04 round
+  found `run_turn`'s failure exits emitting no turn boundary (max iterations said nothing, and
+  `ok_or(NoProvider)?` leaves through the question mark), which left every caller to compensate —
+  and they compensated differently: the TUI answered any `Err` with its own `Error` + `TurnEnd`,
+  so a provider failure that had already announced itself arrived twice, from a site that never
+  asks whether this agent owns a boundary; the GUI asked the events first (`said_by_agent`) and
+  was right about some paths only. Each copy was consistent with itself, so all three rounds'
+  tests stayed green. `Agent::run_turn` now guarantees the pair on every `Err` it returns
+  (a panic is still the caller's to close). When a rule has to be remembered at several call
+  sites, move it to the place that cannot be skipped and delete the reminders.
 - **A regression test has to fail before the fix, and on this machine the proof cannot
   always be run.** Re-inserting a just-fixed bug to show the test catches it is refused
   by the sandbox's command classifier, which reads the edit as an unauthorised
