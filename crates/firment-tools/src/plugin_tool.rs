@@ -147,14 +147,8 @@ impl Tool for PluginTool {
             .spawn()
             .map_err(|e| ToolError::new(format!("[Io] cannot start plugin: {e}")))?;
 
-        if let Some(mut stdin) = child.stdin.take() {
-            use tokio::io::AsyncWriteExt;
-            stdin.write_all(request.as_bytes()).await.map_err(|e| {
-                ToolError::new(format!("[Io] cannot send the call to the plugin: {e}"))
-            })?;
-            // Closing stdin is part of the protocol: a plugin reads until EOF.
-            drop(stdin);
-        }
+        // The request is written inside the waiter task below, not here: an `await` before the
+        // deadline exists is an `await` nothing can stop.
 
         // The child is moved into a task so the timeout can be applied to the *wait*, not to a
         // future that owns it — on timeout the task is aborted, the child is dropped inside it,
@@ -167,13 +161,34 @@ impl Tool for PluginTool {
         // five tests, 29 seconds). `kill_process_tree` is the same killer `run_command` uses, for
         // the same reason.
         let pid = child.id();
-        let waiter = tokio::spawn(async move { child.wait_with_output().await });
+        // Write, then wait, both inside the one deadline. A plugin that never reads its stdin --
+        // the same refusal as never answering, and just as deadlocking -- used to be able to
+        // block the `write_all` above at 8 KiB of pipe with nothing watching, so the only thing
+        // that would ever end the call was the wave timeout, minutes later.
+        let waiter = tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            if let Some(mut stdin) = child.stdin.take() {
+                if let Err(e) = stdin.write_all(request.as_bytes()).await {
+                    drop(stdin);
+                    return Err(format!("[Io] cannot send the call to the plugin: {e}"));
+                }
+                // Closing stdin is part of the protocol: a plugin reads until EOF.
+                drop(stdin);
+            }
+            child
+                .wait_with_output()
+                .await
+                .map_err(|e| format!("[Io] the plugin could not be waited on: {e}"))
+        });
         let output = match tokio::time::timeout(self.timeout, waiter).await {
             Ok(Ok(Ok(output))) => output,
-            Ok(Ok(Err(e))) => {
-                return Err(ToolError::new(format!(
-                    "[Io] the plugin could not be waited on: {e}"
-                )));
+            Ok(Ok(Err(message))) => {
+                // The failure came from our own side of the pipe, so the child may still be
+                // alive: it goes the same way the timeout arm sends it.
+                if let Some(pid) = pid {
+                    crate::tools::util::kill_process_tree(pid);
+                }
+                return Err(ToolError::new(message));
             }
             Ok(Err(e)) => return Err(ToolError::new(format!("[Io] the plugin task failed: {e}"))),
             Err(_) => {

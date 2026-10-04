@@ -315,6 +315,21 @@ struct UartLink {
 /// to the NEXT case.
 const HEARTBEAT_TAIL_MS: u64 = 300;
 
+/// How much of a running capture is kept for the regex/marker tests across a chunk boundary.
+const WINDOW_TAIL_CHARS: usize = 2048;
+
+/// What one read contributes to the capture: `(bytes to keep, whether the cap was hit)`.
+///
+/// Split out so the boundary is a tested number rather than an off-by-one in a loop.
+fn take_within_cap(held: usize, read: usize) -> (usize, bool) {
+    let room = crate::tools::monitor::CAPTURE_CAP_BYTES.saturating_sub(held);
+    if read <= room {
+        (read, false)
+    } else {
+        (room, true)
+    }
+}
+
 fn read_window(
     port: &mut dyn serialport::SerialPort,
     window_ms: u64,
@@ -330,6 +345,13 @@ fn read_window(
     let mut tail_deadline: Option<Instant> = None;
     let mut buf = [0u8; 4096];
     let mut acc: Vec<u8> = Vec::new();
+    // The last characters kept, so a marker split across two 4 KiB reads is still seen. The
+    // detectors used to run over the WHOLE accumulated buffer on every read, which is
+    // quadratic in the capture, and the buffer itself had no ceiling at all while its two
+    // siblings (`monitor.rs:257`, `util.rs:334`) stop at 8 MiB -- a target in a boot loop for
+    // the maximum window was unbounded memory in a tool that is supposed to be the careful one.
+    let mut tail = String::new();
+    let mut truncated = false;
     let mut timed_out = true;
     loop {
         if cancel.is_cancelled() {
@@ -345,8 +367,14 @@ fn read_window(
         }
         match port.read(&mut buf) {
             Ok(n) if n > 0 => {
-                acc.extend_from_slice(&buf[..n]);
-                let text = String::from_utf8_lossy(&acc);
+                let (keep, hit_cap) = take_within_cap(acc.len(), n);
+                acc.extend_from_slice(&buf[..keep]);
+                truncated |= hit_cap;
+                // Only the new chunk is decoded, and the detectors see it glued to the tail of
+                // what was kept -- the whole buffer used to be re-decoded on every read.
+                let chunk = String::from_utf8_lossy(&buf[..n]).into_owned();
+                let text = format!("{tail}{chunk}");
+                tail = window_tail(&text);
                 // A fault scene is ephemeral (watchdog!) — exit on it
                 // immediately.
                 let fault = crate::forensic::fault_detected_marker(&text).is_some()
@@ -375,10 +403,11 @@ fn read_window(
             }
         }
     }
-    Capture {
-        text: String::from_utf8_lossy(&acc).to_string(),
-        timed_out,
+    let mut text = String::from_utf8_lossy(&acc).into_owned();
+    if truncated {
+        text.push_str("\n[... capture stopped at the 8 MiB ceiling; later bytes discarded ...]");
     }
+    Capture { text, timed_out }
 }
 
 /// Blocking half of `send_and_capture`: chunked write under a deadline,
@@ -1398,12 +1427,65 @@ fn handle_replay(arg: &str, ctx: &ToolContext) -> Result<ToolOutput, ToolError> 
     })
 }
 
+/// The last [`WINDOW_TAIL_CHARS`] characters of a window, counted in characters.
+///
+/// Byte slicing would cut a multi-byte glyph in half and panic inside the capture loop, and
+/// serial output carrying CJK log lines is a normal thing in this project's own domain.
+fn window_tail(text: &str) -> String {
+    let skip = text.chars().count().saturating_sub(WINDOW_TAIL_CHARS);
+    text.chars().skip(skip).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use firment_core::{AutoApprove, EditJournal};
     use std::sync::{Arc, Mutex};
     use tempfile::tempdir;
+
+    #[test]
+    fn the_capture_window_stops_at_the_same_ceiling_as_its_siblings() {
+        assert_eq!(take_within_cap(0, 4096), (4096, false));
+        let cap = crate::tools::monitor::CAPTURE_CAP_BYTES;
+        assert_eq!(
+            take_within_cap(cap - 10, 10),
+            (10, false),
+            "filling the buffer exactly is not truncation"
+        );
+        assert_eq!(
+            take_within_cap(cap - 10, 11),
+            (10, true),
+            "the overflow is refused AND reported, so the capture says it stopped"
+        );
+        assert_eq!(
+            take_within_cap(cap, 4096),
+            (0, true),
+            "once full, nothing more is kept"
+        );
+    }
+
+    /// The tail exists so a marker split across two reads is still seen, and it is the second
+    /// place in this loop where a byte index would be a panic: a target logging CJK is normal
+    /// here, and `text.len()` counts bytes.
+    #[test]
+    fn the_boundary_tail_cuts_on_characters_not_bytes() {
+        let short_cjk = "超时".repeat(WINDOW_TAIL_CHARS / 2 - 1);
+        assert_eq!(
+            window_tail(&short_cjk),
+            short_cjk,
+            "less than the window is kept whole"
+        );
+        let long_cjk = "字".repeat(WINDOW_TAIL_CHARS + 500);
+        let tail = window_tail(&long_cjk);
+        assert_eq!(tail.chars().count(), WINDOW_TAIL_CHARS);
+        assert!(tail.chars().all(|c| c == '字'), "not one glyph split");
+        assert_eq!(
+            window_tail(&"a".repeat(WINDOW_TAIL_CHARS * 2))
+                .chars()
+                .count(),
+            WINDOW_TAIL_CHARS
+        );
+    }
 
     fn ctx(dir: &Path) -> ToolContext {
         ToolContext {
