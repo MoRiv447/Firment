@@ -491,17 +491,14 @@ pub async fn set_session_title(
     session_id: String,
     title: String,
 ) -> Result<crate::events::SessionDto, String> {
-    /*
-     * Deliberately not gated on `ensure_not_running`: the three commands above are,
-     * because they change what the turn in flight will do. A name does not, and a
-     * rename that refused while the agent was thinking would be a rename that
-     * usually refuses.
-     *
-     * The normalization lives in the core -- `set_title` trims, turns whitespace into
-     * `None`, and bumps `updated_at`, and `SessionSummary` already prefers the title
-     * over the derived preview. So there is nothing to interpret here: the command
-     * loads, sets and saves, and the rail reads the same field it always did.
-     */
+    ensure_not_running(&shared, &session_id)?;
+    // The paragraph here used to argue the opposite -- that a name "does not change what the turn
+    // in flight will do", so the guard did not apply. That is true of the intent and false of the
+    // mechanism: `ensure_not_running` exists because a running turn holds its own snapshot of the
+    // transcript and saves it on EVERY exit path, so any other load-modify-save of that file
+    // mid-turn is silently reverted. A title set while the agent thought was therefore a rename
+    // that looked saved in the dialog and was gone when the turn finished -- not a rename that
+    // usually refuses, which was the cost the exemption was written to avoid.
     let shared = shared.inner().clone();
     let store = shared
         .store
@@ -637,21 +634,47 @@ pub async fn session_context_usage(
 
 // ---------- permission / ask responses ----------
 
+/// Hand an answer to the turn that asked for it, or say plainly that nobody is asking any more.
+///
+/// Both `respond_*` commands used to return `Ok(())` on every path: take the id out of the map and
+/// send if it was there. A turn that had already ended -- cancelled, or past its deadline -- had
+/// dropped its receiver, so the dialog closed as though the answer had been given, and nothing
+/// received it. The UI then shows the user's own choice as a recorded decision, which is the same
+/// lie the tools keep being caught telling, in a smaller box.
+fn deliver_answer<T>(
+    waiters: &std::sync::Mutex<std::collections::HashMap<u64, tokio::sync::oneshot::Sender<T>>>,
+    id: u64,
+    value: T,
+    what: &str,
+) -> Result<(), String> {
+    let taken = waiters
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&id);
+    match taken {
+        None => Err(format!(
+            "[Busy] {what} {id} is not waiting any more — the turn that asked has ended, so the \
+             answer went nowhere"
+        )),
+        Some(tx) => {
+            if tx.send(value).is_err() {
+                Err(format!(
+                    "[Busy] {what} {id} had already stopped waiting when the answer arrived"
+                ))
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn respond_permission(
     shared: tauri::State<'_, Arc<Shared>>,
     id: u64,
     allowed: bool,
 ) -> Result<(), String> {
-    if let Some(tx) = shared
-        .perm_waiters
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .remove(&id)
-    {
-        let _ = tx.send(allowed);
-    }
-    Ok(())
+    deliver_answer(&shared.perm_waiters, id, allowed, "permission request")
 }
 
 #[tauri::command]
@@ -660,15 +683,7 @@ pub async fn respond_ask(
     id: u64,
     answer: Option<String>,
 ) -> Result<(), String> {
-    if let Some(tx) = shared
-        .ask_waiters
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .remove(&id)
-    {
-        let _ = tx.send(answer);
-    }
-    Ok(())
+    deliver_answer(&shared.ask_waiters, id, answer, "ask request")
 }
 
 // ---------- models / settings ----------
@@ -1023,6 +1038,92 @@ mod tests {
         assert!(
             !slot.cancel_requested.load(Ordering::SeqCst),
             "a Stop that fired is not also parked"
+        );
+    }
+
+    /// A command that rewrites a session transcript must either wait for the turn holding it, or
+    /// say in the list below why there is no turn to conflict with.
+    ///
+    /// `ensure_not_running`'s own comment describes the hazard -- a running turn keeps its own
+    /// snapshot of the transcript and saves it on every exit path, so any other load-modify-save
+    /// mid-turn is silently reverted -- and `set_session_title` carried a paragraph arguing itself
+    /// out of the guard on the ground that a name does not change what the turn will do. That is
+    /// true of the *intent* and false of the *mechanism*: the title write is a load-modify-save of
+    /// exactly the file the guard protects, so the turn's final save dropped it. The exemption was
+    /// prose; this list is the check, and a new command that saves a transcript has to appear here
+    /// with a reason before it can go unguarded.
+    #[test]
+    fn a_command_that_rewrites_a_transcript_guards_itself_or_says_why() {
+        const EXEMPT: [(&str, &str); 1] = [(
+            "new_session",
+            "creates a transcript rather than rewriting one, so there is no in-flight save to lose",
+        )];
+
+        let source = include_str!("commands.rs");
+        let chunks: Vec<&str> = source.split("#[tauri::command]").skip(1).collect();
+        assert!(
+            chunks.len() >= 20,
+            "the command list should be readable from the source; found {}",
+            chunks.len()
+        );
+        let mut saving: Vec<(String, bool)> = Vec::new();
+        for chunk in &chunks {
+            let name = chunk
+                .split("fn ")
+                .nth(1)
+                .unwrap_or("")
+                .split('(')
+                .next()
+                .unwrap_or("")
+                .to_string();
+            if chunk.contains("store.save(") || chunk.contains("save(&session)") {
+                saving.push((name, chunk.contains("ensure_not_running(")));
+            }
+        }
+        assert!(
+            saving.len() >= 5,
+            "expected the transcript-saving commands to still be findable; saw {:?}",
+            saving.iter().map(|(name, _)| name).collect::<Vec<_>>()
+        );
+        for (name, guarded) in &saving {
+            let exempt = EXEMPT.iter().any(|(allowed, _)| allowed == name);
+            assert!(
+                *guarded || exempt,
+                "`{name}` saves a session transcript and is gated on nothing -- either call \
+                 `ensure_not_running` or say in EXEMPT why there is no turn to overwrite it"
+            );
+        }
+    }
+
+    /// Answering nobody is not answering.
+    #[test]
+    fn an_answer_for_a_dead_waiter_is_refused_rather_than_recorded() {
+        let waiters: std::sync::Mutex<
+            std::collections::HashMap<u64, tokio::sync::oneshot::Sender<bool>>,
+        > = std::sync::Mutex::new(std::collections::HashMap::new());
+
+        let gone = deliver_answer(&waiters, 7, true, "permission request").unwrap_err();
+        assert!(gone.starts_with("[Busy]"), "{gone}");
+        assert!(gone.contains("permission request 7"), "{gone}");
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+        waiters.lock().unwrap().insert(9, tx);
+        deliver_answer(&waiters, 9, true, "permission request")
+            .expect("a waiter that is still there takes the answer");
+        assert_eq!(rx.blocking_recv(), Ok(true));
+        assert!(
+            deliver_answer(&waiters, 9, false, "permission request").is_err(),
+            "the entry is taken with the answer, so answering the same id twice cannot be a success"
+        );
+
+        // The second failure mode: registered, but the receiver is gone by the time the answer
+        // arrives (a cancel between the two).
+        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+        drop(rx);
+        waiters.lock().unwrap().insert(11, tx);
+        assert!(
+            deliver_answer(&waiters, 11, true, "permission request").is_err(),
+            "a sender whose receiver vanished still reported success before this"
         );
     }
 }
