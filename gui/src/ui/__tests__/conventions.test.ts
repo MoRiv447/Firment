@@ -197,6 +197,7 @@ describe('Primitive layer and shell conventions', () => {
       'input',
       'inspector',
       'inspector-body',
+      'inspector-parked',
       'inspector-rail',
       'key-value',
       'live-run',

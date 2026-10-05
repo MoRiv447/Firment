@@ -112,19 +112,65 @@ export function Inspector({
     if (!open) onToggle();
   };
 
+  const body = (
+    <div
+      data-ui="inspector-body"
+      data-fill={current?.fill ? 'true' : undefined}
+      className={styles.body}
+    >
+      {/*
+        Every pane is mounted and the inactive ones are hidden, because rendering only
+        `current.content` — which is what this did — unmounts a pane the moment you look away.
+        For the Hardware pane that is not a cosmetic loss: it holds the serial monitor and the
+        flash view, their `busy` flags and results, and the `onHardwareExit` listener that tells
+        the app the monitor closed. Leave Hardware to read a diff and come back to a port nobody
+        is watching.
+  
+        Each wrapper carries the panel role and the id `Tabs` points `aria-controls` at, so the
+        three tabs' controls all resolve — they used to name an element that existed only while
+        that tab was up.
+      */}
+      {tabs.map((tab) => (
+        <div
+          key={tab.key}
+          hidden={tab.key !== current?.key}
+          className={tab.fill ? styles.fillPane : styles.pane}
+          id={`${prefix}-panel-${tab.key}`}
+          role="tabpanel"
+          aria-labelledby={`${prefix}-tab-${tab.key}`}
+        >
+          {tab.content}
+        </div>
+      ))}
+    </div>
+  );
+
   if (!open) {
     return (
-      <aside data-ui="inspector-rail" className={styles.rail}>
-        <RailButton label="Open the inspector" icon={PanelRightOpen} onClick={onToggle} />
-        {tabs.map((tab) => (
-          <RailButton
-            key={tab.key}
-            label={tab.badge ? `${tab.label}, ${tab.badge}` : tab.label}
-            icon={tab.icon ?? PanelRightOpen}
-            onClick={() => openTab(tab.key)}
-          />
-        ))}
-      </aside>
+      <>
+        <aside data-ui="inspector-rail" className={styles.rail}>
+          <RailButton label="Open the inspector" icon={PanelRightOpen} onClick={onToggle} />
+          {tabs.map((tab) => (
+            <RailButton
+              key={tab.key}
+              label={tab.badge ? `${tab.label}, ${tab.badge}` : tab.label}
+              icon={tab.icon ?? PanelRightOpen}
+              onClick={() => openTab(tab.key)}
+            />
+          ))}
+        </aside>
+        {/*
+          Collapsed is not closed. This used to return the rail alone, which unmounted every pane
+          and threw away the same state the comment above is about — `8448fb3` fixed the switch
+          inside the pane, `fe20f00` the switch between panes, and collapsing was the third way to
+          do it. Collapse the inspector while a flash is running and the completion was never
+          recorded; reopening said "No run yet". A hidden container keeps the subtrees mounted and
+          out of the layout and the accessibility tree at the same time.
+        */}
+        <div data-ui="inspector-parked" hidden>
+          {body}
+        </div>
+      </>
     );
   }
 
@@ -153,36 +199,7 @@ export function Inspector({
           </div>
           <CollapseToggle onToggle={onToggle} />
         </div>
-        <div
-          data-ui="inspector-body"
-          data-fill={current?.fill ? 'true' : undefined}
-          className={styles.body}
-        >
-          {/*
-            Every pane is mounted and the inactive ones are hidden, because rendering only
-            `current.content` — which is what this did — unmounts a pane the moment you look away.
-            For the Hardware pane that is not a cosmetic loss: it holds the serial monitor and the
-            flash view, their `busy` flags and results, and the `onHardwareExit` listener that tells
-            the app the monitor closed. Leave Hardware to read a diff and come back to a port nobody
-            is watching, with no message saying why it stopped.
-  
-            Each wrapper carries the panel role and the id `Tabs` points `aria-controls` at, so the
-            three tabs' controls all resolve — they used to name an element that existed only while
-            that tab was up.
-          */}
-          {tabs.map((tab) => (
-            <div
-              key={tab.key}
-              hidden={tab.key !== current?.key}
-              className={tab.fill ? styles.fillPane : styles.pane}
-              id={`${prefix}-panel-${tab.key}`}
-              role="tabpanel"
-              aria-labelledby={`${prefix}-tab-${tab.key}`}
-            >
-              {tab.content}
-            </div>
-          ))}
-        </div>
+        {body}
       </aside>
     </>
   );

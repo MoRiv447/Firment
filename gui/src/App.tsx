@@ -342,10 +342,18 @@ export default function App() {
   // Context usage follows the open session and its message count.
   useEffect(() => {
     if (!session) return;
+    const id = session.id;
     void api
-      .sessionContextUsage(session.id)
-      .then(setUsage)
-      .catch(() => setUsage(null));
+      .sessionContextUsage(id)
+      // Guarded on arrival, like the transcript refresh below: switching chats while this IPC is
+      // in flight used to write the previous session's percentage into the open one, which is the
+      // one number in the status bar that reads as "how much room is left here".
+      .then((u) => {
+        if (sessionRef.current?.id === id) setUsage(u);
+      })
+      .catch(() => {
+        if (sessionRef.current?.id === id) setUsage(null);
+      });
   }, [session?.id, session?.messages.length, session?.context_budget_chars]);
 
   // A tool-heavy turn can double the context while the chip sits at its
@@ -355,7 +363,14 @@ export default function App() {
     const refresh = setInterval(() => {
       const id = sessionRef.current?.id;
       if (!id) return;
-      void api.sessionContextUsage(id).then(setUsage).catch(() => {});
+      void api
+        .sessionContextUsage(id)
+        // Same rule, same reason: the reply carries the number of the session asked for, not of
+        // the one open when it lands.
+        .then((u) => {
+          if (sessionRef.current?.id === id) setUsage(u);
+        })
+        .catch(() => {});
     }, 10_000);
     return () => clearInterval(refresh);
   }, [anyRunning]);
@@ -414,7 +429,14 @@ export default function App() {
             if (e.type === 'tool_end' && e.name === 'todo' && sid) {
               void api
                 .sessionTodos(sid)
-                .then((t) => setTodos(Array.isArray(t) ? t : []))
+                // The background chat finishing a `todo` call must not replace the open chat's
+                // list, its badge, the composer's progress strip or the status bar count. Every
+                // other fetch in this switch that writes session-scoped state re-checks the
+                // session id after the await; this one answered to the event's session instead.
+                .then((t) => {
+                  if (sessionRef.current?.id !== sid) return;
+                  setTodos(Array.isArray(t) ? t : []);
+                })
                 .catch((err: unknown) => console.error(err));
             }
             // Notification center: build/verify/flash failures are

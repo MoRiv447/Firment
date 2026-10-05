@@ -172,6 +172,49 @@ describe('Inspector', () => {
     }
   });
 
+  it('keeps every pane alive while the column is collapsed', () => {
+    // Three ways to lose the serial monitor were found in this one component: the serial<->flash
+    // switch inside the pane (`8448fb3`), the switch between panes (`fe20f00`), and collapsing the
+    // column, which returned the rail alone. Collapsing is the one a user does with a keypress
+    // while a flash is running, and the completion never got recorded afterwards.
+    let alive = 0;
+    function Watcher() {
+      useEffect(() => {
+        alive += 1;
+        return () => {
+          alive -= 1;
+        };
+      }, []);
+      return <span>the monitor</span>;
+    }
+    const watched: InspectorTab[] = [
+      { key: 'changes', label: 'Changes', icon: Diff, content: <div>the diff</div> },
+      { key: 'hardware', label: 'Hardware', icon: Bot, fill: true, content: <Watcher /> },
+    ];
+    const view = (open: boolean) => (
+      <Inspector
+        tabs={watched}
+        active="hardware"
+        onActiveChange={() => {}}
+        open={open}
+        onToggle={() => {}}
+        width={320}
+        onResize={() => {}}
+      />
+    );
+    const { rerender } = render(view(true));
+    expect(alive).toBe(1);
+    rerender(view(false));
+    expect(alive, 'collapsing the inspector unmounted the pane holding the port').toBe(1);
+    // Hidden is not merely invisible: nothing in the collapsed column may stay in the a11y tree.
+    expect(screen.queryByRole('tabpanel')).toBeNull();
+    expect(screen.getByText('the monitor')).not.toBeVisible();
+    expect(screen.getByRole('button', { name: 'Open the inspector' })).toBeInTheDocument();
+    rerender(view(true));
+    expect(alive, 'it was remounted rather than kept, so its state was gone in between').toBe(1);
+    expect(screen.getByText('the monitor')).toBeVisible();
+  });
+
   it('collapses to a rail that reopens the pane you chose, not the first one', () => {
     render(<Harness />);
     fireEvent.click(screen.getByRole('tab', { name: /Subagents/ }));
