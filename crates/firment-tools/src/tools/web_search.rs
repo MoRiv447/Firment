@@ -81,7 +81,15 @@ fn http_client() -> &'static reqwest::Client {
 /// Only meaningful for real DDG hosts; mock servers in tests stay fast.
 async fn ddg_throttle() {
     let wait = {
-        let mut guard = DDG_THROTTLE.lock().unwrap();
+        // Poison-recovering, like every other `std::sync::Mutex` in this workspace — this was the
+        // one the sweep missed (`workbench.rs`'s item-40 site was fixed and the count of
+        // recovering call sites went up by one, without this static in it). No realistic poison
+        // exists here: the section reads an `Instant`, calls `elapsed()` and does a
+        // `saturating_sub`, none of which panic, so nothing can poison it by unwinding. The
+        // reason to write it out anyway is that the rule has no exceptions to remember.
+        let mut guard = DDG_THROTTLE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let since = guard.map(|last| last.elapsed()).unwrap_or_default();
         let wait = DDG_MIN_INTERVAL.saturating_sub(since);
         *guard = Some(Instant::now());

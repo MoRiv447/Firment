@@ -3213,4 +3213,32 @@ expect_decoded = "0x55"
             .unwrap();
         assert!(out.contains("[HIL_EXPECT:FAIL]"), "got: {out}");
     }
+
+    /// `docs/hil-example.toml` is the file a user copies to `.firment/hil.toml`, and nothing ever
+    /// parsed it. Every suite struct here is `deny_unknown_fields` precisely so a typo'd
+    /// expectation fails loudly — which means a renamed field would turn the *published example*
+    /// into a file that cannot be loaded, and the error would land on the person who followed the
+    /// instructions rather than on whoever renamed the field.
+    #[test]
+    fn the_hil_example_still_parses_as_a_suite_file() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/hil-example.toml");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        let file: HilFile = toml::from_str(&text)
+            .unwrap_or_else(|e| panic!("docs/hil-example.toml no longer parses: {e}"));
+        // A floor, so this cannot pass by parsing an empty file: the example exists to show every
+        // step kind, and it is where a user learns the vocabulary.
+        assert!(
+            file.suite.len() >= 5,
+            "expected the showcase suites; found {}",
+            file.suite.len()
+        );
+        for (name, suite) in &file.suite {
+            assert!(
+                !suite.steps.is_empty(),
+                "suite {name:?} in the published example has no steps"
+            );
+        }
+    }
 }

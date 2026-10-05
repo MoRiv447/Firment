@@ -60,7 +60,16 @@ if [ "${FIRMENT_DRY_RUN:-}" = "1" ]; then
 fi
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+# `STAGE` is created only just before the binary is put in place, but the trap is installed here so
+# an interrupt anywhere in between cannot leave it behind either.
+STAGE=""
+cleanup() {
+    rm -rf "$TMP"
+    if [ -n "$STAGE" ]; then
+        rm -f "$STAGE"
+    fi
+}
+trap cleanup EXIT
 TARBALL="$TMP/$ASSET"
 curl -fL "$ASSET_URL" -o "$TARBALL" || { echo "下载失败（$ASSET_URL）：可能该版本尚未发布或平台不支持" >&2; exit 1; }
 
@@ -82,7 +91,15 @@ mkdir -p "$INSTALL_DIR"
 tar -xzf "$TARBALL" -C "$TMP"
 BIN="$(find "$TMP" -type f -name firm | head -n 1)"
 [ -n "$BIN" ] || { echo "压缩包中未找到 firm" >&2; exit 1; }
-install -m 755 "$BIN" "$INSTALL_DIR/firm"
+# 先写同目录的暂存名，再 rename 到位：`install` 是直接写目标文件的，中断（Ctrl-C、磁盘写满）
+# 会在 PATH 上留下一个截断的 firm，而原来那个可用的已经没了。暂存在 $INSTALL_DIR 内、与目标同
+# 一个文件系统，所以 `mv` 走的是 rename(2)，是原子的 —— 也就是 `firm update` 从
+# crates/firment-cli/src/install.rs 的 `replace_file` 拿到的那条保证。（另外 rename 覆盖
+# **正在运行**的二进制不会失败，而在原地写会得到 ETXTBSY。）
+STAGE="$INSTALL_DIR/.firm.new.$$"
+install -m 755 "$BIN" "$STAGE"
+mv -f "$STAGE" "$INSTALL_DIR/firm"
+STAGE=""
 
 case "${SHELL:-}" in
     *zsh*) RC="$HOME/.zshrc" ;;

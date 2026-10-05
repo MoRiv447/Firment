@@ -36,6 +36,10 @@ pub struct WorkbenchConfigDto {
     /// alerts at or above this severity become escalations in the UI.
     pub guard_escalate_sev: String,
     pub toml_raw: String,
+    /// Set when `.firment/workbench.toml` exists but does not parse. The fields above are then the
+    /// DEFAULT values, not the project's, and the panel says so rather than showing an empty
+    /// project as though it were the file's content.
+    pub config_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -70,14 +74,24 @@ async fn git_status(cwd: &Path) -> Option<GitStatusDto> {
     })
 }
 
+/// The parsed workbench, plus the reason it could not be parsed when there is one.
+///
+/// This used to be `WorkbenchConfig::load(cwd).unwrap_or_default()`, so a file that does not parse
+/// was shown to the panel as an empty project — no name, no mainline, no pins — while
+/// `WorkbenchConfig::load`'s own doc says a corrupt file is an error precisely because "the
+/// workbench must not silently invent state". The raw text is the file's real bytes either way, so
+/// the panel can hold both: what could not be read, and what is there to be fixed.
 fn load_config(cwd: &Path) -> WorkbenchConfigDto {
-    let cfg = WorkbenchConfig::load(cwd).unwrap_or_default();
+    let loaded = WorkbenchConfig::load(cwd);
+    let config_error = loaded.as_ref().err().cloned();
+    let cfg = loaded.unwrap_or_default();
     let toml_raw = std::fs::read_to_string(WorkbenchConfig::path_for(cwd)).unwrap_or_default();
     WorkbenchConfigDto {
         project_name: cfg.project.name.clone(),
         mainline_session: cfg.workbench.mainline_session.clone(),
         guard_escalate_sev: cfg.workbench.guard.escalate_sev.clone(),
         toml_raw,
+        config_error,
     }
 }
 
@@ -137,7 +151,29 @@ pub async fn workbench_state(
                 needs_heal = sibling_conflict || target.kind != firment_core::SessionKind::Mainline;
             }
         }
-        if needs_heal && !crate::commands::is_session_running(&shared, &cfg.mainline_session) {
+        // Every record this heal is about to write, not just the one being promoted.
+        // `mark_mainline` promotes the target but DEMOTES each sibling Mainline sharing its cwd,
+        // saving every one of them (see `SessionStore::mark_mainline`) — so a turn running in the
+        // session that currently HOLDS the role had its transcript rewritten by the line below
+        // with nobody in front of it asked. `workbench_set_mainline` collects the same set for the
+        // same reason; this path was the copy that guarded only `cfg.mainline_session`.
+        //
+        // An error enumerating them skips the heal instead of narrowing the guard back to the
+        // target: a guard that covers half the writes is the defect being fixed here.
+        let touched = store
+            .mainline_siblings(&cfg.mainline_session)
+            .ok()
+            .map(|mut ids| {
+                ids.push(cfg.mainline_session.clone());
+                ids
+            });
+        let safe_to_heal = match &touched {
+            Some(ids) => !ids
+                .iter()
+                .any(|id| crate::commands::is_session_running(&shared, id)),
+            None => false,
+        };
+        if needs_heal && safe_to_heal {
             let _ = store.mark_mainline(&cfg.mainline_session);
         }
     }
@@ -1194,5 +1230,100 @@ mod tests {
             "expected the guard plus its eight call sites; a scan that finds a handful means the \
              commands moved somewhere this gate does not look"
         );
+    }
+
+    /// The class one layer down from the gate above: `mark_mainline` is not a workbench-file write,
+    /// it is a *transcript* write — one per record it touches, because it demotes every sibling
+    /// Mainline sharing the target's cwd and saves each (`SessionStore::mark_mainline`).
+    ///
+    /// `commands.rs` has `a_command_that_rewrites_a_transcript_guards_itself_or_says_why`, but it
+    /// reads `include_str!("commands.rs")` and calls a block "saving" only when the literal
+    /// `store.save(` or `save(&session)` appears in it. A save reached through a wrapper is
+    /// invisible to it, and it never opens this file — so both of this file's call sites were
+    /// outside its reach, and the self-heal guarded only the session it was promoting until that
+    /// was found by hand. This gate is the half that watches the wrapper.
+    #[test]
+    fn every_mark_mainline_here_guards_every_record_it_writes() {
+        let source = include_str!("workbench.rs");
+        let product = match source.find("#[cfg(test)]") {
+            Some(at) => &source[..at],
+            None => source,
+        };
+        let calls: Vec<usize> = product
+            .match_indices("mark_mainline(")
+            .map(|(at, _)| at)
+            .collect();
+        assert!(
+            calls.len() >= 2,
+            "expected the tag self-heal and the set-mainline command; finding {} means the calls \
+             moved somewhere this gate does not look",
+            calls.len()
+        );
+        for at in calls {
+            // The guard has to be in the same function as the call, not merely nearby: the window
+            // starts at the enclosing `fn` keyword. A fixed byte window would let a third, unguarded
+            // call borrow the guard of the function above it, which is the failure this gate exists
+            // to catch. Both bounds are char boundaries by construction (`fn ` and the call are
+            // ASCII), so the slice cannot panic mid-word after an edit shifts the bytes.
+            let start = product[..at].rfind("fn ").unwrap_or(0);
+            let window = &product[start..at];
+            assert!(
+                window.contains("mainline_siblings("),
+                "a `mark_mainline` call without a `mainline_siblings` guard rewrites a demoted \
+                 sibling's transcript with nobody in front of it asked"
+            );
+            assert!(
+                window.contains("is_session_running("),
+                "the sibling list is collected but no turn is ever checked against it"
+            );
+        }
+    }
+
+    #[test]
+    fn a_corrupt_registry_is_reported_instead_of_shown_as_an_empty_project() {
+        // The registry is the one file this workspace reads on every panel open, and an unreadable
+        // one used to come back as the default struct: an unnamed project with no pins, which looks
+        // exactly like a project that has nothing in it yet. The parse failure is the whole message,
+        // so it has to reach the panel -- and so do the bytes, because that is what gets edited to
+        // fix it.
+        let nl = char::from(10);
+        let root = temp_project("corrupt-dto");
+        let corrupt = format!("[pinmap]{nl}PA5 = {{ func ={nl}");
+        std::fs::write(WorkbenchConfig::path_for(&root), corrupt).unwrap();
+        let dto = load_config(&root);
+        let err = dto
+            .config_error
+            .expect("a file that exists and does not parse has to say so");
+        assert!(err.contains("corrupt"), "got: {err}");
+        assert!(
+            dto.project_name.is_empty(),
+            "the fields are the defaults, which is why the error has to travel with them"
+        );
+        assert!(
+            dto.toml_raw.contains("PA5"),
+            "the panel still shows the bytes, because that is what the user has to fix: {}",
+            dto.toml_raw
+        );
+
+        // Absent is a normal state and must not borrow the corrupt one's message.
+        let fresh = temp_project("fresh-dto");
+        let dto = load_config(&fresh);
+        assert!(
+            dto.config_error.is_none(),
+            "a project without a workbench file is not a broken project"
+        );
+        assert!(dto.toml_raw.is_empty());
+
+        // And a readable file reports nothing while carrying its own values.
+        std::fs::write(
+            WorkbenchConfig::path_for(&fresh),
+            format!("[project]{nl}name = 'fw'{nl}"),
+        )
+        .unwrap();
+        let dto = load_config(&fresh);
+        assert!(dto.config_error.is_none(), "got: {:?}", dto.config_error);
+        assert_eq!(dto.project_name, "fw");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&fresh);
     }
 }

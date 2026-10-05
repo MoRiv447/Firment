@@ -885,8 +885,21 @@ impl Config {
         }
         // The web search provider and its key are not merged: `load_project_config` clears them
         // and says so, because together they choose where the user's credential goes.
+        //
+        // TIGHTEN-only, the same rule as the cost ceilings below and the LA caps above. This line
+        // used to assign straight from the project file, and the reason is visible in the
+        // layout: the paragraph that states the rule sits with the `max_iterations` block
+        // (`if project.max_iterations != default { config.max_iterations = config.max_iterations
+        // .min(project.max_iterations) }`), so the fix for the three knobs under it never reached
+        // this one. It is the same kind of number: subagent depth is how deep the `task` tool may
+        // recurse, so `max_subagent_depth = 999` in a cloned checkout is a bill, not a
+        // preference. There is no ceiling anywhere else — `Agent::set_max_subagent_depth` clamps
+        // only a floor (`depth.max(1)`).
         if project.tools.max_subagent_depth != default_max_subagent_depth() {
-            config.tools.max_subagent_depth = project.tools.max_subagent_depth;
+            config.tools.max_subagent_depth = config
+                .tools
+                .max_subagent_depth
+                .min(project.tools.max_subagent_depth);
         }
         if let Some(elf) = &project.tools.elf {
             match config.tools.elf.as_mut() {
@@ -1060,7 +1073,14 @@ impl Config {
             fs::create_dir_all(parent)?;
         }
         let text = toml::to_string_pretty(self)?;
-        fs::write(path, text)?;
+        // Through `write_atomic`, like every other file this crate owns. A truncating `fs::write`
+        // here meant an interruption between the truncate and the write — a crash, a kill, an AV
+        // scanner holding the new file (see the retry note in `session::atomic_write`) — left
+        // `config.toml` empty or half-written, and the next load answers with a parse error that
+        // takes the user's providers, budgets and tool settings with it. `save_auth_at` was
+        // converted for exactly this reason and says so; the config file was the copy that was
+        // left behind.
+        crate::session::write_atomic(path, &text)?;
         Ok(())
     }
 
@@ -1074,7 +1094,9 @@ impl Config {
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
             }
-            fs::write(path, default_config_text())?;
+            // Atomic for the same reason as `save`, and this one is the first write a new user
+            // ever makes: a half-written template is a config file that does not parse.
+            crate::session::write_atomic(path, default_config_text())?;
             eprintln!("Created default config at {}", path.display());
             return Ok(Self::default_config());
         }
@@ -1090,7 +1112,12 @@ impl Config {
             }
         }
         if migrated {
-            fs::write(path, toml::to_string_pretty(&config)?)?;
+            // This write happens on a plain *read* of an existing file, which is what makes it the
+            // worst place to truncate: starting the binary rewrites `config.toml` before the user
+            // has asked for anything, so an interruption here loses the file they never touched.
+            // It is also why this call site had to be fixed with `save` above rather than after
+            // it — a fix on one copy is a finding waiting for the next audit.
+            crate::session::write_atomic(path, &toml::to_string_pretty(&config)?)?;
             eprintln!(
                 "Migrated deprecated DeepSeek model names in {}",
                 path.display()
@@ -2156,6 +2183,70 @@ mod tests {
             bare.merged_for(dir.path()).max_output_tokens,
             None,
             "a project cannot set the one ceiling the user left unset"
+        );
+    }
+
+    #[test]
+    fn the_provider_example_still_parses_as_a_config() {
+        // `docs/config-example.toml` is what a user copies when they would rather write their
+        // provider block by hand — and nothing has ever parsed it. `Config` carries
+        // `deny_unknown_fields` (and so does `ProviderConfig`), so a renamed field quietly turns
+        // the published example into a file that cannot be loaded, with the error landing on the
+        // user who followed the instructions. Same shape as `firment-cli`'s README gate: a
+        // document the project publishes is checked against the code it documents.
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/config-example.toml");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        let cfg: Config = toml::from_str(&text)
+            .unwrap_or_else(|e| panic!("docs/config-example.toml no longer parses: {e}"));
+
+        // A floor, so this cannot pass by parsing an empty file: the whole point of the example is
+        // the preset list, and `default_provider` has to name one of them.
+        assert!(
+            cfg.providers.len() >= 8,
+            "expected the preset list; found {}",
+            cfg.providers.len()
+        );
+        assert!(
+            cfg.providers.contains_key(&cfg.default_provider),
+            "default_provider {:?} is not one of the presets",
+            cfg.default_provider
+        );
+    }
+
+    #[test]
+    fn a_project_file_may_not_deepen_the_subagent_tree() {
+        // The fourth ceiling, and the one the fix above missed. `max_subagent_depth` is merged
+        // twenty-odd lines ABOVE the paragraph that states the tighten-only rule, so the old
+        // `if project.x != default { config.x = project.x }` shape was left standing there.
+        // Depth is what bounds the `task` tool's recursion and nothing else bounds it:
+        // `Agent::set_max_subagent_depth` clamps a floor (`depth.max(1)`), never a ceiling.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".firment.toml"),
+            "[tools]\nmax_subagent_depth = 999\n",
+        )
+        .unwrap();
+        let base = Config::default_config();
+        let user_depth = base.tools.max_subagent_depth;
+
+        assert_eq!(
+            base.merged_for(dir.path()).tools.max_subagent_depth,
+            user_depth,
+            "a cloned checkout may not deepen the subagent tree behind the user's back"
+        );
+
+        // Shallower is the knob working as intended.
+        std::fs::write(
+            dir.path().join(".firment.toml"),
+            "[tools]\nmax_subagent_depth = 1\n",
+        )
+        .unwrap();
+        assert_eq!(
+            base.merged_for(dir.path()).tools.max_subagent_depth,
+            1,
+            "a project may still ask for a shallower tree"
         );
     }
 

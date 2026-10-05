@@ -1,14 +1,21 @@
 # Design tokens
 
-The single source of truth for colour, type, radius and motion across the three
-surfaces. Column widths and the shell's geometry are [layout.md](layout.md) — this file
+The single source of truth for colour, type, radius and motion across the GUI and the
+TUI. Column widths and the shell's geometry are [layout.md](layout.md) — this file
 is about what things look like, not about where they sit. Implementation mirrors:
 
 | Surface | Lives in | Consumed by |
 |---|---|---|
 | GUI (Tauri + React) | `gui/src/styles/tokens.css` | CSS variables, read by `base.css` and every component's `.module.css` |
-| Web (Next.js) | `web/src/styles/tokens.css` | CSS variables + `web/tailwind.config.ts` |
 | TUI (Rust) | `crates/firment-tui/src/theme.rs` | ratatui styles, with a colour-degradation chain |
+| Web (Next.js) — **not governed by this file** | `web/src/styles/tokens.css` | imported by `web/src/app/globals.css`, referenced by no component yet. Its palette is provisional and has never been reconciled with the two above; `web/` is out of scope by the standing decision |
+
+The sentence above used to claim all three surfaces, and the table listed the web file as an
+implementation of this document. Both were untrue: that file's `--bg` is `#0f0f12` while the
+palette below says `#090b09`, so the document was asserting authority over a surface whose
+values already disagreed with it — and an audit record then noted the claim as "now scoped to
+the GUI" without the sentence ever having been changed. A document that governs two surfaces
+and names a third it does not govern is worse than one that stays quiet about the third.
 
 The GUI's stylesheet is **three layers, and the boundary between them is asserted
 rather than agreed**: `tokens.css` declares values and draws nothing (its only

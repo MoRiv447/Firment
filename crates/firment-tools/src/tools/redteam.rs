@@ -330,6 +330,38 @@ fn take_within_cap(held: usize, read: usize) -> (usize, bool) {
     }
 }
 
+/// Decode one read's bytes, emitting only the characters that are complete.
+///
+/// The in-loop detectors used to run on `String::from_utf8_lossy(&buf[..n])` once per read, so a
+/// character straddling the 4 KiB read boundary became U+FFFD on both sides — the failure
+/// `LineSplitter` exists for, and the reason the other four serial readers (`monitor.rs`,
+/// `hil.rs`, `firment-cli/src/main.rs`, `gui/src-tauri/src/hardware.rs`) were moved onto it. This
+/// was the fifth, and the only one left.
+///
+/// What that cost is worth stating precisely, because the obvious guess is wrong: the verdict is
+/// not decided here. `run_suite_with` calls `oracle::classify(&cap.text, ..)`, and `cap.text` is
+/// decoded once from the raw bytes at the end of this function — so a signature broken in half
+/// still classified correctly, and no case was ever scored "survived" for this reason. What broke
+/// was the early exit. The loop is supposed to leave the moment a fault scene appears (they are
+/// ephemeral) or a heartbeat arms the short tail deadline, and a split signature or a split
+/// multi-byte heartbeat left it reading to the full deadline instead. Latency, not a wrong
+/// verdict — but the fifth copy of a rule four siblings had already agreed on.
+///
+/// The callback re-appends what `feed` hands it rather than dropping it: complete lines are
+/// consumed from the splitter's buffer there, so an ignored callback is a silent hole, not a
+/// no-op. `take_flushable` then returns the rest of the partial line, holding back at most three
+/// bytes of an incomplete sequence for the next read. Consequence worth naming: a single line
+/// longer than [`crate::utf8::MAX_LINE_BYTES`] is truncated, like every other reader in this crate.
+fn decode_read(splitter: &mut crate::utf8::LineSplitter, bytes: &[u8]) -> String {
+    let mut out = String::new();
+    splitter.feed(bytes, &mut |line| {
+        out.push_str(line);
+        out.push('\n');
+    });
+    out.push_str(&splitter.take_flushable());
+    out
+}
+
 fn read_window(
     port: &mut dyn serialport::SerialPort,
     window_ms: u64,
@@ -351,6 +383,9 @@ fn read_window(
     // siblings (`monitor.rs:257`, `util.rs:334`) stop at 8 MiB -- a target in a boot loop for
     // the maximum window was unbounded memory in a tool that is supposed to be the careful one.
     let mut tail = String::new();
+    // Decoded through the shared splitter so a character split across two reads is not turned into
+    // U+FFFD on both sides — see `decode_read`.
+    let mut splitter = crate::utf8::LineSplitter::new(crate::utf8::MAX_LINE_BYTES);
     let mut truncated = false;
     let mut timed_out = true;
     loop {
@@ -371,8 +406,10 @@ fn read_window(
                 acc.extend_from_slice(&buf[..keep]);
                 truncated |= hit_cap;
                 // Only the new chunk is decoded, and the detectors see it glued to the tail of
-                // what was kept -- the whole buffer used to be re-decoded on every read.
-                let chunk = String::from_utf8_lossy(&buf[..n]).into_owned();
+                // what was kept -- the whole buffer used to be re-decoded on every read. The
+                // decode is boundary-safe now; the `tail` window is still what catches a marker
+                // split across two reads.
+                let chunk = decode_read(&mut splitter, &buf[..n]);
                 let text = format!("{tail}{chunk}");
                 tail = window_tail(&text);
                 // A fault scene is ephemeral (watchdog!) — exit on it
@@ -888,9 +925,12 @@ pub(crate) async fn run_suite_with(
         }
     }
 
-    // Reports.
+    // Reports. Atomic, because both files are rewritten WHOLE on every reporting pass below: a
+    // truncating `fs::write` that dies halfway leaves `findings.jsonl` holding the first few
+    // findings of a campaign that ran for minutes, with no error to say so -- the report is the
+    // artifact the whole suite exists to produce.
     let jsonl: String = findings.iter().map(|f| f.to_json_line()).collect();
-    std::fs::write(dir.join("findings.jsonl"), jsonl)
+    firment_core::session::write_atomic(&dir.join("findings.jsonl"), &jsonl)
         .map_err(|e| format!("[Io] write findings: {e}"))?;
     let min = suite.report.min_severity.unwrap_or(Severity::Low);
     let shown: Vec<Finding> = findings
@@ -898,9 +938,9 @@ pub(crate) async fn run_suite_with(
         .filter(|f| f.severity >= min)
         .cloned()
         .collect();
-    std::fs::write(
-        dir.join("report.md"),
-        findings::render_report_md(suite_label, &run_id, &shown),
+    firment_core::session::write_atomic(
+        &dir.join("report.md"),
+        &findings::render_report_md(suite_label, &run_id, &shown),
     )
     .map_err(|e| format!("[Io] write report: {e}"))?;
 
@@ -1279,7 +1319,10 @@ impl Tool for Redteam {
                         // Rewrite reports with the campaign findings included.
                         let jsonl: String =
                             outcome.findings.iter().map(|f| f.to_json_line()).collect();
-                        let _ = std::fs::write(dir.join("findings.jsonl"), jsonl);
+                        let _ = firment_core::session::write_atomic(
+                            &dir.join("findings.jsonl"),
+                            &jsonl,
+                        );
                         let min = suite.report.min_severity.unwrap_or(Severity::Low);
                         let shown: Vec<Finding> = outcome
                             .findings
@@ -1287,9 +1330,9 @@ impl Tool for Redteam {
                             .filter(|f| f.severity >= min)
                             .cloned()
                             .collect();
-                        let _ = std::fs::write(
-                            dir.join("report.md"),
-                            findings::render_report_md(label, &outcome.run_id, &shown),
+                        let _ = firment_core::session::write_atomic(
+                            &dir.join("report.md"),
+                            &findings::render_report_md(label, &outcome.run_id, &shown),
                         );
                     }
                     Err(e) => campaign_note = format!("campaign failed: {e}"),
@@ -1484,6 +1527,40 @@ mod tests {
                 .chars()
                 .count(),
             WINDOW_TAIL_CHARS
+        );
+    }
+
+    /// The other half of the same boundary. The tail keeps a marker split across two reads visible;
+    /// the *decode* has to hand it over intact as well. It ran `from_utf8_lossy` on each read
+    /// separately, so a multi-byte character landing on the 4096-byte boundary was baked into
+    /// U+FFFD on both sides. The verdict survived that — `oracle::classify` re-reads the whole
+    /// capture, which is decoded from the raw bytes in one pass — but the early exit did not, and
+    /// ASCII signatures hid the whole thing because every ASCII byte is a complete character.
+    #[test]
+    fn a_multibyte_signature_split_across_two_reads_is_still_seen() {
+        let needle = "断言失败";
+        let prefix = b"boot ok\n";
+        let mut bytes = prefix.to_vec();
+        bytes.extend_from_slice(needle.as_bytes());
+        bytes.push(b'\n');
+        // Two bytes into a three-byte character: the cut that used to break the needle in half.
+        let cut = prefix.len() + 2;
+        assert!(
+            cut < prefix.len() + needle.len(),
+            "the cut lands inside the needle"
+        );
+
+        let mut splitter = crate::utf8::LineSplitter::new(crate::utf8::MAX_LINE_BYTES);
+        let text = format!(
+            "{}{}",
+            decode_read(&mut splitter, &bytes[..cut]),
+            decode_read(&mut splitter, &bytes[cut..])
+        );
+
+        assert!(!text.contains('\u{FFFD}'), "no half-character was baked in");
+        assert!(
+            text.contains(needle),
+            "the signature survived the read boundary: {text:?}"
         );
     }
 
@@ -2063,5 +2140,31 @@ strategies = ["oversize"]
             .await
             .unwrap_err();
         assert!(err.contains("attacker runner"), "got: {err}");
+    }
+
+    /// The example's own header makes the promise: "Every key is deny_unknown_fields: a typo'd
+    /// expectation fails loudly instead of silently dropping to a default." The promise only holds
+    /// if the published file still parses *and* still passes the validation a user's own file gets
+    /// — nothing parsed it before this gate, so a renamed expectation key would have shipped the
+    /// typo to every reader who copied the file, and `validate_suite` refusing the file they were
+    /// told to copy is the same defect one step later.
+    #[test]
+    fn the_redteam_example_parses_and_validates() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/redteam-example.toml");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        let file: RedteamFile = toml::from_str(&text)
+            .unwrap_or_else(|e| panic!("docs/redteam-example.toml no longer parses: {e}"));
+        assert!(
+            file.suite.len() >= 2,
+            "expected the worked examples; found {}",
+            file.suite.len()
+        );
+        for (name, suite) in &file.suite {
+            validate_suite(suite).unwrap_or_else(|e| {
+                panic!("example suite {name:?} would be refused at run time: {e}")
+            });
+        }
     }
 }

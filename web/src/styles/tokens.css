@@ -1,9 +1,12 @@
 /*
  * The design tokens, web side.
  *
- * Mirrors gui/src/styles/tokens.ts and docs/design/tokens.md. Values are
- * duplicated rather than generated because the two build systems share no
- * tooling, and the two surfaces must not drift into different greys.
+ * Meant to mirror `docs/design/tokens.md`. Values are duplicated rather than
+ * generated because the two build systems share no tooling — and they have
+ * drifted: this file's `--bg` is `#0f0f12` while the document's dark ground is
+ * `#090b09`. That drift is why the document now states that it governs the GUI
+ * and the TUI and not this file; reconciling the two is part of the web
+ * rewrite, not something to assume has already happened.
  *
  * Nothing consumes these yet: the web client's colours are still hardcoded
  * Tailwind classes. Defining them now means the rewrite has a target to move

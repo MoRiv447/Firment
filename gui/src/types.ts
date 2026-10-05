@@ -153,6 +153,11 @@ export interface WorkbenchConfigDto {
   /** Guard escalation threshold from [workbench.guard] (warn default). */
   guard_escalate_sev: string;
   toml_raw: string;
+  /**
+   * Set when `.firment/workbench.toml` exists but does not parse. The fields above are then the
+   * defaults rather than the project's values, and the panel has to say so.
+   */
+  config_error: string | null;
 }
 
 export interface WorkbenchStateDto {

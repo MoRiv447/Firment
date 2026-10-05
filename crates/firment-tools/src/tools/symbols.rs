@@ -329,6 +329,14 @@ impl Symbols {
     }
 }
 
+/// How many bytes of the current chunk may still be stored, given how much is already held.
+///
+/// Split out so the ceiling is a tested number rather than an off-by-one in the read loop — the
+/// same shape `redteam.rs`'s `take_within_cap` uses for its own capture.
+fn room_for_capture(stored: usize) -> usize {
+    crate::tools::monitor::CAPTURE_CAP_BYTES.saturating_sub(stored)
+}
+
 /// Run universal-ctags with a hard 60s timeout. The child is killed on
 /// timeout instead of hanging the caller forever.
 fn run_ctags(root: &Path) -> Option<std::process::Output> {
@@ -347,11 +355,32 @@ fn run_ctags(root: &Path) -> Option<std::process::Output> {
     // overflows the OS pipe buffer (~64 KB) long before it finishes: the child then blocks on
     // write, `try_wait` never sees an exit, the deadline expires, and every symbol lookup on that
     // tree silently degraded to the regex fallback after a full minute of stalling.
+    //
+    // Draining is exactly why the ceiling has to apply to STORAGE rather than to the read:
+    // `Read::take` would stop pulling bytes, the pipe would fill, and a big tree would become a
+    // guaranteed 60 s timeout instead of a large buffer. So this loop keeps reading and stops
+    // appending, at the same `CAPTURE_CAP_BYTES` every other child in this crate stops at
+    // (`monitor.rs`, the drain in `tools/util.rs`, the plugin path). `symbols` was the one child
+    // that reached the OS with no ceiling at all. A cut in the middle of the last JSON object
+    // costs nothing: `ctags_entries` skips a line it cannot parse.
     let mut pipe = child.stdout.take()?;
     let reader = std::thread::spawn(move || {
-        let mut stdout = Vec::new();
-        let _ = pipe.read_to_end(&mut stdout);
-        stdout
+        let mut stored = Vec::new();
+        let mut chunk = [0u8; 64 * 1024];
+        loop {
+            match pipe.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let room = room_for_capture(stored.len());
+                    if room > 0 {
+                        stored.extend_from_slice(&chunk[..n.min(room)]);
+                    }
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+        }
+        stored
     });
     let deadline = Instant::now() + Duration::from_secs(60);
     let status = loop {
@@ -459,6 +488,27 @@ mod tests {
             allowed_roots: Vec::new(),
             ..ToolContext::default()
         }
+    }
+
+    #[test]
+    fn the_symbol_capture_stops_at_the_same_ceiling_as_its_siblings() {
+        // `run_ctags` drained its pipe with `read_to_end` and no ceiling, while `monitor.rs`, the
+        // drain in `tools/util.rs` and the plugin path all stop at this one number. Same shape as
+        // `redteam.rs`'s `take_within_cap` test: the boundary is asserted as numbers, so a change
+        // to the loop cannot quietly turn into an off-by-one.
+        let cap = crate::tools::monitor::CAPTURE_CAP_BYTES;
+        assert_eq!(room_for_capture(0), cap);
+        assert_eq!(
+            room_for_capture(cap - 10),
+            10,
+            "filling the buffer exactly is not truncation"
+        );
+        assert_eq!(room_for_capture(cap), 0);
+        assert_eq!(
+            room_for_capture(cap + 1),
+            0,
+            "past the ceiling is still zero, never a wrap"
+        );
     }
 
     #[tokio::test]

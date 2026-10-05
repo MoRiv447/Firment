@@ -1699,7 +1699,11 @@ fn run_share(
 
     match out {
         Some(path) => {
-            std::fs::write(path, &document)?;
+            // Atomic: `--out` names a file the user may already have from the last export, and a
+            // truncating write that dies halfway leaves the old document gone and a partial one in
+            // its place -- in the file they are about to send to somebody else. Same guarantee the
+            // config file and the red team reports were moved onto.
+            firment_core::session::write_atomic(Path::new(path), &document)?;
             // The reminder goes to stderr so a redirect of stdout stays the document.
             eprintln!(
                 "wrote {} ({} bytes, {}) — secrets that match a known token shape are masked,                  which is a best effort: read it before sharing",
@@ -3491,6 +3495,207 @@ mod tests {
         assert!(
             once.contains("verbosity") && tui.contains("verbosity"),
             "the verbosity answer has to reach both arms: {once:?} / {tui:?}"
+        );
+    }
+
+    /// The Rust workspace's share of a rule `gui/src-tauri` has held itself to since item 40: a
+    /// `std::sync::Mutex` guard comes back out of its poison, never `unwrap()`s one.
+    ///
+    /// The difference only shows up after something has already gone wrong: a panic while the lock
+    /// is held poisons it, and the next `unwrap()` turns that into a second panic whose backtrace
+    /// points at the recovery rather than at the cause. For a binary whose job is to report state --
+    /// a doctor line, a TUI status row -- recovering the guard is the difference between describing
+    /// the broken thing and becoming it. `web_search.rs` was the last site in product code still
+    /// unwrapping; nothing here keeps a new one from arriving unless it is checked.
+    #[test]
+    fn no_product_lock_in_the_rust_workspace_unwraps_a_poison() {
+        // Spliced so this line is not itself an instance of what it hunts for.
+        let needle = concat!(".lock().un", "wrap()");
+        let mut offenders: Vec<String> = Vec::new();
+        let mut recovering = 0usize;
+        for dir in [
+            "../firment-core/src",
+            "../firment-tools/src",
+            "../firment-tui/src",
+            "src",
+        ] {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);
+            let mut stack = vec![root];
+            while let Some(d) = stack.pop() {
+                let entries = std::fs::read_dir(&d)
+                    .unwrap_or_else(|e| panic!("reading {}: {e}", d.display()));
+                for entry in entries {
+                    let path = entry.unwrap().path();
+                    if path.is_dir() {
+                        stack.push(path);
+                        continue;
+                    }
+                    if path.extension().and_then(std::ffi::OsStr::to_str) != Some("rs") {
+                        continue;
+                    }
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    // A test that panics on a lost lock is reporting a failure, not causing one.
+                    let product = match text.find("#[cfg(test)]") {
+                        Some(at) => &text[..at],
+                        None => &text[..],
+                    };
+                    for (number, line) in product.lines().enumerate() {
+                        if line.contains("unwrap_or_else(|poisoned") {
+                            recovering += 1;
+                        } else if line.contains(needle) {
+                            offenders.push(format!("{}:{}", path.display(), number + 1));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "these take a mutex guard with an unwrap, so somebody else's panic becomes a second \
+             one: {offenders:?}"
+        );
+        assert!(
+            recovering >= 12,
+            "the scrape saw only {recovering} recovering guards across four crates, which means it \
+             is not reading the code it claims to and a pass here would mean nothing"
+        );
+    }
+
+    /// The same shape one step further down: a truncating file write is only harmless when nothing
+    /// was ever at that path. That question is about the call, not the line, so it cannot be
+    /// derived from the text -- but the SET of sites can be pinned, and pinning it turns "a fifth
+    /// overwrite got merged" into a row someone had to write a reason for.
+    ///
+    /// Overwrites of real artifacts fixed in this round: `config.toml` (its three sites, one of
+    /// which fires on a plain read during a migration), the red team's `findings.jsonl` and
+    /// `report.md` (rewritten whole on every reporting pass, so a torn write loses a campaign's
+    /// findings), `firm share --out` and the TUI's `/ledger --export` (both name a file the user may
+    /// already have). What is left is create-only, already temp-plus-rename, or a cache the next run
+    /// rebuilds -- and each row below says which.
+    #[test]
+    fn every_remaining_truncating_write_is_a_create_or_a_cache() {
+        // Keyed `<crate>/<path relative to its src dir>`, because an absolute path has more
+        // components than a table row can honestly name, and the last three of them are not the
+        // crate plus the file the row means.
+        const ALLOWED: [(&str, usize, &str); 9] = [
+            (
+                "firment-core/agent.rs",
+                1,
+                "spill file: the name is a fresh uuid, so nothing is ever replaced",
+            ),
+            (
+                "firment-core/journal.rs",
+                1,
+                "undo index: a unique (stamp, seq) name, and a torn one is refused by the reader rather than trusted",
+            ),
+            (
+                "firment-core/kb.rs",
+                2,
+                "both lines write a temp name that is then renamed; the pair IS the atomic write",
+            ),
+            (
+                "firment-core/local.rs",
+                1,
+                "endpoint discovery cache: rebuilt on the next probe if it came out torn",
+            ),
+            (
+                "firment-core/workbench.rs",
+                1,
+                "the temp half of the workbench save, which renames into place",
+            ),
+            (
+                "firment-tools/tools/debug.rs",
+                1,
+                "forensic snapshot: one path per snapshot, written once",
+            ),
+            (
+                "firment-tools/tools/elf_analyze.rs",
+                1,
+                "stack-depth sidecar: a cache keyed off the ELF, regenerated when missing",
+            ),
+            (
+                "firment-tools/tools/redteam.rs",
+                2,
+                "per-finding capture and forensic files, each named with its finding id; the two cumulative reports were moved to the atomic write",
+            ),
+            (
+                "firment-cli/main.rs",
+                1,
+                "ADR template: the command refuses when the file already exists",
+            ),
+        ];
+        let mut seen: Vec<(String, usize)> = Vec::new();
+        for (label, dir) in [
+            ("firment-core", "../firment-core/src"),
+            ("firment-tools", "../firment-tools/src"),
+            ("firment-tui", "../firment-tui/src"),
+            ("firment-cli", "src"),
+        ] {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);
+            let mut stack = vec![root.clone()];
+            while let Some(d) = stack.pop() {
+                let entries = std::fs::read_dir(&d)
+                    .unwrap_or_else(|e| panic!("reading {}: {e}", d.display()));
+                for entry in entries {
+                    let path = entry.unwrap().path();
+                    if path.is_dir() {
+                        stack.push(path);
+                        continue;
+                    }
+                    if path.extension().and_then(std::ffi::OsStr::to_str) != Some("rs") {
+                        continue;
+                    }
+                    let rel = path.strip_prefix(&root).unwrap_or(path.as_path());
+                    let key = format!(
+                        "{label}/{}",
+                        rel.to_string_lossy()
+                            .replace(std::path::MAIN_SEPARATOR_STR, "/")
+                    );
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    let product = match text.find("#[cfg(test)]") {
+                        Some(at) => &text[..at],
+                        None => &text[..],
+                    };
+                    // Counted per line so a comment that merely names the function is not a site,
+                    // and two sites on one line still count twice.
+                    let found = product
+                        .lines()
+                        .filter(|line| {
+                            line.contains(concat!("fs::w", "rite("))
+                                && !line.trim_start().starts_with("//")
+                        })
+                        .count();
+                    if found > 0 {
+                        seen.push((key, found));
+                    }
+                }
+            }
+        }
+        let total: usize = seen.iter().map(|(_, n)| n).sum();
+        assert!(
+            total >= 8,
+            "the scrape found {total} sites; a table this size cannot be checked against almost nothing"
+        );
+        for (file, n, why) in ALLOWED {
+            let got = seen
+                .iter()
+                .find(|(k, _)| k == file)
+                .map(|(_, c)| *c)
+                .unwrap_or(0);
+            assert_eq!(
+                got, n,
+                "{file} now holds {got} of these writes and the table says {n}. Reason on file: {why}"
+            );
+        }
+        let extra: Vec<&str> = seen
+            .iter()
+            .filter(|(k, _)| !ALLOWED.iter().any(|(file, _, _)| file == k))
+            .map(|(k, _)| k.as_str())
+            .collect();
+        assert!(
+            extra.is_empty(),
+            "new truncating write sites in {extra:?}: make it atomic, or add a row above saying why
+             this path can never already hold something worth keeping"
         );
     }
 }

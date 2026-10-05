@@ -398,7 +398,12 @@ impl PipeDrain {
 /// gigabytes into the agent's memory before any of that applied. The ceiling belongs here, where
 /// the bytes arrive. Generous enough that no real compiler log is cut short, small enough that
 /// two streams cannot sink the session.
-const CAPTURE_CAP_BYTES: usize = 8 * 1024 * 1024;
+///
+/// The number itself is [`crate::tools::monitor::CAPTURE_CAP_BYTES`], not a second literal: it was
+/// written out twice (here and in `monitor.rs`), and the serial-capture path, the HIL monitor step
+/// and this drain are all supposed to stop at the same place. Exactly 8 MiB is the kind of value
+/// that gets tuned, and two copies would have drifted on the day someone tuned one.
+const CAPTURE_CAP_BYTES: usize = crate::tools::monitor::CAPTURE_CAP_BYTES;
 
 /// Written into the capture once, where storage stops, so a reader of the text knows the rest is
 /// missing rather than believing the command fell silent.

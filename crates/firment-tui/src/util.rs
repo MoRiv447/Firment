@@ -124,6 +124,10 @@ pub(crate) fn diff_line_counts(detail: &str) -> (usize, usize) {
 /// cleanly to nothing -- and then said there had been nothing to export. And a failed write was
 /// reported as a notice the same colour as the success it contradicted, so `Could not write` read
 /// as part of the answer rather than as the absence of one.
+///
+/// The write itself is atomic for a second reason: `/ledger --export` names a file that may already
+/// hold the previous export, and a truncating write interrupted halfway would leave that user with
+/// neither patch -- the old one gone, the new one incomplete -- and `git apply` would still take it.
 #[derive(Debug)]
 pub(crate) enum Export {
     Empty,
@@ -135,7 +139,7 @@ pub(crate) fn export_ledger_to(dest: &std::path::Path, diff: &str) -> Export {
     if diff.is_empty() {
         return Export::Empty;
     }
-    match std::fs::write(dest, diff) {
+    match firment_core::session::write_atomic(dest, diff) {
         Ok(()) => Export::Written(diff.len()),
         Err(e) => Export::Failed(format!("Could not write {}: {e}", dest.display())),
     }

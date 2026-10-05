@@ -1,5 +1,5 @@
 import type { WorkbenchStateDto } from '../../types';
-import { Card, KeyValue } from '../../ui';
+import { Callout, Card, KeyValue } from '../../ui';
 import styles from './ProjectSummary.module.css';
 
 /**
@@ -21,6 +21,12 @@ export function ProjectSummary({ state }: { state: WorkbenchStateDto }) {
   const { config, git } = state;
   return (
     <Card title={`Project: ${config.project_name || '(unnamed)'}`}>
+      {config.config_error ? (
+        <Callout tone="warn" title=".firment/workbench.toml does not parse">
+          {config.config_error} The values below are defaults rather than what the file says. Its
+          current text is at the bottom of this card.
+        </Callout>
+      ) : null}
       <KeyValue label="root" value={state.root} mono />
       {git ? (
         <>
