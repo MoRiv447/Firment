@@ -218,8 +218,6 @@ enum Command {
         /// The board, for `show` and `use`. A name, a part number, or a probe-rs chip.
         name: Option<String>,
     },
-    /// Print the tool registry specs as JSON — the single source of truth
-    /// for tool names/descriptions/schemas (consumed by web/IDE surfaces).
     /// Headless guard: subscribe to device alerts on the SBC broker and
     /// hand escalations to the project's mainline session (unattended).
     Guard {
@@ -231,6 +229,9 @@ enum Command {
         #[arg(long, default_value_t = false)]
         once: bool,
     },
+    /// Print the tool registry specs as JSON — the single source of truth
+    /// for tool names/descriptions/schemas (consumed by web/IDE surfaces, and the
+    /// `ci` job diffs the committed snapshot against this output).
     Tools,
     /// Interactively add a provider from the built-in neutral catalog
     /// (`firm config` → pick a preset → key → done). `onboard` is an alias:

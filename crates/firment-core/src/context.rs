@@ -339,7 +339,17 @@ fn load_vendor_index_hint(cwd: &Path) -> Option<String> {
         let Some(index) = index else {
             continue;
         };
-        let index_text = std::fs::read_to_string(&index).unwrap_or_default();
+        // A file that is there and cannot be read is not a project with an empty index. Under
+        // `unwrap_or_default` the seed comparison below also passed ("" is not the seed text),
+        // so a corrupt index was announced to the model as the project's own -- with a heading
+        // telling it to follow an index that then held nothing.
+        let Ok(index_text) = std::fs::read_to_string(&index) else {
+            tracing::warn!(
+                "project hardware index {} could not be read; not injected",
+                index.display()
+            );
+            continue;
+        };
         if index_text.trim() == crate::kb::seed_index_text().trim() {
             continue;
         }
@@ -398,5 +408,41 @@ pub fn load_project_instructions(cwd: &Path) -> Option<String> {
         None
     } else {
         Some(parts.join("\n\n"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unreadable_project_index_is_not_offered_as_an_empty_one() {
+        // The heading this function emits tells the model "this project has a hardware knowledge
+        // base index (path)" and prints it underneath. Under `unwrap_or_default` a file that could
+        // not be read produced exactly that with nothing under it, and passed the seed comparison
+        // on the way ("" is not the seed text) -- so the agent was told to consult an index that
+        // had failed to load.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("vendor-index.toml"),
+            [0xed, 0xa0, 0x80], // invalid UTF-8: the file is there, the read is not
+        )
+        .unwrap();
+        let hint = load_vendor_index_hint(dir.path());
+        assert!(
+            hint.is_none(),
+            "a corrupt index must leave the prompt, not appear in it as an empty one: {hint:?}"
+        );
+
+        // The direction that keeps this from being a rule that simply never injects: a readable
+        // project index still reaches the prompt.
+        let good = tempfile::tempdir().unwrap();
+        std::fs::write(
+            good.path().join("vendor-index.toml"),
+            "# index for esp32s3\n",
+        )
+        .unwrap();
+        let hint = load_vendor_index_hint(good.path()).expect("a readable index is injected");
+        assert!(hint.contains("esp32s3"), "{hint}");
     }
 }

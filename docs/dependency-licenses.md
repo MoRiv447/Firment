@@ -23,7 +23,7 @@ any dependency change; the numbers below are a snapshot, not a promise.
 `cargo tree -p firment-cli --target x86_64-pc-windows-msvc` — **299 distinct
 crates**. Every one of them resolved.
 
-`Cargo.lock` holds 414 entries: 4 workspace members, 410 from the registry. The
+`Cargo.lock` holds 409 package entries: 4 workspace members, 405 from the registry. The
 difference is crates the lock contains but this build never compiles (see
 "Lock-only entries" below).
 

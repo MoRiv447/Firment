@@ -94,7 +94,12 @@ pub fn install_files(source: &Path, dir: &Path) -> Result<(PathBuf, PathBuf)> {
             target.display()
         );
     } else {
-        fs::copy(source, &target).with_context(|| {
+        // `replace_file`, the staged write `firm update` already uses: copying onto the target
+        // empties it first, so a full disk or an AV handle mid-copy left a truncated firm.exe
+        // where a working binary had been. `install.sh` was given the same treatment a round
+        // ago and this is the sibling left behind; the function name says update, the
+        // guarantee is generic.
+        replace_file(source, &target).with_context(|| {
             format!(
                 "failed to copy {} -> {} (if the target is running, exit it first)",
                 source.display(),

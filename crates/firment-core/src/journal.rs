@@ -785,7 +785,12 @@ pub fn line_diff(old: &str, new: &str, max_chars: usize) -> String {
         // Whole hunks only. A diff cut mid-hunk leaves a `@@` header that does
         // not describe the lines under it, which is worse than showing less:
         // stop before the first hunk that would blow the budget.
-        if !out.is_empty() && out.chars().count() + hunk.chars().count() > max_chars {
+        // No `!out.is_empty()` guard: the single big hunk IS the usual case (a whole-region
+        // rewrite), and letting it through meant the diff was cut mid-hunk with NO marker --
+        // exactly what the comment above says is worse than showing less. `export_truncated`
+        // greps for that marker, so an unmarked amputation was advertised as a patch that
+        // applies cleanly.
+        if out.chars().count() + hunk.chars().count() > max_chars {
             out.push_str("… diff truncated\n");
             break;
         }
@@ -1701,6 +1706,24 @@ mod tests {
             !ledger
                 .export_unified_diff(dir.path())
                 .contains(TRUNCATION_MARKER)
+        );
+    }
+    #[test]
+    fn one_big_hunk_reports_its_truncation_instead_of_amputating_silently() {
+        // A whole-region rewrite is ONE hunk. The marker used to be conditional on
+        // `!out.is_empty()`, so this is the case that got cut in half with nothing saying so --
+        // and `export_truncated` greps for that marker, which is how `/ledger --export` came to
+        // advertise a complete patch that ends inside a hunk body.
+        let old = "keep\n".repeat(200);
+        let new = "changed\n".repeat(200);
+        let diff = line_diff(&old, &new, 200);
+        assert!(
+            diff.contains(TRUNCATION_MARKER),
+            "a diff that was cut has to say it was cut: {diff:?}"
+        );
+        assert!(
+            !diff.contains("@@"),
+            "a hunk header with no body under it describes lines that are not there: {diff:?}"
         );
     }
 }

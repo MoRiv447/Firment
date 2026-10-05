@@ -7,9 +7,7 @@
 //! single wiring point: frontends supply their I/O adapters (sink,
 //! permission checker, asker) and get back a fully configured agent.
 
-use crate::{
-    attacker_registry, session_registry, subagent_registry, write_capable_subagent_registry,
-};
+use crate::{attacker_registry, session_registry};
 use firment_core::{
     Agent, Asker, Cancellable, Config, EventSink, PermissionChecker, PlanModePermission, Session,
     SessionMode, SessionStore, SubagentRunner,
@@ -113,7 +111,7 @@ pub fn assemble_agent(
         registry,
         session,
         store.clone(),
-        agent_permission,
+        agent_permission.clone(),
         sink,
         merged.max_iterations,
     );
@@ -185,17 +183,17 @@ pub fn assemble_agent(
         subagent_slots: agent.subagent_slots(),
         ..SubagentRunner::new(
             Arc::new(merged.clone()),
-            // Not `plan_registry`: see `subagent_registry` for the two tools it drops — and
-            // the write-capable table is its own opt-in ([tools] subagents_may_write).
-            if merged.tools.subagents_may_write {
-                write_capable_subagent_registry()
-            } else {
-                subagent_registry()
-            },
+            // `subagent_registry_for`, not the opt-in flag read directly: a planning session's
+            // child gets the read-only set whatever `[tools] subagents_may_write` says, because
+            // the mode promise is the parent's and the child is the only writer in the tree.
+            crate::subagent_registry_for(plan, merged.tools.subagents_may_write),
             agent.session().provider.clone(),
             agent.session().model.clone(),
             asker,
-            permission,
+            // Same reasoning one layer down: the runner used to get the *unwrapped* checker while
+            // the parent had `PlanModePermission` around it, so the child could write even though
+            // the registry above said it could not -- two guards, each believing the other.
+            agent_permission.clone(),
         )
     });
     agent.set_subagent_factory(Some(subagent_factory));

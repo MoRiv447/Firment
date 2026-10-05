@@ -176,6 +176,23 @@ pub fn session_registry(
 /// cannot reach. Everything else — including `task`, bounded by `max_subagent_depth` — is
 /// available, and the workspace boundary still comes from `resolve_within`.
 ///
+/// Which registry a nested agent gets, decided in one place so the planning rule cannot be
+/// forgotten by a caller.
+///
+/// [`write_capable_subagent_registry`] is an opt-in for agent-mode work. A **planning** session is
+/// exactly the case the opt-in must not reach: its whole promise is that nothing is written, and a
+/// child inherits its tools, so a session the UI labels read-only was handing `write_file`,
+/// `rename_symbol`, `pinmap` and `flash` to a nested agent nobody watches. There was no mode check
+/// on that path at all, while `subagent.rs` documented the opposite ("the same checker the parent
+/// agent uses") -- a claim about a gate is checked by reading the call site, not by remembering it.
+pub fn subagent_registry_for(plan: bool, subagents_may_write: bool) -> Arc<ToolRegistry> {
+    if plan || !subagents_may_write {
+        subagent_registry()
+    } else {
+        write_capable_subagent_registry()
+    }
+}
+
 /// Opt-in, never the default: a child that writes is a child nobody watches, and the turn's
 /// journal makes the edits undoable rather than reviewable.
 pub fn write_capable_subagent_registry() -> Arc<ToolRegistry> {
@@ -228,6 +245,48 @@ pub fn attacker_registry() -> Arc<ToolRegistry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_planning_session_s_child_gets_the_read_only_set() {
+        // `subagents_may_write` is an opt-in for agent mode. In plan mode the promise is that
+        // nothing is written, and the child is the one writer nobody watches -- so the flag must
+        // not reach it. `assembly.rs` handed the runner the write-capable registry with no mode
+        // check at all, while `subagent.rs` documented the opposite ("the same checker the parent
+        // agent uses").
+        for may_write in [false, true] {
+            let plan = subagent_registry_for(true, may_write);
+            for name in [
+                "write_file",
+                "edit_file",
+                "rename_symbol",
+                "pinmap",
+                "decision",
+                "flash",
+            ] {
+                assert!(
+                    plan.get(name).is_none(),
+                    "plan mode handed {name} to a nested agent (may_write={may_write})"
+                );
+            }
+            assert!(
+                plan.get("read_file").is_some() && plan.get("grep").is_some(),
+                "the child lost the research tools it exists for"
+            );
+        }
+
+        // The other branch, so the rule above is not a refusal to hand anything out: outside plan
+        // mode the opt-in still means what it says, and the shell stays out of it because a
+        // declared scope cannot constrain a shell.
+        let agent = subagent_registry_for(false, true);
+        assert!(
+            agent.get("write_file").is_some(),
+            "subagents_may_write stopped granting anything"
+        );
+        assert!(
+            agent.get("shell").is_none(),
+            "the shell was never part of the opt-in"
+        );
+    }
 
     #[test]
     fn a_research_subagent_is_not_advertised_tools_that_cannot_work_for_it() {

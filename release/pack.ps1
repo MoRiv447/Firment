@@ -8,7 +8,8 @@ $root = Split-Path -Parent $PSScriptRoot
 Push-Location $root
 try {
     if (-not $SkipBuild) {
-        & "$env:USERPROFILE\.cargo\bin\cargo.exe" build --release
+        # --locked, like the release workflow: the audited set is the committed lockfile.
+        & "$env:USERPROFILE\.cargo\bin\cargo.exe" build --release --locked
         if ($LASTEXITCODE -ne 0) { throw "cargo build --release 失败" }
     }
 
