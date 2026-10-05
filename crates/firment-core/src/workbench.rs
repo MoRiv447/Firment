@@ -296,6 +296,37 @@ impl WorkbenchConfig {
         let s = self.workbench.mainline_session.trim();
         (!s.is_empty()).then_some(s)
     }
+
+    /// Refuse to overwrite content nobody read: fail unless the file on disk is still exactly the
+    /// bytes that came back from [`load_with_bytes`](Self::load_with_bytes).
+    ///
+    /// Every writer of `.firment/workbench.toml` rewrites the WHOLE file -- a pin claim serialises
+    /// the boards, branches, devices and decisions that share it -- so a write that starts from a
+    /// stale read does not conflict with the change it missed, it erases it, and the tool that did
+    /// the erasing reports success. This is the one rule for both writers: the agent's tools
+    /// (`pinmap`, `decision`) and the eight GUI commands that save the same file while a session is
+    /// running against it.
+    ///
+    /// `read` is `None` when the file did not exist at the read, and "still absent" is a different
+    /// answer from "now an empty file" -- which is why the comparison is on `Option`, not on bytes
+    /// against an empty baseline.
+    pub fn unchanged_since(root: &Path, read: Option<&[u8]>) -> Result<(), String> {
+        let path = Self::path_for(root);
+        let now = match std::fs::read(&path) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(format!("cannot re-read {}: {e}", path.display())),
+        };
+        if now.as_deref() == read {
+            return Ok(());
+        }
+        Err(format!(
+            "[ConcurrentChange] {} changed after it was read, so this whole-file rewrite would \
+             have dropped whatever landed in between. Re-read the current state and retry \
+             against it.",
+            path.display()
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -442,5 +473,38 @@ date = "2026-08-22"
         let err = WorkbenchConfig::load(&root).unwrap_err();
         assert!(err.contains("corrupt"), "got: {err}");
         drop(dir);
+    }
+
+    #[test]
+    fn a_stale_read_is_refused_before_it_can_overwrite() {
+        // The rule both writers share, so it is tested here rather than only at the call sites.
+        let (_dir, root) = root_with("[project]\nname = \"fw\"\n");
+        let (_, read) = WorkbenchConfig::load_with_bytes(&root).unwrap();
+
+        WorkbenchConfig::unchanged_since(&root, read.as_deref())
+            .expect("nothing touched the file since the read");
+
+        std::fs::write(
+            WorkbenchConfig::path_for(&root),
+            "[project]\nname = \"other\"\n",
+        )
+        .unwrap();
+        let err = WorkbenchConfig::unchanged_since(&root, read.as_deref())
+            .expect_err("the content moved under the read");
+        assert!(
+            err.starts_with("[ConcurrentChange]"),
+            "the tag is how the agent's retry rule recognises this: {err}"
+        );
+
+        // Absent and empty are different facts, and a writer that read absence must not be allowed
+        // to accept an appearance.
+        let dir = tempfile::tempdir().unwrap();
+        WorkbenchConfig::unchanged_since(dir.path(), None).expect("still absent, still unchanged");
+        std::fs::create_dir_all(dir.path().join(".firment")).unwrap();
+        std::fs::write(WorkbenchConfig::path_for(dir.path()), "").unwrap();
+        WorkbenchConfig::unchanged_since(dir.path(), None)
+            .expect_err("a file created since the read is not no file");
+        WorkbenchConfig::unchanged_since(dir.path(), Some(b""))
+            .expect("an empty read against an empty file is unchanged");
     }
 }

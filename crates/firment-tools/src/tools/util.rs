@@ -170,7 +170,9 @@ pub(crate) fn rel_str(root: &Path, path: &Path) -> String {
 /// - [`commit`](Self::commit) refuses with `[ConcurrentChange]` unless the file on disk is still
 ///   the bytes `open` read. Without that, a claim made by another session (or another board's
 ///   device entry, or the GUI) between the read and the save disappears with no error and no
-///   trace, and the tool answers "claimed on 's3-node-1'".
+///   trace, and the tool answers "claimed on 's3-node-1'". The comparison itself is
+///   [`firment_core::WorkbenchConfig::unchanged_since`], which the GUI's own writes of this file
+///   call too — the rule is one, the two workspaces only reach it from different sides.
 /// - the file enters the undo journal before it is written, so `/undo` gives back what this turn
 ///   took. The registry is the one project file an agent edits by itself, so "I can undo my own
 ///   edit" is worth more here than in the hand-written sources.
@@ -213,24 +215,8 @@ impl WorkbenchTx {
     ) -> Result<(), ToolError> {
         // Compared before the journal, not after: a refusal has to leave nothing behind, and a
         // backup of a file this call did not change is something.
-        let now = match fs::read(&self.path) {
-            Ok(bytes) => Some(bytes),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(e) => {
-                return Err(ToolError::new(format!(
-                    "[Workbench] cannot re-read {}: {e}",
-                    self.path.display()
-                )));
-            }
-        };
-        if now != self.read {
-            return Err(ToolError::new(format!(
-                "[ConcurrentChange] {} changed after it was read, so this whole-file rewrite \
-                 would have dropped whatever landed in between. Re-read the current state \
-                 (pinmap list / decision list) and retry against it.",
-                self.path.display()
-            )));
-        }
+        firment_core::WorkbenchConfig::unchanged_since(&ctx.cwd, self.read.as_deref())
+            .map_err(ToolError::new)?;
         ctx.journal
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())

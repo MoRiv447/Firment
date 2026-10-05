@@ -81,6 +81,24 @@ fn load_config(cwd: &Path) -> WorkbenchConfigDto {
     }
 }
 
+/// The only door through which this workspace writes `.firment/workbench.toml`.
+///
+/// Every one of the commands below rewrites the WHOLE file, because that is what
+/// `WorkbenchConfig::save` does: editing one pin claim serialises the boards, branches, devices and
+/// decisions that share the file with it. Eight of them did that read-modify-save with no compare,
+/// while the agent's `pinmap` and `decision` tools now refuse a stale write -- so the remaining way
+/// to lose a claim silently was the GUI: click a pin in the panel while the agent is claiming one,
+/// and whichever save lands second erases the other with no error shown to either side.
+///
+/// The comparison is [`WorkbenchConfig::unchanged_since`], the same function the agent-side
+/// transaction calls, so "what counts as unchanged" cannot drift between the two workspaces. No
+/// journal here: this is a user editing their own project state, and `/undo` is the agent's turn
+/// ledger, not a command history for the window.
+fn save_workbench(cfg: &WorkbenchConfig, root: &Path, read: Option<&[u8]>) -> Result<(), String> {
+    WorkbenchConfig::unchanged_since(root, read)?;
+    cfg.save(root)
+}
+
 #[tauri::command]
 pub async fn workbench_state(
     shared: tauri::State<'_, Arc<Shared>>,
@@ -165,9 +183,9 @@ pub async fn workbench_set_mainline(
         .mark_mainline(&session_id)
         .map_err(|e| format!("cannot set mainline: {e}"))?;
     drop(store);
-    let mut cfg = WorkbenchConfig::load(Path::new(&cwd))?;
+    let (mut cfg, read) = WorkbenchConfig::load_with_bytes(Path::new(&cwd))?;
     cfg.workbench.mainline_session = session_id;
-    cfg.save(Path::new(&cwd))
+    save_workbench(&cfg, Path::new(&cwd), read.as_deref())
 }
 
 // ---------- pin/resource registry ([pinmap.<board>] in workbench.toml) ----
@@ -221,7 +239,7 @@ pub async fn workbench_pinmap_set(
         return Err("board, pin and func are required".into());
     }
     let root = PathBuf::from(&cwd);
-    let mut cfg = WorkbenchConfig::load(&root)?;
+    let (mut cfg, read) = WorkbenchConfig::load_with_bytes(&root)?;
     cfg.pinmap.entry(board).or_default().insert(
         key,
         firment_core::PinEntry {
@@ -229,7 +247,7 @@ pub async fn workbench_pinmap_set(
             owner: owner.trim().to_string(),
         },
     );
-    cfg.save(&root)?;
+    save_workbench(&cfg, &root, read.as_deref())?;
     workbench_pinmap_list(cwd).await
 }
 
@@ -240,14 +258,14 @@ pub async fn workbench_pinmap_remove(
     pin: String,
 ) -> Result<Vec<BoardPinmapDto>, String> {
     let root = PathBuf::from(&cwd);
-    let mut cfg = WorkbenchConfig::load(&root)?;
+    let (mut cfg, read) = WorkbenchConfig::load_with_bytes(&root)?;
     if let Some(board_pins) = cfg.pinmap.get_mut(board.trim()) {
         board_pins.remove(pin.trim().to_uppercase().as_str());
         if board_pins.is_empty() {
             cfg.pinmap.remove(board.trim());
         }
     }
-    cfg.save(&root)?;
+    save_workbench(&cfg, &root, read.as_deref())?;
     workbench_pinmap_list(cwd).await
 }
 
@@ -406,7 +424,7 @@ pub async fn workbench_devices_set(
         return Err("node is required".into());
     }
     let root = PathBuf::from(&cwd);
-    let mut cfg = WorkbenchConfig::load(&root)?;
+    let (mut cfg, read) = WorkbenchConfig::load_with_bytes(&root)?;
     // Partial-update semantics: note/allow omitted (None) PRESERVE the
     // existing values — otherwise a GUI rebind would silently wipe an
     // allow-prefix whitelist the agent or a hand edit had configured.
@@ -427,7 +445,7 @@ pub async fn workbench_devices_set(
             allow,
         },
     );
-    cfg.save(&root)?;
+    save_workbench(&cfg, &root, read.as_deref())?;
     workbench_devices_list(cwd).await
 }
 
@@ -437,9 +455,9 @@ pub async fn workbench_devices_remove(
     node: String,
 ) -> Result<Vec<DeviceBindingDto>, String> {
     let root = PathBuf::from(&cwd);
-    let mut cfg = WorkbenchConfig::load(&root)?;
+    let (mut cfg, read) = WorkbenchConfig::load_with_bytes(&root)?;
     cfg.devices.remove(node.trim());
-    cfg.save(&root)?;
+    save_workbench(&cfg, &root, read.as_deref())?;
     workbench_devices_list(cwd).await
 }
 
@@ -476,14 +494,14 @@ pub async fn workbench_decision_add(
         return Err("title is required".into());
     }
     let root = PathBuf::from(&cwd);
-    let mut cfg = WorkbenchConfig::load(&root)?;
+    let (mut cfg, read) = WorkbenchConfig::load_with_bytes(&root)?;
     cfg.decision.push(firment_core::DecisionEntry {
         title: title.trim().to_string(),
         body: body.trim().to_string(),
         // Same stamp the agent-side `decision` tool uses.
         date: chrono_like_today(),
     });
-    cfg.save(&root)?;
+    save_workbench(&cfg, &root, read.as_deref())?;
     workbench_decision_list(cwd).await
 }
 
@@ -493,7 +511,7 @@ pub async fn workbench_decision_remove(
     index: u64,
 ) -> Result<Vec<DecisionEntryDto>, String> {
     let root = PathBuf::from(&cwd);
-    let mut cfg = WorkbenchConfig::load(&root)?;
+    let (mut cfg, read) = WorkbenchConfig::load_with_bytes(&root)?;
     let idx = index as usize;
     if idx == 0 || idx > cfg.decision.len() {
         return Err(format!(
@@ -502,7 +520,7 @@ pub async fn workbench_decision_remove(
         ));
     }
     cfg.decision.remove(idx - 1);
-    cfg.save(&root)?;
+    save_workbench(&cfg, &root, read.as_deref())?;
     workbench_decision_list(cwd).await
 }
 
@@ -714,7 +732,7 @@ pub async fn workbench_branch_create(
     // Register it in the project's workbench.toml when the parent's cwd has
     // one (or create the file fresh).
     let cwd = branch.cwd.clone();
-    let mut cfg = WorkbenchConfig::load(Path::new(&cwd)).unwrap_or_default();
+    let (mut cfg, read) = WorkbenchConfig::load_with_bytes(Path::new(&cwd))?;
     if cfg.project.name.is_empty() {
         cfg.project.name = cwd
             .file_name()
@@ -732,7 +750,7 @@ pub async fn workbench_branch_create(
             ..Default::default()
         },
     );
-    cfg.save(Path::new(&cwd))?;
+    save_workbench(&cfg, Path::new(&cwd), read.as_deref())?;
 
     Ok(branch.id)
 }
@@ -1086,5 +1104,95 @@ mod tests {
             .collect();
         assert_eq!(siblings, vec!["saved.toml".to_string()], "{siblings:?}");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_gui_write_over_content_it_did_not_read_is_refused() {
+        // Eight commands rewrite `.firment/workbench.toml` whole, and the agent's `pinmap` and
+        // `decision` tools write the same file. Before the compare, the second save did not conflict
+        // with the first -- it became the file, and both sides were told success.
+        let root = temp_project("workbench-cas");
+        let path = WorkbenchConfig::path_for(&root);
+
+        let (mut ours, read) = WorkbenchConfig::load_with_bytes(&root).unwrap();
+        ours.pinmap.entry("node-a".to_string()).or_default().insert(
+            "PA5".to_string(),
+            firment_core::PinEntry {
+                func: "LED".to_string(),
+                owner: "gui".to_string(),
+            },
+        );
+
+        // The agent claims a pin for another board in the meantime.
+        std::fs::write(
+            &path,
+            "[pinmap.node-b]\nPB7 = { func = \"SCL\", owner = \"agent\" }\n",
+        )
+        .unwrap();
+
+        let err = save_workbench(&ours, &root, read.as_deref())
+            .expect_err("this read is no longer the file on disk");
+        assert!(
+            err.starts_with("[ConcurrentChange]"),
+            "the refusal has to name the condition: {err}"
+        );
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            on_disk.contains("node-b"),
+            "a refusal that still wrote erased the agent's claim: {on_disk}"
+        );
+        assert!(
+            !on_disk.contains("PA5"),
+            "and the refusal is not a save: ours landed anyway: {on_disk}"
+        );
+
+        // The direction that keeps the assertions above from passing on a guard that refuses
+        // everything: with nothing moved, the write goes through AND the other writer's claim
+        // survives it, which is the entire point of refusing instead of overwriting.
+        let (mut ours, read) = WorkbenchConfig::load_with_bytes(&root).unwrap();
+        ours.pinmap.entry("node-a".to_string()).or_default().insert(
+            "PA5".to_string(),
+            firment_core::PinEntry {
+                func: "LED".to_string(),
+                owner: "gui".to_string(),
+            },
+        );
+        save_workbench(&ours, &root, read.as_deref()).expect("nothing moved since this read");
+        let back = WorkbenchConfig::load(&root).unwrap();
+        assert_eq!(
+            back.pinmap["node-b"]["PB7"].func, "SCL",
+            "the agent's claim has to survive the GUI's write"
+        );
+        assert_eq!(back.pinmap["node-a"]["PA5"].func, "LED");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The class, in this workspace: a writer of the workbench file that reaches disk without the
+    /// guard. The tools side has `one_tail_writes_the_workbench_file`; the two halves are one rule
+    /// only if both are held to it, and the eight GUI commands were the ones left out.
+    #[test]
+    fn the_workbench_file_has_one_write_door_here_too() {
+        let source = include_str!("workbench.rs");
+        let product = match source.find("#[cfg(test)]") {
+            Some(at) => &source[..at],
+            None => source,
+        };
+        assert_eq!(
+            product.matches(".save(").count(),
+            1,
+            "only `save_workbench` may put a workbench config on disk"
+        );
+        let helper = product
+            .find("fn save_workbench")
+            .expect("the write tail is gone, so this gate is reading nothing");
+        assert!(
+            product[helper..helper + 700].contains(".save("),
+            "the one `.save(` is not inside the guard, so the guard is decoration"
+        );
+        assert!(
+            product.matches("save_workbench(").count() >= 9,
+            "expected the guard plus its eight call sites; a scan that finds a handful means the \
+             commands moved somewhere this gate does not look"
+        );
     }
 }
