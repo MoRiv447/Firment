@@ -30,7 +30,6 @@ try:
 except ModuleNotFoundError:  # python < 3.11
     import tomli as tomllib
 
-DATA_DIR = Path.home() / "sbc-guard"
 CFG_PATH = Path(sys.argv[1] if len(sys.argv) > 1 else Path(__file__).parent / "config.toml")
 
 DEFAULT_CONFIG = """
@@ -43,11 +42,24 @@ rules_file = "rules.toml"
 enabled = false
 url = "http://127.0.0.1:11434/v1/chat/completions"
 model = "qwen2.5:0.5b"
+timeout_s = 60
 
 [guard]
 standby_minutes = 10
 escalate_sev = "warn"
+queue_max = 256
+pairs_keep_days = 0
 """
+
+# The rules used when rules.toml is absent OR unreadable. One list, not two: the fallback for a
+# broken file and the fallback for a missing one have to be the same rules, or "delete the file"
+# and "typo the file" would mean different things.
+DEFAULT_RULES = [
+    {"name": "panic", "pattern": r"(panic|Guru Meditation|assert failed)", "sev": "error"},
+    {"name": "err-log", "pattern": r"\b(E \(|ERROR|error:)", "sev": "error"},
+    {"name": "warn-log", "pattern": r"\b(W \(|WARN|warning:)", "sev": "warn"},
+    {"name": "rst", "pattern": r"(rst:|boot:|reboot)", "sev": "warn"},
+]
 
 # Sections merged one level deep: a user [ollama] block omitting `enabled`
 # must not wipe the rest of the defaults (raw dict.update clobbered tables).
@@ -56,26 +68,58 @@ SECTION_KEYS = ("ollama", "guard")
 
 def load_config() -> dict:
     raw = tomllib.loads(DEFAULT_CONFIG)
-    if CFG_PATH.is_file():
+    if not CFG_PATH.is_file():
+        return raw
+    try:
         user = tomllib.loads(CFG_PATH.read_text())
-        for key, value in user.items():
-            if key in SECTION_KEYS and isinstance(value, dict) and isinstance(raw.get(key), dict):
-                raw[key].update(value)
-            else:
-                raw[key] = value
+    except (tomllib.TOMLDecodeError, OSError) as e:
+        # This used to propagate out of `main`: with `Restart=always` the unit then restart-looped
+        # every 5 s (systemd's default start limit, 5 starts in 10 s, is not reached at that
+        # cadence) and never reached `connect`/`subscribe` — so one stray quote in the config took
+        # the DATA plane down, not just the alerts, while `journalctl` showed the same traceback
+        # forever. Falling back to the defaults is the wrong repair here: the default broker is
+        # 127.0.0.1, so a guard the operator pointed at another host would silently watch the wrong
+        # one. Exit with a code the unit refuses to restart on instead (see
+        # `RestartPreventExitStatus=2`), so systemd records a failure an operator can read.
+        print(f"[config] {CFG_PATH} cannot be parsed: {e}", file=sys.stderr, flush=True)
+        print(
+            "[config] fix it, or remove it — a missing file uses the built-in defaults, "
+            "a broken one would silently use the wrong broker",
+            file=sys.stderr,
+            flush=True,
+        )
+        sys.exit(2)
+    for key, value in user.items():
+        if key in SECTION_KEYS and isinstance(value, dict) and isinstance(raw.get(key), dict):
+            raw[key].update(value)
+        else:
+            raw[key] = value
     return raw
 
 
 def load_rules(path: Path) -> list:
     if not path.is_file():
-        # Sensible firmware-log defaults; override by editing rules.toml.
-        return [
-            {"name": "panic", "pattern": r"(panic|Guru Meditation|assert failed)", "sev": "error"},
-            {"name": "err-log", "pattern": r"\b(E \(|ERROR|error:)", "sev": "error"},
-            {"name": "warn-log", "pattern": r"\b(W \(|WARN|warning:)", "sev": "warn"},
-            {"name": "rst", "pattern": r"(rst:|boot:|reboot)", "sev": "warn"},
-        ]
-    return tomllib.loads(path.read_text()).get("rule", [])
+        return DEFAULT_RULES
+    try:
+        rules = tomllib.loads(path.read_text()).get("rule", [])
+    except (tomllib.TOMLDecodeError, OSError) as e:
+        # `compile_rules` below already refuses to let one bad RULE take the daemon down — that is
+        # what its comment promises — but a bad FILE was not covered, and the failure it produced
+        # was exactly the one that comment is about: the process died at startup, `Restart=always`
+        # looped it, and nothing was subscribed. A stray quote in a hand-edited file marked the
+        # whole board unwatched. Degrading to the built-in rules keeps the collector running.
+        print(f"[rules] {path} cannot be parsed ({e}) — using the built-in defaults", flush=True)
+        return DEFAULT_RULES
+    if not rules:
+        # Parses fine, declares nothing: the section is `[[rule]]` (singular) and a misspelled
+        # table name yields an empty list, i.e. a guard that escalates nothing while looking
+        # healthy. Loud, because that is silent deafness.
+        print(
+            f"[rules] {path} declares no [[rule]] entries — nothing will escalate "
+            "(the table is `[[rule]]`, singular)",
+            flush=True,
+        )
+    return rules
 
 
 def compile_rules(rules: list) -> list:
@@ -112,9 +156,24 @@ class Guard:
         self.g = cfg.get("guard", {})
         self.started = time.time()
         self.counters_lock = threading.Lock()
-        self.counters = {"frames": 0, "matches": 0, "llm_calls": 0, "llm_fail": 0}
+        # `llm_dropped` is in the heartbeat on purpose: shedding refinement under load is fine,
+        # shedding it silently is not.
+        self.counters = {
+            "frames": 0,
+            "matches": 0,
+            "llm_calls": 0,
+            "llm_fail": 0,
+            "llm_dropped": 0,
+        }
         self.escalate_sev = self.g.get("escalate_sev", "warn")
-        self.work_queue: "queue.Queue" = queue.Queue()
+        # Bounded, because the single worker below can spend up to `2 × ollama.timeout_s` on one
+        # item: a device stuck in a match storm enqueues faster than that drains, and an unbounded
+        # queue turns the storm into unbounded memory — which the unit's `MemoryMax=256M` answers
+        # with an OOM kill and `Restart=always` with a restart, i.e. a guard that dies exactly when
+        # the device is misbehaving. Configurable; 256 items is a long backlog at the worst-case
+        # drain rate and far more than an operator reads.
+        self.queue_max = max(1, int(self.g.get("queue_max", 256)))
+        self.work_queue: "queue.Queue" = queue.Queue(maxsize=self.queue_max)
         threading.Thread(target=self._worker, daemon=True).start()
 
     _SEV_RANK = {"debug": 0, "info": 1, "warn": 2, "error": 3}
@@ -162,6 +221,12 @@ class Guard:
         # qwen3.5 is a THINKING model: its reasoning consumes output tokens
         # before any content appears (P0 notes). Budget generously or
         # content comes back empty every time.
+        #
+        # The timeout is a *drain rate*, not just a failure deadline: it multiplies by the two
+        # attempts to give the worst case one queued item can hold the single worker, and that
+        # product is what `queue_max` has to absorb. 180 s was sized for a thinking model; the
+        # non-thinking classifier the config pins answers in seconds, so the default is 60.
+        timeout_s = int(self.o.get("timeout_s", 60))
         for _attempt in range(2):  # one retry on invalid JSON
             self.bump("llm_calls")
             try:
@@ -173,7 +238,7 @@ class Guard:
                         "temperature": 0,
                         "max_tokens": 800,
                     },
-                    timeout=180,
+                    timeout=timeout_s,
                 )
                 msg = resp.json()["choices"][0]["message"]
                 content = msg.get("content") or ""
@@ -198,7 +263,16 @@ class Guard:
         # One hit, one count — publish_alert also runs for the REVISED alert,
         # so the bump lives here rather than doubling every match.
         self.bump("matches")
-        self.work_queue.put((node, rule, sev, hit, full))
+        try:
+            self.work_queue.put_nowait((node, rule, sev, hit, full))
+        except queue.Full:
+            # Never block this thread waiting for room — it is paho's network callback, and
+            # blocking it is the same sin as classifying on it (the broker keepalive expires).
+            # The RAW alert is already published above, so what a full queue costs is the LLM
+            # refinement and its corpus sample for the newest hits; the counter puts that loss in
+            # the heartbeat instead of in nobody's notice. Newest rather than oldest: the raw
+            # alert for a recent hit is the one still on the operator's screen.
+            self.bump("llm_dropped")
 
     def _worker(self):
         while True:
@@ -271,7 +345,50 @@ class Guard:
             alert["revised"] = True
         mqtt_client.publish(f"firment/device/{node}/alert", json.dumps(alert), qos=1)
 
+    def pairs_size(self) -> tuple:
+        """`(files, bytes)` of the fine-tuning corpus — reported, not expired, by default."""
+        files = total = 0
+        for f in (self.data_dir / "pairs").glob("*.jsonl"):
+            try:
+                total += f.stat().st_size
+                files += 1
+            except OSError:
+                pass
+        return files, total
+
+    def gc(self):
+        """Expire what expires, and report what does not.
+
+        The raw event sinks are an operational log: seven days is plenty, and the ceiling matters
+        more than the history. `pairs/` is a training corpus — expiring it on a timer would throw
+        away the thing it exists to accumulate — so it is kept until an operator says otherwise
+        with `[guard] pairs_keep_days`, and its size rides the heartbeat either way.
+
+        The comment here used to call the globbed set "daily sinks", plural, as though the whole
+        directory were covered while `pairs/` grew without limit and nothing said so.
+        """
+        cutoff = time.time() - 7 * 86_400
+        for old in self.data_dir.glob("events-*.jsonl"):
+            try:
+                if old.stat().st_mtime < cutoff:
+                    old.unlink()
+                    print(f"[gc] removed {old.name}", flush=True)
+            except OSError:
+                pass
+        keep_days = int(self.g.get("pairs_keep_days", 0))
+        if keep_days <= 0:
+            return
+        pairs_cutoff = time.time() - keep_days * 86_400
+        for old in (self.data_dir / "pairs").glob("*.jsonl"):
+            try:
+                if old.stat().st_mtime < pairs_cutoff:
+                    old.unlink()
+                    print(f"[gc] removed pairs/{old.name}", flush=True)
+            except OSError:
+                pass
+
     def heartbeat(self):
+        pairs_files, pairs_bytes = self.pairs_size()
         status = {
             "service": "sbc-guard",
             "online": True,
@@ -280,6 +397,14 @@ class Guard:
             "standby_minutes": self.g.get("standby_minutes", 10),
             "escalate_sev": self.escalate_sev,
             "rules": len(self.rules),
+            # The backlog and its ceiling, so `llm_dropped` is actionable: a climbing count with a
+            # full queue means refinement is being shed, and that is a knob, not a mystery.
+            "queue_depth": self.work_queue.qsize(),
+            "queue_max": self.queue_max,
+            # The corpus is kept by default, so its growth has to be visible somewhere — see
+            # `gc`. A number in every heartbeat is enough to notice it climbing.
+            "pairs_files": pairs_files,
+            "pairs_bytes": pairs_bytes,
             "counters": self.snapshot(),
         }
         mqtt_client.publish("firment/guard/status", json.dumps(status), retain=True)
@@ -369,12 +494,6 @@ if __name__ == "__main__":
         if time.time() - last_beat >= beat:
             guard.heartbeat()
             last_beat = time.time()
-            # GC: daily sinks older than 7 days are deleted on the heartbeat.
-            cutoff = time.time() - 7 * 86_400
-            for old in guard.data_dir.glob("events-*.jsonl"):
-                try:
-                    if old.stat().st_mtime < cutoff:
-                        old.unlink()
-                        print(f"[gc] removed {old.name}", flush=True)
-                except OSError:
-                    pass
+            # GC: the raw event sinks. `pairs/` is reported in the heartbeat rather than expired
+            # by default — see `Guard.gc` for why the two sets are held differently.
+            guard.gc()

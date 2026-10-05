@@ -10,7 +10,19 @@ rules_file = "rules.toml"
 enabled = true
 url = "http://127.0.0.1:11434/v1/chat/completions"
 model = "qwen2.5:0.5b"
+# Per-attempt budget. Times two attempts, this is the worst case ONE queued
+# hit can hold the single classifier worker — see [guard] queue_max.
+timeout_s = 60
 
 [guard]
 standby_minutes = 10
 escalate_sev = "warn"
+# Refinement backlog ceiling. A full queue drops the newest refinement request
+# (the raw alert for it has already gone out) and counts it in the heartbeat
+# as `llm_dropped`, rather than growing until MemoryMax kills the daemon.
+queue_max = 256
+# Retention for the fine-tuning corpus in data_dir/pairs. 0 = keep forever
+# (the corpus only matters if it accumulates), which is why the heartbeat
+# reports `pairs_files`/`pairs_bytes`: growth is visible without being deleted.
+# The raw sinks in data_dir are the ones with a fixed 7-day window.
+pairs_keep_days = 0

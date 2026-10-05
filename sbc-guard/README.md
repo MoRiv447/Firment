@@ -40,6 +40,18 @@ mosquitto_sub -h 192.168.1.6 -t 'firment/device/+/alert' -C 1 -W 10000
 mosquitto_sub -h 192.168.1.6 -t firment/guard/status -C 1 -W 3000
 ```
 
+## Test
+
+```bash
+python3 test_guardd.py        # stdlib only; no paho/ollama needed
+```
+
+Four cases over the daemon's startup failure paths — a broken `rules.toml` must warn and keep
+collecting, a broken `config.toml` must exit 2 with the reason, the healthy path must still come
+up, and a misspelled `[[rules]]` table must say that nothing will escalate. It runs `guardd.py` as
+a real subprocess with stub `paho`/`requests` modules in a temp tree, so it measures the daemon
+rather than a copy of its logic.
+
 ## Config
 
 `config.toml` next to guardd.py:
@@ -51,7 +63,22 @@ mosquitto_sub -h 192.168.1.6 -t firment/guard/status -C 1 -W 3000
 | rules_file | rules.toml | pre-filter regexes |
 | [ollama] enabled | false | classify hits via ollama |
 | [ollama] model | qwen2.5:0.5b | NON-thinking classifier (see note) |
+| [ollama] timeout_s | 60 | per-attempt budget; ×2 attempts bounds one item |
 | [guard] standby_minutes | 10 | heartbeat cadence |
+| [guard] queue_max | 256 | refinement backlog ceiling (see below) |
+
+**A broken file, held two different ways.** `config.toml` that does not parse makes the daemon
+exit 2 with the reason on stderr, and the unit's `RestartPreventExitStatus=2` makes systemd record
+a failure instead of restart-looping it — a loop would never reach `subscribe`, so a typo would
+take the data plane down, not just the alerts. `rules.toml` that does not parse is different: the
+guard prints the reason and falls back to the built-in rules, because a collector that keeps
+collecting beats one that exits. A `rules.toml` with a misspelled table (`[[rules]]` instead of
+`[[rule]]`) also says so — an empty rule list means nothing ever escalates.
+
+**Refinement backlog.** The classifier runs on one worker thread, and the queue feeding it is
+bounded by `[guard] queue_max`. When it is full the newest refinement request is dropped and
+counted in the heartbeat as `llm_dropped`; the raw alert for that hit has already been published,
+so nothing on the wire is lost, and the counter is how you can tell refinement is being shed.
 
 **Model note**: the classifier should be a NON-thinking instruct model
 (qwen2.5:0.5b works well). qwen3.5:0.8b always emits long `<think>` streams
