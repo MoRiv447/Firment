@@ -3699,4 +3699,77 @@ mod tests {
              this path can never already hold something worth keeping"
         );
     }
+
+    /// The unbounded-capture class, pinned to the one place it kept reappearing: a loop that
+    /// reads a network stream.
+    ///
+    /// Three rounds closed instances of this in `firment-tools` -- the serial monitor, the
+    /// subprocess drains, the red-team window -- each with the same repair (a named ceiling the
+    /// other copies alias), and each still left the layer *outside* the tool crate unchecked: both
+    /// provider parsers accumulated `Vec<u8>` with no ceiling at all while emitting an activity
+    /// heartbeat that re-armed the inactivity timer on every chunk. A gate whose scan list is the
+    /// crate its author was standing in cannot catch the next layer, so this one walks every Rust
+    /// source directory in the repository, including the Tauri workspace, and keys on `bytes_stream(`
+    /// -- the call that opens the buffer -- rather than on a list of files someone remembered.
+    ///
+    /// A file passes by either using the shared line buffer (which owns the ceiling and refuses at
+    /// it) or naming its own ceiling constant. Naming is enough; the defect was never that a
+    /// different number would be wrong, it was that no number was there.
+    #[test]
+    fn every_stream_reader_names_a_cap() {
+        const CEILINGS: [&str; 3] = ["SseLineBuffer", "CAPTURE_CAP_BYTES", "MAX_BODY_BYTES"];
+        let mut readers: Vec<String> = Vec::new();
+        let mut uncapped: Vec<String> = Vec::new();
+        for dir in [
+            "../firment-core/src",
+            "../firment-tools/src",
+            "../firment-tui/src",
+            "src",
+            "../../gui/src-tauri/src",
+        ] {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);
+            let mut stack = vec![root];
+            while let Some(d) = stack.pop() {
+                let entries = match std::fs::read_dir(&d) {
+                    Ok(entries) => entries,
+                    // The Tauri workspace is a sibling checkout, not a cargo path dependency; a
+                    // tree without it is a narrower scan, not a passing one, so say which.
+                    Err(_) => continue,
+                };
+                for entry in entries {
+                    let path = entry.unwrap().path();
+                    if path.is_dir() {
+                        stack.push(path);
+                        continue;
+                    }
+                    if path.extension().and_then(std::ffi::OsStr::to_str) != Some("rs") {
+                        continue;
+                    }
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    let product = match text.find("#[cfg(test)]") {
+                        Some(at) => &text[..at],
+                        None => &text[..],
+                    };
+                    if !product.contains(concat!("bytes_", "stream(")) {
+                        continue;
+                    }
+                    readers.push(path.display().to_string());
+                    if !CEILINGS.iter().any(|cap| product.contains(cap)) {
+                        uncapped.push(path.display().to_string());
+                    }
+                }
+            }
+        }
+        assert!(
+            uncapped.is_empty(),
+            "these read a network stream into a buffer that has no ceiling, so the only limit is
+             the endpoint's goodwill: {uncapped:?}"
+        );
+        assert!(
+            readers.len() >= 3,
+            "the scrape found {} files opening a stream, and a table of a ceiling rule checked
+             against almost nothing proves nothing",
+            readers.len()
+        );
+    }
 }

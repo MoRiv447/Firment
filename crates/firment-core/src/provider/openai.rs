@@ -1,3 +1,4 @@
+use super::sse::SseLineBuffer;
 use super::{Provider, ProviderError, ProviderEvent, StopReason};
 use crate::{ChatMessage, ChatRequest, ThinkingLevel, ToolCall};
 use async_trait::async_trait;
@@ -215,12 +216,10 @@ impl Provider for OpenAIProvider {
 
         let mut chunks = response.bytes_stream();
         let stream = async_stream::stream! {
-            let mut line_buf: Vec<u8> = Vec::new();
-            let mut tool_acc: HashMap<usize, AccumTool> = HashMap::new();
-            let mut stop_emitted = false;
-            let mut done = false;
+            let mut buf = SseLineBuffer::default();
+            let mut sse = OpenAiSse::default();
 
-            while let Some(chunk) = chunks.next().await {
+            'read: while let Some(chunk) = chunks.next().await {
                 let chunk = match chunk {
                     Ok(c) => c,
                     Err(e) => {
@@ -235,167 +234,60 @@ impl Provider for OpenAIProvider {
                 if !chunk.is_empty() {
                     yield Ok(ProviderEvent::Activity);
                 }
-                for &b in chunk.iter() {
-                    line_buf.push(b);
-                    if b != b'\n' {
-                        continue;
-                    }
-                    let line = String::from_utf8_lossy(&line_buf).trim().to_string();
-                    line_buf.clear();
-                    let Some(data) = line.strip_prefix("data:") else {
-                        continue;
-                    };
-                    let data = data.trim();
-                    if data.is_empty() {
-                        // SSE heartbeat / keep-alive frame; legal, ignore it.
-                        continue;
-                    }
-                    if data == "[DONE]" {
-                        done = true;
-                        break;
-                    }
-                    let payload: Value = match serde_json::from_str(data) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            yield Err(ProviderError::InvalidResponse(format!(
-                                "bad SSE payload: {e}"
-                            )));
-                            return;
-                        }
-                    };
-
-                    // Gateways report failures mid-stream as a top-level
-                    // `error` object on a 200 response. Only fatal while the
-                    // turn is still open: unlike the Anthropic parser, this one
-                    // keeps reading frames after `finish_reason`, and a stray
-                    // trailer must not turn a completed reply into a failure.
-                    if !stop_emitted
-                        && let Some(err) = payload.get("error")
-                    {
-                        let message = err
-                            .get("message")
-                            .and_then(|m| m.as_str())
-                            .unwrap_or("provider reported an error")
-                            .to_string();
-                        yield Err(ProviderError::StreamEnded(message));
+                let lines = match buf.push(&chunk) {
+                    Ok(lines) => lines,
+                    // Past the ceiling an unterminated line is refused here,
+                    // while the bytes are still arriving, instead of being
+                    // collected until the process cannot continue.
+                    Err(e) => {
+                        yield Err(e);
                         return;
                     }
-
-                    if let Some(delta) = payload.pointer("/choices/0/delta") {
-                        // Reasoning deltas (never persisted into the
-                        // transcript — they only drive the "model is
-                        // reasoning" indicator): DeepSeek/OpenAI-style
-                        // `reasoning_content`, OpenRouter's `reasoning`
-                        // (string, or an object carrying `text`).
-                        for key in ["reasoning_content", "reasoning"] {
-                            let snippet = match delta.get(key) {
-                                Some(s) if s.is_string() => s.as_str().map(String::from),
-                                Some(o) if o.is_object() => o
-                                    .get("text")
-                                    .and_then(|t| t.as_str())
-                                    .map(String::from),
-                                _ => None,
-                            };
-                            if let Some(text) = snippet
-                                && !text.is_empty()
-                            {
-                                yield Ok(ProviderEvent::Thinking(text));
-                            }
-                        }
-                        if let Some(text) = delta.get("content").and_then(|c| c.as_str())
-                            && !text.is_empty()
-                        {
-                            yield Ok(ProviderEvent::Text(text.to_string()));
-                        }
-                        if let Some(calls) = delta.get("tool_calls").and_then(|c| c.as_array()) {
-                            for tc in calls {
-                                // Spec-conformant servers always send `index`.
-                                // Non-conformant ones omit it — a fresh `id`
-                                // or `name` then starts a NEW call instead of
-                                // merging everything into slot 0 (which used
-                                // to concatenate two calls' arguments into
-                                // one and overwrite id/name).
-                                let idx = match tc.get("index").and_then(|i| i.as_u64()) {
-                                    Some(i) => i as usize,
-                                    // No index: an id we have NOT seen starts
-                                    // a new call; anything else (argument
-                                    // fragments, repeated ids) continues the
-                                    // most recent one.
-                                    None => {
-                                        let new_id = tc
-                                            .get("id")
-                                            .and_then(|i| i.as_str())
-                                            .filter(|s| !s.is_empty())
-                                            .is_some_and(|id| {
-                                                !tool_acc.values().any(|e| e.id == *id)
-                                            });
-                                        if new_id {
-                                            tool_acc.len()
-                                        } else {
-                                            tool_acc.keys().copied().max().unwrap_or(0)
-                                        }
-                                    }
-                                };
-                                let entry = tool_acc.entry(idx).or_default();
-                                if let Some(id) = tc.get("id").and_then(|i| i.as_str())
-                                    && !id.is_empty()
-                                {
-                                    entry.id = id.to_string();
-                                }
-                                if let Some(f) = tc.get("function") {
-                                    if let Some(name) = f.get("name").and_then(|n| n.as_str())
-                                        && !name.is_empty()
-                                    {
-                                        entry.name = name.to_string();
-                                    }
-                                    if let Some(args) = f.get("arguments").and_then(|a| a.as_str()) {
-                                        entry.arguments.push_str(args);
-                                    }
-                                }
-                            }
-                        }
+                };
+                for line in lines {
+                    let mut out = Vec::new();
+                    let result = sse.on_line(&line, &mut out);
+                    for event in out {
+                        yield Ok(event);
                     }
-
-                    if let Some(reason) = payload
-                        .pointer("/choices/0/finish_reason")
-                        .and_then(|f| f.as_str())
-                        && !reason.is_empty()
-                        && !stop_emitted
-                    {
-                        let reason = match reason {
-                            "tool_calls" => StopReason::ToolUse,
-                            "length" => StopReason::MaxTokens,
-                            "stop" => StopReason::EndTurn,
-                            other => StopReason::Other(other.to_string()),
-                        };
-                        yield Ok(ProviderEvent::Stop(reason));
-                        stop_emitted = true;
+                    if let Err(e) = result {
+                        yield Err(e);
+                        return;
                     }
-                }
-                if done {
-                    break;
+                    if sse.done {
+                        // `[DONE]`: the rest of this chunk is trailer, and the
+                        // accumulator below still gets flushed, as it did when
+                        // the byte loop broke out here.
+                        break 'read;
+                    }
                 }
             }
 
-            let mut indexes: Vec<usize> = tool_acc.keys().copied().collect();
-            indexes.sort_unstable();
-            for idx in indexes {
-                let entry = tool_acc.remove(&idx).unwrap_or_default();
-                if entry.name.is_empty() {
-                    continue;
+            // The body is over. Whatever bytes were still buffered ARE the last
+            // frame — a gateway that closes without a trailing newline used to
+            // drop exactly this line, and the line it drops is routinely the
+            // tool-call arguments or the finish reason, after which the loop
+            // reported `EndTurn` as though the reply had been complete. The
+            // tail goes through the same handler a newline-terminated frame
+            // goes through, so the two cannot drift apart.
+            if !sse.done {
+                for line in buf.finish() {
+                    let mut out = Vec::new();
+                    let result = sse.on_line(&line, &mut out);
+                    for event in out {
+                        yield Ok(event);
+                    }
+                    if let Err(e) = result {
+                        yield Err(e);
+                        return;
+                    }
                 }
-                yield Ok(ProviderEvent::ToolCall(ToolCall {
-                    id: if entry.id.is_empty() {
-                        format!("call_{idx}")
-                    } else {
-                        entry.id
-                    },
-                    name: entry.name,
-                    arguments: super::collect_tool_arguments(&entry.arguments),
-                }));
             }
-            if !stop_emitted {
-                yield Ok(ProviderEvent::Stop(StopReason::EndTurn));
+
+            let mut out = Vec::new();
+            sse.finish(&mut out);
+            for event in out {
+                yield Ok(event);
             }
         };
         Ok(Box::pin(stream))
@@ -411,4 +303,176 @@ struct AccumTool {
     id: String,
     name: String,
     arguments: String,
+}
+
+/// The per-line half of the OpenAI-compatible parser, kept out of the network
+/// loop so a response body can be driven through it without a socket.
+///
+/// `on_line` returns the events one frame produced; an `Err` is fatal and, like
+/// the `return` it replaces, abandons the rest of the body. `finish` is what the
+/// stream emits once the body is done: the accumulated tool calls, then a stop
+/// reason if the server never gave one.
+#[derive(Default)]
+pub(crate) struct OpenAiSse {
+    tool_acc: HashMap<usize, AccumTool>,
+    stop_emitted: bool,
+    pub(crate) done: bool,
+}
+
+impl OpenAiSse {
+    pub(crate) fn on_line(
+        &mut self,
+        raw: &[u8],
+        out: &mut Vec<ProviderEvent>,
+    ) -> Result<(), ProviderError> {
+        let line = String::from_utf8_lossy(raw).trim().to_string();
+        let Some(data) = line.strip_prefix("data:") else {
+            return Ok(());
+        };
+        let data = data.trim();
+        if data.is_empty() {
+            // SSE heartbeat / keep-alive frame; legal, ignore it.
+            return Ok(());
+        }
+        if data == "[DONE]" {
+            self.done = true;
+            return Ok(());
+        }
+        let payload: Value = match serde_json::from_str(data) {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(ProviderError::InvalidResponse(format!(
+                    "bad SSE payload: {e}"
+                )));
+            }
+        };
+
+        // Gateways report failures mid-stream as a top-level
+        // `error` object on a 200 response. Only fatal while the
+        // turn is still open: unlike the Anthropic parser, this one
+        // keeps reading frames after `finish_reason`, and a stray
+        // trailer must not turn a completed reply into a failure.
+        if !self.stop_emitted
+            && let Some(err) = payload.get("error")
+        {
+            let message = err
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("provider reported an error")
+                .to_string();
+            return Err(ProviderError::StreamEnded(message));
+        }
+
+        if let Some(delta) = payload.pointer("/choices/0/delta") {
+            // Reasoning deltas (never persisted into the
+            // transcript — they only drive the "model is
+            // reasoning" indicator): DeepSeek/OpenAI-style
+            // `reasoning_content`, OpenRouter's `reasoning`
+            // (string, or an object carrying `text`).
+            for key in ["reasoning_content", "reasoning"] {
+                let snippet = match delta.get(key) {
+                    Some(s) if s.is_string() => s.as_str().map(String::from),
+                    Some(o) if o.is_object() => {
+                        o.get("text").and_then(|t| t.as_str()).map(String::from)
+                    }
+                    _ => None,
+                };
+                if let Some(text) = snippet
+                    && !text.is_empty()
+                {
+                    out.push(ProviderEvent::Thinking(text));
+                }
+            }
+            if let Some(text) = delta.get("content").and_then(|c| c.as_str())
+                && !text.is_empty()
+            {
+                out.push(ProviderEvent::Text(text.to_string()));
+            }
+            if let Some(calls) = delta.get("tool_calls").and_then(|c| c.as_array()) {
+                for tc in calls {
+                    // Spec-conformant servers always send `index`.
+                    // Non-conformant ones omit it — a fresh `id`
+                    // or `name` then starts a NEW call instead of
+                    // merging everything into slot 0 (which used
+                    // to concatenate two calls' arguments into
+                    // one and overwrite id/name).
+                    let idx = match tc.get("index").and_then(|i| i.as_u64()) {
+                        Some(i) => i as usize,
+                        // No index: an id we have NOT seen starts
+                        // a new call; anything else (argument
+                        // fragments, repeated ids) continues the
+                        // most recent one.
+                        None => {
+                            let new_id = tc
+                                .get("id")
+                                .and_then(|i| i.as_str())
+                                .filter(|s| !s.is_empty())
+                                .is_some_and(|id| !self.tool_acc.values().any(|e| e.id == *id));
+                            if new_id {
+                                self.tool_acc.len()
+                            } else {
+                                self.tool_acc.keys().copied().max().unwrap_or(0)
+                            }
+                        }
+                    };
+                    let entry = self.tool_acc.entry(idx).or_default();
+                    if let Some(id) = tc.get("id").and_then(|i| i.as_str())
+                        && !id.is_empty()
+                    {
+                        entry.id = id.to_string();
+                    }
+                    if let Some(f) = tc.get("function") {
+                        if let Some(name) = f.get("name").and_then(|n| n.as_str())
+                            && !name.is_empty()
+                        {
+                            entry.name = name.to_string();
+                        }
+                        if let Some(args) = f.get("arguments").and_then(|a| a.as_str()) {
+                            entry.arguments.push_str(args);
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(reason) = payload
+            .pointer("/choices/0/finish_reason")
+            .and_then(|f| f.as_str())
+            && !reason.is_empty()
+            && !self.stop_emitted
+        {
+            let reason = match reason {
+                "tool_calls" => StopReason::ToolUse,
+                "length" => StopReason::MaxTokens,
+                "stop" => StopReason::EndTurn,
+                other => StopReason::Other(other.to_string()),
+            };
+            out.push(ProviderEvent::Stop(reason));
+            self.stop_emitted = true;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn finish(&mut self, out: &mut Vec<ProviderEvent>) {
+        let mut indexes: Vec<usize> = self.tool_acc.keys().copied().collect();
+        indexes.sort_unstable();
+        for idx in indexes {
+            let entry = self.tool_acc.remove(&idx).unwrap_or_default();
+            if entry.name.is_empty() {
+                continue;
+            }
+            out.push(ProviderEvent::ToolCall(ToolCall {
+                id: if entry.id.is_empty() {
+                    format!("call_{idx}")
+                } else {
+                    entry.id
+                },
+                name: entry.name,
+                arguments: super::collect_tool_arguments(&entry.arguments),
+            }));
+        }
+        if !self.stop_emitted {
+            out.push(ProviderEvent::Stop(StopReason::EndTurn));
+        }
+    }
 }

@@ -30,7 +30,12 @@ pub const PORT_TIMEOUT_MS: u64 = 500;
 /// caller's to choose — so without a ceiling the bytes were only ever cut on the way out, after
 /// every one of them had been collected. Public because the HIL monitor step reads the same kind
 /// of stream and must not pick a second number for the same problem.
-pub const CAPTURE_CAP_BYTES: usize = 8 * 1024 * 1024;
+///
+/// The value itself lives in `firment_core::provider::CAPTURE_CAP_BYTES`, not here: the two
+/// provider SSE parsers hit the same shape one layer out (a buffer with no ceiling while the
+/// inactivity timer re-armed on every chunk), and a core crate cannot depend on a tool crate, so
+/// the shared number moved down rather than the providers getting their own literal.
+pub const CAPTURE_CAP_BYTES: usize = firment_core::provider::CAPTURE_CAP_BYTES;
 
 /// Open a serial port for reading.
 ///

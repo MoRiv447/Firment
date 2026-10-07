@@ -1,5 +1,6 @@
 pub mod anthropic;
 pub mod openai;
+mod sse;
 
 use crate::ToolCall;
 use async_trait::async_trait;
@@ -9,6 +10,7 @@ use serde_json::Value;
 pub use crate::types::ChatRequest;
 pub use anthropic::AnthropicProvider;
 pub use openai::OpenAIProvider;
+pub use sse::CAPTURE_CAP_BYTES;
 
 pub type ProviderStream = BoxStream<'static, Result<ProviderEvent, ProviderError>>;
 
@@ -253,5 +255,276 @@ mod tests {
             json!({"path": "main.c"})
         );
         assert_eq!(normalize_tool_arguments(&json!([1, 2])), json!({}));
+    }
+
+    // ---------------------------------------------------------------------
+    // The SSE parsers, driven the way the network loop drives them.
+    //
+    // `openai.rs` had no test of any kind before this, because there was no way
+    // to get bytes into it: the parse lived inside the `async_stream` macro,
+    // which needs a socket, a runtime and a server. Splitting the per-line half
+    // out (`OpenAiSse`, `AnthropicSse`) is what makes the two frames that matter
+    // testable -- and the table below is why it is worth more than two tests: the
+    // properties belong to every dialect, so a third parser added later joins the
+    // list and inherits them instead of discovering the tail-flush rule the hard
+    // way for the fourth time.
+    // ---------------------------------------------------------------------
+
+    use super::sse::SseLineBuffer;
+    use crate::provider::anthropic::AnthropicSse;
+    use crate::provider::openai::OpenAiSse;
+
+    /// What the production loop does with a chunk stream, so the tests cannot
+    /// diverge from it without the divergence being visible here.
+    trait Dialect {
+        fn on_line(
+            &mut self,
+            line: &[u8],
+            out: &mut Vec<ProviderEvent>,
+        ) -> Result<(), ProviderError>;
+        fn finish(&mut self, out: &mut Vec<ProviderEvent>);
+        /// True once the reader stops consuming further lines (`[DONE]`).
+        fn stopped(&self) -> bool {
+            false
+        }
+    }
+
+    impl Dialect for OpenAiSse {
+        fn on_line(
+            &mut self,
+            line: &[u8],
+            out: &mut Vec<ProviderEvent>,
+        ) -> Result<(), ProviderError> {
+            OpenAiSse::on_line(self, line, out)
+        }
+        fn finish(&mut self, out: &mut Vec<ProviderEvent>) {
+            OpenAiSse::finish(self, out)
+        }
+        fn stopped(&self) -> bool {
+            self.done
+        }
+    }
+
+    impl Dialect for AnthropicSse {
+        fn on_line(
+            &mut self,
+            line: &[u8],
+            out: &mut Vec<ProviderEvent>,
+        ) -> Result<(), ProviderError> {
+            AnthropicSse::on_line(self, line, out)
+        }
+        fn finish(&mut self, out: &mut Vec<ProviderEvent>) {
+            AnthropicSse::finish(self, out)
+        }
+    }
+
+    fn drive<D: Dialect + Default>(
+        chunks: &[&[u8]],
+    ) -> (Vec<ProviderEvent>, Option<ProviderError>) {
+        let mut buf = SseLineBuffer::default();
+        let mut parser = D::default();
+        let mut events: Vec<ProviderEvent> = Vec::new();
+        for &chunk in chunks {
+            let lines = match buf.push(chunk) {
+                Ok(lines) => lines,
+                Err(e) => return (events, Some(e)),
+            };
+            for line in lines {
+                if let Err(e) = parser.on_line(&line, &mut events) {
+                    return (events, Some(e));
+                }
+            }
+            // A body may carry frames after the sentinel; the reader stops
+            // where the production loop stops.
+            if parser.stopped() {
+                let mut out = Vec::new();
+                parser.finish(&mut out);
+                events.extend(out);
+                return (events, None);
+            }
+        }
+        for line in buf.finish() {
+            if let Err(e) = parser.on_line(&line, &mut events) {
+                return (events, Some(e));
+            }
+        }
+        parser.finish(&mut events);
+        (events, None)
+    }
+
+    type DialectFn = fn(&[&[u8]]) -> (Vec<ProviderEvent>, Option<ProviderError>);
+
+    fn dialects() -> Vec<(&'static str, DialectFn)> {
+        vec![
+            ("openai", drive::<OpenAiSse> as DialectFn),
+            ("anthropic", drive::<AnthropicSse> as DialectFn),
+        ]
+    }
+
+    /// A complete reply that ends with a stop reason: text, a tool call in two
+    /// fragments, and the frame that says which of the two the model chose.
+    /// Every dialect's tail is its own, and in both dialects losing it is
+    /// expensive: `content_block_stop` is the ONLY place anthropic emits a
+    /// `ToolCall`, and `message_delta` the only place it learns the stop reason.
+    fn body(dialect: &str, newline: bool) -> Vec<u8> {
+        let frames: Vec<&str> = match dialect {
+            "openai" => vec![
+                r#"data: {"choices":[{"delta":{"content":"reading it now"}}]}"#,
+                r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_9","function":{"name":"read_file","arguments":"{\"path\""}}]}}]}"#,
+                r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":": \"src/main.c\"}"}}]}}]}"#,
+                r#"data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ],
+            _ => vec![
+                r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_9","name":"read_file"}}"#,
+                r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\": \"src/main.c\"}"}}"#,
+                r#"data: {"type":"content_block_stop","index":0}"#,
+                r#"data: {"type":"message_delta","delta":{"stop_reason":"tool_use"}}"#,
+            ],
+        };
+        let mut text = frames.join("\n\n");
+        if newline {
+            text.push('\n');
+        }
+        text.into_bytes()
+    }
+
+    fn render(events: &[ProviderEvent]) -> String {
+        events
+            .iter()
+            .map(|e| format!("{e:?}"))
+            .collect::<Vec<_>>()
+            .join("|")
+    }
+
+    #[test]
+    fn a_reply_ending_without_a_newline_parses_as_the_same_reply() {
+        // The defect: bytes were parsed only when a `\n` arrived, so the last
+        // frame of a body that ends cleanly was dropped. Both dialects, one
+        // property -- the newline is a framing detail, not part of the answer.
+        for (name, run) in dialects() {
+            let with = run(&[&body(name, true)]);
+            let without = run(&[&body(name, false)]);
+            assert!(
+                with.1.is_none(),
+                "{name}: the well-formed body must not error: {:?}",
+                with.1
+            );
+            assert!(
+                without.1.is_none(),
+                "{name}: a body missing only its final newline must not error either: {:?}",
+                without.1
+            );
+            assert_eq!(
+                render(&with.0),
+                render(&without.0),
+                "{name}: the final frame was parsed differently with and without its newline"
+            );
+            let text = render(&with.0);
+            assert!(
+                text.contains("read_file") && text.contains("src/main.c"),
+                "{name}: the tool call must survive, got {text}"
+            );
+            assert!(
+                text.contains("ToolUse"),
+                "{name}: the stop reason the server sent must be the one reported, not the \
+                 fallback for \"nothing arrived\": {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_reply_ending_on_a_newline_is_not_parsed_twice() {
+        // The other direction of the same repair: flushing what is buffered is
+        // only correct if there is nothing buffered. Without this assertion the
+        // tail flush could re-emit the last frame on every well-formed stream,
+        // which is the worse of the two failures and the one a fix would produce
+        // by forgetting `finish()` empties the buffer.
+        for (name, run) in dialects() {
+            let events = run(&[&body(name, true)]).0;
+            let stops = events
+                .iter()
+                .filter(|e| matches!(e, ProviderEvent::Stop(_)))
+                .count();
+            let calls = events
+                .iter()
+                .filter(|e| matches!(e, ProviderEvent::ToolCall(_)))
+                .count();
+            assert_eq!(
+                stops, 1,
+                "{name}: a duplicated stop reason ends the turn twice"
+            );
+            assert_eq!(
+                calls, 1,
+                "{name}: a duplicated tool call runs the tool twice"
+            );
+        }
+    }
+
+    #[test]
+    fn bytes_that_never_form_a_line_are_refused_rather_than_collected() {
+        // The ceiling. An endpoint that trickles a line without ever ending it
+        // used to grow the buffer until the process could not, while the
+        // activity heartbeat re-armed the inactivity timer for every chunk of
+        // it -- so the loop was never interrupted either.
+        for (name, run) in dialects() {
+            let filler = vec![b'x'; CAPTURE_CAP_BYTES / 8];
+            let chunks: Vec<&[u8]> = vec![filler.as_slice(); 9];
+            let (events, error) = run(&chunks);
+            let error = error.unwrap_or_else(|| panic!("{name}: the ceiling never fired"));
+            assert!(
+                error.to_string().contains("capture ceiling"),
+                "{name}: the refusal must name the ceiling it hit: {error}"
+            );
+            assert!(
+                !events.iter().any(|e| matches!(e, ProviderEvent::Stop(_))),
+                "{name}: an unfinished stream must not report a finished turn: {:?}",
+                render(&events)
+            );
+        }
+    }
+
+    #[test]
+    fn the_stream_table_covers_every_parser_that_reads_a_body() {
+        // The table above is the instrument only if it holds every dialect: two
+        // tests written for the two parsers that exist today are the same list
+        // someone has to remember to extend, which is what this round keeps
+        // finding. So the list is checked against the source, not against memory.
+        let mut parsers = Vec::new();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/provider");
+        for entry in std::fs::read_dir(&root).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(std::ffi::OsStr::to_str) != Some("rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            // The test module below quotes the needle to look for it; a scrape
+            // that counted its own search string would report this file as a
+            // parser that nobody tested.
+            let product = match text.find("#[cfg(test)]") {
+                Some(at) => &text[..at],
+                None => &text[..],
+            };
+            if product.contains("bytes_stream(") {
+                parsers.push(
+                    path.file_stem()
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace('-', "_"),
+                );
+            }
+        }
+        parsers.sort();
+        for name in &parsers {
+            assert!(
+                dialects().iter().any(|(dialect, _)| dialect == name),
+                "{name} reads a stream but is not in the table, so the tail-flush and ceiling \
+                 properties below do not cover it"
+            );
+        }
+        assert!(
+            parsers.len() >= 2,
+            "the scrape found {} stream parsers; it is not reading this directory",
+            parsers.len()
+        );
     }
 }

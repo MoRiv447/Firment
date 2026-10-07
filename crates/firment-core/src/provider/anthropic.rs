@@ -1,3 +1,4 @@
+use super::sse::SseLineBuffer;
 use super::{Provider, ProviderError, ProviderEvent, StopReason};
 use crate::{ChatMessage, ChatRequest, ThinkingLevel, ToolCall};
 use async_trait::async_trait;
@@ -267,9 +268,8 @@ impl Provider for AnthropicProvider {
 
         let mut chunks = response.bytes_stream();
         let stream = async_stream::stream! {
-            let mut line_buf: Vec<u8> = Vec::new();
-            let mut blocks: HashMap<usize, Block> = HashMap::new();
-            let mut stop_emitted = false;
+            let mut buf = SseLineBuffer::default();
+            let mut sse = AnthropicSse::default();
 
             while let Some(chunk) = chunks.next().await {
                 let chunk = match chunk {
@@ -286,202 +286,55 @@ impl Provider for AnthropicProvider {
                 if !chunk.is_empty() {
                     yield Ok(ProviderEvent::Activity);
                 }
-                for &b in chunk.iter() {
-                    line_buf.push(b);
-                    if b != b'\n' {
-                        continue;
+                let lines = match buf.push(&chunk) {
+                    Ok(lines) => lines,
+                    // Refused at the ceiling, while the bytes are still
+                    // arriving, rather than collected until the process cannot
+                    // continue: this buffer used to have no ceiling at all and
+                    // the heartbeat above re-armed the timer for every chunk of
+                    // it.
+                    Err(e) => {
+                        yield Err(e);
+                        return;
                     }
-                    let line = String::from_utf8_lossy(&line_buf).trim().to_string();
-                    line_buf.clear();
-                    let Some(data) = line.strip_prefix("data:") else {
-                        continue;
-                    };
-                    let data = data.trim();
-                    if data.is_empty() {
-                        // SSE heartbeat / keep-alive frame; legal, ignore it.
-                        continue;
+                };
+                for line in lines {
+                    let mut out = Vec::new();
+                    let result = sse.on_line(&line, &mut out);
+                    for event in out {
+                        yield Ok(event);
                     }
-                    if data == "[DONE]" {
-                        // OpenAI-style stream sentinel: Anthropic's official API
-                        // never sends it, but compatible gateways (OpenRouter,
-                        // ...) terminate their anthropic-flavored streams with
-                        // it. Skip instead of failing the whole turn.
-                        continue;
-                    }
-                    if stop_emitted {
-                        // Anything after message_stop is trailer noise from
-                        // compatibility gateways (sentinels, keep-alives,
-                        // usage pings) — the turn is already complete.
-                        continue;
-                    }
-                    let payload: Value = match serde_json::from_str(data) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            yield Err(ProviderError::InvalidResponse(format!(
-                                "bad SSE payload: {e}"
-                            )));
-                            return;
-                        }
-                    };
-                    let event = payload.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                    match event {
-                        "content_block_start" => {
-                            let idx = payload.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
-                            let block = payload.get("content_block").cloned().unwrap_or(Value::Null);
-                            let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                            let entry = blocks.entry(idx).or_insert_with(|| Block::Text(String::new()));
-                            if block_type == "tool_use" {
-                                *entry = Block::ToolUse {
-                                    id: block.get("id").and_then(|i| i.as_str()).unwrap_or_default().to_string(),
-                                    name: block.get("name").and_then(|n| n.as_str()).unwrap_or_default().to_string(),
-                                    arguments: String::new(),
-                                };
-                            } else if block_type == "thinking" {
-                                *entry = Block::Thinking {
-                                    text: String::new(),
-                                    signature: String::new(),
-                                    redacted: false,
-                                };
-                            } else if block_type == "redacted_thinking" {
-                                // Redacted blocks arrive complete (data field,
-                                // no deltas) — capture now, no UI deltas.
-                                *entry = Block::Thinking {
-                                    text: block
-                                        .get("data")
-                                        .and_then(|d| d.as_str())
-                                        .unwrap_or_default()
-                                        .to_string(),
-                                    signature: String::new(),
-                                    redacted: true,
-                                };
-                            }
-                        }
-                        "content_block_delta" => {
-                            let idx = payload.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
-                            let delta = payload.get("delta").cloned().unwrap_or(Value::Null);
-                            match delta.get("type").and_then(|t| t.as_str()) {
-                                Some("text_delta") => {
-                                    if let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
-                                        match blocks.get_mut(&idx) {
-                                            Some(Block::Text(buf)) => {
-                                                buf.push_str(text);
-                                            }
-                                            // A protocol-conformant server never
-                                            // sends text deltas for a tool_use
-                                            // index; overwriting the accumulator
-                                            // here would destroy the tool call.
-                                            None => {
-                                                blocks.insert(idx, Block::Text(text.to_string()));
-                                            }
-                                            Some(Block::ToolUse { .. }) | Some(Block::Thinking { .. }) => {}
-                                        }
-                                        yield Ok(ProviderEvent::Text(text.to_string()));
-                                    }
-                                }
-                                Some("thinking_delta") => {
-                                    if let Some(text) =
-                                        delta.get("thinking").and_then(|t| t.as_str())
-                                    {
-                                        if let Some(Block::Thinking { text: buf, .. }) =
-                                            blocks.get_mut(&idx)
-                                        {
-                                            buf.push_str(text);
-                                        }
-                                        yield Ok(ProviderEvent::Thinking(text.to_string()));
-                                    }
-                                }
-                                Some("signature_delta") => {
-                                    if let Some(sig) = delta.get("signature").and_then(|t| t.as_str())
-                                        && let Some(Block::Thinking { signature, .. }) =
-                                            blocks.get_mut(&idx)
-                                    {
-                                        signature.push_str(sig);
-                                    }
-                                }
-                                Some("input_json_delta") => {
-                                    if let Some(partial) = delta.get("partial_json").and_then(|p| p.as_str())
-                                        && let Some(Block::ToolUse { arguments, .. }) = blocks.get_mut(&idx)
-                                    {
-                                        arguments.push_str(partial);
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        "content_block_stop" => {
-                            let idx = payload.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
-                            // Remove ONCE and match: a second remove() here
-                            // would find None (the first already took the
-                            // value) and silently drop thinking blocks.
-                            match blocks.remove(&idx) {
-                                Some(Block::ToolUse { id, name, arguments }) if !name.is_empty() => {
-                                    // A gateway omitting the id would round-trip
-                                    // empty tool_use/tool_result ids, which strict
-                                    // APIs reject — synthesize a stable one.
-                                    let id = if id.is_empty() {
-                                        format!("toolu_synthesized_{idx}")
-                                    } else {
-                                        id
-                                    };
-                                    yield Ok(ProviderEvent::ToolCall(ToolCall {
-                                        id,
-                                        name,
-                                        arguments: super::collect_tool_arguments(&arguments),
-                                    }));
-                                }
-                                Some(Block::Thinking { text, signature, redacted }) => {
-                                    // Complete block: persisted on the assistant
-                                    // message and replayed on the next request.
-                                    let block = if redacted {
-                                        json!({"type": "redacted_thinking", "data": text})
-                                    } else {
-                                        json!({
-                                            "type": "thinking",
-                                            "thinking": text,
-                                            "signature": signature,
-                                        })
-                                    };
-                                    yield Ok(ProviderEvent::ThinkingBlock(block));
-                                }
-                                _ => {}
-                            }
-                        }
-                        "message_delta" => {
-                            let reason = payload
-                                .pointer("/delta/stop_reason")
-                                .and_then(|r| r.as_str())
-                                .unwrap_or("");
-                            if !reason.is_empty() && !stop_emitted {
-                                let reason = match reason {
-                                    "end_turn" => StopReason::EndTurn,
-                                    "tool_use" => StopReason::ToolUse,
-                                    "max_tokens" => StopReason::MaxTokens,
-                                    "stop_sequence" => StopReason::StopSequence,
-                                    other => StopReason::Other(other.to_string()),
-                                };
-                                yield Ok(ProviderEvent::Stop(reason));
-                                stop_emitted = true;
-                            }
-                        }
-                        "error" => {
-                            // Reported mid-stream over a 200 response (capacity,
-                            // content filter, gateway abort). Falling through the
-                            // catch-all here used to end the turn as if the model
-                            // had simply finished.
-                            let message = payload
-                                .pointer("/error/message")
-                                .and_then(|m| m.as_str())
-                                .unwrap_or("provider reported an error")
-                                .to_string();
-                            yield Err(ProviderError::StreamEnded(message));
-                            return;
-                        }
-                        _ => {}
+                    if let Err(e) = result {
+                        yield Err(e);
+                        return;
                     }
                 }
             }
-            if !stop_emitted {
-                yield Ok(ProviderEvent::Stop(StopReason::EndTurn));
+
+            // The body ended with bytes still buffered, which means the last
+            // frame had no trailing newline. Under Anthropic's dialect that
+            // frame is most often `content_block_stop` (the only place a
+            // `ToolCall` is emitted) or `message_delta` (the only place a stop
+            // reason is), so dropping it lost a whole tool call and then
+            // reported `EndTurn` as if the model had finished cleanly. Same
+            // handler as a newline-terminated frame, by design: a second copy
+            // of this branch is how the two would start disagreeing.
+            for line in buf.finish() {
+                let mut out = Vec::new();
+                let result = sse.on_line(&line, &mut out);
+                for event in out {
+                    yield Ok(event);
+                }
+                if let Err(e) = result {
+                    yield Err(e);
+                    return;
+                }
+            }
+
+            let mut out = Vec::new();
+            sse.finish(&mut out);
+            for event in out {
+                yield Ok(event);
             }
         };
         Ok(Box::pin(stream))
@@ -504,6 +357,235 @@ enum Block {
         name: String,
         arguments: String,
     },
+}
+
+/// The per-line half of the Anthropic parser, kept out of the network loop so a
+/// response body can be driven through it without a socket.
+///
+/// `on_line` returns what one frame produced; `Err` is fatal and, like the
+/// `return` it replaces, abandons the rest of the body.
+#[derive(Default)]
+pub(crate) struct AnthropicSse {
+    blocks: HashMap<usize, Block>,
+    stop_emitted: bool,
+}
+
+impl AnthropicSse {
+    pub(crate) fn on_line(
+        &mut self,
+        raw: &[u8],
+        out: &mut Vec<ProviderEvent>,
+    ) -> Result<(), ProviderError> {
+        let line = String::from_utf8_lossy(raw).trim().to_string();
+        let Some(data) = line.strip_prefix("data:") else {
+            return Ok(());
+        };
+        let data = data.trim();
+        if data.is_empty() {
+            // SSE heartbeat / keep-alive frame; legal, ignore it.
+            return Ok(());
+        }
+        if data == "[DONE]" {
+            // OpenAI-style stream sentinel: Anthropic's official API
+            // never sends it, but compatible gateways (OpenRouter,
+            // ...) terminate their anthropic-flavored streams with
+            // it. Skip instead of failing the whole turn.
+            return Ok(());
+        }
+        if self.stop_emitted {
+            // Anything after message_stop is trailer noise from
+            // compatibility gateways (sentinels, keep-alives,
+            // usage pings) — the turn is already complete.
+            return Ok(());
+        }
+        let payload: Value = match serde_json::from_str(data) {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(ProviderError::InvalidResponse(format!(
+                    "bad SSE payload: {e}"
+                )));
+            }
+        };
+        let event = payload.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        match event {
+            "content_block_start" => {
+                let idx = payload.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+                let block = payload.get("content_block").cloned().unwrap_or(Value::Null);
+                let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                let entry = self
+                    .blocks
+                    .entry(idx)
+                    .or_insert_with(|| Block::Text(String::new()));
+                if block_type == "tool_use" {
+                    *entry = Block::ToolUse {
+                        id: block
+                            .get("id")
+                            .and_then(|i| i.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        name: block
+                            .get("name")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        arguments: String::new(),
+                    };
+                } else if block_type == "thinking" {
+                    *entry = Block::Thinking {
+                        text: String::new(),
+                        signature: String::new(),
+                        redacted: false,
+                    };
+                } else if block_type == "redacted_thinking" {
+                    // Redacted blocks arrive complete (data field,
+                    // no deltas) — capture now, no UI deltas.
+                    *entry = Block::Thinking {
+                        text: block
+                            .get("data")
+                            .and_then(|d| d.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        signature: String::new(),
+                        redacted: true,
+                    };
+                }
+            }
+            "content_block_delta" => {
+                let idx = payload.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+                let delta = payload.get("delta").cloned().unwrap_or(Value::Null);
+                match delta.get("type").and_then(|t| t.as_str()) {
+                    Some("text_delta") => {
+                        if let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
+                            match self.blocks.get_mut(&idx) {
+                                Some(Block::Text(buf)) => {
+                                    buf.push_str(text);
+                                }
+                                // A protocol-conformant server never
+                                // sends text deltas for a tool_use
+                                // index; overwriting the accumulator
+                                // here would destroy the tool call.
+                                None => {
+                                    self.blocks.insert(idx, Block::Text(text.to_string()));
+                                }
+                                Some(Block::ToolUse { .. }) | Some(Block::Thinking { .. }) => {}
+                            }
+                            out.push(ProviderEvent::Text(text.to_string()));
+                        }
+                    }
+                    Some("thinking_delta") => {
+                        if let Some(text) = delta.get("thinking").and_then(|t| t.as_str()) {
+                            if let Some(Block::Thinking { text: buf, .. }) =
+                                self.blocks.get_mut(&idx)
+                            {
+                                buf.push_str(text);
+                            }
+                            out.push(ProviderEvent::Thinking(text.to_string()));
+                        }
+                    }
+                    Some("signature_delta") => {
+                        if let Some(sig) = delta.get("signature").and_then(|t| t.as_str())
+                            && let Some(Block::Thinking { signature, .. }) =
+                                self.blocks.get_mut(&idx)
+                        {
+                            signature.push_str(sig);
+                        }
+                    }
+                    Some("input_json_delta") => {
+                        if let Some(partial) = delta.get("partial_json").and_then(|p| p.as_str())
+                            && let Some(Block::ToolUse { arguments, .. }) =
+                                self.blocks.get_mut(&idx)
+                        {
+                            arguments.push_str(partial);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            "content_block_stop" => {
+                let idx = payload.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+                // Remove ONCE and match: a second remove() here
+                // would find None (the first already took the
+                // value) and silently drop thinking blocks.
+                match self.blocks.remove(&idx) {
+                    Some(Block::ToolUse {
+                        id,
+                        name,
+                        arguments,
+                    }) if !name.is_empty() => {
+                        // A gateway omitting the id would round-trip
+                        // empty tool_use/tool_result ids, which strict
+                        // APIs reject — synthesize a stable one.
+                        let id = if id.is_empty() {
+                            format!("toolu_synthesized_{idx}")
+                        } else {
+                            id
+                        };
+                        out.push(ProviderEvent::ToolCall(ToolCall {
+                            id,
+                            name,
+                            arguments: super::collect_tool_arguments(&arguments),
+                        }));
+                    }
+                    Some(Block::Thinking {
+                        text,
+                        signature,
+                        redacted,
+                    }) => {
+                        // Complete block: persisted on the assistant
+                        // message and replayed on the next request.
+                        let block = if redacted {
+                            json!({"type": "redacted_thinking", "data": text})
+                        } else {
+                            json!({
+                                "type": "thinking",
+                                "thinking": text,
+                                "signature": signature,
+                            })
+                        };
+                        out.push(ProviderEvent::ThinkingBlock(block));
+                    }
+                    _ => {}
+                }
+            }
+            "message_delta" => {
+                let reason = payload
+                    .pointer("/delta/stop_reason")
+                    .and_then(|r| r.as_str())
+                    .unwrap_or("");
+                if !reason.is_empty() && !self.stop_emitted {
+                    let reason = match reason {
+                        "end_turn" => StopReason::EndTurn,
+                        "tool_use" => StopReason::ToolUse,
+                        "max_tokens" => StopReason::MaxTokens,
+                        "stop_sequence" => StopReason::StopSequence,
+                        other => StopReason::Other(other.to_string()),
+                    };
+                    out.push(ProviderEvent::Stop(reason));
+                    self.stop_emitted = true;
+                }
+            }
+            "error" => {
+                // Reported mid-stream over a 200 response (capacity,
+                // content filter, gateway abort). Falling through the
+                // catch-all here used to end the turn as if the model
+                // had simply finished.
+                let message = payload
+                    .pointer("/error/message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("provider reported an error")
+                    .to_string();
+                return Err(ProviderError::StreamEnded(message));
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    pub(crate) fn finish(&mut self, out: &mut Vec<ProviderEvent>) {
+        if !self.stop_emitted {
+            out.push(ProviderEvent::Stop(StopReason::EndTurn));
+        }
+    }
 }
 
 #[cfg(test)]
