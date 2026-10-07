@@ -720,6 +720,12 @@ impl App {
         let content_width = transcript_area.width.saturating_sub(2) as usize;
         self.transcript_rect = transcript_area;
         self.content_width = content_width.max(1);
+        // A resize is the one thing that invalidates a transcript selection, because its rows
+        // are *wrapped* rows: carry the mark onto the new wrapping before anything reads those
+        // coordinates -- the highlight below and right-click's copy both do. Dropping it (with
+        // a line saying why) happens only when the marked text is gone; doing that here, before
+        // the rows are built, means the notice is drawn on the same frame it is added.
+        self.reproject_selection(self.content_width);
         let mut rows = self.render_rows(content_width.max(1));
         if self.ai_thinking {
             let ch = SPINNER[self.spinner_frame()];

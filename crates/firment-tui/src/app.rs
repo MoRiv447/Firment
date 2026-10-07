@@ -129,6 +129,14 @@ pub(crate) struct App {
     pub(crate) content_width: usize,
     pub(crate) input_width: usize,
     pub(crate) selection: Option<Selection>,
+    /// The transcript width [`App::selection`] was captured (or last re-projected) at.
+    ///
+    /// The selection's rows are indices into the *wrapped* transcript, so they mean a
+    /// particular stretch of text only at the width that produced that wrapping: widen the
+    /// terminal and every row index shifts by the lines that re-joined. `reproject_selection`
+    /// carries the selection across the width change instead of letting the highlight drift onto
+    /// different words, and 0 means "never drawn yet", which is treated as nothing to reproject.
+    pub(crate) selection_width: usize,
     pub(crate) cwd: PathBuf,
     pub(crate) config_path: PathBuf,
     pub(crate) cmd_tx: mpsc::Sender<AgentCmd>,
@@ -225,6 +233,7 @@ impl App {
             content_width: 0,
             input_width: 80,
             selection: None,
+            selection_width: 0,
             cwd,
             config_path,
             cmd_tx,
@@ -304,6 +313,7 @@ impl App {
         self.evidence = Evidence::default();
         self.active_tools.clear();
         self.selection = None;
+        self.selection_width = 0;
     }
 
     /// Invalidate the wrapped-row cache. Every transcript mutation that
@@ -810,6 +820,10 @@ impl App {
                                     row,
                                     col,
                                 });
+                        // The rows just named are wrapped-row indices at THIS width; the
+                        // reprojector needs to know which width they came from to carry them
+                        // across the next one.
+                        self.selection_width = self.content_width;
                     }
                     false
                 }
@@ -820,10 +834,18 @@ impl App {
                             self.cursor = idx;
                         }
                     } else if let Some((row, col)) = self.cell_to_content(mouse.column, mouse.row)
-                        && let Some(selection) = &mut self.selection
+                        && self.selection.is_some()
                     {
-                        selection.row = row;
-                        selection.col = col;
+                        // The new head comes from the geometry on screen now, while the anchor
+                        // is from wherever the drag started: bring the anchor into this width
+                        // first, or one end of the range is described in a wrapping that no
+                        // longer exists. Reprojecting can clear the mark (the text it anchored
+                        // to is gone), which is why the update below is conditional.
+                        self.reproject_selection(self.content_width);
+                        if let Some(selection) = &mut self.selection {
+                            selection.row = row;
+                            selection.col = col;
+                        }
                     }
                     false
                 }
@@ -1698,6 +1720,139 @@ impl App {
         Some((content_row, (column - area.x - 1) as usize))
     }
 
+    /// Where a wrapped row and cell actually point: `(item index, character offset within
+    /// that item's rendered text)`.
+    ///
+    /// The character offset is the width-independent address, and it works because
+    /// [`crate::util::wrap_text`] is a pure splitter: it never drops and never inserts a
+    /// character, so concatenating an item's wrapped lines gives the same string at every
+    /// width and only the break points move. `None` means the row belongs to no item --
+    /// which is what a stale selection looks like after the transcript it marked is gone.
+    fn char_address(
+        rows: &[Line<'static>],
+        starts: &[usize],
+        row: usize,
+        cell: usize,
+    ) -> Option<(usize, usize)> {
+        if starts.len() < 2 || row >= *starts.last()? {
+            return None;
+        }
+        let item = starts
+            .partition_point(|start| *start <= row)
+            .saturating_sub(1);
+        let (begin, end) = (starts[item], starts[item + 1]);
+        if row >= end {
+            return None;
+        }
+        let mut offset = 0usize;
+        for line in rows.get(begin..row)? {
+            offset += line
+                .spans
+                .iter()
+                .map(|span| span.content.chars().count())
+                .sum::<usize>();
+        }
+        let line = rows.get(row)?;
+        let text: String = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        Some((
+            item,
+            offset + char_index_at_cell(&text, cell.min(cell_width(&text))),
+        ))
+    }
+
+    /// The inverse: the wrapped row and cell that land on `(item, character offset)` at this
+    /// width. An offset past the end of the item clamps to its last row, which is the honest
+    /// answer when the item shrank -- the selection ends where the text ends.
+    fn row_for_address(
+        rows: &[Line<'static>],
+        starts: &[usize],
+        address: (usize, usize),
+    ) -> (usize, usize) {
+        let (item, wanted) = address;
+        if starts.len() < 2 {
+            return (0, 0);
+        }
+        let item = item.min(starts.len() - 2);
+        let (begin, end) = (starts[item], starts[item + 1]);
+        let mut offset = 0usize;
+        for row in begin..end.max(begin + 1) {
+            let text: String = rows
+                .get(row)
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect::<String>()
+                })
+                .unwrap_or_default();
+            let chars = text.chars().count();
+            if wanted <= offset + chars || row + 1 == end {
+                return (
+                    row,
+                    cell_width(&text.chars().take(wanted - offset).collect::<String>()),
+                );
+            }
+            offset += chars;
+        }
+        (begin, 0)
+    }
+
+    /// Carry the live selection onto a different transcript width.
+    ///
+    /// Without this, a row index chosen at 80 columns means a different line at 40, the
+    /// highlight moves off the marked text, and right-click copies whatever now sits under the
+    /// stale indices -- and prints "Copied selection (N chars)", a success message about the
+    /// wrong words. Decided with the user: re-project, and only clear when the text the
+    /// selection anchored to is no longer on screen, in which case the transcript says so rather
+    /// than silently dropping the mark.
+    pub(crate) fn reproject_selection(&mut self, new_width: usize) {
+        let Some(selection) = self.selection else {
+            return;
+        };
+        let old_width = self.selection_width;
+        self.selection_width = new_width;
+        // Nothing marked, never drawn, or the same wrapping: the coordinates still mean what
+        // they meant. `content_width` only ever changes inside `draw`, which calls this.
+        if old_width == 0 || old_width == new_width {
+            return;
+        }
+        let old_rows = self.render_rows(old_width);
+        let old_starts = std::mem::take(&mut self.item_row_starts);
+        let new_rows = self.render_rows(new_width);
+        let new_starts = std::mem::take(&mut self.item_row_starts);
+        // `item_row_starts` is now the new width's, which is what the next draw would have
+        // produced anyway; `render_rows` refreshed the row cache to the new width too.
+        let anchor = Self::char_address(
+            &old_rows,
+            &old_starts,
+            selection.anchor_row,
+            selection.anchor_col,
+        );
+        let head = Self::char_address(&old_rows, &old_starts, selection.row, selection.col);
+        let (Some(anchor), Some(head)) = (anchor, head) else {
+            self.selection = None;
+            self.items.push(Item::System(
+                "Selection cleared: the terminal was resized and the text it marked is no longer \
+                 on screen."
+                    .to_string(),
+            ));
+            self.touch_rows();
+            return;
+        };
+        let (anchor_row, anchor_col) = Self::row_for_address(&new_rows, &new_starts, anchor);
+        let (row, col) = Self::row_for_address(&new_rows, &new_starts, head);
+        self.selection = Some(Selection {
+            anchor_row,
+            anchor_col,
+            row,
+            col,
+        });
+    }
+
     /// Terminal cell → input char index (for click/drag selection in the input
     /// box).
     pub(crate) fn cell_to_input(&self, column: u16, row: u16) -> Option<usize> {
@@ -1766,6 +1921,10 @@ impl App {
     }
 
     pub(crate) fn copy_selection(&mut self) {
+        // Belt and braces: a resize normally reprojects inside `draw`, which runs every frame,
+        // but the copy must not be the place that discovers it was skipped -- the text it prints
+        // a character count of is the thing being claimed.
+        self.reproject_selection(self.content_width);
         let Some(selection) = self.selection.take() else {
             return;
         };

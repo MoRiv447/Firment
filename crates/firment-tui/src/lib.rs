@@ -1858,6 +1858,97 @@ mod tests {
     }
 
     #[test]
+    fn a_selection_follows_the_text_across_a_resize() {
+        // The failure this is the instrument for: a selection is stored as wrapped-row indices,
+        // the transcript has no resize handling anywhere in the crate, and `selection_text`
+        // re-renders at the CURRENT width and indexes with the OLD numbers. Widen or narrow the
+        // terminal and the highlight moves off the words you marked, while right-click prints
+        // "Copied selection (N chars)" about whatever now sits under those indices.
+        let text = "The quick brown fox jumps over the lazy dog, and then it sleeps.";
+        let mut app = test_app();
+        app.items.push(Item::Assistant(text.to_string()));
+        app.transcript_rect = Rect {
+            x: 0,
+            y: 0,
+            width: 82,
+            height: 10,
+        };
+        app.content_width = 80;
+        app.max_offset = 0;
+        app.follow = true;
+        // One row at 80 columns: cells 4..55 of the sentence, ending inside "then".
+        app.selection = Some(Selection {
+            anchor_row: 0,
+            anchor_col: 4,
+            row: 0,
+            col: 55,
+        });
+        app.selection_width = 80;
+        let wide = app.selection_text(app.selection.unwrap());
+        assert_eq!(&wide, "quick brown fox jumps over the lazy dog, and then i");
+
+        // Narrow enough that the same characters span two wrapped rows.
+        app.content_width = 40;
+        app.reproject_selection(40);
+        let sel = app
+            .selection
+            .expect("a resize must not throw the mark away, the text is still on screen");
+        let narrow = app.selection_text(sel);
+        // Wrapped rows are joined with newlines when they are copied, which is what a visual
+        // selection has always done; the characters underneath are what has to be identical.
+        assert_eq!(
+            narrow.replace('\n', ""),
+            wide,
+            "the mark followed the wrapping to different words: {narrow:?} vs {wide:?}"
+        );
+        assert_eq!(
+            app.selection_width, 40,
+            "the new width has to be remembered"
+        );
+
+        // And back out again, because a resize is not a one-way trip.
+        app.content_width = 80;
+        app.reproject_selection(80);
+        let sel = app.selection.expect("still on screen");
+        assert_eq!(app.selection_text(sel), wide);
+    }
+
+    #[test]
+    fn a_selection_that_cannot_be_reprojected_is_cleared_and_said() {
+        // The other half of the contract the user chose: re-project, and where the marked text
+        // is genuinely gone say so instead of leaving a mark on screen that points at nothing --
+        // silently keeping stale coordinates is the bug, not the fallback.
+        let mut app = test_app();
+        app.items.push(Item::Assistant("first".to_string()));
+        app.items.push(Item::Assistant("second".to_string()));
+        app.content_width = 40;
+        app.selection = Some(Selection {
+            anchor_row: 2,
+            anchor_col: 0,
+            row: 3,
+            col: 3,
+        });
+        app.selection_width = 40;
+
+        // The transcript the mark belongs to is gone, and the width changes with it.
+        app.items.clear();
+        app.touch_rows();
+        app.content_width = 20;
+        app.reproject_selection(20);
+
+        assert!(app.selection.is_none(), "a mark with nothing under it");
+        assert!(
+            app.items.iter().any(|i| matches!(
+                i,
+                Item::System(text) if text.contains("Selection cleared")
+            )),
+            "dropping the selection without saying why reads as the UI having lost it; the \
+             transcript holds {} rows",
+            app.items.len()
+        );
+    }
+
+    #[test]
     fn selection_uses_cell_widths_for_cjk() {
         let mut app = test_app();
         app.items.push(Item::Assistant("你好世界 ok".to_string()));
