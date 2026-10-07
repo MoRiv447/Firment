@@ -313,7 +313,11 @@ async fn run_loop(
     // drives, and awaiting it inline in this select would freeze key/event
     // handling for the whole UI (no Esc interrupt, no Ctrl+Q).
     let mut git_ticker = tokio::time::interval(Duration::from_secs(4));
-    let (git_tx, mut git_rx) = mpsc::channel::<(Option<GitInfo>, Vec<crate::rail::FileRow>)>(1);
+    let (git_tx, mut git_rx) = mpsc::channel::<(
+        Option<GitInfo>,
+        Vec<crate::rail::FileRow>,
+        crate::rail::Shed,
+    )>(1);
     let mut git_in_flight = false;
     let mut dirty = true;
     // When the last repaint of any kind happened. Animation frames are paced
@@ -341,12 +345,12 @@ async fn run_loop(
                             .as_ref()
                             .map(|i| i.changed.iter().cloned().collect())
                             .unwrap_or_default();
-                        let files = crate::rail::file_rows(&cwd, &changed);
-                        let _ = tx.send((info, files)).await;
+                        let (files, shed) = crate::rail::file_rows(&cwd, &changed);
+                        let _ = tx.send((info, files, shed)).await;
                     });
                 }
             }
-            Some((maybe_info, files)) = git_rx.recv() => {
+            Some((maybe_info, files, shed)) = git_rx.recv() => {
                 git_in_flight = false;
                 // None = not a repo / git unavailable: clear the latch (so
                 // later ticks retry) without clobbering a previously known
@@ -355,6 +359,7 @@ async fn run_loop(
                     app.git = Some(info);
                 }
                 app.rail_files = files;
+                app.rail_files_shed = shed;
                 dirty = true;
             }
             Some(event) = event_rx.recv() => {
@@ -1855,6 +1860,123 @@ mod tests {
             col: 11,
         };
         assert_eq!(app.selection_text(within_row), "world");
+    }
+
+    #[test]
+    fn an_unhandled_ctrl_chord_does_not_type_its_letter() {
+        // The bare `Char(ch)` arm matches any modifier, and the comment above the two Ctrl
+        // bindings said so -- as a confession, not a fix. So `Ctrl+G` typed a "g" into the
+        // composer, `Ctrl+W` typed a "w", and a chord pressed meaning an editor command edited
+        // the prompt instead, with no line on screen saying the chord is not a binding here.
+        let mut app = test_app();
+        app.on_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        assert!(
+            app.input.is_empty(),
+            "an unhandled Ctrl chord typed {:?}",
+            app.input.iter().collect::<String>()
+        );
+        app.on_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::SUPER));
+        assert!(app.input.is_empty(), "a Super chord typed a letter");
+
+        // The two directions the fix must NOT swallow, asserted in the same run so the next
+        // person cannot widen the guard by accident: a plain letter still types, and the
+        // Ctrl+Alt chord is how AltGr arrives -- swallowing it would break typing accented
+        // glyphs rather than protect anything.
+        app.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        assert_eq!(app.input.iter().collect::<String>(), "y");
+        app.on_key(KeyEvent::new(
+            KeyCode::Char('j'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        ));
+        assert_eq!(
+            app.input.iter().collect::<String>(),
+            "yj",
+            "AltGr (reported as Ctrl+Alt) must still type its glyph"
+        );
+
+        // And the chords that ARE bindings still are, or the guard above would have eaten them
+        // by being placed too early.
+        app.items.clear();
+        app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        assert!(
+            app.items.iter().any(|i| matches!(
+                i,
+                Item::System(text) if text.contains("No tool output to expand")
+            )),
+            "Ctrl+O stopped reaching the toggle it names"
+        );
+    }
+
+    #[test]
+    fn the_mouse_does_not_edit_through_a_modal() {
+        // Keys must reach a permission prompt, a question and the two pickers -- the queue can
+        // be long and the user has to answer it. The mouse must not: it has no meaning against
+        // a modal, and a click or right-click lands on the transcript BEHIND it. `/help`
+        // promises "inside /sessions: … drag-select and right-click are disabled"; the mouse
+        // arm used to have no modal check at all, so that sentence described nothing.
+        let mut app = test_app();
+        app.items
+            .push(Item::Assistant("text behind the picker".to_string()));
+        app.transcript_rect = Rect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 8,
+        };
+        app.content_width = 38;
+        app.max_offset = 0;
+        app.follow = true;
+        let mark = Selection {
+            anchor_row: 0,
+            anchor_col: 0,
+            row: 0,
+            col: 1,
+        };
+        app.selection = Some(mark);
+        app.session_picker = Some(pickers::SessionPicker::new(Vec::new()));
+
+        // A left-click inside the transcript must not move the mark, and must not start a new one.
+        app.on_ui(crossterm::event::Event::Mouse(
+            crossterm::event::MouseEvent {
+                kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                column: 5,
+                row: 2,
+                modifiers: crossterm::event::KeyModifiers::NONE,
+            },
+        ));
+        assert_eq!(
+            app.selection,
+            Some(mark),
+            "a click through the session picker re-anchored the transcript selection"
+        );
+
+        // A right-click must not copy or paste what sits under the picker. The mark's text is
+        // one character, so a regression here would clear the selection without reaching the
+        // clipboard -- this test proves the gate ran, and never touches the user's clipboard.
+        app.on_ui(crossterm::event::Event::Mouse(
+            crossterm::event::MouseEvent {
+                kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Right),
+                column: 5,
+                row: 2,
+                modifiers: crossterm::event::KeyModifiers::NONE,
+            },
+        ));
+        assert_eq!(
+            app.selection,
+            Some(mark),
+            "right-click through the picker ran copy/paste on the text behind it"
+        );
+
+        // Keys still reach it, which is the other half of `modal_up`: the gate must not
+        // swallow the escape that closes the picker.
+        let quit = app.on_ui(crossterm::event::Event::Key(KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )));
+        assert!(
+            !quit,
+            "Esc inside the picker is handled there, not passed on"
+        );
     }
 
     #[test]

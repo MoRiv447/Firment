@@ -62,6 +62,10 @@ pub(crate) struct App {
     /// Left rail: the sessions in this workspace, and the files under the cwd.
     pub(crate) rail_sessions: Vec<SessionRow>,
     pub(crate) rail_files: Vec<FileRow>,
+    /// What each rail section had to leave out, so the panel can say so instead of
+    /// ending its list mid-tree. Paired with the lists above by the code that fills them.
+    pub(crate) rail_sessions_shed: crate::rail::Shed,
+    pub(crate) rail_files_shed: crate::rail::Shed,
     /// The session being typed into, so the rail can mark its row.
     pub(crate) session_id: String,
     /// While busy, the first Esc arms an interrupt confirmation window (5s);
@@ -200,6 +204,8 @@ impl App {
             device: Device::default(),
             rail_sessions: Vec::new(),
             rail_files: Vec::new(),
+            rail_sessions_shed: crate::rail::Shed::None,
+            rail_files_shed: crate::rail::Shed::None,
             session_id: String::new(),
             permission: None,
             permission_queue: VecDeque::new(),
@@ -588,7 +594,9 @@ impl App {
                 }
             }
             AgentEvent::Sessions(sessions) => {
-                self.rail_sessions = SessionRow::list(&sessions, &self.session_id);
+                let (rows, shed) = SessionRow::list(&sessions, &self.session_id);
+                self.rail_sessions = rows;
+                self.rail_sessions_shed = shed;
                 if let Some(picker) = &mut self.session_picker {
                     picker.sessions = sessions;
                     picker.clamp();
@@ -796,6 +804,15 @@ impl App {
                 self.insert_text_at_cursor(&text, true);
                 false
             }
+            Event::Mouse(mouse) if self.modal_up() => {
+                // The modal is the target of input right now, and the mouse has no meaning
+                // against it: a click would move the cursor in the composer behind the
+                // question, a right-click would copy or paste text the picker is covering, and
+                // `/help` already promises the opposite of that. Keys are the way out, and
+                // `global_shortcut` keeps the ones that must always work.
+                let _ = mouse;
+                false
+            }
             Event::Mouse(mouse) => match mouse.kind {
                 MouseEventKind::ScrollUp => {
                     self.scroll_up(3);
@@ -868,12 +885,24 @@ impl App {
 
     /// Key entry point: runs paste-burst detection first, then falls back to
     /// the original key handling.
-    pub(crate) fn on_key_with_burst(&mut self, key: KeyEvent) -> bool {
-        if self.permission.is_some()
+    /// Whether a modal owns the screen right now: a permission prompt, an
+    /// `ask_user` question, or one of the two pickers.
+    ///
+    /// One predicate for two rules that have to agree. Keys must still reach it (the
+    /// approval queue may be long and the user has to be able to answer it), and the mouse
+    /// must NOT: a click or a right-click while a picker covers the transcript lands on the
+    /// text behind it, which is how `/help`'s promise that "drag-select and right-click are
+    /// disabled inside /sessions" used to be false. Written as a function because the second
+    /// rule was the one nobody remembered.
+    pub(crate) fn modal_up(&self) -> bool {
+        self.permission.is_some()
             || self.question.is_some()
             || self.model_picker.is_some()
             || self.session_picker.is_some()
-        {
+    }
+
+    pub(crate) fn on_key_with_burst(&mut self, key: KeyEvent) -> bool {
+        if self.modal_up() {
             return self.on_key(key);
         }
         self.on_key_burst(key, Instant::now())
@@ -993,6 +1022,23 @@ impl App {
             }
             KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.toggle_all_tool_details();
+                false
+            }
+            // The sentence above used to be a confession rather than a fix: every other
+            // `Ctrl`+letter fell through to the bare arm and put that letter in the input box,
+            // so `Ctrl+G` typed a "g", `Ctrl+W` typed a "w", and a chord the user pressed
+            // meaning an editor command silently edited the prompt instead.
+            //
+            // `Ctrl+Alt` is deliberately not swallowed here: that is how AltGr reaches a
+            // terminal, and AltGr is the ordinary way to type the third glyph on a key. An
+            // ignored chord is quiet by design -- a transcript line per stray keystroke would
+            // bury the conversation, and the alternative (typing a letter nobody meant) is the
+            // bug being fixed.
+            KeyCode::Char(_)
+                if (key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT))
+                    || key.modifiers.contains(KeyModifiers::SUPER) =>
+            {
                 false
             }
             KeyCode::Char(ch) => {

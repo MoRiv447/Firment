@@ -564,6 +564,12 @@ impl App {
                 style,
             )));
         }
+        if let Some(more) = self.rail_sessions_shed.line() {
+            lines.push(Line::from(Span::styled(
+                format!(" {}", clip(&more, width.saturating_sub(1))),
+                dim,
+            )));
+        }
 
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled("FILES", dim)));
@@ -582,6 +588,14 @@ impl App {
                 Span::styled(clip(&row.name, room), dim),
                 Span::styled(dot, Style::default().fg(crate::theme::warn(self.tier))),
             ]));
+        }
+        // The cap is stated, not implied: a file that is not on the rail looks like a file
+        // that is not in the directory, and the FILES list has always stopped at 200.
+        if let Some(more) = self.rail_files_shed.line() {
+            lines.push(Line::from(Span::styled(
+                format!(" {}", clip(&more, width.saturating_sub(1))),
+                dim,
+            )));
         }
 
         lines.push(Line::from(""));

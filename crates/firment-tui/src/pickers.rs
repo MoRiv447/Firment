@@ -42,7 +42,7 @@ impl ModelPicker {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Selection {
     pub(crate) anchor_row: usize,
     pub(crate) anchor_col: usize,
