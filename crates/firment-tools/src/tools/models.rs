@@ -8,6 +8,24 @@ use std::time::Duration;
 /// the small SBC model instead of assuming only the configured one exists.
 pub struct Models;
 
+/// What an HTTP status that is not a model list usually means, in the words a
+/// `firm doctor`/`models` reader can act on.
+///
+/// Named `hint` rather than `reason` because it is a shape, not a diagnosis: the body may say
+/// more. What matters is that the line stops claiming "listed no models" about a request the
+/// endpoint refused outright -- the two facts send the reader to different places, a key versus
+/// a catalog.
+fn status_hint(code: u16) -> &'static str {
+    match code {
+        401 | 403 => "the endpoint refused the credential (check the provider's api_key / env)",
+        404 => "no /models on this base URL (check [providers].base_url)",
+        408 => "the request timed out at the endpoint",
+        429 => "rate limited; retry later",
+        500..=599 => "the endpoint errored; its own logs are the next place to look",
+        _ => "the endpoint did not return a model list",
+    }
+}
+
 #[async_trait]
 impl Tool for Models {
     fn name(&self) -> &'static str {
@@ -75,6 +93,12 @@ impl Tool for Models {
             }
             match req.send().await {
                 Ok(resp) => {
+                    // The status has to be read before the body. A 401 answers with a JSON error
+                    // object, so `data` is absent, and the old fallthrough printed "reachable
+                    // but listed no models" -- which tells a person with the wrong key that their
+                    // endpoint holds no models, and sends them looking at the model list instead
+                    // of at the credential. The endpoint did answer; what it said was no.
+                    let status = resp.status();
                     let ids = resp.json::<Value>().await.ok().and_then(|v| {
                         Some(
                             v.get("data")?
@@ -84,14 +108,31 @@ impl Tool for Models {
                                 .collect::<Vec<_>>(),
                         )
                     });
-                    match ids {
-                        Some(ids) if !ids.is_empty() => {
-                            lines.push(format!("{} @ {}: {}", ep.name, base, ids.join(", ")));
+                    if !status.is_success() {
+                        lines.push(format!(
+                            "{0} @ {1}: answered HTTP {status} — {hint}",
+                            ep.name,
+                            base,
+                            hint = status_hint(status.as_u16())
+                        ));
+                    } else {
+                        match ids {
+                            Some(ids) if !ids.is_empty() => {
+                                lines.push(format!("{} @ {}: {}", ep.name, base, ids.join(", ")));
+                            }
+                            Some(_) => lines.push(format!(
+                                "{0} @ {1}: reachable but listed no models",
+                                ep.name, base
+                            )),
+                            // A 200 whose body is not a model list is a different fact from an
+                            // empty list: a proxy page, a redirect to a login form, an API that
+                            // answers `/models` with something else entirely.
+                            None => lines.push(format!(
+                                "{0} @ {1}: answered HTTP {status} with a body that is not a \
+                                 model list",
+                                ep.name, base
+                            )),
                         }
-                        _ => lines.push(format!(
-                            "{0} @ {1}: reachable but listed no models",
-                            ep.name, base
-                        )),
                     }
                 }
                 Err(e) => lines.push(format!(
@@ -146,5 +187,32 @@ mod tests {
     fn plan_registry_includes_models() {
         let reg = crate::plan_registry();
         assert!(reg.get("models").is_some());
+    }
+
+    #[test]
+    fn a_refusal_is_not_reported_as_an_empty_catalog() {
+        // The probe read no status: a 401 body parses to no `data` array, and the line printed
+        // "reachable but listed no models" -- a sentence that sends a person with a wrong key to
+        // look at their model list. The status is now taken before the body, and these are the
+        // two facts the reader has to be able to tell apart.
+        assert!(
+            status_hint(401).contains("credential"),
+            "{:?}",
+            status_hint(401)
+        );
+        assert!(status_hint(403).contains("credential"));
+        assert!(status_hint(404).contains("base_url"));
+        assert!(status_hint(429).contains("rate"));
+        assert!(status_hint(503).contains("its own logs"));
+        // An unknown code still says something actionable rather than nothing.
+        assert!(status_hint(418).contains("model list"));
+        // And the phrase the bug produced is unreachable from here: no status that is not a
+        // success can be described as having listed no models.
+        for code in [400u16, 401, 403, 404, 429, 500, 503] {
+            assert!(
+                !status_hint(code).contains("listed no models"),
+                "HTTP {code} must not be phrased as an empty catalog"
+            );
+        }
     }
 }

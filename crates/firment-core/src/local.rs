@@ -247,15 +247,31 @@ pub fn is_private_url(url: &str) -> bool {
     if host == "localhost" || host == "::1" || host == "0:0:0:0:0:0:0:1" {
         return true;
     }
-    let octets: Vec<u8> = host
-        .split('.')
-        .filter_map(|part| part.parse::<u8>().ok())
-        .collect();
-    match octets.as_slice() {
+    // An IPv4 literal is exactly four numeric labels, and that is the whole check. Dropping the
+    // labels that do not parse -- which is what this did -- made `127.0.0.1.attacker.test`
+    // resolve to the octets `[127, 0, 0, 1]` and read as a loopback address: a public hostname
+    // the resolver will happily take somewhere else, declared local, and then probed with the
+    // user's own model configuration behind it. A name is not an address, and a name that
+    // merely starts with one is the case that has to fail closed.
+    let labels: Vec<&str> = host.split('.').collect();
+    if labels.len() != 4 {
+        return false;
+    }
+    let mut octets = [0u8; 4];
+    for (index, label) in labels.iter().enumerate() {
+        if label.is_empty() || !label.chars().all(|c| c.is_ascii_digit()) {
+            return false;
+        }
+        match label.parse::<u8>() {
+            Ok(value) => octets[index] = value,
+            Err(_) => return false,
+        }
+    }
+    match octets {
         [127, ..] => true,
         [10, ..] => true,
         [192, 168, ..] => true,
-        [172, second, ..] => (16..=31).contains(second),
+        [172, second, ..] => (16..=31).contains(&second),
         _ => false,
     }
 }
@@ -357,6 +373,45 @@ mod tests {
         assert!(!cache_is_fresh(now - CACHE_TTL.as_secs() - 1, now));
         // A clock that jumped backwards must not make an entry immortal.
         assert!(cache_is_fresh(now + 10_000, now));
+    }
+
+    #[test]
+    fn a_hostname_that_begins_like_a_loopback_is_not_a_loopback() {
+        // The check dropped every label that did not parse as a byte, so
+        // `127.0.0.1.attacker.test` reduced to the octets [127,0,0,1] and read as local. This
+        // function decides whether to probe an endpoint at all, so the hole is a public hostname
+        // getting the user's own provider configuration -- and a name that resolves wherever its
+        // owner pleases is exactly the input that must not be trusted as an address.
+        assert!(
+            !is_private_url("http://127.0.0.1.attacker.test/v1"),
+            "a name is not an address, whatever it starts with"
+        );
+        assert!(!is_private_url("http://192.168.1.8.nip.io:11434/v1"));
+        assert!(!is_private_url("http://10.0.0.1.example.com/v1"));
+
+        // Every literal the old code got right still arrives, in the same run, so the fix cannot
+        // have become a blanket refusal that silently disables the LAN probe this file exists for.
+        for local in [
+            "http://127.0.0.1:11434/v1",
+            "http://localhost:11434/v1",
+            "http://10.1.2.3:8000/v1",
+            "http://192.168.1.8:11434/v1",
+            "http://172.16.0.1:8080/v1",
+            "http://[::1]:11434/v1",
+        ] {
+            assert!(is_private_url(local), "{local} is local and must be probed");
+        }
+        for public in [
+            "http://172.32.0.1:8080/v1",
+            "http://8.8.8.8/v1",
+            "http://api.openai.com/v1",
+            // Five numeric-looking labels: not an IPv4 literal, whatever it means to a resolver.
+            "http://1.2.3.4.5/v1",
+            // An empty label is not a byte.
+            "http://127..0.1/v1",
+        ] {
+            assert!(!is_private_url(public), "{public} must not be called local");
+        }
     }
 
     #[test]

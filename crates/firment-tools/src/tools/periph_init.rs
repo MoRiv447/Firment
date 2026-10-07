@@ -108,7 +108,11 @@ impl Tool for PeriphInit {
             .get_or_init(|| std::sync::Mutex::new(()))
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let _ = firment_core::kb::ensure_seed_kb();
+        // Kept, not discarded. When this fails the cheatsheet lookup below finds nothing and the
+        // output reads "no cheatsheet for this peripheral", which sends the model to invent
+        // register settings -- the exact thing the hardware knowledge base exists to prevent, and
+        // the reason a missing file has to be named as the cause rather than left as an absence.
+        let seed_failure = firment_core::kb::ensure_seed_kb().err();
         drop(_guard);
         let kb_dir = firment_core::kb::seed_kb_dir();
         let family = family_for(part);
@@ -224,6 +228,14 @@ impl Tool for PeriphInit {
                     conflicts.join("\n - ")
                 ));
             }
+        }
+        if let Some(e) = seed_failure {
+            // Stated as the cause of whatever the lookup did or did not find, so a reader of this
+            // output cannot mistake an unreadable knowledge base for an uncovered chip.
+            text.push_str(&format!(
+                "\n## ⚠ 硬件知识库未能落地（{}），本次未参考 cheatsheet\n",
+                e.replace('\n', " ")
+            ));
         }
         Ok(ToolOutput { text })
     }

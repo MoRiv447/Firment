@@ -665,7 +665,17 @@ async fn main() -> anyhow::Result<()> {
         // otherwise silently wrap around and shrink the budget.
         config.pin_max_output_tokens(tokens.min(u32::MAX as usize) as u32, "--max-output-tokens");
     }
-    let _ = firment_core::kb::ensure_seed_kb();
+    // The system prompt built for this run orders the model to `read_file` the seed index as
+    // its FIRST step (`context.rs:252`), so a failed materialization is not a lost nicety: the
+    // instruction points at a file that is not there, and the model spends its first call on a
+    // read error and may conclude the hardware knowledge does not exist. To stderr, because on
+    // this path stdout may be the document; not fatal, because the run works without the KB.
+    if let Err(e) = firment_core::kb::ensure_seed_kb() {
+        eprintln!(
+            "hardware knowledge base was not materialized ({e}); the prompt's first read_file \
+             step will fail"
+        );
+    }
 
     if let Some(kv) = &cli.set_key {
         let (name, key) = kv
@@ -4092,5 +4102,97 @@ mod tests {
             "only {checked} installer/target combinations were checked and both scripts map at \
              least that many -- the scan read the wrong thing"
         );
+    }
+
+    /// The calls whose failure a surface turns into a *normal state* must never be discarded.
+    ///
+    /// Round nine found five of them -- `ensure_seed_kb` (twice), `rotate_if_needed`,
+    /// `pending_turns`, `undo_candidates`, `list_with_damage` -- and every one of them was a
+    /// `let _ =` or an `unwrap_or(0)` on a call whose error is the difference between "nothing
+    /// happened yet" and "something is broken and I cannot see it".
+    ///
+    /// What this deliberately does NOT pretend to cover: the repository holds 145 `let _ =` sites
+    /// across product code (30 / 36 / 37 / 9 / 33 by crate), and most are legitimate -- a watch
+    /// `send` with no receiver, a oneshot reply nobody waits for, an abort-on-drop. A closed
+    /// table of 145 rows would be read by nobody and enforced by nothing, and a ratchet on the
+    /// *count* is worse than no gate: a number someone can raise when inconvenient is not a
+    /// rule, it is a suggestion with a CI job attached. So this gate names the callees whose
+    /// failure has already been shown to be misreported to a user, and each must be *observed*
+    /// somewhere in product code, so a rename cannot turn the check into a pass by deletion.
+    #[test]
+    fn five_calls_whose_failure_is_not_the_same_as_an_empty_result() {
+        const NAMED: [&str; 5] = [
+            "ensure_seed_kb(",
+            "rotate_if_needed(",
+            "pending_turns(",
+            "undo_candidates(",
+            "list_with_damage(",
+        ];
+        let mut discards: Vec<String> = Vec::new();
+        let mut seen: Vec<usize> = vec![0; NAMED.len()];
+        for dir in [
+            "../firment-core/src",
+            "../firment-tools/src",
+            "../firment-tui/src",
+            "src",
+            "../../gui/src-tauri/src",
+        ] {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);
+            let mut stack = vec![root];
+            while let Some(d) = stack.pop() {
+                let entries = match std::fs::read_dir(&d) {
+                    Ok(entries) => entries,
+                    Err(_) => continue,
+                };
+                for entry in entries {
+                    let path = entry.unwrap().path();
+                    if path.is_dir() {
+                        stack.push(path);
+                        continue;
+                    }
+                    if path.extension().and_then(std::ffi::OsStr::to_str) != Some("rs") {
+                        continue;
+                    }
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    let product = match text.find("#[cfg(test)]") {
+                        Some(at) => &text[..at],
+                        None => &text[..],
+                    };
+                    for line in product.lines() {
+                        let trimmed = line.trim_start();
+                        if trimmed.starts_with("//") {
+                            continue;
+                        }
+                        for (index, name) in NAMED.iter().enumerate() {
+                            if !trimmed.contains(name) {
+                                continue;
+                            }
+                            seen[index] += 1;
+                            let discarded = trimmed.starts_with("let _ =")
+                                || trimmed.contains(&format!("{name}unwrap_or"))
+                                || (trimmed.contains(name)
+                                    && (trimmed.contains(".unwrap_or(0)")
+                                        || trimmed.contains(".unwrap_or_default()")));
+                            if discarded {
+                                discards.push(format!("{}: {}", path.display(), trimmed));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            discards.is_empty(),
+            "these discard a failure that a user is shown as a normal, empty state: {discards:?}"
+        );
+        for (index, name) in NAMED.iter().enumerate() {
+            assert!(
+                seen[index] >= 2,
+                "`{name}` was sighted {} times across five source directories. Each of these \
+                 functions is defined, called and (for most) tested, so a lower count means the \
+                 scan stopped reading -- and a scan that reads nothing also finds no discard.",
+                seen[index]
+            );
+        }
     }
 }

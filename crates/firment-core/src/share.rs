@@ -71,7 +71,12 @@ pub fn markdown(input: &ExportInput<'_>) -> String {
                 "### `{}` (message {})\n\n```diff\n{}\n```\n\n",
                 tool,
                 index,
-                mask(diff)
+                // Bounded like every conversation body. `note()` below promises that
+                // `{MESSAGE_LIMIT}` characters are "summarised, not truncated silently"; the
+                // Changes section is where the megabytes actually live, and it used to paste
+                // the whole diff in, so the document ended with a sentence the document had
+                // not honoured.
+                bounded(&mask(diff))
             ));
         }
     }
@@ -120,7 +125,9 @@ pub fn html(input: &ExportInput<'_>) -> String {
                 "<h3><code>{}</code> (message {})</h3><pre class=\"diff\">{}</pre>",
                 masked_escaped(tool),
                 index,
-                masked_escaped(diff)
+                // Same rule as the markdown path and for the same reason: the footer of this
+                // document claims the cap, so no section may paste an unbounded body.
+                masked_escaped(&mask(&bounded(diff)))
             ));
         }
     }
@@ -140,9 +147,10 @@ pub fn html(input: &ExportInput<'_>) -> String {
 fn note(message_count: usize) -> String {
     format!(
         "\n---\n\nExported by Firment. Secrets that match a known token shape are masked; \
-         this is a best effort, not a guarantee — read before sharing. Messages longer than \
-         {MESSAGE_LIMIT} characters are summarised (not truncated silently: the omission is \
-         stated where it happens). {message_count} message(s) in this session.\n"
+         this is a best effort, not a guarantee — read before sharing. Messages and change \
+         bodies longer than {MESSAGE_LIMIT} characters are summarised (not truncated silently: \
+         the omission is stated where it happens). {message_count} message(s) in this \
+         session.\n"
     )
 }
 
@@ -177,7 +185,11 @@ fn html_section(message: &ChatMessage) -> String {
         _ => "tool",
     };
     let content = if role == "diff" {
-        format!("<pre>{}</pre>", masked_escaped(&mask(&body)))
+        // `bounded` here as well as in the markdown path: the cap exists because a tool result
+        // can be megabytes, and an HTML export that skipped it for diff bodies only -- which is
+        // exactly the content that gets long -- shipped a document that read as complete while
+        // the same `firm share --format md` said what it left out. Two renderers, one promise.
+        format!("<pre>{}</pre>", masked_escaped(&mask(&bounded(&body))))
     } else {
         masked_escaped(&mask(&bounded(&body)))
     };
@@ -493,6 +505,50 @@ mod tests {
             page.contains("50 more character(s) omitted"),
             "the omission is stated"
         );
+    }
+
+    #[test]
+    fn a_long_change_is_capped_in_both_formats() {
+        // The cap is for the content that actually grows, and that is a tool's diff body --
+        // megabytes of patch from one `edit_file` on a large file. The HTML renderer applied
+        // `bounded` to every role *except* `diff`, so the same session exported as markdown said
+        // what it left out and exported as HTML shipped a document that read as complete. Two
+        // renderers, one promise, asserted in the same run so the pair cannot drift again.
+        let filler = "+added line of output\n".repeat(600);
+        // The tail is what must not survive: the head is kept by design, so "the body is in
+        // there somewhere" proves nothing.
+        let body = format!(
+            "Edited big.c (1 lines -> {} lines)\n@@ -1 +1,2 @@\n-old\n{}+TAIL_BEYOND_THE_CAP\n",
+            filler.lines().count() + 2,
+            filler
+        );
+        assert!(
+            body.chars().count() > MESSAGE_LIMIT + 4000,
+            "the fixture has to be well over the cap to test the cap ({} chars)",
+            body.chars().count()
+        );
+        let session = session_with(vec![ChatMessage::Tool {
+            tool_call_id: "c1".to_string(),
+            name: "edit_file".to_string(),
+            content: body,
+        }]);
+        let input = ExportInput {
+            session: &session,
+            events: &[],
+        };
+        let page = html(&input);
+        let md = markdown(&input);
+        for (format, document) in [("html", &page), ("markdown", &md)] {
+            assert!(
+                !document.contains("TAIL_BEYOND_THE_CAP"),
+                "{format}: the change body was exported whole, so a reader of this document \
+                 cannot tell the patch is incomplete"
+            );
+            assert!(
+                document.contains("omitted from this export"),
+                "{format}: the omission has to be stated, not merely performed"
+            );
+        }
     }
 
     #[test]
