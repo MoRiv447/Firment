@@ -22,6 +22,20 @@ pub struct ProgressEvent {
     pub total: u64,
     /// Milliseconds remaining, when it can be estimated from the rate so far.
     pub eta_ms: Option<u64>,
+    /// The verification-ladder rung this phase **completed and proved**, for a composite tool
+    /// that decides rungs for itself.
+    ///
+    /// Only `hil` is in that position: its steps drive the hardware from inside one call, so no
+    /// `ToolStart`/`ToolEnd` pair names them and a frontend cannot derive the rung from the
+    /// tool's name. `hil::ladder_rung(step_kind)` remains the single authority -- the tool calls
+    /// it and forwards the number it got. A frontend that recomputed the ladder from the name
+    /// `hil` would be forming a second opinion about the same fact, which is what this field is
+    /// there to make unnecessary.
+    ///
+    /// `None` means "a progress line, not evidence", so an ordinary phase can never light a rung.
+    /// Reported when the step *succeeded*, never when it merely started: a rung is what a person
+    /// quotes afterwards, and one that means "attempted" is worse than no rung.
+    pub rung: Option<u8>,
 }
 
 impl ProgressEvent {
@@ -32,6 +46,18 @@ impl ProgressEvent {
             current: 0,
             total: 0,
             eta_ms: None,
+            rung: None,
+        }
+    }
+
+    /// A phase that finished and, in finishing, proved this rung of the ladder.
+    pub fn proved_rung(phase: impl Into<String>, rung: u8) -> Self {
+        ProgressEvent {
+            phase: phase.into(),
+            current: 0,
+            total: 0,
+            eta_ms: None,
+            rung: Some(rung),
         }
     }
 
@@ -42,6 +68,7 @@ impl ProgressEvent {
             current,
             total,
             eta_ms: eta_ms(elapsed_ms, current, total),
+            rung: None,
         }
     }
 }
@@ -113,6 +140,15 @@ impl ProgressReporter {
             &self.tool,
             self.seq,
             ProgressEvent::counted(phase, current, total, elapsed_ms),
+        );
+    }
+
+    /// Report a step that finished and proved `rung` of the verification ladder.
+    pub fn proved_rung(&self, phase: impl Into<String>, rung: u8) {
+        (self.sink)(
+            &self.tool,
+            self.seq,
+            ProgressEvent::proved_rung(phase, rung),
         );
     }
 }

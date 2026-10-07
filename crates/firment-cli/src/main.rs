@@ -3839,4 +3839,112 @@ mod tests {
              formality",
         );
     }
+
+    /// The verification ladder has one authority, and every place that reads it is named.
+    ///
+    /// `ladder_rung` is written in the *step-kind* vocabulary. The TUI's EVIDENCE panel calls it
+    /// with the **tool name** carried by `ToolStart`/`ToolEnd`, which lines up for the seven
+    /// single-purpose tools and cannot line up for a composite: `hil` drove a flash and captured
+    /// a waveform, the tool printed "reached level 5 (physical)", and the panel showed an empty
+    /// ladder -- while `evidence.rs` stated the two could never disagree. The repair is that a
+    /// composite reports its proved rung as a number (`ProgressEvent::rung`) rather than anyone
+    /// inventing an arm for a name that maps to several rungs.
+    ///
+    /// What this gate holds is the boundary: four readers of the mapping is already three
+    /// vocabularies, and a fourth place deciding rungs -- most plausibly the GUI, which has no
+    /// ladder today -- is how the disagreement returns. A new reader has to be added here with
+    /// the vocabulary it reads stated, exactly as the closed lists in the frontend's
+    /// `conventions.test.ts` work.
+    #[test]
+    fn the_ladder_has_one_authority_and_every_reader_of_it_is_named() {
+        const READERS: [(&str, &str); 3] = [
+            (
+                "firment-tools/tools/hil.rs",
+                "the authority's own file: step kinds from its own suite, and it reports the \
+                 rungs it proved on the progress channel instead of letting a panel guess",
+            ),
+            (
+                "firment-tools/review/evidence.rs",
+                "step.kind, the same vocabulary the arms are written in",
+            ),
+            (
+                "firment-tui/evidence.rs",
+                "tool names, which coincide with step kinds for single-purpose tools only; a \
+                 composite reaches the ladder through `prove_rung`, not through this call",
+            ),
+        ];
+        let mut found: Vec<String> = Vec::new();
+        for (label, dir) in [
+            ("firment-core", "../firment-core/src"),
+            ("firment-tools", "../firment-tools/src"),
+            ("firment-tui", "../firment-tui/src"),
+            ("firment-cli", "src"),
+            ("gui/src-tauri", "../../gui/src-tauri/src"),
+        ] {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);
+            let mut stack = vec![root.clone()];
+            while let Some(d) = stack.pop() {
+                let entries = match std::fs::read_dir(&d) {
+                    Ok(entries) => entries,
+                    Err(_) => continue,
+                };
+                for entry in entries {
+                    let path = entry.unwrap().path();
+                    if path.is_dir() {
+                        stack.push(path);
+                        continue;
+                    }
+                    if path.extension().and_then(std::ffi::OsStr::to_str) != Some("rs") {
+                        continue;
+                    }
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    let product = match text.find("#[cfg(test)]") {
+                        Some(at) => &text[..at],
+                        None => &text[..],
+                    };
+                    let rel = path.strip_prefix(&root).unwrap_or(path.as_path());
+                    let key = format!(
+                        "{label}/{}",
+                        rel.to_string_lossy()
+                            .replace(std::path::MAIN_SEPARATOR_STR, "/")
+                    );
+                    let calls = product
+                        .lines()
+                        .filter(|line| {
+                            let trimmed = line.trim_start();
+                            trimmed.contains("ladder_rung(")
+                            && !trimmed.starts_with("//")
+                            // The definition itself is not a reader.
+                            && !trimmed.contains("pub fn ladder_rung")
+                        })
+                        .count();
+                    if calls > 0 && !found.contains(&key) {
+                        found.push(key);
+                    }
+                }
+            }
+        }
+        assert!(
+            found.len() >= 3,
+            "the walk found {found:?} reading the ladder; three files call it today, so a scan \
+             that saw fewer is not reading the tree"
+        );
+        for (file, _why) in READERS {
+            assert!(
+                found.iter().any(|k| k == file),
+                "{file} is listed as a reader of the ladder and no longer calls it: {found:?}"
+            );
+        }
+        let extra: Vec<&str> = found
+            .iter()
+            .filter(|k| !READERS.iter().any(|(file, _)| file == k))
+            .map(|k| k.as_str())
+            .collect();
+        assert!(
+            extra.is_empty(),
+            "a new place now decides verification rungs from `ladder_rung`: {extra:?}. Name it in \
+             READERS with the vocabulary it reads -- step kinds or tool names -- because those \
+             two only agree for tools that do exactly one thing"
+        );
+    }
 }

@@ -7,6 +7,17 @@
 //! proven. The one thing written down here is the *labels*, and a test pins them
 //! to the canonical mapping.
 //!
+//! **How that non-agreement is actually arranged, because it is not automatic.** The panel keys
+//! on the tool name carried by `ToolStart`/`ToolEnd`, and `ladder_rung`'s arms are written in the
+//! *step-kind* vocabulary. The two line up for the seven tools that do one thing (`build`,
+//! `flash`, `run`, `monitor`, `trace`, `observe`, `la`) and cannot line up for a composite: a
+//! `hil` run may prove any subset of the rungs, so it has no arm here -- inventing one would
+//! light level 5 for a suite that only ever built. A composite reports the rung it proved as a
+//! number on the progress channel ([`Evidence::prove_rung`]), which this module records without
+//! deciding. So the claim above holds because one function computes every rung and the number
+//! travels from it, not because two independent readings happen to match -- which is the
+//! distinction a reader needs before adding a fourth place that decides.
+//!
 //! Rungs are tracked individually rather than as a high-water mark. The system
 //! prompt is explicit that a higher level never implies the ones below it
 //! succeeded for the user's goal, so a ladder that fills everything below its
@@ -91,6 +102,28 @@ impl Evidence {
         }
         if ok && let Some(slot) = self.reached.get_mut(rung as usize - 1) {
             *slot = true;
+        }
+    }
+
+    /// A rung a tool proved from the inside, reported rather than derived.
+    ///
+    /// `hil` runs the hardware from one call, so its steps never appear as tool events and
+    /// there is no name here to map -- the number arrives on the progress channel instead, and
+    /// this records it without deciding it. Ordinary phases have `rung: None` and cannot reach
+    /// this call, so a progress line can never light a rung.
+    pub fn prove_rung(&mut self, rung: u8) {
+        // Bounded because the number arrives over a channel from another crate, not out of the
+        // `ladder_rung` match next door: a rung added on the tool side that this five-row panel
+        // does not know yet has to be ignored rather than index past the array and take the UI
+        // down with it.
+        if rung == 0 || rung as usize > RUNGS.len() {
+            return;
+        }
+        if let Some(slot) = self.reached.get_mut(rung as usize - 1) {
+            *slot = true;
+        }
+        if self.running == Some(rung) {
+            self.running = None;
         }
     }
 
@@ -274,5 +307,34 @@ mod tests {
             e.rows().map(|(r, _, _)| r).collect::<Vec<_>>(),
             vec![1, 2, 3, 4, 5]
         );
+    }
+
+    #[test]
+    fn a_reported_rung_ticks_that_rung_and_no_other() {
+        // What `hil` sends when its own steps proved a rung: the panel records the number
+        // without deciding it, and one rung never implies the ones below it -- which is the
+        // rule the whole module is built on, so the reported path has to obey it too.
+        let mut e = Evidence::default();
+        e.prove_rung(3);
+        assert_eq!(e.state(3), RungState::Proven);
+        assert_eq!(e.state(2), RungState::Untouched, "no build was proved");
+        assert_eq!(e.state(5), RungState::Untouched, "no waveform was caught");
+        assert_eq!(e.highest(), Some(3));
+        e.prove_rung(5);
+        assert_eq!(e.highest(), Some(5));
+        assert_eq!(e.state(2), RungState::Untouched, "still never proved");
+    }
+
+    #[test]
+    fn a_rung_number_outside_the_ladder_is_ignored_not_fatal() {
+        // The number crosses a crate boundary rather than coming from the match next door, so
+        // a tool-side rung this five-row panel does not know about must be dropped quietly.
+        // Indexing it would take the terminal UI down with a panic in raw mode.
+        let mut e = Evidence::default();
+        e.prove_rung(0);
+        e.prove_rung(6);
+        e.prove_rung(255);
+        assert_eq!(e.highest(), None);
+        assert!(e.rows().all(|(_, _, s)| s == RungState::Untouched));
     }
 }

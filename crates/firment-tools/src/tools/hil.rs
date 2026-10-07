@@ -416,10 +416,23 @@ impl Tool for Hil {
                     write_replay_line(&replay_path, idx, kind, !expect_failed, &text, elapsed);
                     if let Some((l, n)) = ladder_rung(kind)
                         && !expect_failed
-                        && l > reached_level
+                        && !dry_run
                     {
-                        reached_level = l;
-                        reached_name = n;
+                        // Report every rung a step proved, including one the suite had already
+                        // topped: the panel tracks rungs individually, not as a high-water mark,
+                        // because reaching level 5 says nothing about whether level 2 ever
+                        // happened. `reached_level` itself stays a high-water number because the
+                        // tool's evidence line is one line and has to pick one.
+                        //
+                        // A dry run reports nothing: nothing touched hardware, and a rung is
+                        // what a person quotes afterwards as proof.
+                        if let Some(progress) = &ctx.progress {
+                            progress.proved_rung(format!("{kind} step proved"), l);
+                        }
+                        if l > reached_level {
+                            reached_level = l;
+                            reached_name = n;
+                        }
                     }
                     output_sections.push(format!(
                         "\n── step {}/{}: {kind} ── ({} ms)\n{text}",
@@ -527,6 +540,20 @@ fn replay_path_for(ctx: &ToolContext, id: &str) -> PathBuf {
 /// Public because the TUI's EVIDENCE panel displays this ladder. Note the two
 /// vocabularies and do not conflate them: the *kind* is the tool/step name
 /// (`flash`), while the *label* is the rung's name (`deploy`).
+///
+/// Three callers, and the second vocabulary is the reason `hil` is absent from the arms:
+///  * `hil.rs` calls this with a **step kind**, which is what the arms are written for;
+///  * `review/evidence.rs` calls it with a `step.kind`, same vocabulary;
+///  * `firment-tui/src/evidence.rs` calls it with the **tool name** from `ToolStart`/`ToolEnd`,
+///    which lines up for the seven single-purpose tools (`build`, `flash`, `run`, `monitor`,
+///    `trace`, `observe`, `la`) and cannot line up for a composite one.
+///
+/// `hil` is that composite: its steps are not tool calls, so the panel cannot name them. It does
+/// not get an arm -- an arm would have to invent one rung for a run that may prove several, and
+/// inventing is what this function's `_ => None` refuses. The tool reports each proved rung on
+/// the progress channel instead (`ProgressEvent::rung`), and the panel records the number without
+/// deciding it. So "the panel and the tools can never disagree" is true only because the number
+/// travels from the one place that computes it.
 pub fn ladder_rung(kind: &str) -> Option<(u8, &'static str)> {
     match kind {
         "build" => Some((2, "build")),

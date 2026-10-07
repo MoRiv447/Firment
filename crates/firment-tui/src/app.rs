@@ -372,6 +372,15 @@ impl App {
             AgentEvent::Progress {
                 seq, owner, event, ..
             } => {
+                // A tool that proves rungs from inside itself (`hil`, whose steps are not tool
+                // calls) reports the number on this channel. The panel RECORDS it and does not
+                // derive one from the tool's name: `hil` maps to no rung, so deriving would
+                // either light a rung the hardware never reached or leave the ladder empty while
+                // the tool's own evidence line says level 5.
+                if let Some(rung) = event.rung {
+                    self.evidence.prove_rung(rung);
+                    self.touch_rows();
+                }
                 // Stored, not filtered: §16.2's two seconds is a decision about *drawing*, and
                 // only the drawer has the card's clock in front of it. The first version dropped
                 // the event here when the card was younger than two seconds — and because every

@@ -1728,6 +1728,68 @@ mod tests {
         assert!(rows[4].contains('○'), "got {rows:?}");
     }
 
+    fn progress(seq: u64, event: firment_core::progress::ProgressEvent) -> AgentEvent {
+        AgentEvent::Progress {
+            tool: "hil".to_string(),
+            seq,
+            owner: None,
+            event,
+        }
+    }
+
+    #[test]
+    fn a_hil_run_ticks_the_rungs_its_steps_proved() {
+        // The panel keys on the tool name, and `hil` names no rung: its steps drive the hardware
+        // from inside one call, so they never appear as tool events. A session that had flashed
+        // a board and captured a waveform through `hil` therefore showed an empty ladder while
+        // the tool's own evidence line read "reached level 5 (physical)" -- and `evidence.rs`
+        // claimed the two could never disagree. The tool now reports the rung it proved as a
+        // number, and the panel records it instead of trying to derive one.
+        let mut app = test_app();
+        app.on_agent(AgentEvent::ToolStart {
+            owner: None,
+            name: "hil".to_string(),
+            args: serde_json::json!({"steps": [{"kind": "flash"}, {"kind": "observe"}]}),
+            seq: 1,
+        });
+        // The negative control, in the same run: a phase is not a claim. An ordinary progress
+        // line must leave the ladder exactly where it was, or every `erasing` in the log would
+        // read as evidence.
+        app.on_agent(progress(
+            1,
+            firment_core::progress::ProgressEvent::phase("erasing"),
+        ));
+        let rows = evidence_rows(&app);
+        assert!(
+            rows.iter().all(|row| !row.starts_with(" ✓ deploy")),
+            "a bare phase ticked the deploy rung: {rows:?}"
+        );
+
+        app.on_agent(progress(
+            1,
+            firment_core::progress::ProgressEvent::proved_rung("flash step proved", 3),
+        ));
+        app.on_agent(progress(
+            1,
+            firment_core::progress::ProgressEvent::proved_rung("observe step proved", 5),
+        ));
+        app.on_agent(AgentEvent::ToolEnd {
+            owner: None,
+            name: "hil".to_string(),
+            ok: true,
+            summary: "hil: PASS".to_string(),
+            detail: None,
+            seq: 1,
+            waited_ms: None,
+        });
+
+        let rows = evidence_rows(&app);
+        assert!(rows[2].starts_with(" ✓ deploy"), "got {rows:?}");
+        assert!(rows[4].starts_with(" ✓ physical"), "got {rows:?}");
+        // Individually tracked, as the module says: level 5 was proved, level 2 was not.
+        assert!(rows[1].contains('○'), "got {rows:?}");
+    }
+
     #[test]
     fn a_failed_step_does_not_tick_its_rung() {
         let mut app = test_app();
