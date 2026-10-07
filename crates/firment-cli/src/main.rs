@@ -3947,4 +3947,126 @@ mod tests {
              two only agree for tools that do exactly one thing"
         );
     }
+
+    /// Every image an installer can ask for must exist, and the ones that do not have to be
+    /// refused by name.
+    ///
+    /// Both installers mapped `ARM64`/`aarch64` into an asset name and built a URL for it:
+    /// `firm-aarch64-pc-windows-msvc.zip` and `firm-aarch64-unknown-linux-gnu.tar.gz`. The
+    /// release matrix has never written either -- it builds x86_64 Windows, x86_64 Linux and
+    /// x86_64/aarch64 macOS -- so the request failed with the installer's own guess about the
+    /// server ("可能该版本尚未发布或平台不支持") while the fact was already known a few lines
+    /// earlier. The Linux/ARM case is the one that stings: an SBC is what this project is
+    /// about, and `install.sh` is the document a person on a Pi reads.
+    ///
+    /// The rule is read out of the scripts rather than typed in by hand: the arch and OS
+    /// tokens are the values their own `case`/assignment arms set, and the published list is
+    /// the matrix's `asset:` rows. So widening an installer's mapping to a target nobody
+    /// builds fails here -- and a refusal only counts when the script *prints* the triple it
+    /// is refusing, because a silent `exit 1` on the user's own platform is the same guessing
+    /// in a different font.
+    #[test]
+    fn no_installer_advertises_an_asset_the_release_never_builds() {
+        fn values_after(text: &str, needle: &str, quote: char) -> Vec<String> {
+            let mut out: Vec<String> = Vec::new();
+            let mut from = 0usize;
+            while let Some(i) = text[from..].find(needle) {
+                let start = from + i + needle.len();
+                match text[start..].find(quote) {
+                    Some(rel) => {
+                        let value = text[start..start + rel].to_string();
+                        if !value.is_empty() && !out.contains(&value) {
+                            out.push(value);
+                        }
+                        from = start;
+                    }
+                    None => break,
+                }
+            }
+            out
+        }
+
+        // Two levels up: this manifest is `crates/firment-cli`, and the workflow and both
+        // installers live at the repository root.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let workflow = std::fs::read_to_string(root.join(".github/workflows/release.yml"))
+            .expect("the release workflow is what declares the published assets");
+        let published: Vec<String> = workflow
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("asset:"))
+            .map(|rest| rest.trim().to_string())
+            .collect();
+        assert!(
+            published.len() >= 4,
+            "the matrix declares {} assets; this test is not reading it",
+            published.len()
+        );
+
+        let sh = std::fs::read_to_string(root.join("install.sh")).expect("install.sh");
+        let ps = std::fs::read_to_string(root.join("install.ps1")).expect("install.ps1");
+        let refuses_in_words = |text: &str, triple: &str, verb: &str| {
+            text.lines()
+                .any(|line| line.contains(triple) && line.contains(verb))
+        };
+
+        let mut checked = 0usize;
+        let mut offenders: Vec<String> = Vec::new();
+
+        let sh_arches = values_after(&sh, "ARCH_TARGET=\"", '"');
+        let sh_oses = values_after(&sh, "OS_TARGET=\"", '"');
+        assert!(
+            !sh_arches.is_empty() && !sh_oses.is_empty(),
+            "install.sh's arch/OS maps read as {:?}/{:?}, which is not its case blocks",
+            sh_arches,
+            sh_oses
+        );
+        for arch in &sh_arches {
+            for os in &sh_oses {
+                let asset = format!("firm-{arch}-{os}.tar.gz");
+                checked += 1;
+                if published.contains(&asset) {
+                    continue;
+                }
+                let triple = format!("{arch}-{os}");
+                if refuses_in_words(&sh, &triple, "echo") {
+                    continue;
+                }
+                offenders.push(format!(
+                    "install.sh builds a URL for {asset}, which no workflow writes, and never \
+                     names the target it cannot serve"
+                ));
+            }
+        }
+
+        let ps_arches = values_after(&ps, "$arch = '", '\'');
+        assert!(
+            !ps_arches.is_empty(),
+            "install.ps1's arch assignments read as empty, so its mapping was not read"
+        );
+        for arch in &ps_arches {
+            let asset = format!("firm-{arch}-pc-windows-msvc.zip");
+            checked += 1;
+            if published.contains(&asset) {
+                continue;
+            }
+            let triple = format!("{arch}-pc-windows-msvc");
+            if refuses_in_words(&ps, &triple, "throw") {
+                continue;
+            }
+            offenders.push(format!(
+                "install.ps1 asks for {asset}, which no workflow writes, and never names the \
+                 target it cannot serve"
+            ));
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "{offenders:?}\nthe matrix publishes: {published:?}"
+        );
+        assert!(
+            checked >= 5,
+            "only {checked} installer/target combinations were checked and both scripts map at \
+             least that many -- the scan read the wrong thing"
+        );
+    }
 }

@@ -6,14 +6,16 @@
 #   FIRMENT_VERSION   指定版本 tag（默认 latest）
 #   FIRMENT_MIRROR    国内镜像根地址，目录结构: {mirror}/{tag}/{asset}
 #   FIRMENT_REPO      仓库（默认 MoRiv447/Firment）
-#   FIRMENT_INSTALL_DIR  安装目录（默认 ~/.firment/bin）
+#   FIRMENT_INSTALL_DIR  安装目录（默认 ~/.firment/bin）。`FIRMENT_BIN_DIR` 是同义的别名：
+#                      那是 `firm install` 自己认的名字，两个都收，是为了在 Unix 上和
+#                      install.ps1 上设置同一个变量能得到同一个目录。
 #   FIRMENT_DRY_RUN   设为 1 时只打印安装计划，不下载、不执行
 set -eu
 
 REPO="${FIRMENT_REPO:-MoRiv447/Firment}"
 VERSION="${FIRMENT_VERSION:-latest}"
 MIRROR="${FIRMENT_MIRROR:-}"
-INSTALL_DIR="${FIRMENT_INSTALL_DIR:-$HOME/.firment/bin}"
+INSTALL_DIR="${FIRMENT_INSTALL_DIR:-${FIRMENT_BIN_DIR:-$HOME/.firment/bin}}"
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
@@ -27,6 +29,20 @@ case "$ARCH" in
     aarch64|arm64) ARCH_TARGET="aarch64" ;;
     *) echo "不支持的架构: $ARCH" >&2; exit 1 ;;
 esac
+
+# The release job builds four images: x86_64 Linux, and x86_64/aarch64 macOS. There is no
+# aarch64 Linux image, so on a Raspberry Pi or an SBC — the machines this project is
+# otherwise about — the honest answer is that one sentence, not a URL for an asset no
+# workflow writes. A wrong URL then arrives as "该版本尚未发布或平台不支持", which is a
+# guess about a server, and the fact was already known here.
+if [ "$OS_TARGET" = "unknown-linux-gnu" ] && [ "$ARCH_TARGET" = "aarch64" ]; then
+    echo "Linux 只发布 x86_64-unknown-linux-gnu；aarch64-unknown-linux-gnu 没有被构建" >&2
+    echo "（发布矩阵：x86_64-unknown-linux-gnu、x86_64-apple-darwin、aarch64-apple-darwin）。" >&2
+    echo "在 SBC/树莓派上请从源码安装：" >&2
+    echo "  cargo build --release --locked --target aarch64-unknown-linux-gnu" >&2
+    exit 1
+fi
+
 ASSET="firm-${ARCH_TARGET}-${OS_TARGET}.tar.gz"
 
 TAG="$VERSION"
