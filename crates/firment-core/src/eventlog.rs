@@ -431,6 +431,22 @@ mod tests {
         assert!(!is_significant(&AgentEvent::TextDelta("tok".to_string())));
         assert!(is_significant(&AgentEvent::TurnStart));
         assert!(record_of(&AgentEvent::TextDelta("hello".into()), 1).is_none());
+        // A delegated run's bracket is not the durable record of it: the `task` tool's
+        // own ToolStart/ToolEnd pair is, which is why the pair is excluded rather than
+        // logged twice. That exclusion is also what bounds the one path that emits a
+        // `SubagentStart` with no matching `SubagentEnd` -- the tool wave's grace window
+        // expiring, where the child's future is dropped (`subagent.rs` at the emission)
+        // -- because the hole that path leaves is a UI card the parent's turn boundary
+        // closes, not a missing line in the log.
+        assert!(!is_significant(&AgentEvent::SubagentStart {
+            id: "s-1".into(),
+            label: "why is the LED stuck".into(),
+            depth: 1,
+        }));
+        assert!(!is_significant(&AgentEvent::SubagentEnd {
+            id: "s-1".into(),
+            depth: 1,
+        }));
     }
 
     #[test]

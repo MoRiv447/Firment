@@ -106,8 +106,16 @@ pub enum AgentEvent {
         /// delegation. Subagents can spawn subagents up to `max_subagent_depth`.
         depth: usize,
     },
-    /// See [`AgentEvent::SubagentStart`]. Emitted even when the nested run
-    /// fails, so a UI stack cannot be left unbalanced by an error path.
+    /// See [`AgentEvent::SubagentStart`]. Emitted whenever the nested run returns or
+    /// fails, so an error path cannot leave a UI stack unbalanced.
+    ///
+    /// It is NOT emitted when the `task` tool's own future is dropped, which is the one
+    /// path where the tool wave's grace window expired and the child would not wind down
+    /// (see the emission site in `subagent.rs`). A surface must therefore be able to
+    /// close an open subagent at the parent's turn boundary and read this event as an
+    /// EARLY pop rather than as the only pop — which is what `gui/src-tauri`'s reducer
+    /// does — and the durable record of the delegation is the task tool's own `ToolEnd`,
+    /// not this pair (`eventlog::is_significant` says why the pair is not logged).
     SubagentEnd {
         id: String,
         depth: usize,
@@ -591,12 +599,6 @@ impl Agent {
     pub fn reset_cancel(&self) {
         let _ = self.cancel_tx.send(false);
         self.cancel.reset();
-    }
-
-    /// Clone of the turn-level cancellation signal, used to propagate a
-    /// parent agent's cancel into nested agents.
-    pub fn cancel_signal(&self) -> Cancellable {
-        self.cancel.clone()
     }
 
     /// Override the provider-stream silence cap (default `STREAM_TIMEOUT`):

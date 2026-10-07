@@ -100,8 +100,13 @@ pub enum FrontendEvent {
         label: String,
         depth: usize,
     },
-    /// See [`FrontendEvent::SubagentStart`]. Sent on the error path too, so the
-    /// frontend's stack cannot be left unbalanced by a subagent that failed.
+    /// See [`FrontendEvent::SubagentStart`]. Sent whenever the nested run returns or
+    /// fails, so a subagent that failed cannot leave the frontend's stack unbalanced.
+    ///
+    /// Not sent when the `task` tool's future is dropped without winding down (the tool
+    /// wave's grace window expiring — see `AgentEvent::SubagentEnd`). `turnReducer`'s
+    /// `closeAll()` at the parent's `turn_end` is what balances that case, which is why
+    /// the stack must be closable from the turn boundary and not from this event alone.
     SubagentEnd {
         session_id: Option<String>,
         id: String,

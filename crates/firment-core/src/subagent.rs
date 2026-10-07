@@ -55,6 +55,43 @@ pub trait SubagentFactory: Send + Sync {
     async fn run_subagent(&self, call: SubagentCall<'_>) -> Result<String, String>;
 }
 
+/// Parks a task that carries a parent turn's cancellation into a nested agent,
+/// and aborts it when the nested run is over.
+///
+/// **Both** channels have to be armed, and this used to arm one. An agent has two
+/// cancellation surfaces on purpose: the `Cancellable`, which the tool layer waits
+/// on so a running child process gets its whole tree killed, and the watch channel,
+/// which `run_turn` reads at every checkpoint it has -- before the first provider
+/// call (`agent.rs:1181`), at each iteration (`:1269`), and in both stream `select!`
+/// arms (`:1298`, `:1340`). Propagating the `Cancellable` alone meant a child whose
+/// tools were interrupted still sat down at the next iteration and started another
+/// turn, so Esc stopped the subagent only *during* a wave and never *between* one and
+/// the next. Nothing in the two types says they must both be flipped, which is why
+/// `Agent::cancel_signal()` was easy to reach for: it is deleted, and `cancel_handle()`
+/// hands back the pair so a propagator cannot take half of it.
+pub(crate) fn spawn_cancel_propagator(parent: Cancellable, nested: &Agent) -> CancelPropagator {
+    let (watch, signal) = nested.cancel_handle();
+    let propagator = tokio::spawn(async move {
+        parent.cancelled().await;
+        // Discarded like `Agent::cancel()` discards it: the send fails only when no
+        // receiver is left, and an agent with no receiver has no loop to interrupt,
+        // while the signal below is the same request's other half.
+        let _ = watch.send(true);
+        signal.cancel();
+    });
+    CancelPropagator(propagator)
+}
+
+/// The handle is kept and aborted on drop: an uncancelled parent would otherwise
+/// leave the parked propagation task alive -- one leaked tokio task per task-tool call.
+pub(crate) struct CancelPropagator(tokio::task::JoinHandle<()>);
+
+impl Drop for CancelPropagator {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// Concrete subagent runner used by the TUI and CLI. Rebuilds the provider from
 /// the same `Config` (fresh client per nesting level), gives the nested agent a
 /// read-only research registry, and keeps its session in a temp directory so it
@@ -210,22 +247,8 @@ impl SubagentFactory for SubagentRunner {
         nested.set_la_config(self.config.tools.la.clone());
         // Propagate the parent turn's cancellation into the nested agent so
         // interrupting the parent also stops the subagent (and the processes
-        // it spawned, via its own tool layer). The handle is kept and aborted
-        // on drop: an uncancelled parent would otherwise leave the parked
-        // propagation task alive (one leaked tokio task per task-tool call).
-        let propagate = cancel.clone();
-        let nested_cancel = nested.cancel_signal();
-        let propagator = tokio::spawn(async move {
-            propagate.cancelled().await;
-            nested_cancel.cancel();
-        });
-        struct AbortOnDrop(tokio::task::JoinHandle<()>);
-        impl Drop for AbortOnDrop {
-            fn drop(&mut self) {
-                self.0.abort();
-            }
-        }
-        let _propagator_guard = AbortOnDrop(propagator);
+        // it spawned, via its own tool layer).
+        let _propagator = spawn_cancel_propagator(cancel, &nested);
 
         // Bracket the nested run on the PARENT's sink. The nested agent emits
         // through that same sink, so its tool calls would otherwise be
@@ -240,9 +263,17 @@ impl SubagentFactory for SubagentRunner {
             })
             .await;
         let result = nested.run_turn(prompt).await;
-        // Emitted on every path, including the error one: a UI stack that is
-        // pushed but never popped would attribute the rest of the session to a
-        // subagent that has already finished.
+        // Emitted on every path THIS function controls -- returning or failing. It is
+        // not emitted when this future is dropped, and that happens on exactly one
+        // path: the tool wave's grace window expiring (`agent.rs:2382`), where the
+        // child would not wind down. Bounded, not leaked, because the pair is not the
+        // durable record -- `eventlog::is_significant` excludes it precisely because
+        // the `task` tool's own ToolStart/ToolEnd bracket is -- and a surface holding
+        // a stack closes the open card at the parent's turn boundary, which is what
+        // follows a dropped wave. So a UI must treat `SubagentEnd` as a prompt to pop
+        // early, not as the only thing that can pop: three comments here and in
+        // `agent.rs`/`gui/src-tauri/src/events.rs` claimed "every path", and a reader
+        // who believed one would build a stack that sticks.
         self.sink
             .event(AgentEvent::SubagentEnd {
                 id: subagent_id,
@@ -346,6 +377,139 @@ mod tests {
     use crate::config::Config;
     use crate::permission::AutoApprove;
     use crate::tool::ToolRegistry;
+
+    #[tokio::test]
+    async fn a_cancelled_parent_arms_both_of_the_child_s_cancel_channels() {
+        // An `Agent` has two cancellation surfaces and `run_turn` reads them for
+        // different things: the watch channel at every checkpoint it owns
+        // (before the first provider call, at each iteration, in both stream arms),
+        // the `Cancellable` in the tool layer. The propagator armed only the second,
+        // so a cancelled parent left the child free to begin its next iteration —
+        // which is the moment a user pressing Esc expects the delegation to stop.
+        //
+        // Both directions are exercised in one run: nothing is armed while the
+        // parent is live, and both surfaces are armed once it is cancelled. The
+        // first half is what stops a propagator that fired on its own from passing.
+        use crate::provider::{Provider, ProviderStream};
+        use crate::session::{Session, SessionStore};
+        use crate::types::ChatRequest;
+
+        struct Silent;
+
+        #[async_trait]
+        impl Provider for Silent {
+            async fn stream(
+                &self,
+                _request: ChatRequest,
+            ) -> Result<ProviderStream, crate::provider::ProviderError> {
+                Ok(Box::pin(futures::stream::empty()))
+            }
+            fn model(&self) -> &str {
+                "silent"
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let nested = Agent::new(
+            Some(Box::new(Silent)),
+            Arc::new(ToolRegistry::new()),
+            Session::new(dir.path().to_path_buf(), "default", "silent"),
+            SessionStore::new(dir.path().to_path_buf()),
+            Arc::new(AutoApprove::everything()),
+            Arc::new(NullSink),
+            4,
+        );
+        let parent = Cancellable::new();
+        let (watch, signal) = nested.cancel_handle();
+        let mut armed = watch.subscribe();
+        let _guard = spawn_cancel_propagator(parent.clone(), &nested);
+
+        // The propagator is parked, not firing.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(
+            !*armed.borrow_and_update() && !signal.is_cancelled(),
+            "the propagator armed the child before the parent was cancelled"
+        );
+
+        parent.cancel();
+        for _ in 0..50 {
+            if *armed.borrow_and_update() && signal.is_cancelled() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+
+        assert!(
+            signal.is_cancelled(),
+            "the tool layer's signal never fired, so a running child process would not be killed"
+        );
+        assert!(
+            *armed.borrow(),
+            "the watch channel stayed false, so the child's loop would take its next iteration: \
+             `run_turn` tests `*cancel_rx.borrow()` at every checkpoint it has, and none of them \
+             reads the Cancellable"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_propagator_task_does_not_outlive_the_nested_run() {
+        // The guard aborts the parked task, and the observable consequence is that a
+        // parent cancelled AFTER the run returned must not arm the child's channels.
+        // Without the abort, every `task` tool call left a live task holding a clone of
+        // the child's cancel handle and waiting on a parent turn that had already
+        // finished -- and the next cancellation anywhere in the session would then
+        // interrupt an agent that had nothing to do with it.
+        let dir = tempfile::tempdir().unwrap();
+        use crate::provider::{Provider, ProviderStream};
+        use crate::session::{Session, SessionStore};
+        use crate::types::ChatRequest;
+
+        struct Silent;
+
+        #[async_trait]
+        impl Provider for Silent {
+            async fn stream(
+                &self,
+                _request: ChatRequest,
+            ) -> Result<ProviderStream, crate::provider::ProviderError> {
+                Ok(Box::pin(futures::stream::empty()))
+            }
+            fn model(&self) -> &str {
+                "silent"
+            }
+        }
+
+        let nested = Agent::new(
+            Some(Box::new(Silent)),
+            Arc::new(ToolRegistry::new()),
+            Session::new(dir.path().to_path_buf(), "default", "silent"),
+            SessionStore::new(dir.path().to_path_buf()),
+            Arc::new(AutoApprove::everything()),
+            Arc::new(NullSink),
+            4,
+        );
+        let parent = Cancellable::new();
+        let (watch, signal) = nested.cancel_handle();
+        let mut armed = watch.subscribe();
+        {
+            let _guard = spawn_cancel_propagator(parent.clone(), &nested);
+        }
+
+        parent.cancel();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        tokio::task::yield_now().await;
+
+        assert!(
+            !*armed.borrow_and_update(),
+            "a propagator that outlived its run armed the watch of an agent that was already done"
+        );
+        assert!(
+            !signal.is_cancelled(),
+            "a propagator that outlived its run cancelled the tool layer of an agent that was \
+             already done; the guard is what prevents this, and it is the only thing the dropped \
+             `_guard` above is for"
+        );
+    }
 
     #[test]
     fn a_child_runner_shares_the_slot_pool_instead_of_creating_its_own() {

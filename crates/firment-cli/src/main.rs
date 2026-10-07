@@ -3772,4 +3772,71 @@ mod tests {
             readers.len()
         );
     }
+
+    /// An `Agent` has two cancellation surfaces, and the accessor that let a propagator arm
+    /// only one of them is gone.
+    ///
+    /// `run_turn` tests the watch channel at every checkpoint it owns (before the first
+    /// provider call, at each iteration, in both stream `select!` arms) and the
+    /// `Cancellable` inside the tool layer. `subagent.rs` propagated the `Cancellable` only,
+    /// so a cancelled parent stopped a child *during* a wave and never *between* one and the
+    /// next -- which is the case a person pressing Esc expects. The single-channel getter
+    /// (`Agent::cancel_signal`) is deleted and `cancel_handle()` returns the pair; this gate
+    /// keeps the shorter call from coming back, because the shorter call was the whole bug.
+    #[test]
+    fn no_agent_is_cancelled_through_only_one_of_its_two_channels() {
+        let half = concat!(".cancel_signal", "()");
+        let pair = concat!(".cancel_handle", "()");
+        let mut singles: Vec<String> = Vec::new();
+        let mut paired = 0usize;
+        for dir in [
+            "../firment-core/src",
+            "../firment-tools/src",
+            "../firment-tui/src",
+            "src",
+            "../../gui/src-tauri/src",
+        ] {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);
+            let mut stack = vec![root];
+            while let Some(d) = stack.pop() {
+                let entries = match std::fs::read_dir(&d) {
+                    Ok(entries) => entries,
+                    Err(_) => continue,
+                };
+                for entry in entries {
+                    let path = entry.unwrap().path();
+                    if path.is_dir() {
+                        stack.push(path);
+                        continue;
+                    }
+                    if path.extension().and_then(std::ffi::OsStr::to_str) != Some("rs") {
+                        continue;
+                    }
+                    for line in std::fs::read_to_string(&path).unwrap().lines() {
+                        let trimmed = line.trim_start();
+                        if trimmed.starts_with("//") {
+                            continue;
+                        }
+                        if trimmed.contains(half) {
+                            singles.push(format!("{}: {}", path.display(), trimmed));
+                        }
+                        if trimmed.contains(pair) {
+                            paired += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            singles.is_empty(),
+            "these take one cancellation surface and leave the other alone, which is how a nested
+             agent keeps working after its parent was interrupted: {singles:?}"
+        );
+        assert!(
+            paired >= 4,
+            "the scrape saw the two-channel getter {paired} times across five source directories; \
+             a walk that reads nothing would also find no offender, so the rule above would be a \
+             formality",
+        );
+    }
 }
