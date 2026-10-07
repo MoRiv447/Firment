@@ -226,6 +226,14 @@ impl EventLog {
     }
 
     /// Move the current file aside when it is full, dropping the oldest generation.
+    ///
+    /// A failed step is an error now, not `Ok(())`. The loop deletes the oldest generation
+    /// *first*, so a rename that then fails leaves the file it was supposed to protect in place
+    /// and the rotation half-done: `Ok(())` reported a rotation that had not happened, and the
+    /// append proceeded as though the cap had been honoured -- which is how a log ends up
+    /// larger than its cap, or shorter than the generations it claims to keep. Callers already
+    /// surface an `Err` from here (`LoggingSink::event` warns once per failure), so nothing
+    /// about the reporting path changes except the truth of it.
     fn rotate_if_needed(&self, incoming: u64) -> std::io::Result<()> {
         let size = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
         if size + incoming <= self.max_bytes {
@@ -238,16 +246,35 @@ impl EventLog {
             let to = self.generation_path(index + 1);
             if from.exists() {
                 if index + 1 >= self.generations {
-                    let _ = std::fs::remove_file(&from);
-                } else {
-                    let _ = std::fs::rename(&from, &to);
+                    if let Err(e) = std::fs::remove_file(&from) {
+                        return Err(std::io::Error::other(format!(
+                            "rotating out the oldest event log {}: {e}",
+                            from.display()
+                        )));
+                    }
+                } else if let Err(e) = std::fs::rename(&from, &to) {
+                    return Err(std::io::Error::other(format!(
+                        "shifting event log {} to {}: {e}",
+                        from.display(),
+                        to.display()
+                    )));
                 }
             }
         }
         if self.generations > 1 && self.path.exists() {
-            let _ = std::fs::rename(&self.path, self.generation_path(1));
-        } else if self.path.exists() {
-            let _ = std::fs::remove_file(&self.path);
+            if let Err(e) = std::fs::rename(&self.path, self.generation_path(1)) {
+                return Err(std::io::Error::other(format!(
+                    "rotating {} to its first generation: {e}",
+                    self.path.display()
+                )));
+            }
+        } else if self.path.exists()
+            && let Err(e) = std::fs::remove_file(&self.path)
+        {
+            return Err(std::io::Error::other(format!(
+                "discarding the full event log {} (no generations to keep): {e}",
+                self.path.display()
+            )));
         }
         Ok(())
     }
@@ -413,6 +440,30 @@ mod tests {
         assert!(log.path().exists());
         assert!(!log.generation_path(1).exists());
         assert!(log.read().iter().any(|r| r.summary == "step 19"));
+    }
+
+    #[test]
+    fn a_rotation_that_cannot_move_the_file_says_so() {
+        // Rotation drops the oldest generation *first*, so a shift that fails afterwards has
+        // already changed the tree. Every step here discarded its `Result` and returned
+        // `Ok(())`: the append went on as though the cap had been honoured, and the log ended up
+        // larger than its cap -- or shorter than the generations it claimed to keep -- while
+        // reading as a clean rotation.
+        let dir = tempfile::tempdir().unwrap();
+        let log = EventLog::new(dir.path().join("events.jsonl")).with_limits(8, 2);
+        log.append(&record("tool_end", "first"))
+            .expect("the first line fits under any cap");
+        // Generation 1's slot is occupied by a directory, which is the shape of both a leftover
+        // tree and a file another process is holding on Windows: the shift cannot complete.
+        std::fs::create_dir(dir.path().join("events.1.jsonl")).unwrap();
+
+        let err = log
+            .append(&record("tool_end", "the one that needs the room"))
+            .expect_err("a rotation that failed must not report success");
+        assert!(
+            err.to_string().contains("events.1.jsonl"),
+            "the failure has to name the file it could not move: {err}"
+        );
     }
 
     #[test]

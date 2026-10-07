@@ -580,10 +580,19 @@ impl SessionStore {
         Ok(session)
     }
 
-    pub fn list(&self) -> Result<Vec<SessionSummary>, SessionError> {
+    /// The sessions that could be read, and the paths that could not.
+    ///
+    /// A file whose first line will not parse is skipped by [`SessionStore::list`], which is
+    /// right for a picker and wrong for a surface that reports a count: nine session files with
+    /// three damaged by a torn write read as three sessions, and all nine damaged read as
+    /// "No sessions yet." -- a project that looks empty is a stronger claim than one the code
+    /// earned. The second value exists so the caller that prints a number can also print the
+    /// ones it could not show.
+    pub fn list_with_damage(&self) -> Result<(Vec<SessionSummary>, Vec<PathBuf>), SessionError> {
         let mut out = Vec::new();
+        let mut unreadable: Vec<PathBuf> = Vec::new();
         if !self.dir.exists() {
-            return Ok(out);
+            return Ok((out, unreadable));
         }
         for entry in fs::read_dir(&self.dir)? {
             let entry = entry?;
@@ -592,6 +601,7 @@ impl SessionStore {
                 continue;
             }
             let Ok(meta) = read_meta_line(&path) else {
+                unreadable.push(path);
                 continue;
             };
             out.push(SessionSummary {
@@ -618,6 +628,20 @@ impl SessionStore {
             });
         }
         out.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
+        Ok((out, unreadable))
+    }
+
+    /// The readable sessions, newest first. A file that could not be parsed is left out and
+    /// logged; [`SessionStore::list_with_damage`] returns the paths it left out, for a caller
+    /// that has to report a count.
+    pub fn list(&self) -> Result<Vec<SessionSummary>, SessionError> {
+        let (out, unreadable) = self.list_with_damage()?;
+        for path in unreadable {
+            tracing::warn!(
+                "session file {} could not be read and is missing from the list",
+                path.display()
+            );
+        }
         Ok(out)
     }
 
@@ -1609,5 +1633,31 @@ six earlier rounds"
             store.load(&s.id).unwrap().display_name(),
             "an older session"
         );
+    }
+
+    #[test]
+    fn a_corrupt_session_file_is_counted_rather_than_making_the_project_look_empty() {
+        // `list()` skipped a file whose meta line would not parse and stayed `Ok`, which is the
+        // right call for a picker and the wrong one for a count: nine session files with three
+        // damaged by a torn write read as three sessions, and all nine damaged read as
+        // "No sessions yet." -- a claim about the project rather than about the reader.
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+        let session = Session::new(dir.path().to_path_buf(), "default", "m");
+        let id = session.id.clone();
+        store.save(&session).unwrap();
+        std::fs::write(dir.path().join("torn.jsonl"), "this is not a meta line\n").unwrap();
+
+        let (summaries, unreadable) = store.list_with_damage().unwrap();
+        assert_eq!(summaries.len(), 1, "the readable one is still listed");
+        assert_eq!(
+            unreadable.len(),
+            1,
+            "the damaged one has to come back as damage, not vanish"
+        );
+        assert!(unreadable[0].ends_with("torn.jsonl"), "{unreadable:?}");
+        // `list()` keeps its shape for everyone who only wants the picker.
+        assert_eq!(store.list().unwrap().len(), 1);
+        assert_eq!(store.load(&id).unwrap().id, id);
     }
 }

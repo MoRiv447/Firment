@@ -543,8 +543,9 @@ impl EditJournal {
     /// accident.
     pub fn undo_turns(dir: &Path, turns: usize) -> Result<(usize, UndoSummary), String> {
         // Counted first, so an empty session is "zero turns" rather than an error: walking back
-        // three turns when only one is recorded should say "one", not fail.
-        let available = EditJournal::pending_turns(dir);
+        // three turns when only one is recorded should say "one", not fail. An *unreadable*
+        // journal is still an error -- see `pending_turns`.
+        let available = EditJournal::pending_turns(dir)?;
         let mut undone = 0;
         let mut restored: Vec<String> = Vec::new();
         for _ in 0..turns.min(available) {
@@ -620,12 +621,16 @@ impl EditJournal {
         }
     }
 
-    /// How many committed turns are available to undo. Zero is a normal state, not an error —
-    /// which is the whole reason this exists: `undo_latest` reports "nothing to undo" as an
-    /// error, so a caller walking back several turns cannot tell "the session is empty" from
-    /// "something went wrong" without asking first.
-    pub fn pending_turns(dir: &Path) -> usize {
-        undo_candidates(dir).map(|c| c.len()).unwrap_or(0)
+    /// How many committed turns are available to undo.
+    ///
+    /// Zero is a normal state and an `Err` is not, which is the distinction this function used
+    /// to erase: it mapped an unreadable journal directory to `0`, and `undo_turns` then walked
+    /// back "zero turns" and the TUI printed `nothing to undo (no file changes committed in this
+    /// session)` about a session that had committed plenty. A journal the user cannot read is
+    /// the one thing an undo surface must not present as an empty history -- the difference is
+    /// whether they reach for a backup or for `/undo` again.
+    pub fn pending_turns(dir: &Path) -> Result<usize, String> {
+        undo_candidates(dir).map(|c| c.len())
     }
 
     pub fn undo_latest(dir: &Path) -> Result<UndoSummary, String> {
@@ -967,6 +972,17 @@ fn now_nanos() -> u128 {
 #[allow(dead_code)]
 fn undo_candidates(dir: &Path) -> Result<Vec<PathBuf>, String> {
     let mut candidates: Vec<PathBuf> = Vec::new();
+    // A journal path that is not a directory is not an empty journal. Something else is sitting
+    // where the undo records belong -- a file left by a partial write, a symlink to a tree that
+    // was moved -- and reporting "no turns to undo" about that costs the user both the undo they
+    // asked for and the knowledge that their history is unreachable. An absent directory is the
+    // genuinely empty case and stays `Ok(vec![])`.
+    if dir.exists() && !dir.is_dir() {
+        return Err(format!(
+            "the undo journal path {} is not a directory",
+            dir.display()
+        ));
+    }
     if dir.is_dir() {
         for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
@@ -1059,7 +1075,35 @@ mod tests {
             );
         }
         // The store is otherwise healthy: an ordinary undo of the newest turn still works.
-        assert_eq!(EditJournal::pending_turns(&undo_dir), 3);
+        assert_eq!(EditJournal::pending_turns(&undo_dir).unwrap(), 3);
+    }
+
+    #[test]
+    fn a_journal_that_cannot_be_read_is_not_reported_as_nothing_to_undo() {
+        // `pending_turns` mapped every failure to `0`, and `undo_turns` turned `0` into a
+        // successful no-op, so the TUI printed `nothing to undo (no file changes committed in
+        // this session)` for a session that had committed plenty and whose journal simply could
+        // not be listed. The advice in that sentence is the opposite of what the user needs.
+        let dir = tempfile::tempdir().unwrap();
+        let undo = dir.path().join("undo");
+        std::fs::write(&undo, "not a journal directory").unwrap();
+
+        let err = EditJournal::pending_turns(&undo)
+            .expect_err("a file where the journal belongs is not an empty history");
+        assert!(
+            err.contains("not a directory"),
+            "the error must say what is wrong with the path: {err}"
+        );
+        assert!(
+            EditJournal::undo_turns(&undo, 1).is_err(),
+            "and the undo that consults it must fail rather than report success"
+        );
+
+        // The genuinely empty case is still a zero, not an error: walking back three turns in a
+        // session that never edited a file is a no-op the caller can describe.
+        std::fs::remove_file(&undo).unwrap();
+        assert_eq!(EditJournal::pending_turns(&undo).unwrap(), 0);
+        assert_eq!(EditJournal::undo_turns(&undo, 3).unwrap().0, 0);
     }
 
     #[test]

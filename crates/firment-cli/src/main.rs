@@ -1299,9 +1299,22 @@ fn short_id(id: &str) -> String {
 
 fn list_sessions() -> anyhow::Result<()> {
     let store = SessionStore::default();
-    let sessions = store.list()?;
+    let (sessions, unreadable) = store.list_with_damage()?;
     if sessions.is_empty() {
-        println!("No sessions yet.");
+        if unreadable.is_empty() {
+            println!("No sessions yet.");
+        } else {
+            // The distinction the count used to erase: an empty list because nothing was saved
+            // and an empty list because every file failed to parse are not the same project.
+            println!(
+                "No sessions could be read, and {} session file(s) did not parse -- see {}:",
+                unreadable.len(),
+                SessionStore::default().dir.display()
+            );
+            for path in &unreadable {
+                println!("  {}", path.display());
+            }
+        }
         return Ok(());
     }
     for summary in sessions {
@@ -1328,6 +1341,17 @@ fn list_sessions() -> anyhow::Result<()> {
             kind_tag,
             preview
         );
+    }
+    if !unreadable.is_empty() {
+        // Said after the rows rather than instead of them: the list above is real, and so is
+        // the part of it that could not be shown.
+        println!(
+            "({} session file(s) could not be read and are not listed above)",
+            unreadable.len()
+        );
+        for path in &unreadable {
+            println!("  {}", path.display());
+        }
     }
     Ok(())
 }
