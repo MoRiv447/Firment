@@ -151,24 +151,22 @@ pub async fn run(
     // into its lock: cancel must be actionable WHILE a turn is running, so it
     // cannot go through the agent lock.
     //
-    // Keep a copy for the app so Esc can fire cancel directly (bypassing the
-    // command channel); the originals are moved into the agent task.
-    let app_cancel_tx = assembly.cancel_tx.clone();
-    let app_cancel_signal = assembly.cancel_signal.clone();
+    // The app holds the handles because an interruption has to fire them directly: a command
+    // queued behind one that is parked on the agent lock cannot stop the turn it names, which
+    // is why the command loop's `Cancel` arm is gone and why it no longer takes these at all.
+    let app_cancel_tx = assembly.cancel_tx;
+    let app_cancel_signal = assembly.cancel_signal;
     let agent = Arc::new(tokio::sync::Mutex::new(assembly.agent));
     // Serializes turns: a queued message waits for the running turn instead
     // of running two agent loops against the same session.
     let turn_lock = Arc::new(tokio::sync::Mutex::new(()));
-    // The command loop is extracted so tests can drive these exact semantics:
-    // turns run on their own task (so the loop stays responsive) and `Cancel`
-    // fires the pre-extracted handles directly instead of going through the
-    // agent lock — together that is what makes Esc interrupt a running turn.
+    // The command loop is extracted so tests can drive these exact semantics: turns run on
+    // their own task, so a command that takes the agent lock (`/model`, `/undo`) cannot park
+    // the whole channel behind a running turn.
 
     let agent_task = spawn_agent_task(
         cmd_rx,
         agent,
-        assembly.cancel_tx,
-        assembly.cancel_signal,
         turn_lock,
         store.clone(),
         task_config,
@@ -1115,10 +1113,10 @@ mod tests {
         assert_eq!(app.cursor, 0);
     }
 
-    #[test]
-    fn new_command_clears_input_and_starts_fresh_session() {
-        let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
-        let mut app = App::new(
+    /// An `App` on a channel the test keeps, so the commands `/new` and `submit`
+    /// queue can be read back.
+    fn app_on(cmd_tx: mpsc::Sender<AgentCmd>) -> App {
+        App::new(
             cmd_tx,
             Arc::new(Mutex::new(HashSet::new())),
             "test-model".to_string(),
@@ -1129,7 +1127,19 @@ mod tests {
             PathBuf::from("config.toml"),
             None,
             Vec::new(),
-        );
+        )
+    }
+
+    #[test]
+    fn new_command_clears_input_and_starts_fresh_session() {
+        // What this test asserted until now was that `/new` puts `AgentCmd::Cancel` on the
+        // command channel -- the behaviour that was wrong, pinned as the contract. That is
+        // why the defect survived every earlier pass with a green suite: the assertion was
+        // not merely neutral about it, it failed any fix. The queue is still checked here,
+        // and `new_command_interrupts_without_going_through_the_channel` now holds the
+        // property the old assertion contradicted.
+        let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
+        let mut app = app_on(cmd_tx);
         app.input = "old draft".chars().collect();
         app.cursor = app.input.len();
         app.items.push(Item::User("old message".to_string()));
@@ -1145,16 +1155,116 @@ mod tests {
         )));
         assert!(!app.busy);
         assert!(app.pending_new_session);
-        // A running turn is cancelled first so the fresh session is processed
-        // without waiting for the old turn to finish.
-        match cmd_rx.try_recv().unwrap() {
-            AgentCmd::Cancel => {}
-            _ => panic!("expected Cancel"),
+        // The session swap is queued; the interrupt is not a queued command.
+        match cmd_rx.try_recv() {
+            Ok(AgentCmd::NewSession) => {}
+            Ok(_) => panic!("the first command out of /new must be NewSession"),
+            Err(e) => panic!("no command was queued: {e}"),
         }
-        match cmd_rx.try_recv().unwrap() {
-            AgentCmd::NewSession => {}
-            _ => panic!("expected NewSession"),
-        }
+        assert!(
+            cmd_rx.try_recv().is_err(),
+            "a second command means something is still waiting for the command loop that used \
+             to be fired through the handles"
+        );
+    }
+
+    #[test]
+    fn new_command_interrupts_without_going_through_the_channel() {
+        // The defect this replaces: `AgentCmd::Cancel` is delivered by the one task that
+        // reads the command channel, and a `/model` or `/undo` queued ahead of it sits on
+        // the lock the running turn holds. So the cancel landed only once the turn ended
+        // on its own -- the turn kept streaming, `NewSession` stayed in the queue,
+        // `SessionLoaded` never came, and the flag `/new` had set dropped every event for
+        // the rest of the session. Here nobody reads the channel at all, which is what a
+        // stalled loop looks like from the UI's side, and the interrupt still lands.
+        let (cmd_tx, _cmd_rx) = mpsc::channel(1);
+        let mut app = app_on(cmd_tx);
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let signal = firment_core::Cancellable::new();
+        app.cancel_tx = Some(tx);
+        app.cancel_signal = Some(signal.clone());
+        app.busy = true;
+
+        app.run_command("new");
+
+        assert!(
+            *rx.borrow(),
+            "the turn's own checkpoints read the watch channel, and nothing armed it"
+        );
+        assert!(
+            signal.is_cancelled(),
+            "the tool layer reads the `Cancellable`, and nothing armed it either"
+        );
+    }
+
+    #[test]
+    fn new_command_stops_suppressing_when_the_channel_is_full() {
+        // `/new` set the suppression flag before queueing, and discarded the `bool`
+        // `send_cmd` returns, so a refused command left the flag set with nothing that
+        // could ever
+        // clear it -- `SessionLoaded` is the only writer. The UI then ignored every event
+        // while the agent carried on working.
+        let (cmd_tx, _cmd_rx) = mpsc::channel(1);
+        let filler = cmd_tx.clone();
+        assert!(filler.try_send(AgentCmd::ShowContext).is_ok());
+        let mut app = app_on(cmd_tx);
+        app.busy = true;
+
+        app.run_command("new");
+
+        assert!(
+            !app.pending_new_session,
+            "the command never reached the agent, so the flag that waits for its reply must not \
+             stay set"
+        );
+        assert!(
+            app.items.iter().any(
+                |i| matches!(i, Item::Error(text) if text.contains("command channel is full"))
+            ),
+            "the refusal `send_cmd` reports must still be on screen"
+        );
+    }
+
+    #[test]
+    fn a_new_session_that_never_lands_stops_silencing_the_ui() {
+        // The bound on the other half: even a command that *was* accepted can fail to
+        // produce a `SessionLoaded` (the task that reads the channel is gone). Suppressing
+        // forever turned that into a frozen transcript with no explanation. The wait is
+        // zeroed here rather than waited out, and a late `SessionLoaded` still has to
+        // complete the swap, because the user may have typed into the meantime.
+        let (cmd_tx, _cmd_rx) = mpsc::channel(16);
+        let mut app = app_on(cmd_tx);
+        app.new_session_wait = std::time::Duration::ZERO;
+
+        app.run_command("new");
+        assert!(app.pending_new_session);
+
+        app.on_agent(AgentEvent::TextDelta("still working".to_string()));
+        assert!(
+            app.new_session_stalled,
+            "the wait expired and nothing replaced it"
+        );
+        assert!(
+            app.items
+                .iter()
+                .any(|i| matches!(i, Item::Error(text) if text.contains("has not reported back"))),
+            "resuming the event stream without saying why leaves the user to guess what froze"
+        );
+        assert!(
+            app.items
+                .iter()
+                .any(|i| matches!(i, Item::Assistant(text) if text == "still working")),
+            "the events are supposed to be shown again once the note is on screen"
+        );
+
+        let fresh = Session::new(PathBuf::from("."), "default", "m");
+        app.on_agent(AgentEvent::SessionLoaded(fresh));
+        assert!(!app.pending_new_session);
+        assert!(!app.new_session_stalled);
+        assert!(app.items.iter().any(|i| matches!(
+            i,
+            Item::System(text) if text == "New conversation started"
+        )));
     }
 
     #[test]
@@ -2191,12 +2301,29 @@ mod tests {
 
     static NEXT_HARNESS_DIR: AtomicUsize = AtomicUsize::new(0);
 
+    /// The two cancel surfaces, bundled so a test can fire them exactly the way the UI
+    /// does -- which is the only way the UI can, since a command queued behind one that is
+    /// waiting on the agent lock arrives after the turn it was meant to stop.
+    #[derive(Clone)]
+    struct Canceller {
+        watch: tokio::sync::watch::Sender<bool>,
+        signal: firment_core::Cancellable,
+    }
+
+    impl Canceller {
+        fn cancel(&self) {
+            let _ = self.watch.send(true);
+            self.signal.cancel();
+        }
+    }
+
     fn spawn_agent_task_harness(
         provider: Box<dyn firment_core::Provider>,
     ) -> (
         mpsc::Sender<AgentCmd>,
         mpsc::Receiver<AgentEvent>,
         tokio::task::JoinHandle<()>,
+        Canceller,
     ) {
         spawn_agent_task_harness_with(provider, Arc::new(ToolRegistry::new()))
     }
@@ -2214,6 +2341,7 @@ mod tests {
         mpsc::Sender<AgentCmd>,
         mpsc::Receiver<AgentEvent>,
         tokio::task::JoinHandle<()>,
+        Canceller,
     ) {
         let (event_tx, event_rx) = mpsc::channel(256);
         // Unique per invocation: two harness tests run in parallel and must
@@ -2235,14 +2363,16 @@ mod tests {
             10,
         );
         let (cancel_tx, cancel_signal) = agent.cancel_handle();
+        let canceller = Canceller {
+            watch: cancel_tx,
+            signal: cancel_signal,
+        };
         let agent = Arc::new(tokio::sync::Mutex::new(agent));
         let turn_lock = Arc::new(tokio::sync::Mutex::new(()));
         let (cmd_tx, cmd_rx) = mpsc::channel(16);
         let task = spawn_agent_task(
             cmd_rx,
             agent,
-            cancel_tx,
-            cancel_signal,
             turn_lock,
             store,
             firment_core::Config::default_with_provider(
@@ -2261,7 +2391,7 @@ mod tests {
             Arc::new(firment_core::AutoApprove::everything()),
             Arc::new(firment_core::AutoApprove::everything()),
         );
-        (cmd_tx, event_rx, task)
+        (cmd_tx, event_rx, task, canceller)
     }
 
     /// A tool whose output is shaped like the writer's: a one-line header, then a unified diff.
@@ -2376,7 +2506,7 @@ mod tests {
         let mut registry = ToolRegistry::new();
         registry.register(Arc::new(DiffShaped));
         registry.register(Arc::new(Chatty));
-        let (cmd_tx, mut event_rx, task) =
+        let (cmd_tx, mut event_rx, task, _cancel) =
             spawn_agent_task_harness_with(Box::new(Scripted { rounds }), Arc::new(registry));
         cmd_tx
             .send(AgentCmd::User("blink the led".to_string()))
@@ -2433,21 +2563,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancel_command_interrupts_a_running_turn() {
+    async fn the_interrupt_the_ui_fires_stops_a_running_turn() {
+        // This used to drive `AgentCmd::Cancel` through the command channel, and that
+        // command is gone: every UI path (Esc, `/model`, `/new`) fires the pre-extracted
+        // handles, because a queued cancel is delivered by the one task that can itself be
+        // parked on the agent lock. The property under test -- a stalled stream ends within
+        // seconds of the interrupt -- is now the handles' job, so the test fires the
+        // handles, which is what a person's keypress reaches.
         let calls = Arc::new(AtomicUsize::new(0));
         let started = Arc::new(tokio::sync::Notify::new());
-        let (cmd_tx, mut event_rx, task) = spawn_agent_task_harness(Box::new(StallProvider {
-            calls: calls.clone(),
-            started: started.clone(),
-        }));
+        let (cmd_tx, mut event_rx, task, cancel) =
+            spawn_agent_task_harness(Box::new(StallProvider {
+                calls: calls.clone(),
+                started: started.clone(),
+            }));
 
         // Turn 1: must actually be streaming (TurnStart then silence) before
-        // Cancel arrives, otherwise a stale cancel state would show up here as
-        // a premature end-of-turn event.
+        // the interrupt arrives, otherwise a stale cancel state would show up
+        // here as a premature end-of-turn event.
         start_turn_and_expect_live_stream(&cmd_tx, &calls, 1, &mut event_rx).await;
 
         let begin = std::time::Instant::now();
-        cmd_tx.send(AgentCmd::Cancel).await.unwrap();
+        cancel.cancel();
         let mut ended = false;
         for _ in 0..8 {
             match tokio::time::timeout(Duration::from_secs(5), event_rx.recv()).await {
@@ -2459,16 +2596,16 @@ mod tests {
                 _ => break,
             }
         }
-        assert!(ended, "turn must end after its Cancel");
+        assert!(ended, "turn must end after the interrupt");
         assert!(
             begin.elapsed() < Duration::from_secs(4),
-            "turn must end within 4s of Cancel"
+            "turn must end within 4s of the interrupt"
         );
 
         // Turn 2: reset_cancel fired; a second turn streams normally and a
-        // second Cancel stops it too.
+        // second interrupt stops it too.
         start_turn_and_expect_live_stream(&cmd_tx, &calls, 2, &mut event_rx).await;
-        cmd_tx.send(AgentCmd::Cancel).await.unwrap();
+        cancel.cancel();
         let mut ended = false;
         for _ in 0..8 {
             match tokio::time::timeout(Duration::from_secs(5), event_rx.recv()).await {
@@ -2480,7 +2617,7 @@ mod tests {
                 _ => break,
             }
         }
-        assert!(ended, "second turn must end after its Cancel");
+        assert!(ended, "second turn must end after its interrupt");
         drop(cmd_tx);
         task.await.unwrap();
     }
@@ -2944,7 +3081,8 @@ mod tests {
     /// the turn it never started, because the UI went busy the moment it sent the retry.
     #[tokio::test]
     async fn a_retry_with_nothing_to_repeat_still_closes_the_turn() {
-        let (cmd_tx, mut event_rx, _task) = spawn_agent_task_harness(Box::new(ErrorProvider));
+        let (cmd_tx, mut event_rx, _task, _cancel) =
+            spawn_agent_task_harness(Box::new(ErrorProvider));
         cmd_tx.send(AgentCmd::RetryLast).await.unwrap();
 
         let mut saw_info = false;
@@ -2981,7 +3119,8 @@ mod tests {
     /// duplication this exists to catch.
     #[tokio::test]
     async fn turn_error_still_closes_the_turn() {
-        let (cmd_tx, mut event_rx, task) = spawn_agent_task_harness(Box::new(ErrorProvider));
+        let (cmd_tx, mut event_rx, task, _cancel) =
+            spawn_agent_task_harness(Box::new(ErrorProvider));
         cmd_tx.send(AgentCmd::User("go".to_string())).await.unwrap();
         let mut tags: Vec<&'static str> = Vec::new();
         for _ in 0..8 {
@@ -3064,6 +3203,75 @@ mod tests {
         assert!(
             outcome.decision.is_err(),
             "a dismissed card is a refusal, not an approval"
+        );
+    }
+
+    /// The suppression `/new` switches on has one door, and that door stands next to the
+    /// command whose reply opens it.
+    ///
+    /// `pending_new_session` is cleared only by `SessionLoaded`. A second site setting it
+    /// -- without checking that the command producing that event was accepted, or without
+    /// the deadline that now bounds the wait -- reproduces the transcript that stopped
+    /// showing anything while the agent kept working. The deadline makes a forgotten check
+    /// survivable; this gate makes a second door a review comment rather than a freeze.
+    #[test]
+    fn the_new_session_flag_has_one_door_and_it_checks_its_command() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut setters: Vec<String> = Vec::new();
+        let mut queued = 0usize;
+        let mut stack = vec![root];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(std::ffi::OsStr::to_str) != Some("rs") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).unwrap();
+                let product = match text.find("#[cfg(test)]") {
+                    Some(at) => &text[..at],
+                    None => &text[..],
+                };
+                let lines: Vec<&str> = product.lines().collect();
+                queued += lines
+                    .iter()
+                    .filter(|line| line.contains("send_cmd("))
+                    .count();
+                for (i, line) in lines.iter().enumerate() {
+                    if !line.trim().starts_with("self.pending_new_session = true;") {
+                        continue;
+                    }
+                    setters.push(format!("{}:{}", path.display(), i + 1));
+                    // A setter is only honest while the command that will answer it is
+                    // checked in the same breath -- so the window below is the lines after.
+                    let checked = lines[i..(i + 30).min(lines.len())]
+                        .iter()
+                        .any(|line| line.contains("if !self.send_cmd("));
+                    assert!(
+                        checked,
+                        "{}:{} silences the transcript without checking the send that has to \
+                         un-silence it",
+                        path.display(),
+                        i + 1
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            setters.len(),
+            1,
+            "the flag that silences the transcript has {} doors: {setters:?}. One is the design; \
+             the second is how the freeze comes back",
+            setters.len()
+        );
+        assert!(
+            queued >= 20,
+            "the walk saw {queued} command sends across the crate, which is not the twenty-odd \
+             sites `send_cmd` has -- so it read nothing, and the assertions above would be \
+             ceremony",
         );
     }
 }

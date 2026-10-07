@@ -29,6 +29,13 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, watch};
 use unicode_width::UnicodeWidthChar;
 
+/// How long `/new` may keep the transcript suppressed while the agent task gets around
+/// to loading the fresh session. Long enough that a turn finishing a build or a flash
+/// still resolves inside it, short enough that a `NewSession` which never lands cannot
+/// silence the UI for the rest of the session. See
+/// [`App::pending_new_session_since`] for what happens when it expires.
+const NEW_SESSION_WAIT: Duration = Duration::from_secs(15);
+
 pub(crate) struct App {
     pub(crate) items: Vec<Item>,
     pub(crate) input: Vec<char>,
@@ -91,6 +98,22 @@ pub(crate) struct App {
     /// Set by `/new`: the transcript was cleared locally; events from the old
     /// turn are suppressed until `SessionLoaded` for the fresh session arrives.
     pub(crate) pending_new_session: bool,
+    /// When that suppression started, and how long it may last.
+    ///
+    /// The fresh session is created by the agent task, which takes the agent lock -- so
+    /// the suppression is by design waiting on a turn that is still running. Without a
+    /// bound, a `NewSession` that never lands (channel full, a task that died) leaves
+    /// `on_agent` dropping every event for the rest of the session: the transcript
+    /// freezes while the agent keeps working, and nothing on screen says which of the
+    /// two happened. Once the deadline passes the events are shown again and labelled
+    /// as the previous turn's, which is unwelcome but honest, and a late
+    /// `SessionLoaded` still gets the transcript split below.
+    pub(crate) pending_new_session_since: Option<Instant>,
+    pub(crate) new_session_wait: Duration,
+    /// The deadline fired: stop suppressing, while `pending_new_session` stays set so a
+    /// late `SessionLoaded` still knows it is completing a `/new` and keeps whatever the
+    /// user typed since.
+    pub(crate) new_session_stalled: bool,
     /// Items index captured by `/new`; messages added after it (e.g. a message
     /// typed and sent while the fresh session is still loading) survive the
     /// transcript clear in `SessionLoaded`.
@@ -189,6 +212,9 @@ impl App {
             thinking,
             mode,
             pending_new_session: false,
+            pending_new_session_since: None,
+            new_session_wait: NEW_SESSION_WAIT,
+            new_session_stalled: false,
             pending_new_baseline: 0,
             model_picker: None,
             session_picker: None,
@@ -291,9 +317,29 @@ impl App {
     pub(crate) fn on_agent(&mut self, event: AgentEvent) {
         // While `/new` is in flight, ignore events from the old turn (stream
         // deltas, tool cards, interrupt/rollback messages) so they cannot leak
-        // into the fresh conversation.
-        if self.pending_new_session && !matches!(&event, AgentEvent::SessionLoaded(_)) {
-            return;
+        // into the fresh conversation -- until the wait expires. Suppressing
+        // forever was the failure here: the flag is cleared only by
+        // `SessionLoaded`, and a `NewSession` that never reaches the agent (the
+        // command channel was full, or the task that reads it is gone) left
+        // every later event dropped -- the transcript frozen with an agent still
+        // working, and no line on screen saying which of the two it was.
+        if self.pending_new_session && !self.new_session_stalled {
+            let loaded = matches!(&event, AgentEvent::SessionLoaded(_));
+            if !loaded
+                && self
+                    .pending_new_session_since
+                    .is_some_and(|since| since.elapsed() >= self.new_session_wait)
+            {
+                self.new_session_stalled = true;
+                let secs = self.new_session_wait.as_secs();
+                self.items.push(Item::Error(format!(
+                    "The new session has not reported back after {secs}s; the previous turn is \
+                     still running and its events are being shown again. Press Esc if you meant \
+                     to stop it."
+                )));
+            } else if !loaded {
+                return;
+            }
         }
         match event {
             AgentEvent::TurnStart => {
@@ -534,6 +580,8 @@ impl App {
             AgentEvent::SessionLoaded(session) => {
                 let was_new = self.pending_new_session;
                 self.pending_new_session = false;
+                self.pending_new_session_since = None;
+                self.new_session_stalled = false;
                 // The rail marks the session being typed into. Done by id rather
                 // than by rebuilding the list: this event carries one session,
                 // and the list may not have arrived yet.
@@ -1083,7 +1131,7 @@ impl App {
             return;
         }
         self.interrupting = true;
-        // Cancel directly instead of queueing AgentCmd::Cancel: while a turn
+        // Cancel directly instead of queueing a cancel command: while a turn
         // holds the agent lock, the command loop can be blocked on a queued
         // command's lock wait (e.g. /model), which would otherwise stall the
         // channel and make Esc unable to interrupt a long turn.
@@ -2006,10 +2054,26 @@ impl App {
                 self.follow = true;
                 self.scroll = 0;
                 self.pending_new_session = true;
+                self.pending_new_session_since = Some(Instant::now());
+                self.new_session_stalled = false;
                 if was_busy {
-                    self.send_cmd(AgentCmd::Cancel);
+                    // Interrupt through the pre-extracted handles, the way Esc does, and for
+                    // the reason `request_interrupt` states: the command channel is read by a
+                    // single task, and a `/model` or `/undo` queued ahead of this was already
+                    // sitting on the lock the running turn holds. A queued cancel command
+                    // therefore arrived only once the turn ended by itself -- so the turn kept
+                    // running, `NewSession` stayed behind it in the queue, `SessionLoaded` never
+                    // landed, and every event the same turn emitted was dropped by the flag set
+                    // three lines above. One tail decides, as the Esc path does.
+                    self.request_interrupt();
                 }
-                self.send_cmd(AgentCmd::NewSession);
+                if !self.send_cmd(AgentCmd::NewSession) {
+                    // Nothing will load a fresh session, so nothing will clear the flag.
+                    // `send_cmd` has already said the channel was full; dropping the
+                    // suppression here is what keeps the UI live instead of silent.
+                    self.pending_new_session = false;
+                    self.pending_new_session_since = None;
+                }
                 self.items
                     .push(Item::System("Starting a new conversation…".to_string()));
                 self.pending_new_baseline = self.items.len();

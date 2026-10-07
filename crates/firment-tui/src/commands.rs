@@ -5,12 +5,12 @@
 //! agent lock — together that is what makes Esc interrupt a running turn.
 
 use firment_core::{
-    Agent, AgentEvent, Cancellable, Config, PermissionChecker, ProviderConfig, Session,
-    SessionMode, SessionStore, ThinkingLevel, ToolVerbosity,
+    Agent, AgentEvent, Config, PermissionChecker, ProviderConfig, Session, SessionMode,
+    SessionStore, ThinkingLevel, ToolVerbosity,
 };
 use futures::FutureExt;
 use std::sync::Arc;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 /// Install the tool set for `mode` and report what it refused.
 ///
 /// Built here, per switch, through the same door the CLI and the GUI use. It used to be two
@@ -56,8 +56,6 @@ async fn emit_refusals(agent: &mut Agent, refusals: Vec<String>) {
 pub(crate) fn spawn_agent_task(
     mut cmd_rx: mpsc::Receiver<AgentCmd>,
     agent: Arc<tokio::sync::Mutex<Agent>>,
-    cancel_tx: watch::Sender<bool>,
-    cancel_signal: Cancellable,
     turn_lock: Arc<tokio::sync::Mutex<()>>,
     store: SessionStore,
     mut task_config: Config,
@@ -216,10 +214,6 @@ pub(crate) fn spawn_agent_task(
                 }
                 AgentCmd::RetryLast => {
                     spawn_turn(None);
-                }
-                AgentCmd::Cancel => {
-                    let _ = cancel_tx.send(true);
-                    cancel_signal.cancel();
                 }
                 AgentCmd::SetModel(model) => {
                     let mut agent = agent.lock().await;
@@ -837,7 +831,12 @@ pub(crate) enum AgentCmd {
     ReviewPath {
         path: String,
     },
-    Cancel,
+    // No `Cancel` command, and the reason is the one this loop keeps being shown: a queued
+    // cancel is delivered by this single task, and a `/model` or `/undo` ahead of it is
+    // parked on the lock the running turn holds -- so the cancel would arrive only after the
+    // turn it meant to stop had finished. Interruption goes through the pre-extracted
+    // handles (`App::request_interrupt`), which is why `Agent::cancel_handle` hands back both
+    // surfaces at once.
     SetModel(String),
     SetThinking(ThinkingLevel),
     SetContextBudget(usize),
