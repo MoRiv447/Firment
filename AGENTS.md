@@ -441,9 +441,12 @@ two variables above are the whole available route.
 - CHANGELOG.md gets an entry per release; the release workflow extracts
   the `## <tag> ...` section verbatim as GitHub release notes, so keep
   headings in the exact `## vX.Y.Z (date) — title` format. The heading and the
-  tag must match **character for character** — `awk` looks for `^## <tag> `, so
-  `v1.0.0rc` against a `v1.0.0-rc` tag silently falls back to a link and the
-  notes nobody wrote get published instead.
+  tag must match **character for character** — `awk` looks for `^## <tag> `, and
+  on no match the job now prints `::error::CHANGELOG.md has no "## <tag> "
+  section` and exits 1. It used to fall back to a link to CHANGELOG.md and
+  publish the notes nobody wrote; that fallback was removed on 2026-10-05, so a
+  mismatched heading stops the release instead of shipping a placeholder, and the
+  sentence above is the rule that keeps it from happening.
 - A pre-release tag (`v1.0.0-rc`) is **invisible to `releases/latest`**, and
   `install.sh` / `install.ps1` resolve that pointer — so an rc never reaches the
   one-liner install, by design. The Windows installer is also built as NSIS only:
