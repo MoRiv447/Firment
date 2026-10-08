@@ -57,7 +57,13 @@ pub struct Adr {
 }
 
 impl Adr {
-    /// One line for the digest.
+    /// One line for the digest, ending with the path to read.
+    ///
+    /// The module's own rule says the digest carries "number, status, title, one line, and the
+    /// path to read" -- and `path` was a field the line never printed, so the prompt told the
+    /// model to "read the record with read_file" and gave it nothing to pass. The number is not
+    /// that: two records in one project can share a title, and the filename is the only thing
+    /// that identifies which file to open.
     pub fn line(&self) -> String {
         let status = match &self.status {
             Some(status) => format!(" [{status}]"),
@@ -68,7 +74,12 @@ impl Adr {
         } else {
             format!(" — {}", self.summary)
         };
-        format!("- ADR-{:04}{status}: {}{summary}", self.number, self.title)
+        format!(
+            "- ADR-{:04}{status}: {}{summary} ({})",
+            self.number,
+            self.title,
+            self.path.display()
+        )
     }
 }
 
@@ -345,10 +356,22 @@ The handler is a few microseconds. Parsing latency grows by one loop iteration.
 
     #[test]
     fn a_record_that_does_not_state_a_status_still_reads() {
-        let record = parse("# 3. Something\n\nWe will do it.\n", 3, PathBuf::new());
+        let record = parse(
+            "# 3. Something\n\nWe will do it.\n",
+            3,
+            PathBuf::from("docs/adr/0003-something.md"),
+        );
         assert_eq!(record.status, None);
         assert!(record.line().starts_with("- ADR-0003: Something"));
         assert!(!record.line().contains("["), "no status means no brackets");
+        // The promise the digest made and did not keep: the prompt tells the model to "read the
+        // record with read_file", so the line has to carry a path to hand to it. Fail-before:
+        // the old `line()` ended after the summary, and `path` was a field nothing read.
+        assert!(
+            record.line().contains("docs/adr/0003-something.md"),
+            "the line must name the file: {}",
+            record.line()
+        );
     }
 
     #[test]

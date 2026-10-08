@@ -111,6 +111,16 @@ pub struct ChatRequest {
     pub messages: Vec<ChatMessage>,
     pub tools: Vec<ToolSpec>,
     pub max_tokens: Option<u32>,
-    pub temperature: Option<f32>,
+    /// No `temperature` field, and that is deliberate rather than an omission.
+    ///
+    /// The request used to carry one: both providers read it as
+    /// `self.temperature.or(request.temperature)` -- the **opposite** precedence to
+    /// `max_tokens`, where a per-request value wins -- and nothing in the workspace ever set
+    /// it, so the field was dead code that made the two knobs look alike while ranking them
+    /// differently. A caller who had set it would have been silently ignored. The temperature
+    /// a request gets is the provider's configured one, which is the only one anyone can
+    /// actually set today (`[providers] temperature` in the config); when a per-request
+    /// override is wanted, add the field, the plumbing and the precedence in one change that
+    /// also fixes `max_tokens` and `temperature` pointing opposite ways.
     pub thinking: Option<ThinkingLevel>,
 }

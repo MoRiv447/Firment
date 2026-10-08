@@ -36,7 +36,6 @@ async fn anthropic_stream_parses_text_and_tool_use() {
         }],
         tools: Vec::new(),
         max_tokens: None,
-        temperature: None,
         thinking: None,
     };
     let mut stream = provider.stream(request).await.unwrap();
@@ -91,7 +90,6 @@ async fn anthropic_stream_tolerates_openrouter_trailers() {
         }],
         tools: Vec::new(),
         max_tokens: None,
-        temperature: None,
         thinking: None,
     };
     let mut stream = provider.stream(request).await.unwrap();
@@ -143,7 +141,6 @@ async fn anthropic_stream_parses_thinking_blocks() {
         }],
         tools: Vec::new(),
         max_tokens: None,
-        temperature: None,
         thinking: Some(firment_core::ThinkingLevel::High),
     };
     let mut stream = provider.stream(request).await.unwrap();
@@ -201,7 +198,6 @@ async fn unparsable_frames_still_prove_the_stream_is_alive() {
         }],
         tools: Vec::new(),
         max_tokens: None,
-        temperature: None,
         thinking: None,
     };
     let mut stream = provider.stream(request).await.unwrap();
@@ -248,7 +244,6 @@ async fn mid_stream_error_is_not_disguised_as_a_finished_turn() {
         }],
         tools: Vec::new(),
         max_tokens: None,
-        temperature: None,
         thinking: None,
     };
     let mut stream = provider.stream(request).await.unwrap();

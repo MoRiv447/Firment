@@ -356,7 +356,6 @@ pub async fn review_diff(
         // findings, and this call must not change anything.
         tools: Vec::new(),
         max_tokens: config.max_output_tokens,
-        temperature: None,
         // Thinking off: the answer is a small JSON document, and a reasoning pass here
         // is exactly the extra wait §16.2-1 is protecting.
         thinking: Some(ThinkingLevel::Off),

@@ -350,7 +350,6 @@ async fn capture_deepseek_body(thinking: ThinkingLevel) -> Value {
         }],
         tools: Vec::new(),
         max_tokens: None,
-        temperature: None,
         thinking: Some(thinking),
     };
     let mut stream = provider.stream(request).await.unwrap();
@@ -399,7 +398,6 @@ async fn generic_openai_reasoning_effort_passes_through() {
         }],
         tools: Vec::new(),
         max_tokens: None,
-        temperature: None,
         thinking: Some(ThinkingLevel::XHigh),
     };
     let mut stream = provider.stream(request).await.unwrap();

@@ -199,7 +199,10 @@ impl AnthropicProvider {
                     .collect::<Vec<_>>()
             );
         }
-        if let Some(t) = self.temperature.or(request.temperature) {
+        // As in `openai.rs`: the configured temperature is the only one, because the
+        // per-request field is gone (`types.rs:ChatRequest` says why). A request that wanted to
+        // change it had no way to, and the read implied it could.
+        if let Some(t) = self.temperature {
             body["temperature"] = json!(t);
         }
         if let Some(level) = request.thinking.filter(|l| *l != ThinkingLevel::Off) {

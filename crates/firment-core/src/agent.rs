@@ -1126,7 +1126,6 @@ impl Agent {
             messages,
             tools: self.registry.specs(),
             max_tokens: None,
-            temperature: None,
             thinking: thinking_opt(self.session.thinking),
         }
     }
@@ -1920,7 +1919,6 @@ impl Agent {
             .collect(),
             tools: Vec::new(),
             max_tokens: Some(2048),
-            temperature: None,
             thinking: None,
         };
         let mut stream = provider.stream(request).await.ok()?;

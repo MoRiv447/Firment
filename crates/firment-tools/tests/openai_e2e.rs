@@ -227,7 +227,6 @@ async fn openai_stream(
         }],
         tools: Vec::new(),
         max_tokens: None,
-        temperature: None,
         thinking: None,
     };
     let mut stream = provider.stream(request).await.unwrap();

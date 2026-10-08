@@ -159,7 +159,12 @@ impl OpenAIProvider {
         if let Some(t) = request.max_tokens.or(self.max_tokens) {
             body["max_tokens"] = json!(t);
         }
-        if let Some(t) = self.temperature.or(request.temperature) {
+        // The provider's configured temperature is the only one there is: `ChatRequest` has no
+        // temperature field, and the reason is stated at its declaration. Note that
+        // `max_tokens` directly above gives a per-request value precedence and this does not --
+        // the two knobs ranked oppositely while looking alike, which is what the removed field
+        // was hiding.
+        if let Some(t) = self.temperature {
             body["temperature"] = json!(t);
         }
         if let Some(level) = request.thinking.filter(|l| *l != ThinkingLevel::Off) {
