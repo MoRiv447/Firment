@@ -61,6 +61,14 @@
   border-color: var(--ink);
 }
 
+.row[data-disabled='true'] {
+  /* The whole row, not just the input: the readout beside a slider that cannot be moved is
+     not information about a value the user can still change. Added when the disabled-state
+     gate learned to read `[data-disabled='true']` -- until then this file was in none of its
+     lists, because the regex looked for `[disabled]` and `:disabled`. */
+  opacity: var(--disabled-opacity);
+}
+
 .row[data-disabled='true'] .input {
   cursor: not-allowed;
 }

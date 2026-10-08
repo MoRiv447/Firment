@@ -16,16 +16,23 @@ import styles from './StepProgress.module.css';
  *   neutral `o`, never a `x`. A step whose outcome nobody has measured yet must
  *   not read as a step that failed. The one state that may be red is `failed`,
  *   and it is only ever reached from a tool that actually reported failure.
- * * **A pending step is legible, not greyed out.** Its label stays readable
- *   (4.51:1 on the light ground), so it reads as "not yet", not as "unavailable".
+ * * **A pending step is legible, not greyed out.** Its label stays readable in both schemes
+ *   (the ratio is measured on `--step-pending-ink` in `tokens.css`), so it reads as "not yet",
+ *   not as "unavailable".
  *
- * Colour per state, both schemes:
+ * Colour per state, both schemes. No ratios here on purpose: a number repeated from
+ * `tokens.css` is a second copy of a measurement, and the scraper that keeps the measurement
+ * honest reads `tokens.css` and `docs/design/tokens.md` -- not this file. Four of these lines
+ * used to quote ratios ("4.51:1 on the light ground", "6.49:1 dark / 6.19:1 light", "6.56:1
+ * light"), none of which was what the palette produces and none of which any test read; the
+ * real figures are on the `--step-*` declarations themselves, which are the only thing these
+ * rules paint with.
  *
- *   done     filled chip -- success pair (6.49:1 dark / 6.19:1 light)
- *   failed   filled chip -- the removed-diff pair (6.56:1 light)
- *   current  no fill, body ink, 2px brand rule underneath
- *   pending  no fill, muted ink
- *   unknown  no fill, muted ink, `o` glyph
+ *   done     filled chip -- --step-done-ink on --step-done-bg
+ *   failed   filled chip -- --step-failed-ink on --step-failed-bg
+ *   current  no fill, --step-current-ink, 2px --step-rule underneath
+ *   pending  no fill, --step-pending-ink
+ *   unknown  no fill, --step-pending-ink, `o` glyph
  *
  * `data-state` carries all of it, which is the whole point of the rewrite: the
  * previous version computed `background`, `color` and `borderBottom` from

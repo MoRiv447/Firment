@@ -120,6 +120,12 @@
   border-color: var(--line);
   color: var(--muted);
   cursor: not-allowed;
+  /* Dimmed like every other disabled control. The `conventions.test.ts` list that decides
+     which stylesheets carry a disabled state used to scan for `[disabled]` and `:disabled`
+     only, so a rule written as `[data-disabled='true']` -- which is how every one of these
+     frames is written -- was invisible to it, and this rule was showing "off" by colour
+     alone in a palette where `--muted` is the same olive family as the text next to it. */
+  opacity: var(--disabled-opacity);
 }
 
 .frame[data-invalid='true'] {

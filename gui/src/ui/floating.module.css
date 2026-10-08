@@ -108,6 +108,10 @@
 .item[data-disabled='true'] {
   color: var(--muted);
   cursor: default;
+  /* One of the three stylesheets the disabled-state gate used to be blind to, because it
+     scans for `[disabled]` / `:disabled` and this is written `[data-disabled='true']`. A
+     menu row that cannot be chosen now says so the same way a Button does. */
+  opacity: var(--disabled-opacity);
 }
 
 /* The keyboard cursor. A wash, not the brand: only one thing on a screen may be

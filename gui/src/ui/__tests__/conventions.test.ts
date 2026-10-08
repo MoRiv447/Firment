@@ -309,30 +309,44 @@ describe('Primitive layer and shell conventions', () => {
     // The file list is closed for the same reason the `data-ui` list is: a
     // component that grows a disabled state has to say so here, which is a cheaper
     // conversation than a control that silently has no disabled signal at all.
-    const dimmed = cssFiles
-      .filter((path) => {
-        // Comments and `:not(:disabled)` are not disabled states. Stripping the
-        // negations first is what keeps a hover rule from counting itself.
-        const source = read(path).replace(/\/\*[\s\S]*?\*\//g, '').replace(/:not\([^)]*\)/g, '');
-        return /\[disabled\]|:disabled/.test(source);
-      })
-      .map((path) => path.slice(path.lastIndexOf('/') + 1))
-      .sort();
-    expect(dimmed).toEqual([
+    //
+    // It used to look for `[disabled]` and `:disabled` alone, and every framed control in this
+    // layer -- `Input`, `Select`, `Menu`, `Slider` -- writes its state as
+    // `[data-disabled='true']` because the state arrives as a `data-*` attribute rather than a
+    // class. Three stylesheets therefore had disabled rules the gate could not see, and none of
+    // them dimmed: a disabled `Select` was a box with slightly greyer text, in a palette where
+    // `--muted` is the same olive family as the label beside it. `[disabled` catches both
+    // spellings, and the `:not(` stripping above keeps a hover rule from counting itself.
+    const DIMMED: string[] = [
       'Button.module.css',
       'ChatView.module.css',
       'Checkbox.module.css',
+      'floating.module.css',
       'Hardware.module.css',
       'MultiSelect.module.css',
       'Radio.module.css',
       'Segmented.module.css',
       'SessionTree.module.css',
+      'Slider.module.css',
       'Switch.module.css',
       'Tabs.module.css',
-    ]);
+      'control.module.css',
+    ];
+    const isDisabledState = (source: string) =>
+      /\[disabled|\:disabled/.test(source) || source.includes("[data-disabled");
+    const dimmed = cssFiles
+      .filter((path) => {
+        // Comments and `:not(:disabled)` are not disabled states. Stripping the
+        // negations first is what keeps a hover rule from counting itself.
+        const source = read(path).replace(/\/\*[\s\S]*?\*\//g, '').replace(/:not\([^)]*\)/g, '');
+        return isDisabledState(source);
+      })
+      .map((path) => path.slice(path.lastIndexOf('/') + 1))
+      .sort();
+    expect(dimmed).toEqual([...DIMMED].sort());
     for (const path of cssFiles) {
       const source = read(path).replace(/\/\*[\s\S]*?\*\//g, '').replace(/:not\([^)]*\)/g, '');
-      if (!/\[disabled\]|:disabled/.test(source)) continue;
+      if (!isDisabledState(source)) continue;
       expect(source, `${path} has a disabled state but does not dim it`).toContain(
         'opacity: var(--disabled-opacity)',
       );

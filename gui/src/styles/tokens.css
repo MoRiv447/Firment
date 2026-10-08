@@ -196,12 +196,12 @@
 
   /* The three step states, derived so a step never invents a fourth green. */
   --step-done-bg: #16230d;           /* = diff-added: same message, two sizes */
-  --step-done-ink: #c9e8a2;
+  --step-done-ink: #c9e8a2;          /* 12.14:1 on --step-done-bg */
   --step-current-ink: #b4f779;
   --step-rule: #8fce5a;              /* a shape, not text: 10.48:1 on bg */
-  --step-pending-ink: #828f70;       /* = dim: "not yet" reads as the quietest rung */
+  --step-pending-ink: #828f70;       /* = dim: "not yet" reads as the quietest rung, 5.48:1 on surface */
   --step-failed-bg: #2e1216;         /* = diff-removed */
-  --step-failed-ink: #ffbcc2;
+  --step-failed-ink: #ffbcc2;        /* 10.89:1 on --step-failed-bg */
 
   /* Keyboard focus. Dark can afford the lime ring (15.54:1); light cannot. */
   --focus-ring: #b4f779;
@@ -292,12 +292,12 @@
   --on-selection: #1a1e15;           /* 14.01:1 */
 
   --step-done-bg: #e4f3d5;
-  --step-done-ink: #24400f;
+  --step-done-ink: #24400f;          /* 9.96:1 on --step-done-bg */
   --step-current-ink: #476f0e;
   --step-rule: #6d8c4a;              /* a 2px rule needs 3:1: 3.71:1 on bg */
-  --step-pending-ink: #1a1e15;
+  --step-pending-ink: #1a1e15;       /* 15.68:1 on surface */
   --step-failed-bg: #fbe0e3;
-  --step-failed-ink: #6d1a20;
+  --step-failed-ink: #6d1a20;        /* 9.28:1 on --step-failed-bg */
 
   --focus-ring: #476f0e;             /* NOT the acid: 4.99:1 is a fill, and a 2px
                                         ring in it on white is 2.5:1, invisible to a
