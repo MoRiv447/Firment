@@ -380,8 +380,36 @@ export function turnReducer(state: TurnState, e: TurnFlowEvent): TurnState {
  */
 export type TurnMap = Record<string, TurnState>;
 
+/**
+ * Give an event the session it belongs to, so it can reach the right slot.
+ *
+ * `turnsReducer` keys its slots on `session_id` and returns the state unchanged without one,
+ * which is correct for an event nobody owns and wrong for an event that simply predates the
+ * stamping -- the backend used to emit turn-flow events with no `session_id` at all. `App`
+ * resolves the owning chat (the event's, else the one open on screen) and this is where that
+ * answer is attached; the caller could not attach it by hand because the reducer was reading
+ * the event's own field, which is how the fallback became a comment that nothing implemented.
+ *
+ * Exported because the routing decision deserves a test of both directions: a background chat's
+ * event must land in the background chat's slot, and an unstamped one must land in the open
+ * chat's -- not both in the open chat, and not neither.
+ */
+export function stampSessionId(
+  e: TurnFlowEvent,
+  fallback: string | null | undefined,
+): TurnFlowEvent {
+  if (e.session_id || !fallback) return e;
+  // Spread-and-replace on a discriminated union: the discriminant is carried by the spread, and
+  // `session_id` is present on every turn-flow member (the reducer reads it off the union), so
+  // the result is a turn-flow event with a different owner and nothing else changed.
+  return { ...e, session_id: fallback };
+}
+
 export function turnsReducer(state: TurnMap, e: TurnFlowEvent): TurnMap {
   const sid = e.session_id || undefined;
+  // An event that reaches here still unattributed belongs to no chat the reducer knows about;
+  // dropping it is the honest answer, and `stampSessionId` above is what makes "the open chat"
+  // the owner before this line can be reached.
   if (!sid) return state;
   const current = state[sid] ?? initialTurnState();
   const next = turnReducer(current, e);

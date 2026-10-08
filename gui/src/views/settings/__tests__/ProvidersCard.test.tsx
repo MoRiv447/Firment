@@ -42,7 +42,7 @@ function setup(over: Partial<Parameters<typeof ProvidersCard>[0]> = {}) {
     onAdd: vi.fn().mockResolvedValue(true),
   };
   render(
-    <ProvidersCard providers={providers} newMsg="" keyMsg="" {...handlers} {...over} />,
+    <ProvidersCard providers={providers} newMsg={null} keyMsg={null} {...handlers} {...over} />,
   );
   const addRow = () => screen.getByPlaceholderText('name (e.g. deepseek)') as HTMLInputElement;
   const modelField = () => screen.getByPlaceholderText(/^model \(/) as HTMLInputElement;
@@ -184,8 +184,33 @@ describe('ProvidersCard', () => {
   });
 
   it('shows what the caller reported', () => {
-    setup({ newMsg: 'saved provider "glm"', keyMsg: 'key saved for glm' });
+    setup({
+      newMsg: { text: 'saved provider "glm"', tone: 'ok' },
+      keyMsg: { text: 'key saved for glm', tone: 'ok' },
+    });
     expect(screen.getByText('saved provider "glm"')).toBeInTheDocument();
     expect(screen.getByText('key saved for glm')).toBeInTheDocument();
+  });
+
+  it('draws a failed write as a failure, not as a save', () => {
+    // The colour was the defect: `failed: …` and `key saved for …` both arrived as bare
+    // strings and both were painted in `--success-ink`, so the line reporting the refusal was
+    // drawn in the colour of the thing it says did not happen.
+    //
+    // One render, one failure and one success side by side, and their class names compared to
+    // each other rather than to a literal: CSS modules scope the names, and what is being
+    // claimed is only that the two tones are not the same style.
+    setup({
+      newMsg: { text: 'could not save "glm": refused', tone: 'error' },
+      keyMsg: { text: 'key saved for glm', tone: 'ok' },
+    });
+    const failure = screen.getByText('could not save "glm": refused');
+    const success = screen.getByText('key saved for glm');
+    expect(failure).toBeInTheDocument();
+    expect(failure.className).not.toEqual(success.className);
+    // The other half of the same sentence: a row-level failure has to reach the screen at all.
+    // `editProvider` and `removeProvider` used to end their catch in `console.error`, which is
+    // invisible to anyone without devtools open.
+    expect(success).toBeInTheDocument();
   });
 });

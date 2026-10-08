@@ -1,7 +1,7 @@
 import { Trash2 } from 'lucide-react';
 import { useRef, useState } from 'react';
 
-import type { ProviderEntryDto } from '../../types';
+import type { CardMessage, ProviderEntryDto } from '../../types';
 import { isComposing } from '../../lib/ime';
 import { Button, Card, Chip, IconButton, PopConfirm, Select, TextInput } from '../../ui';
 import styles from './ProvidersCard.module.css';
@@ -36,9 +36,10 @@ export function ProvidersCard({
   onAdd,
 }: {
   providers: ProviderEntryDto[];
-  /** Set by the caller's IO, shown here because this is where it happened. */
-  newMsg: string;
-  keyMsg: string;
+  /** Set by the caller's IO, shown here because this is where it happened. The tone is the
+   * caller's to say: a card cannot tell a refusal from a receipt by looking at the sentence. */
+  newMsg: CardMessage | null;
+  keyMsg: CardMessage | null;
   /** A local edit -- the caller holds the list, this holds the typing. */
   onChange: (provider: ProviderEntryDto, patch: Partial<ProviderEntryDto>) => void;
   /** Write the row out. Called on blur. */
@@ -160,8 +161,15 @@ export function ProvidersCard({
         )}
       </div>
 
-      {newMsg && <p className={styles.note}>{newMsg}</p>}
-      {keyMsg && <p className={styles.ok}>{keyMsg}</p>}
+      {newMsg && (
+        <p className={newMsg.tone === 'error' ? styles.error : styles.note}>{newMsg.text}</p>
+      )}
+      {/* The success colour is a claim. It used to be applied to every string that arrived
+          here, including `failed: …`, so the line that reported the refusal was drawn in the
+          colour of a save. */}
+      {keyMsg && (
+        <p className={keyMsg.tone === 'error' ? styles.error : styles.ok}>{keyMsg.text}</p>
+      )}
       <p className={styles.hint}>
         Providers are stored in config.toml; keys in auth.json. Pick the default in the Agent card
         below.

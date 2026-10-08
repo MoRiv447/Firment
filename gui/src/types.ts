@@ -352,6 +352,20 @@ export interface SettingsDto {
   providers: ProviderEntryDto[];
 }
 
+/**
+ * A one-line result a card shows after an IO, with the tone it deserves.
+ *
+ * The message used to be a bare string that the card painted in the success colour, so
+ * `failed: …` about a key that was not stored arrived in green next to the row that still
+ * shows the old value -- a failure wearing the colour of the thing it contradicts. The tone
+ * travels with the text because the writer of the message is the only party that knows
+ * whether the call worked; a renderer cannot tell a refusal from a receipt by looking at it.
+ */
+export interface CardMessage {
+  text: string;
+  tone: 'ok' | 'error';
+}
+
 export interface ProviderEntryDto {
   name: string;
   type: string;

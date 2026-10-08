@@ -79,3 +79,14 @@
   color: var(--success-ink);
   font-size: var(--fs-minor);
 }
+
+/* The counterpart `.ok` never had: a message about a write that did not happen must not
+   borrow the colour of one that did. `--step-failed-ink` is the palette's failure ink, the
+   same one `FlashHistory` uses for a refused row, and it carries no new contrast claim --
+   `tokens.test.ts` scrapes the ratios quoted in `tokens.css`, where this token already is. */
+.error {
+  margin: var(--sp-1) 0 0;
+  color: var(--step-failed-ink);
+  font-size: var(--fs-minor);
+  overflow-wrap: anywhere;
+}

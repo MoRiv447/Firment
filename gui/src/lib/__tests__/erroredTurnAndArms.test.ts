@@ -72,6 +72,12 @@ describe('the fall-through arm of the event switch behaves like the arms above i
     const app = read('App.tsx');
     // Find the arm by what it does rather than by which `default:` it happens to be: the file
     // has other switches, and counting them would have this test fail for the wrong reason.
+    //
+    // The arm now calls `dispatch(e)`, the listener's own door, because every event has to be
+    // attributed to a session before `turnsReducer` sees it (the reducer reads
+    // `event.session_id` itself and drops what has none). Renaming the call is exactly the kind
+    // of edit that would silently retire this rule, so the door is checked here as well: it has
+    // to reach the reducer, and it has to stamp on the way.
     const arm = app
       .split('default:')
       .slice(1)
@@ -79,13 +85,17 @@ describe('the fall-through arm of the event switch behaves like the arms above i
         const end = chunk.indexOf('break;');
         return end < 0 ? chunk : chunk.slice(0, end);
       })
-      .find((body) => body.includes('dispatchTurn(e)'));
+      .find((body) => body.includes('dispatch(e)'));
     expect(arm, 'no `default:` arm dispatches to the turn reducer any more').toBeTruthy();
     expect(arm).toContain('flushDeltas()');
     expect(
       arm!.indexOf('flushDeltas()'),
       'a flush after the dispatch would flush nothing: the reducer has already dropped the turn',
-    ).toBeLessThan(arm!.indexOf('dispatchTurn(e)'));
+    ).toBeLessThan(arm!.indexOf('dispatch(e)'));
+    const door = app.match(/const dispatch = \(ev: TurnFlowEvent\) => ([^\n]+)\n/);
+    expect(door, 'the listener has to dispatch through one door, not six call sites').toBeTruthy();
+    expect(door![1]).toContain('dispatchTurn(');
+    expect(door![1]).toContain('stampSessionId(');
     // The arms above it must still be there for this to be a parity rule rather than one check.
     expect(app.match(/flushDeltas\(\)/g)?.length).toBeGreaterThanOrEqual(4);
   });

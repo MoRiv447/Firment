@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { initialTurnState, turnReducer, turnsReducer, type TurnState } from '../turnReducer';
+import {
+  initialTurnState,
+  stampSessionId,
+  turnReducer,
+  turnsReducer,
+  type TurnState,
+} from '../turnReducer';
 import type { ReviewFinding, TurnFlowEvent } from '../../types';
 
 function feed(events: TurnFlowEvent[], start: TurnState = initialTurnState()): TurnState {
@@ -315,8 +321,37 @@ describe('turnsReducer (multi-session routing)', () => {
   });
 
   it('ignores events without a session id (legacy/global)', () => {
+    // The reducer's own rule: with no owner it cannot choose one, and guessing would write into
+    // whichever chat happens to have a slot. `stampSessionId` below is the door that gives an
+    // unstamped event its owner before this line can be reached.
     const orphan: TurnFlowEvent = { type: 'turn_start' };
     expect(turnsReducer({}, orphan)).toEqual({});
+  });
+});
+
+describe('stampSessionId (the fallback the routing comment promised)', () => {
+  const startA: TurnFlowEvent = { type: 'turn_start', session_id: 'a' };
+  const unstamped: TurnFlowEvent = { type: 'turn_start' };
+
+  it('leaves an event that already names its session alone', () => {
+    // The negative control, in the same run as the fallback below: a background chat's event
+    // must not be dragged into the open chat. That is the class this repo keeps finding --
+    // session-scoped state written by whichever reply landed last.
+    expect(stampSessionId(startA, 'open')).toBe(startA);
+    let state = turnsReducer({}, stampSessionId(startA, 'open'));
+    state = turnsReducer(state, stampSessionId({ type: 'text_delta', session_id: 'a', text: 'mine' } as TurnFlowEvent, 'open'));
+    expect(state.a?.turn?.text).toBe('mine');
+    expect(state.open).toBeUndefined();
+  });
+
+  it('gives an unstamped event the open chat as its owner', () => {
+    const stamped = stampSessionId(unstamped, 'open');
+    expect(stamped.session_id).toBe('open');
+    const state = turnsReducer({}, stamped);
+    expect(state.open?.running).toBe(true);
+    // No open chat, no owner: the event stays dropped, which is the reducer's rule, not a
+    // silence the app invents.
+    expect(stampSessionId(unstamped, null)).toBe(unstamped);
   });
 });
 

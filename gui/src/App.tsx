@@ -33,7 +33,7 @@ import { appendMonitorLines } from './lib/monitorLines';
 import { workflowSteps } from './lib/steps';
 import { relightable } from './lib/relight';
 import { useNewSessionShortcut } from './lib/shortcuts';
-import { initialTurnState, turnsReducer } from './lib/turnReducer';
+import { initialTurnState, stampSessionId, turnsReducer } from './lib/turnReducer';
 import type { TurnMap } from './lib/turnReducer';
 import { WorkbenchView } from './views/WorkbenchView';
 import { Inspector } from './shell/Inspector';
@@ -401,6 +401,13 @@ export default function App() {
           (e as { session_id?: string | null }).session_id ||
           sessionRef.current?.id ||
           null;
+        // The fallback above was a comment until it was attached here. `turnsReducer` reads
+        // `event.session_id` itself and returns the state unchanged when that is absent, so an
+        // unstamped event -- a turn kind from a backend that does not stamp yet, or one that
+        // arrives before the first stamped frame -- silently went nowhere while the banners and
+        // the notification below, which did use `sid`, looked as though the chat had received
+        // it. One door, in `stampSessionId`, because six call sites below cannot each remember.
+        const dispatch = (ev: TurnFlowEvent) => dispatchTurn(stampSessionId(ev, sid));
         // Recorded before anything else looks at it: these two are the only notices that end a
         // turn, and the mount re-light has to know whether one has already arrived here.
         if ((e.type === 'turn_end' || e.type === 'error') && sid) {
@@ -409,11 +416,13 @@ export default function App() {
         switch (e.type) {
           case 'turn_start':
             setInfos((prev) => prev.filter((i) => i.sid !== sid));
-            dispatchTurn(e);
+            dispatch(e);
             break;
           case 'text_delta':
           case 'thinking':
-            deltaBuffer.push(e);
+            // Stamped on the way into the buffer, not on the way out: `flushDeltas` runs from a
+            // timer and has no owning chat to ask, and by then the user may have switched.
+            deltaBuffer.push(stampSessionId(e, sid));
             if (deltaTimer === null) {
               deltaTimer = window.setTimeout(flushDeltas, 50);
             }
@@ -421,7 +430,7 @@ export default function App() {
           case 'tool_start':
           case 'tool_end':
             flushDeltas();
-            dispatchTurn(e);
+            dispatch(e);
             // The agent's todo list is a file the `todo` tool rewrites. Nothing
             // else can change it, so the tool reporting is the only refresh
             // trigger this needs -- and polling a file the agent owns would be
@@ -458,14 +467,14 @@ export default function App() {
             // survive. The turn's stale info banners (tool-wave timeout
             // etc.) belong to the same dead turn — clear them too.
             flushDeltas();
-            dispatchTurn(e);
+            dispatch(e);
             setInfos((prev) => prev.filter((i) => i.sid !== sid));
             setPermQueue((q) => q.filter((r) => r.session_id !== sid));
             setAskQueue((q) => q.filter((r) => r.session_id !== sid));
             break;
           case 'turn_end':
             flushDeltas();
-            dispatchTurn(e);
+            dispatch(e);
             setPermQueue((q) => q.filter((r) => r.session_id !== sid));
             setAskQueue((q) => q.filter((r) => r.session_id !== sid));
             if (sid && sid === sessionRef.current?.id) {
@@ -559,7 +568,7 @@ export default function App() {
             // (a `turn_end`, a new kind added to `TURN_FLOW_KINDS`) close the turn while the
             // sentence that arrived with it was still waiting for the 50ms timer.
             flushDeltas();
-            dispatchTurn(e);
+            dispatch(e);
             break;
         }
       }),

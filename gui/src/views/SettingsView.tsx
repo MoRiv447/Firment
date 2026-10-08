@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { Callout } from '../ui';
 import styles from './SettingsView.module.css';
 import { api } from '../lib/api';
-import type { ProviderEntryDto, SettingsDto } from '../types';
+import type { CardMessage, ProviderEntryDto, SettingsDto } from '../types';
 import { setThemeSetting } from '../lib/theme';
 import { AgentCard } from './settings/AgentCard';
 import { ProvidersCard } from './settings/ProvidersCard';
@@ -11,11 +11,14 @@ import { ProvidersCard } from './settings/ProvidersCard';
 export function SettingsView() {
   const [settings, setSettings] = useState<SettingsDto | null>(null);
   const [models, setModels] = useState<string[]>([]);
-  const [keyMsg, setKeyMsg] = useState('');
+  // Toned, not bare strings: these two lines report writes, and a card cannot tell a refusal
+  // from a receipt by reading the sentence. `save` below already keeps its success and failure
+  // in two separate states; these two had one state each and the colour was guessed.
+  const [keyMsg, setKeyMsg] = useState<CardMessage | null>(null);
   const [saveMsg, setSaveMsg] = useState('');
   const [saveErr, setSaveErr] = useState('');
 
-  const [newMsg, setNewMsg] = useState('');
+  const [newMsg, setNewMsg] = useState<CardMessage | null>(null);
 
   const load = () => {
     void api
@@ -79,11 +82,11 @@ export function SettingsView() {
   }) => {
     try {
       await api.setProvider(fields.name, fields.type, fields.baseUrl, fields.model);
-      setNewMsg(`saved provider "${fields.name}"`);
+      setNewMsg({ text: `saved provider "${fields.name}"`, tone: 'ok' });
       load();
       return true;
     } catch (err) {
-      setNewMsg(`failed: ${err}`);
+      setNewMsg({ text: `failed: ${err}`, tone: 'error' });
       console.error(err);
       return false;
     }
@@ -94,6 +97,12 @@ export function SettingsView() {
       await api.setProvider(p.name, p.type, p.base_url, p.model);
       load();
     } catch (err) {
+      // Said on the card, not only in the console. The row keeps its draft on a failed write --
+      // that is this card's own rule -- so without a line here the user sees the value they typed
+      // still in the box and no indication that the config on disk says otherwise. The reload
+      // that would have corrected the row is the `load()` on the success path, and a failure
+      // skips it.
+      setNewMsg({ text: `could not save "${p.name}": ${err}`, tone: 'error' });
       console.error(err);
     }
   };
@@ -103,6 +112,10 @@ export function SettingsView() {
       await api.removeProvider(p.name);
       load();
     } catch (err) {
+      // A delete that failed leaves the row on screen looking exactly as it did before the
+      // confirmation was accepted, which reads as "it is gone from the config, just not from my
+      // list" unless something says otherwise.
+      setNewMsg({ text: `could not delete "${p.name}": ${err}`, tone: 'error' });
       console.error(err);
     }
   };
@@ -127,10 +140,12 @@ export function SettingsView() {
   const saveProviderKey = async (p: ProviderEntryDto, key: string) => {
     try {
       await api.setApiKey(p.name, key);
-      setKeyMsg(`key saved for ${p.name}`);
+      setKeyMsg({ text: `key saved for ${p.name}`, tone: 'ok' });
       load();
     } catch (err) {
-      setKeyMsg(`failed: ${err}`);
+      // The tone is the point of this line: the string arrived in `failed: …` form and was
+      // drawn in the success colour, next to a row whose key had not been stored.
+      setKeyMsg({ text: `failed: ${err}`, tone: 'error' });
       console.error(err);
     }
   };
