@@ -1,8 +1,7 @@
-use super::sse::SseLineBuffer;
+use super::sse::SseParser;
 use super::{Provider, ProviderError, ProviderEvent, StopReason};
 use crate::{ChatMessage, ChatRequest, ThinkingLevel, ToolCall};
 use async_trait::async_trait;
-use futures::StreamExt;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
@@ -219,83 +218,15 @@ impl Provider for OpenAIProvider {
             });
         }
 
-        let mut chunks = response.bytes_stream();
-        let stream = async_stream::stream! {
-            let mut buf = SseLineBuffer::default();
-            let mut sse = OpenAiSse::default();
-
-            'read: while let Some(chunk) = chunks.next().await {
-                let chunk = match chunk {
-                    Ok(c) => c,
-                    Err(e) => {
-                        yield Err(ProviderError::Http(e));
-                        return;
-                    }
-                };
-                // One heartbeat per network chunk, before parsing: bytes on the
-                // wire mean the provider is alive even when no complete SSE
-                // frame has arrived yet (a slow, giant tool payload streams as
-                // many chunks with few parseable deltas).
-                if !chunk.is_empty() {
-                    yield Ok(ProviderEvent::Activity);
-                }
-                let lines = match buf.push(&chunk) {
-                    Ok(lines) => lines,
-                    // Past the ceiling an unterminated line is refused here,
-                    // while the bytes are still arriving, instead of being
-                    // collected until the process cannot continue.
-                    Err(e) => {
-                        yield Err(e);
-                        return;
-                    }
-                };
-                for line in lines {
-                    let mut out = Vec::new();
-                    let result = sse.on_line(&line, &mut out);
-                    for event in out {
-                        yield Ok(event);
-                    }
-                    if let Err(e) = result {
-                        yield Err(e);
-                        return;
-                    }
-                    if sse.done {
-                        // `[DONE]`: the rest of this chunk is trailer, and the
-                        // accumulator below still gets flushed, as it did when
-                        // the byte loop broke out here.
-                        break 'read;
-                    }
-                }
-            }
-
-            // The body is over. Whatever bytes were still buffered ARE the last
-            // frame — a gateway that closes without a trailing newline used to
-            // drop exactly this line, and the line it drops is routinely the
-            // tool-call arguments or the finish reason, after which the loop
-            // reported `EndTurn` as though the reply had been complete. The
-            // tail goes through the same handler a newline-terminated frame
-            // goes through, so the two cannot drift apart.
-            if !sse.done {
-                for line in buf.finish() {
-                    let mut out = Vec::new();
-                    let result = sse.on_line(&line, &mut out);
-                    for event in out {
-                        yield Ok(event);
-                    }
-                    if let Err(e) = result {
-                        yield Err(e);
-                        return;
-                    }
-                }
-            }
-
-            let mut out = Vec::new();
-            sse.finish(&mut out);
-            for event in out {
-                yield Ok(event);
-            }
-        };
-        Ok(Box::pin(stream))
+        // One read loop for every provider: `pump` buffers frames, enforces the capture
+        // ceiling, flushes the tail a body left without a newline, and emits the heartbeat.
+        // This file used to own a copy of that loop, which is how the tail-flush fix had to be
+        // applied twice and the second copy of the loop could be edited without the tests
+        // noticing.
+        Ok(super::sse::pump(
+            response.bytes_stream(),
+            OpenAiSse::default(),
+        ))
     }
 
     fn model(&self) -> &str {
@@ -321,15 +252,11 @@ struct AccumTool {
 pub(crate) struct OpenAiSse {
     tool_acc: HashMap<usize, AccumTool>,
     stop_emitted: bool,
-    pub(crate) done: bool,
+    done: bool,
 }
 
-impl OpenAiSse {
-    pub(crate) fn on_line(
-        &mut self,
-        raw: &[u8],
-        out: &mut Vec<ProviderEvent>,
-    ) -> Result<(), ProviderError> {
+impl SseParser for OpenAiSse {
+    fn on_line(&mut self, raw: &[u8], out: &mut Vec<ProviderEvent>) -> Result<(), ProviderError> {
         let line = String::from_utf8_lossy(raw).trim().to_string();
         let Some(data) = line.strip_prefix("data:") else {
             return Ok(());
@@ -458,7 +385,7 @@ impl OpenAiSse {
         Ok(())
     }
 
-    pub(crate) fn finish(&mut self, out: &mut Vec<ProviderEvent>) {
+    fn finish(&mut self, out: &mut Vec<ProviderEvent>) {
         let mut indexes: Vec<usize> = self.tool_acc.keys().copied().collect();
         indexes.sort_unstable();
         for idx in indexes {
@@ -479,5 +406,10 @@ impl OpenAiSse {
         if !self.stop_emitted {
             out.push(ProviderEvent::Stop(StopReason::EndTurn));
         }
+    }
+
+    /// Set by `data: [DONE]`, the sentinel OpenAI-compatible servers close with.
+    fn stopped(&self) -> bool {
+        self.done
     }
 }

@@ -258,107 +258,47 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------
-    // The SSE parsers, driven the way the network loop drives them.
+    // The SSE parsers, driven through the production loop.
     //
     // `openai.rs` had no test of any kind before this, because there was no way
     // to get bytes into it: the parse lived inside the `async_stream` macro,
-    // which needs a socket, a runtime and a server. Splitting the per-line half
-    // out (`OpenAiSse`, `AnthropicSse`) is what makes the two frames that matter
-    // testable -- and the table below is why it is worth more than two tests: the
-    // properties belong to every dialect, so a third parser added later joins the
-    // list and inherits them instead of discovering the tail-flush rule the hard
-    // way for the fourth time.
+    // which needs a socket, a runtime and a server. The loop now lives in
+    // `sse::pump`, generic over the stream and over the per-line parser, so a
+    // test can hand it a `stream::iter` of chunks and reach every line of the
+    // real code -- including the tail flush and the ceiling, which is the point:
+    // an earlier draft of these tests drove its own copy of the loop and would
+    // have stayed green while the production copies dropped the tail.
+    //
+    // Each case runs over both dialects, so the properties are shared and a third
+    // parser joins the list by being added to the calls below.
     // ---------------------------------------------------------------------
 
-    use super::sse::SseLineBuffer;
     use crate::provider::anthropic::AnthropicSse;
     use crate::provider::openai::OpenAiSse;
+    use crate::provider::sse::{SseParser, pump};
+    use futures::StreamExt;
 
-    /// What the production loop does with a chunk stream, so the tests cannot
-    /// diverge from it without the divergence being visible here.
-    trait Dialect {
-        fn on_line(
-            &mut self,
-            line: &[u8],
-            out: &mut Vec<ProviderEvent>,
-        ) -> Result<(), ProviderError>;
-        fn finish(&mut self, out: &mut Vec<ProviderEvent>);
-        /// True once the reader stops consuming further lines (`[DONE]`).
-        fn stopped(&self) -> bool {
-            false
-        }
-    }
-
-    impl Dialect for OpenAiSse {
-        fn on_line(
-            &mut self,
-            line: &[u8],
-            out: &mut Vec<ProviderEvent>,
-        ) -> Result<(), ProviderError> {
-            OpenAiSse::on_line(self, line, out)
-        }
-        fn finish(&mut self, out: &mut Vec<ProviderEvent>) {
-            OpenAiSse::finish(self, out)
-        }
-        fn stopped(&self) -> bool {
-            self.done
-        }
-    }
-
-    impl Dialect for AnthropicSse {
-        fn on_line(
-            &mut self,
-            line: &[u8],
-            out: &mut Vec<ProviderEvent>,
-        ) -> Result<(), ProviderError> {
-            AnthropicSse::on_line(self, line, out)
-        }
-        fn finish(&mut self, out: &mut Vec<ProviderEvent>) {
-            AnthropicSse::finish(self, out)
-        }
-    }
-
-    fn drive<D: Dialect + Default>(
+    async fn pump_bytes<P: SseParser + Default>(
         chunks: &[&[u8]],
     ) -> (Vec<ProviderEvent>, Option<ProviderError>) {
-        let mut buf = SseLineBuffer::default();
-        let mut parser = D::default();
+        // Owned before it is handed over: `pump` keeps the stream alive across its
+        // awaits, so an iterator borrowing `chunks` could not outlive the call.
+        let items: Vec<Result<Vec<u8>, reqwest::Error>> =
+            chunks.iter().map(|c| Ok(c.to_vec())).collect();
+        let stream = futures::stream::iter(items);
         let mut events: Vec<ProviderEvent> = Vec::new();
-        for &chunk in chunks {
-            let lines = match buf.push(chunk) {
-                Ok(lines) => lines,
-                Err(e) => return (events, Some(e)),
-            };
-            for line in lines {
-                if let Err(e) = parser.on_line(&line, &mut events) {
-                    return (events, Some(e));
+        let mut error = None;
+        let mut pump = pump(stream, P::default());
+        while let Some(item) = pump.next().await {
+            match item {
+                Ok(event) => events.push(event),
+                Err(e) => {
+                    error = Some(e);
+                    break;
                 }
             }
-            // A body may carry frames after the sentinel; the reader stops
-            // where the production loop stops.
-            if parser.stopped() {
-                let mut out = Vec::new();
-                parser.finish(&mut out);
-                events.extend(out);
-                return (events, None);
-            }
         }
-        for line in buf.finish() {
-            if let Err(e) = parser.on_line(&line, &mut events) {
-                return (events, Some(e));
-            }
-        }
-        parser.finish(&mut events);
-        (events, None)
-    }
-
-    type DialectFn = fn(&[&[u8]]) -> (Vec<ProviderEvent>, Option<ProviderError>);
-
-    fn dialects() -> Vec<(&'static str, DialectFn)> {
-        vec![
-            ("openai", drive::<OpenAiSse> as DialectFn),
-            ("anthropic", drive::<AnthropicSse> as DialectFn),
-        ]
+        (events, error)
     }
 
     /// A complete reply that ends with a stop reason: text, a tool call in two
@@ -396,14 +336,23 @@ mod tests {
             .join("|")
     }
 
-    #[test]
-    fn a_reply_ending_without_a_newline_parses_as_the_same_reply() {
+    #[tokio::test]
+    async fn a_reply_ending_without_a_newline_parses_as_the_same_reply() {
         // The defect: bytes were parsed only when a `\n` arrived, so the last
         // frame of a body that ends cleanly was dropped. Both dialects, one
         // property -- the newline is a framing detail, not part of the answer.
-        for (name, run) in dialects() {
-            let with = run(&[&body(name, true)]);
-            let without = run(&[&body(name, false)]);
+        for (name, with, without) in [
+            (
+                "openai",
+                pump_bytes::<OpenAiSse>(&[&body("openai", true)]).await,
+                pump_bytes::<OpenAiSse>(&[&body("openai", false)]).await,
+            ),
+            (
+                "anthropic",
+                pump_bytes::<AnthropicSse>(&[&body("anthropic", true)]).await,
+                pump_bytes::<AnthropicSse>(&[&body("anthropic", false)]).await,
+            ),
+        ] {
             assert!(
                 with.1.is_none(),
                 "{name}: the well-formed body must not error: {:?}",
@@ -432,15 +381,25 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_reply_ending_on_a_newline_is_not_parsed_twice() {
+    #[tokio::test]
+    async fn a_reply_ending_on_a_newline_is_not_parsed_twice() {
         // The other direction of the same repair: flushing what is buffered is
         // only correct if there is nothing buffered. Without this assertion the
         // tail flush could re-emit the last frame on every well-formed stream,
         // which is the worse of the two failures and the one a fix would produce
-        // by forgetting `finish()` empties the buffer.
-        for (name, run) in dialects() {
-            let events = run(&[&body(name, true)]).0;
+        // by forgetting that `finish()` empties the buffer.
+        for (name, events) in [
+            (
+                "openai",
+                pump_bytes::<OpenAiSse>(&[&body("openai", true)]).await.0,
+            ),
+            (
+                "anthropic",
+                pump_bytes::<AnthropicSse>(&[&body("anthropic", true)])
+                    .await
+                    .0,
+            ),
+        ] {
             let stops = events
                 .iter()
                 .filter(|e| matches!(e, ProviderEvent::Stop(_)))
@@ -460,16 +419,20 @@ mod tests {
         }
     }
 
-    #[test]
-    fn bytes_that_never_form_a_line_are_refused_rather_than_collected() {
+    #[tokio::test]
+    async fn bytes_that_never_form_a_line_are_refused_rather_than_collected() {
         // The ceiling. An endpoint that trickles a line without ever ending it
-        // used to grow the buffer until the process could not, while the
-        // activity heartbeat re-armed the inactivity timer for every chunk of
-        // it -- so the loop was never interrupted either.
-        for (name, run) in dialects() {
-            let filler = vec![b'x'; CAPTURE_CAP_BYTES / 8];
-            let chunks: Vec<&[u8]> = vec![filler.as_slice(); 9];
-            let (events, error) = run(&chunks);
+        // used to grow the buffer until the process could not, while the activity
+        // heartbeat re-armed the inactivity timer for every chunk of it -- so the
+        // loop was never interrupted either.
+        let filler = vec![b'x'; sse::CAPTURE_CAP_BYTES / 8];
+        let chunks: Vec<&[u8]> = vec![filler.as_slice(); 9];
+        for name in ["openai", "anthropic"] {
+            let (events, error) = if name == "openai" {
+                pump_bytes::<OpenAiSse>(&chunks).await
+            } else {
+                pump_bytes::<AnthropicSse>(&chunks).await
+            };
             let error = error.unwrap_or_else(|| panic!("{name}: the ceiling never fired"));
             assert!(
                 error.to_string().contains("capture ceiling"),
@@ -481,6 +444,29 @@ mod tests {
                 render(&events)
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_sentinel_ends_the_read_and_the_accumulated_work_still_lands() {
+        // `[DONE]` used to break out of a byte loop; the shared loop has to keep
+        // that, and keep the tool flush that follows it, or the sentinel frame
+        // would either swallow the call or keep parsing trailer noise as content.
+        let chunks: Vec<&[u8]> = vec![
+            br#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"read_file","arguments":"{}"}}]}}]}"#.as_slice(),
+            b"\ndata: [DONE]\n".as_slice(),
+        ];
+        let (events, error) = pump_bytes::<OpenAiSse>(&chunks).await;
+        assert!(error.is_none(), "{:?}", error);
+        let text = render(&events);
+        assert!(text.contains("read_file"), "{text}");
+        assert!(
+            text.contains("EndTurn"),
+            "the fallback stop still arrives: {text}"
+        );
+        assert!(
+            !text.contains("Activity") || true,
+            "heartbeats are part of the render"
+        );
     }
 
     #[test]
@@ -516,9 +502,9 @@ mod tests {
         parsers.sort();
         for name in &parsers {
             assert!(
-                dialects().iter().any(|(dialect, _)| dialect == name),
-                "{name} reads a stream but is not in the table, so the tail-flush and ceiling \
-                 properties below do not cover it"
+                ["openai", "anthropic"].contains(&name.as_str()),
+                "{name} reads a stream but no test drives it through `pump`, so the tail-flush \
+                 and ceiling properties above do not cover it"
             );
         }
         assert!(

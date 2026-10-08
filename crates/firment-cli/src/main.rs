@@ -3746,12 +3746,20 @@ mod tests {
     /// source directory in the repository, including the Tauri workspace, and keys on `bytes_stream(`
     /// -- the call that opens the buffer -- rather than on a list of files someone remembered.
     ///
-    /// A file passes by either using the shared line buffer (which owns the ceiling and refuses at
-    /// it) or naming its own ceiling constant. Naming is enough; the defect was never that a
-    /// different number would be wrong, it was that no number was there.
+    /// A file passes by reading through the shared SSE loop (which owns the ceiling, the tail
+    /// flush and the heartbeat) or by naming its own ceiling constant. Naming is enough; the
+    /// defect was never that a different number would be wrong, it was that no number was there.
+    /// `sse::pump` is on the list because the providers no longer touch the buffer themselves --
+    /// and that is the point of the needle: a file that reads `bytes_stream(` through its own
+    /// loop has re-created the copy where a ceiling or a flush can be forgotten again.
     #[test]
     fn every_stream_reader_names_a_cap() {
-        const CEILINGS: [&str; 3] = ["SseLineBuffer", "CAPTURE_CAP_BYTES", "MAX_BODY_BYTES"];
+        const CEILINGS: [&str; 4] = [
+            "pump(",
+            "SseLineBuffer",
+            "CAPTURE_CAP_BYTES",
+            "MAX_BODY_BYTES",
+        ];
         let mut readers: Vec<String> = Vec::new();
         let mut uncapped: Vec<String> = Vec::new();
         for dir in [

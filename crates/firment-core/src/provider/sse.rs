@@ -16,7 +16,119 @@
 /// a provider must not depend on a tool crate.
 pub const CAPTURE_CAP_BYTES: usize = 8 * 1024 * 1024;
 
+use crate::ProviderEvent;
 use crate::provider::ProviderError;
+use crate::provider::ProviderStream;
+use futures::StreamExt;
+
+/// One provider's per-line state machine: what a complete SSE frame produces.
+///
+/// Kept apart from [`pump`] so a response body can be driven through it without a socket, and
+/// so the two dialects differ in exactly one place -- this trait -- rather than in two copies
+/// of a read loop.
+pub(crate) trait SseParser: Send + 'static {
+    /// Events the frame produced. `Err` is fatal and abandons the rest of the body, which is
+    /// what the `return` inside the old byte loop did.
+    fn on_line(&mut self, line: &[u8], out: &mut Vec<ProviderEvent>) -> Result<(), ProviderError>;
+    /// What the stream emits once the body is done: the accumulated tool calls, then a stop
+    /// reason if the server never sent one.
+    fn finish(&mut self, out: &mut Vec<ProviderEvent>);
+    /// True when the reader stops consuming further lines (`data: [DONE]`).
+    fn stopped(&self) -> bool {
+        false
+    }
+}
+
+/// Read a provider's chunk stream to the end: buffer bytes into frames, hand each frame to
+/// `parser`, flush what the body left unnewline, then run `parser.finish`.
+///
+/// There is exactly one of these, and that is the point. Both parsers used to carry their own
+/// copy of the loop, and the copy is where the two bugs this function closes lived: neither
+/// read its buffer after the stream ended (so a gateway that closes the body without a trailing
+/// newline lost the last frame, routinely the tool-call arguments or the stop reason, and the
+/// loop then reported `EndTurn` as if the reply had been complete), and neither bounded the
+/// buffer at all -- while the `Activity` heartbeat below re-armed the inactivity timer for
+/// every chunk of the unbounded growth. A fix applied to one copy is the shape this repo keeps
+/// finding; a fix with no second copy to forget is not.
+/// Generic over the chunk and error types on purpose: `reqwest` hands out `Bytes`
+/// and its own error, while a test hands out `Vec<u8>` and an error it cannot
+/// construct. `AsRef<[u8]>` and `Into<ProviderError>` cover both, so the test
+/// drives this function rather than a copy of it.
+pub(crate) fn pump<St, C, E>(mut chunks: St, mut parser: impl SseParser) -> ProviderStream
+where
+    St: futures::stream::Stream<Item = Result<C, E>> + Send + Unpin + 'static,
+    C: AsRef<[u8]> + Send + 'static,
+    E: Into<ProviderError> + Send + 'static,
+{
+    Box::pin(async_stream::stream! {
+        let mut buf = SseLineBuffer::default();
+
+        'read: while let Some(chunk) = chunks.next().await {
+            let chunk = match chunk {
+                Ok(c) => c,
+                Err(e) => {
+                    yield Err(e.into());
+                    return;
+                }
+            };
+            // One heartbeat per network chunk, before parsing: bytes on the wire mean the
+            // provider is alive even when no complete SSE frame has arrived yet (a slow, giant
+            // tool payload streams as many chunks with few parseable deltas).
+            if !chunk.as_ref().is_empty() {
+                yield Ok(ProviderEvent::Activity);
+            }
+            let lines = match buf.push(chunk.as_ref()) {
+                Ok(lines) => lines,
+                // Past the ceiling an unterminated line is refused here, while the bytes are
+                // still arriving, instead of being collected until the process cannot continue.
+                Err(e) => {
+                    yield Err(e);
+                    return;
+                }
+            };
+            for line in lines {
+                let mut out = Vec::new();
+                let result = parser.on_line(&line, &mut out);
+                for event in out {
+                    yield Ok(event);
+                }
+                if let Err(e) = result {
+                    yield Err(e);
+                    return;
+                }
+                if parser.stopped() {
+                    // `[DONE]`: the rest of this chunk is trailer, and the flush below still
+                    // runs, as it did when the byte loop broke out here.
+                    break 'read;
+                }
+            }
+        }
+
+        // The body ended with bytes still buffered, which means the last frame had no trailing
+        // newline. Those bytes ARE the last frame, and they go through the same handler a
+        // newline-terminated frame went through: a second branch for the tail is how the two
+        // would start disagreeing. Skipped after `[DONE]`, where the reader had already stopped.
+        if !parser.stopped() {
+            for line in buf.finish() {
+                let mut out = Vec::new();
+                let result = parser.on_line(&line, &mut out);
+                for event in out {
+                    yield Ok(event);
+                }
+                if let Err(e) = result {
+                    yield Err(e);
+                    return;
+                }
+            }
+        }
+
+        let mut out = Vec::new();
+        parser.finish(&mut out);
+        for event in out {
+            yield Ok(event);
+        }
+    })
+}
 
 /// Accumulates a byte stream into complete lines.
 ///

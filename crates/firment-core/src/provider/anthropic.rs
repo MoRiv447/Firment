@@ -1,8 +1,7 @@
-use super::sse::SseLineBuffer;
+use super::sse::SseParser;
 use super::{Provider, ProviderError, ProviderEvent, StopReason};
 use crate::{ChatMessage, ChatRequest, ThinkingLevel, ToolCall};
 use async_trait::async_trait;
-use futures::StreamExt;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
@@ -269,78 +268,15 @@ impl Provider for AnthropicProvider {
             });
         }
 
-        let mut chunks = response.bytes_stream();
-        let stream = async_stream::stream! {
-            let mut buf = SseLineBuffer::default();
-            let mut sse = AnthropicSse::default();
-
-            while let Some(chunk) = chunks.next().await {
-                let chunk = match chunk {
-                    Ok(c) => c,
-                    Err(e) => {
-                        yield Err(ProviderError::Http(e));
-                        return;
-                    }
-                };
-                // One heartbeat per network chunk, before parsing: bytes on the
-                // wire mean the provider is alive even when no complete SSE
-                // frame has arrived yet (a slow, giant tool payload streams as
-                // many chunks with few parseable deltas).
-                if !chunk.is_empty() {
-                    yield Ok(ProviderEvent::Activity);
-                }
-                let lines = match buf.push(&chunk) {
-                    Ok(lines) => lines,
-                    // Refused at the ceiling, while the bytes are still
-                    // arriving, rather than collected until the process cannot
-                    // continue: this buffer used to have no ceiling at all and
-                    // the heartbeat above re-armed the timer for every chunk of
-                    // it.
-                    Err(e) => {
-                        yield Err(e);
-                        return;
-                    }
-                };
-                for line in lines {
-                    let mut out = Vec::new();
-                    let result = sse.on_line(&line, &mut out);
-                    for event in out {
-                        yield Ok(event);
-                    }
-                    if let Err(e) = result {
-                        yield Err(e);
-                        return;
-                    }
-                }
-            }
-
-            // The body ended with bytes still buffered, which means the last
-            // frame had no trailing newline. Under Anthropic's dialect that
-            // frame is most often `content_block_stop` (the only place a
-            // `ToolCall` is emitted) or `message_delta` (the only place a stop
-            // reason is), so dropping it lost a whole tool call and then
-            // reported `EndTurn` as if the model had finished cleanly. Same
-            // handler as a newline-terminated frame, by design: a second copy
-            // of this branch is how the two would start disagreeing.
-            for line in buf.finish() {
-                let mut out = Vec::new();
-                let result = sse.on_line(&line, &mut out);
-                for event in out {
-                    yield Ok(event);
-                }
-                if let Err(e) = result {
-                    yield Err(e);
-                    return;
-                }
-            }
-
-            let mut out = Vec::new();
-            sse.finish(&mut out);
-            for event in out {
-                yield Ok(event);
-            }
-        };
-        Ok(Box::pin(stream))
+        // One read loop for every provider, in `sse::pump`: frame buffering, the capture
+        // ceiling, the tail flush and the heartbeat. This dialect loses more than the other
+        // when the tail is dropped -- `content_block_stop` is the only place a `ToolCall` is
+        // emitted and `message_delta` the only place a stop reason is -- so the loop that
+        // protects it exists once now, in the file whose test drives it.
+        Ok(super::sse::pump(
+            response.bytes_stream(),
+            AnthropicSse::default(),
+        ))
     }
 
     fn model(&self) -> &str {
@@ -362,23 +298,19 @@ enum Block {
     },
 }
 
-/// The per-line half of the Anthropic parser, kept out of the network loop so a
-/// response body can be driven through it without a socket.
+/// The per-line half of the Anthropic parser.
 ///
-/// `on_line` returns what one frame produced; `Err` is fatal and, like the
-/// `return` it replaces, abandons the rest of the body.
+/// `on_line` returns what one frame produced; `Err` is fatal and, like the `return` it
+/// replaces, abandons the rest of the body. The read loop that feeds it is `sse::pump`, shared
+/// with the other dialect and driven by that module's tests.
 #[derive(Default)]
 pub(crate) struct AnthropicSse {
     blocks: HashMap<usize, Block>,
     stop_emitted: bool,
 }
 
-impl AnthropicSse {
-    pub(crate) fn on_line(
-        &mut self,
-        raw: &[u8],
-        out: &mut Vec<ProviderEvent>,
-    ) -> Result<(), ProviderError> {
+impl SseParser for AnthropicSse {
+    fn on_line(&mut self, raw: &[u8], out: &mut Vec<ProviderEvent>) -> Result<(), ProviderError> {
         let line = String::from_utf8_lossy(raw).trim().to_string();
         let Some(data) = line.strip_prefix("data:") else {
             return Ok(());
@@ -584,7 +516,7 @@ impl AnthropicSse {
         Ok(())
     }
 
-    pub(crate) fn finish(&mut self, out: &mut Vec<ProviderEvent>) {
+    fn finish(&mut self, out: &mut Vec<ProviderEvent>) {
         if !self.stop_emitted {
             out.push(ProviderEvent::Stop(StopReason::EndTurn));
         }
