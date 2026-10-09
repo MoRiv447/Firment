@@ -1,5 +1,213 @@
 # Changelog
 
+## v1.0.0-rc2 (2026-10-09) — the second candidate: 109 commits, 72 of them fixes, and the shape they share
+
+Everything since `v1.0.0-rc` — 109 commits, **72 fixes**, 17 features, 13 docs,
+7 style, counted at `7adb195`. This entry's own commit is the 110th and changes no
+product code; the count is tied to a commit rather than left as a number, because a
+release note is exactly where a drifting count goes unnoticed. They come from audit
+**rounds 4 through 9** — six rounds, each run against a
+tree whose gates were already green — recorded in
+`docs/handoff/review-2026-10-03.md`, `review-2026-10-05.md` and
+`review-2026-10-08.md`. The headline is not the count, it is the shape: almost
+none of these were unreachable codepaths. They were the **second copy of a guard**
+that had been fixed once, a **failure returning `Ok`**, a **claim in a comment or a
+document that the code contradicted**, and a **test that drove a duplicate of the
+production path** instead of the path. So this candidate ships instruments as well
+as fixes: six source-scanning gates added this round (five in the CLI's test module,
+one in the TUI's), each of which walks the workspace and fails if it reads nothing.
+The CLI module carries 17 gate tests in total.
+
+### Streams: the last frame, and one ceiling
+
+- A reply whose final SSE frame had no trailing newline **was not parsed at all** —
+  routinely the tool-call arguments or the finish reason — and the loop then reported
+  `EndTurn` as though the reply had been complete. Both providers now share one read
+  loop (`provider/sse.rs`) that pushes the leftover bytes through the same handler a
+  newline-terminated frame goes through, so the two dialects cannot drift apart.
+- The same loop owns the byte ceiling: bytes that never form a line are refused
+  while they are still arriving, rather than collected until the process cannot
+  continue. It is one number, `CAPTURE_CAP_BYTES`, read by the providers and by the
+  serial monitor tool.
+- A `[DONE]` sentinel still ends the read and the accumulated work still lands.
+- **The tests that were meant to prove this were driving my copy of the loop, not
+  the providers'.** Found after the fix shipped, by deleting the production flush and
+  watching everything stay green. They now call `sse::pump` directly and the gate's
+  needle is `pump(`.
+
+### Cancellation, and every way out of a turn
+
+- A cancelled parent stopped its child's current tool but **not its next turn**. The
+  propagator now drives both channels a nested agent can be stopped through, and a
+  gate refuses any agent cancelled through only one of them.
+- `/new` queued the cancel on the command channel, which a loop that is busy never
+  reads; it interrupts through the handles now, and a new session that never lands
+  stops silencing the UI after 15 s instead of forever.
+- `run_turn` guarantees the `Error` + `TurnEnd` pair on every `Err` it returns. The
+  callers had each been compensating differently — the TUI answered any `Err` with
+  its own pair, so a provider failure that had already announced itself arrived
+  twice, from a site that never asks whether it owns a boundary.
+- A delegated run now opens a turn and closes it; previously a nested run reset the
+  parent's whole turn boundary.
+
+### Failures that used to be reported as successes
+
+- A session store or a key store that cannot be read is **never saved over**; a
+  journal backup is never written on top of another file's recovery copy.
+- Event-log rotation returns `Err` naming the path. Session listing reports the files
+  it had to shed; `pending_turns` returns a `Result`; `firm sessions` prints the shed
+  paths instead of hiding them.
+- A ledger export no longer writes a file it had nothing to put in it, and a diff
+  count no longer charges the `---`/`+++` headers as changes.
+- A refused model catalogue is no longer drawn as an empty one — the status is read
+  before the body.
+- Five such calls are pinned by a gate that walks the workspace looking for the shape
+  (`five_calls_whose_failure_is_not_the_same_as_an_empty_result`).
+- **A file the user marked read-only was rewritten anyway — on Linux.** The atomic
+  write replaces its target through the directory, and POSIX asks the directory, not the
+  file. Everything that goes through `session::write_atomic` — the session store, the
+  config and key store, `write_file`, `edit_file`, `rename_symbol` — now refuses it by
+  the file's attribute, the one signal that reads the same on Windows. The journal writes
+  in place, where the kernel's own write bits already applied; it is named here because
+  "every write" would have been a claim this change does not earn.
+
+### Security
+
+- `127.0.0.1.attacker.test` counted as a loopback address. `is_private_url` now
+  requires exactly four numeric labels, with a test that names the bypass.
+- The settings page no longer echoes the live API key back into the DOM.
+- A cloned checkout can no longer aim your credential at a host the user never
+  chose, and `firm build` honours the flag it documents.
+- A plugin that prints without end is capped, and a plugin that never reads its
+  child's pipe can no longer hang the call.
+
+### Terminal UI
+
+- Resizing the terminal moved the transcript selection **off the words it marked**.
+  The selection is re-projected from character addresses that do not depend on the
+  width; where the anchored text has vanished it is cleared and the screen says so,
+  rather than continuing to act on an invisible range.
+- The rail bounded its files but not its sessions; both now stop at a row cap and
+  print what they shed — `… 3 more` when the count is known, `… more (the list stops
+  at N)` when it is not, rather than a number the function cannot know.
+- An unhandled `Ctrl`+letter chord typed the letter into the composer.
+- The mouse could edit through a modal.
+- A `hil` run that proved the hardware showed nothing on the EVIDENCE ladder: one
+  authority now owns the rung vocabulary and a gate names every reader of it.
+
+### GUI
+
+- An event with no session id used to be dropped. It now reaches the chat that owns
+  it (the fallback was implemented, not just documented).
+- A failed settings or provider write is no longer drawn as a save; provider
+  edit/remove failures surface in the panel that made them.
+- The mainline switch guarded the session *arriving* rather than the one *losing* the
+  role; a collapsed inspector lost the running flash; two fetches wrote the wrong
+  session.
+- Eight workbench saves could overwrite a claim they never read — all now
+  compare-and-swap.
+- An input method's Enter no longer answers on the person's behalf, and a window
+  reload mid-turn lights a spinner that can still be stopped.
+- Stopping a serial monitor waits for its reader to hand the port back; a card times
+  itself off the turn, not off the wall clock.
+- Streamed text travels in runs, not one IPC message per token.
+- The disabled-state gate could not read how half the controls actually say
+  "disabled" (`[data-disabled]`), and four contrast claims in `tokens.md` had never
+  been recomputed. Both are machine-checked now.
+
+### Shipped byte form, installers, release plumbing
+
+- Both installers honoured an environment variable the other ignored; they now agree
+  on `FIRMENT_INSTALL_DIR` / `FIRMENT_BIN_DIR`, and `install.ps1` forwards its
+  directory to `firm install --to`.
+- They asked for two images no release job ever built. A gate refuses an installer
+  that advertises an asset the workflow does not produce.
+- A shipped `.ps1` with non-ASCII text and no UTF-8 BOM mis-parses under PowerShell
+  5.1; two gates cover shipped scripts and the generated completions file, and one
+  walks the repository so a third script cannot appear unchecked.
+- The aarch64 refusals name the triples that were never published and the command
+  that builds from source.
+- Release notes are no longer a link to a CHANGELOG section nobody wrote: a tag whose
+  heading is missing stops the job with `::error::`.
+
+### Verification
+
+Measured on this tree on the machine that builds it, with `NO_PROXY=127.0.0.1,localhost`
+(see *Known gaps*):
+
+| Gate | Result |
+|---|---|
+| `cargo fmt --all -- --check` | clean |
+| `cargo clippy --workspace --all-targets -- -D warnings` | clean (clippy **0.1.97**, local) |
+| `cargo test --workspace` | **1014 passed**, 0 failed, 1 ignored |
+| `gui/src-tauri` fmt + clippy + `cargo test --lib` | clean — **23 passed** |
+| GUI `tsc --noEmit` / `vitest run` / `vite build` | 0 errors / **740 passed** (62 files) / builds |
+
+**CI found two things the local gates structurally could not**, and this is the part of
+the release note worth reading:
+
+1. `cargo clippy` on CI is **1.99**; this machine's stable is **1.97**. It flagged
+   `double_must_use` at nine `#[async_trait]` trait definitions — the attribute is the
+   macro's, so the allow went to the two crate roots rather than to nine sites a tenth
+   would be free to skip. Nothing here hand-writes a `#[must_use]`, so no claim of ours
+   was hidden to get green (`827e181`).
+2. One test failed on `ubuntu-22.04` and passed on `windows-latest`, and the Linux one
+   was right about the product. `atomic_write` replaces its target through the
+   directory, and POSIX never consults the target's write bits for a `rename`, so a file
+   marked **read-only was rewritten anyway on Linux** while Windows refused it. The
+   guard is on the file's attribute now, which means the same thing on both — so a
+   read-only file is refused by every write that goes through that helper, on both
+   platforms, which is a user-visible change in the stricter direction (`7adb195`).
+
+`gui-check`, `web-check` and the audit job (both lockfiles) were green on the first
+push; the check job now prints the toolchain it used, because that gap took a log grep
+to find rather than being visible in the output.
+
+The push that carries both fixes (`7adb195`) is **green on all five jobs** — `fmt`,
+`clippy --all-targets -D warnings`, `test` and the tool-spec snapshot diff on
+`ubuntu-22.04` and on `windows-latest`, plus `gui-check`, `web-check` and `audit`. The
+snapshot diff and `gui-check`'s `cargo test --lib` had never once been executed against
+these 104 commits before this push.
+
+### Known gaps
+
+Stated so nobody discovers them as surprises:
+
+- **A local green clippy is not a green clippy.** CI installs `@stable`, which floats
+  ahead of the toolchain here (1.97 vs 1.99, measured). Expect a new lint to land on
+  main between the two, and read the `Toolchain versions` line first.
+- **On a machine whose proxy intercepts loopback, five provider tests fail with
+  `502` unless you set `NO_PROXY=127.0.0.1,localhost`.** `wiremock` binds
+  `127.0.0.1` and the proxy answers for it. Measured here with the client listening
+  on `127.0.0.1:7897`; nothing about the code is involved.
+- **Four call sites are verified by reading, not by running**: the draw-time
+  selection projection, the propagator spawned inside `run_subagent`, the rung
+  `hil` emits, and `Provider::stream` against a real gateway. Each needs a terminal
+  or a provider that is not in this test suite.
+- **A clean EOF with no stop reason still synthesises `EndTurn`.** A deliberate
+  contract, undecided, not an oversight.
+- **AltGr on a German layout still collides with the `Ctrl+letter` table** for the
+  chords that are real bindings.
+- `firm sessions` still falls back to an empty preview rather than saying the file
+  could not be read.
+- 160 `let _ =` sites remain (`crates/` and `gui/src-tauri/src/`, counted on this
+  tree). A count ratchet over them was rejected: a gate whose only claim is that a
+  number went down is a false instrument.
+- **CI covers the code, not the artifacts.** Nobody has run the installer built from
+  this commit.
+- The Tauri GUI's serial monitor **still has no reconnect** (only the MQTT path does).
+- `aarch64-unknown-linux-gnu` is not in the release matrix. Owner's call, not a bug.
+- This is a **pre-release tag**, so `releases/latest` does not point at it and the
+  one-liner `install.sh` / `install.ps1` will not find it; install by explicit tag.
+  The Windows installer is NSIS only — the WiX target rejects a non-numeric
+  pre-release id.
+
+Closed since `v1.0.0-rc`, checked rather than assumed: a mistyped top-level key in
+`.firment.toml` is now an error (`deny_unknown_fields` on the config structs), and the
+two backend events the GUI read nobody — `settings` and `models` — are gone: the four
+the backend emits (`agent-event`, `ask-expired`, `permission-expired`,
+`monitor-exited`) are each consumed in `gui/src/lib/api.ts`.
+
 ## v1.0.0-rc (2026-09-25) — rebuilt GUI, self-review, plugins, and measured numbers
 
 The first release candidate. 241 commits since v0.8.1, and they go in two
