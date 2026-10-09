@@ -188,8 +188,9 @@ Stated so nobody discovers them as surprises:
   contract, undecided, not an oversight.
 - **AltGr on a German layout still collides with the `Ctrl+letter` table** for the
   chords that are real bindings.
-- `firm sessions` still falls back to an empty preview rather than saying the file
-  could not be read.
+- `firm sessions` lists damaged files now, but a row whose own reload fails still shows
+  an **empty preview** (`store.load(..).unwrap_or_default()`). The row is listed, so the
+  loss is a title, not a session.
 - 160 `let _ =` sites remain (`crates/` and `gui/src-tauri/src/`, counted on this
   tree). A count ratchet over them was rejected: a gate whose only claim is that a
   number went down is a false instrument.
