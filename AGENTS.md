@@ -459,7 +459,25 @@ two variables above are the whole available route.
   first real CI found four things they structurally could not see: two test fixtures
   that only held on Windows, a bundler version constraint, six dependency
   advisories, and a drifted tool-spec snapshot. `cargo test` on one platform is not a
-  portability claim.
+  portability claim. It repeated on 2026-10-09 with **104** unpushed commits: the first
+  CI to run on them was red twice over, once for a lint this machine's clippy does not
+  have and once for a POSIX behaviour that only the other platform can show.
+- **A locally-green clippy is not a green clippy.** CI installs `@stable`, which floats
+  ahead of this machine's toolchain: clippy **1.99** flagged `double_must_use` at nine
+  `#[async_trait]` trait definitions while **0.1.97** here has never heard of the lint,
+  so `cargo clippy --workspace --all-targets -- -D warnings` was telling the truth
+  about a different program. The `check` job prints `rustc -vV` and
+  `cargo clippy --version` for exactly this — read that line before assuming the code
+  is what broke. The allow went on the two crates that define async traits
+  (`firment-core`, `firment-tools`) rather than on the nine traits, because nine call
+  sites is a list a tenth is free to skip.
+- **If a proxy client is running, `cargo test` needs `NO_PROXY=127.0.0.1,localhost`.**
+  `wiremock` serves on loopback and the client answers for it, so the SSE provider tests
+  fail with `Api { status: 502, message: "" }` — measured 2026-10-09 with the client on
+  `127.0.0.1:7897`, where five tests in `firment-core/tests/anthropic_provider.rs` failed
+  and passed the moment `NO_PROXY` was set, with no other change. The run stops at the
+  first failing binary, so how many other wiremock tests this hits is not known. This
+  is the environment, not the tree — the same way the proxy is what `git push` needs.
 - Do not compile a dependency feature the product does not use. `rumqttc`'s
   default `use-rustls` pulled a `rustls-webpki` copy carrying four advisories into
   a binary whose only MQTT connection is plain TCP to a LAN broker; turning the
