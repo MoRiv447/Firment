@@ -1,11 +1,13 @@
 # Changelog
 
-## v1.0.0-rc2 (2026-10-09) — the second candidate: 109 commits, 72 of them fixes, and the shape they share
+## v1.0.0-rc2 (2026-10-09) — the second candidate: 112 commits, 72 of them fixes, and the shape they share
 
-Everything since `v1.0.0-rc` — 109 commits, **72 fixes**, 17 features, 13 docs,
-7 style, counted at `7adb195`. This entry's own commit is the 110th and changes no
-product code; the count is tied to a commit rather than left as a number, because a
-release note is exactly where a drifting count goes unnoticed. They come from audit
+**112 commits** between `v1.0.0-rc` and this tag — `git rev-list --count
+v1.0.0-rc..v1.0.0-rc2`, which is the number a reader can check. The product work is
+the 109 of them at `7adb195`: **72 fixes**, 17 features, 13 docs, 7 style. The
+remaining three are the docs commits that wrote and corrected this entry; they are
+counted in the total rather than quietly dropped from it, because a release note that
+excludes its own commits is how a count stops meaning anything. They come from audit
 **rounds 4 through 9** — six rounds, each run against a
 tree whose gates were already green — recorded in
 `docs/handoff/review-2026-10-03.md`, `review-2026-10-05.md` and
@@ -194,6 +196,21 @@ Stated so nobody discovers them as surprises:
 - 160 `let _ =` sites remain (`crates/` and `gui/src-tauri/src/`, counted on this
   tree). A count ratchet over them was rejected: a gate whose only claim is that a
   number went down is a false instrument.
+- **This release's own `SHA256SUMS` cannot be used to verify the Windows GUI
+  installer.** The sums row reads `Firment GUI_1.0.0-rc_x64-setup.exe`; the asset
+  GitHub stored is `Firment.GUI_1.0.0-rc_x64-setup.exe`. NSIS names the bundle after
+  the product name, which contains a space, and the upload turns that space into a dot
+  while `sha256sum *` records the name on disk. `v1.0.0-rc` shipped the same
+  mismatch — nothing read that line, so both releases passed. The next one flattens
+  the name at staging and then diffs the published asset list against the sums file in
+  both directions (`eed63a6`); repairing the asset on *this* release is a separate,
+  visible action and has not been taken.
+- **The GUI installer does not carry the release's identity.** Its version comes from
+  `gui/src-tauri/tauri.conf.json:4`, which says `1.0.0-rc`, and the workspace crates
+  say the same; no step stamps the tag into the build. So rc2's installer is named
+  exactly as rc1's was — different bytes, same name — and the installed app reports
+  `1.0.0-rc`. Left alone deliberately rather than fixed blind: changing how the
+  artifact is built is not something to do from a machine that cannot run the bundler.
 - **CI covers the code, not the artifacts.** Nobody has run the installer built from
   this commit.
 - The Tauri GUI's serial monitor **still has no reconnect** (only the MQTT path does).
