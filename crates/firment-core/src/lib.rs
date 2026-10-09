@@ -1,3 +1,10 @@
+// clippy 1.99 reads the `#[must_use]` that `#[async_trait]` puts on a trait
+// definition's boxed future as a double must_use. It is the macro's attribute,
+// not ours — there is no source-level form to change — and this crate hand-writes
+// no `#[must_use]` at all, so nothing of ours is hidden by allowing it here
+// rather than at each of the six traits.
+#![allow(clippy::double_must_use)]
+
 pub mod adr;
 pub mod agent;
 pub mod ask;

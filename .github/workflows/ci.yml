@@ -17,6 +17,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      # `@stable` floats, so CI's clippy can be ahead of the one a developer runs
+      # with. Print both versions: that is the difference between reading a lint
+      # failure as "reproduces everywhere" and finding out it is one toolchain.
+      - name: Toolchain versions
+        shell: bash
+        run: rustc -vV | tail -1 && cargo clippy --version
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y pkg-config libudev-dev libssl-dev

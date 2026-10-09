@@ -1,3 +1,7 @@
+// Same as in firment-core: the must_use clippy 1.99 calls a double is the one
+// `#[async_trait]` adds to a trait definition, not one this crate writes.
+#![allow(clippy::double_must_use)]
+
 pub mod assembly;
 pub mod decode;
 pub mod forensic;
