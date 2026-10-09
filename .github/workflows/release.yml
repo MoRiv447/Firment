@@ -87,6 +87,17 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path dist -Force | Out-Null
           Copy-Item "gui/src-tauri/target/release/bundle/nsis/*-setup.exe" dist/
+          # NSIS names the bundle after the product name, and that name has a space in
+          # it: `Firment GUI_1.0.0-rc_x64-setup.exe`. GitHub stores the uploaded asset
+          # with the space turned into a dot, while SHA256SUMS is generated from the
+          # name on disk -- so the two halves of one release called the same installer
+          # by two names and its checksum could not be looked up. Both v1.0.0-rc and
+          # v1.0.0-rc2 shipped that row. Flattening the name here removes the only
+          # place the two can disagree.
+          Get-ChildItem dist/*.exe | ForEach-Object {
+            $flat = $_.Name -replace ' ', '.'
+            if ($flat -ne $_.Name) { Rename-Item -LiteralPath $_.FullName -NewName $flat }
+          }
           Get-ChildItem dist
       - uses: actions/upload-artifact@v4
         with:
@@ -150,3 +161,35 @@ jobs:
           # readable here instead of living inside a dependency.
           prerelease: ${{ contains(github.ref_name, '-') }}
           make_latest: ${{ !contains(github.ref_name, '-') }}
+      # The pair that drifted on two consecutive releases: `sha256sum *` writes the
+      # names as they are on disk, and the assets are stored under the names GitHub
+      # gave them. Check both directions against the live release, so a row that names
+      # nothing -- or a binary that shipped without one -- fails the job instead of
+      # teaching the next reader that SHA256SUMS is decorative.
+      - name: Verify SHA256SUMS names the published assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -eu
+          cd artifacts
+          names="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name')"
+          bad=0
+          while read -r _ name; do
+            [ -n "${name:-}" ] || continue
+            [ "$name" = "SHA256SUMS" ] && continue
+            if ! printf '%s\n' "$names" | grep -qxF "$name"; then
+              echo "::error::SHA256SUMS names \"$name\", which is not an asset of $GITHUB_REF_NAME"
+              bad=1
+            fi
+          done < SHA256SUMS
+          while read -r asset; do
+            [ -n "$asset" ] || continue
+            [ "$asset" = "SHA256SUMS" ] && continue
+            if ! awk -v a="$asset" '$2 == a { found = 1 } END { exit found ? 0 : 1 }' SHA256SUMS; then
+              echo "::error::$asset shipped with no SHA256SUMS row"
+              bad=1
+            fi
+          done <<< "$names"
+          [ "$bad" -eq 0 ] && echo "SHA256SUMS and the published assets name the same files."
+          exit $bad
