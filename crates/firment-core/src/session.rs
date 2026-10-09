@@ -946,6 +946,24 @@ fn atomic_write(path: &Path, content: &str) -> Result<(), SessionError> {
             path.display()
         )))
     })?;
+    // A target the user marked read-only is refused here, by its attribute rather
+    // than by trying to open it. The write below replaces the file through the
+    // *directory*, so on POSIX a 0o444 target is renamed over without a word while
+    // the same call on Windows fails: the attribute is the only signal that means
+    // the same thing on both. Root can write a read-only file and still does not
+    // get to by way of this function.
+    let readonly = match path.metadata() {
+        Ok(meta) => meta.permissions().readonly(),
+        // No target yet — there is no read-only file to honour, and the create
+        // below is the first write.
+        Err(_) => false,
+    };
+    if readonly {
+        return Err(SessionError::Io(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("{} is read-only", path.display()),
+        )));
+    }
     let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
     use std::io::Write;
     tmp.write_all(content.as_bytes())?;
@@ -1659,5 +1677,43 @@ six earlier rounds"
         // `list()` keeps its shape for everyone who only wants the picker.
         assert_eq!(store.list().unwrap().len(), 1);
         assert_eq!(store.load(&id).unwrap().id, id);
+    }
+
+    /// The rule `rename_symbol` only failed against on Linux, pinned where it lives.
+    ///
+    /// `persist` replaces the target through its *directory*, so on POSIX a 0o444 file
+    /// is renamed over without any complaint; on Windows the same call fails. A test
+    /// that marks a file read-only therefore measured the platform, not the product,
+    /// until `atomic_write` started refusing the target by its attribute.
+    #[test]
+    fn a_read_only_target_is_refused_rather_than_replaced_through_its_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.json");
+        std::fs::write(&path, "the bytes on disk").unwrap();
+
+        let original = std::fs::metadata(&path).unwrap().permissions();
+        let mut locked = original.clone();
+        locked.set_readonly(true);
+        std::fs::set_permissions(&path, locked).unwrap();
+        let err = atomic_write(&path, "replacement").unwrap_err();
+        std::fs::set_permissions(&path, original).unwrap();
+
+        assert!(
+            matches!(&err, SessionError::Io(e) if e.kind() == std::io::ErrorKind::PermissionDenied),
+            "a read-only target has to come back as PermissionDenied, not as {err:?}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "the bytes on disk");
+    }
+
+    /// The negative control for the check above: the file not existing is the normal
+    /// first write, not a permission problem. Asking its metadata before it exists
+    /// fails, and reading that failure as a refusal would stop every new session,
+    /// journal and config from ever being created.
+    #[test]
+    fn a_target_that_does_not_exist_yet_is_still_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fresh.json");
+        atomic_write(&path, "created").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "created");
     }
 }
