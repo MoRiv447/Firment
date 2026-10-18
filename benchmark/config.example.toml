@@ -1,0 +1,313 @@
+# eval 评测器配置
+#
+# 注意：本目录（含本文件）位于裁判资料夹，**不得**复制进
+# D:\OldStudy66\ai test pro —— 被测 agent 的工作目录就在那棵树的 runs\ 下，
+# 断言阈值放进去等于把评分表递给它。
+
+[paths]
+testset = ""
+judge = ""
+python = ""
+reports = ""
+
+# 重跑前对被抹工作区做的那份拷贝放哪里。必须**在测试集之外**：两边都有 shell，
+# 而 `resolve_within` 的工作区沙箱不覆盖 shell（tools/util.rs 的注释自己写明）。
+# 实测 claude 在 case06 就 Get-ChildItem 过当时放在 runs/<agent>/_bench 的归档 ——
+# 那里面是对面 agent 每一局的完整解答。另外 C 盘紧，所以放 D 盘。
+archive = ""
+
+[serial]
+default_baud   = 115200
+open_retries   = 5
+retry_delay_ms = 400
+# 采集窗口默认读超时
+read_chunk_ms  = 50
+
+# 端口解析：一律按 VID/PID + 描述匹配，尽量不写死 COM 号（复位/重插后 COM 会漂）。
+# 但**同型号板并存时必须点名**：这个端口是用来拨动物理电平的，猜错就是把脉冲发给
+# 另一块板子 —— 表现是"按键没反应"，且完全看不出原因。这时用下面两把钥匙之一：
+#   device   = "COM9"          直接点名 COM 号（最省事，但换 USB 口可能会变）
+#   location = "1-2:x.1"       点名**物理 USB 口**（重启不变，换口才变）—— 更稳
+# 具体该填什么，跑 `cli.py caps` 看"串口"那一段，location 会打出来。
+[[serial.roles]]
+role  = "dut_vcp"
+vid   = 0x0483
+pid   = 0x374E
+description_contains = "STLink"
+
+# 夹具口 = **ESP-01S 烧录板**（不是那块裸 TTL，原因见文件末尾"为什么不用裸 TTL"）。
+# 两块板都是 CH340/1A86:7523，所以若同时插着，必须用 location 或 device 指定其一。
+[[serial.roles]]
+role  = "fixture_uart"
+vid   = 0x1A86
+pid   = 0x7523
+description_contains = "CH340"
+# 2026-10-15 实测：ESP-01S 板在 location 1-1.4:x.2（COM15）。
+# 锁死物理口，这样以后裸 TTL 也插上时不会跟它混。
+location = "1-1.4:x.2"
+
+[[serial.roles]]
+role  = "bt_peer"
+vid   = 0x0000
+pid   = 0x0000
+description_contains = "蓝牙链接上的标准串行"
+# 蓝牙口里既有"本机虚拟"的（LOCALMFG&0000，打开会挂住），也有真实配对的远端
+# 设备。两者描述字符串完全一样，只能靠实例 ID 区分：真实设备的 hwid 里带
+# VID&0001... 这一串。**跑 case13 前请先确认那个设备就是 HC-05。**
+hwid_contains = "VID&0001"
+
+[probe]
+chip            = "STM32G431RBTx"
+flash_timeout_s = 180
+# 系统复位走 probe-rs；语义 ≠ 板载 RESET 键（NRST）。见下方 nrst_method。
+reset_kind = "swd"
+# 同时插着 ST-Link 和 DAPLink 时必须点名用哪个，否则 probe-rs 可能挑错。
+# 2026-10-15 实测：板载 STLink V3 = 0483:374e:002100364142501720353451（唯一的探针）。
+probe_selector = "0483:374e:002100364142501720353451"
+
+# 真 NRST 复位走哪条路 —— case11 的 RESET=POR **只认这个**：
+# 拉 NRST 置的是 PINRSTF，SWD 系统复位置的是 SFTRSTF，两者在 RCC_CSR 里不同。
+# 可选值：
+#   "none"       未标定（默认，最保守）→ caps 不认为具备 reset:nrst，相关步骤跳过
+#   "fixture"    夹具的 modem 线拉 NRST（需 fixture.enabled = true）
+#   "programmer" STM32_Programmer_CLI -rst
+#   "openocd"    OpenOCD 以 srst_only 走 SRST 引脚（interface 见下）
+# **插上板子后跑 `cli.py probe reset-test`**，它会读 RCC_CSR 告诉你哪条真出现 PINRSTF。
+nrst_method = "programmer"
+
+# OpenOCD 用哪个探针的配置文件：stlink（板载 ST-Link）或 cmsis-dap（DAPLink）。
+# DAPLink 的 RST 脚同样由 OpenOCD 驱动，所以它也是"真 NRST"的一条候选路径。
+openocd_interface = "stlink"
+
+[toolchain]
+probe_rs             = "probe-rs"
+openocd_dir          = "C:/Users/18978/.platformio/packages/tool-openocd"
+stm32_programmer_cli = "D:/OldStudy66/stm32programma/bin/STM32_Programmer_CLI.exe"
+# 砖恢复用的母本固件。**刻意留空**：`start/cubemx` 只有源码、没有构建产物，
+# 而整片擦除本身就足够解砖（每次判分前都会重烧该题自己的固件，空芯片不影响下一题；
+# `-e all` 也会顺带清掉 agent 可能设置的读保护 RDP）。
+# 真要回写母本，先构建一份 ELF 放到 eval/artifacts/ 下再填这里。
+recover_elf          = ""
+
+[fixture]
+# 夹具激励：默认关闭。标定完再打开。
+# enabled = false 时，spec 里声明了 gpio_* 的步骤会按 caps.fallback 处理（默认 skip）。
+# 2026-10-16 实测通过：line=DTR（受控的是 ESP-01S 板的 RST/EN 脚）、
+# active_low=false、三种内部上下拉全部读对、EXTI 上升沿 ≤50ms 认出。
+enabled = true
+port_role = "fixture_uart"
+
+# ─────────────────────────────────────────────────────────────────────────
+# 先记住两条**目标板**的方向（跟用哪块夹具板无关）：
+#
+#   NRST ：低有效 —— 拉低 = 复位。
+#   B1   ：**高有效** —— 拉高 = 按下。
+#          依据（三条独立来源）：ST 的 BSP 里 BSP_PB_Init 用的是
+#          `Pull = GPIO_PULLDOWN` + `GPIO_MODE_IT_RISING`；RIOT OS 的板级支持
+#          写明"G431RB/G474RE/G491RE 用 GPIO_IN_PD，而其他多数 Nucleo64 用上拉"；
+#          EEWorld 的教程直接写"按下为高电平"。
+#          **大多数 Nucleo 的按键是低有效，这一块板是例外** —— 所以"按键就是
+#          低有效"这条常识在这里正好是错的。
+#
+# 于是：**只会往 GND 拉的方案做不了按键**（三极管/开漏），而且它们空闲是高电平，
+# 接上去等于一直按住。按键需要一根能**主动驱动高电平**的线。
+#
+# active_low 就是写"目标引脚低不低有效"：NRST → true；B1 → false。
+# ─────────────────────────────────────────────────────────────────────────
+
+# 按键：接 **ESP-01S 板的 IO0**（受 DTR 控制）→ PC13，再加一根 GND。
+#
+# 2026-10-15 实测（用户用万用表配合 `fixture wiggle --line DTR`）：
+#   IO0 跟着 DTR 跳，电平 **2.9V ↔ 0.3V**，且**取消断言（空闲）时 IO0 是高**。
+#   ⇒ 这根脚能受软件控制，**而且能输出高电平**（不是"只会往 GND 拉"那种），
+#     所以可以直接驱动高有效的 B1。
+#   低电平 0.3V 没问题（VIL 上限 0.99V）；高的 2.9V 需要**带载复核**，见下。
+#
+# 方向推导（**line_inverted 的依据，别想当然**）：
+#   pyserial 写 True（断言）→ DTR# 引脚**低**。实测 IO0 空闲（取消断言）是高，
+#   即 **断言 DTR ⇒ IO0 低** —— 这和"直连"的表现完全一样。
+#   （即使中间过了自动下载电路的三极管也不变：三极管反了一次相，但 CH340 的
+#    DTR# 本身也是低有效、再反一次，两次抵消。所以只能靠实测，推不出来。）
+#   按下 = PC13 要**高** = IO0 高 = DTR **取消断言(False)**
+#   未按下 = PC13 低 = IO0 低 = DTR 断言(True)
+#   ⇒ 与"断言即拉低"一致，中间没有额外反相级 → line_inverted = false
+#
+# ⚠️ **必须复核的一点**：2.9V 是空载读数（万用表 10MΩ）。PC13 内部有约 40k 下拉，
+#   接上去之后高电平会掉 —— 掉多少取决于这根线的源阻抗：
+#     接上后仍 ≈2.9V      → 推挽输出，余量充足，放心用
+#     掉到 2.6~2.9V       → 可用（VIH = 0.7×VDD = 2.31V，余量 0.3V+）
+#     掉到 2.31~2.6V      → 临界，不建议（噪声余量太小）
+#     掉到 2.31V 以下     → 读不到高电平，改用 RST/EN 那根（还没量）
+#   顺带量一下这块板自己的 3V3 脚：若它本来就是 2.9V，那"3.3V 轨"其实是 2.9V，
+#   一切自洽；若 3V3 是 3.3V 而 IO0 只有 2.9V，说明中间串了电阻在分压。
+#
+# 接线：IO0 → PC13(B1)、GND → GND。就这两根。
+[fixture.stimuli.button]
+backend = "modem"
+# **2026-10-16 17:00 用户更正 + 实测**：按钮那根线接的是适配器的 **RST**，
+# 而 RST 由 **RTS** 控制（不是 DTR）。`map-pins` 实测：
+#   RTS 断言 → RST 拉低（**两种内部上下拉下都读到 0**，连内部上拉都压不住 ⇒ 真 sink）
+#   都松开   → 回高（有上拉）⇒ 能驱动高有效的 B1 ✓
+# 而 IO0（受 DTR 控制）现在给了继电器 —— 两条线各管一个，正好不冲突。
+#
+# 注意：我 17:00 前一直以为"按钮线在 RST、受 DTR 控制"，那是错的 ——
+# 当时成功的三层验证其实是在 **IO0** 上做的（用户后来发现接的是 IO0）。
+# **2026-10-16 真值表实测后改到 DTR**（这块板的 DTR/RTS 是交叉耦合的）：
+#     RST 低（= 固件认为"未按下"）⟸ **RTS 断言 或 DTR 断言**
+#     IO0 低（= 继电器闭合）      ⟸ **DTR 断言 且 RTS 取消**
+# ⇒ "未按下"用 DTR 实现就够，**RTS 全程保持取消** —— 否则继电器永远合不上
+#   （case06 就是这么挂的：release_all 按旧配置断言了 RTS）。
+# 代价：按键"按下"= DTR 取消、跳线"闭合"= DTR 断言 ⇒ 两者同题不能共存。
+# 本题组不会同题用两个（case04 只用按键、case06 只用跳线），开题时的静止态
+# 由 runner 按 spec 的 caps.gpio 决定（见 Fixture.active_names）。
+line = "DTR"
+active_low = false          # B1 高有效：按下 = 把 PC13 拉到高
+line_inverted = false       # 实测"断言 RTS ⇒ RST 低"，与直连一致，无额外反相
+pulse_ms = 200
+
+# 备选：如果手上有 DTR/RTS **直通排针**的 CH340（排针上写 DTR/RTS 的），
+# 它们本身就是推挽输出，能高能低，直连即可：
+# [fixture.stimuli.button]
+# backend = "modem"
+# line = "DTR"
+# active_low = false        # 同样：按下 = 拉高 = pyserial 写 False
+#
+# 备选：ESP32 的 GPIO（推挽，最通用，还能顺带做 case06 的可控跳线与测频）：
+# [fixture.stimuli.button]
+# backend = "esp32"
+# gpio = 4
+# active_low = false
+
+# NRST：先试**三条免接线路径**（STM32_Programmer_CLI -rst / OpenOCD 走 ST-Link 的
+# SRST / OpenOCD 走 DAPLink），用 `cli.py probe reset-test` 看哪条真出 PINRSTF，
+# 再把 [probe].nrst_method 填上。只有全都不行时才需要接这根线：
+#   把 ESP-01S 烧录板的 RST/EN（受 DTR/RTS 控制的三极管输出，只会拉低）
+#   接到 NRST —— 对低有效的 NRST 来说，"只会拉低"正好合适。
+# NRST：**不走夹具** —— 用 [probe].nrst_method（当前 = "programmer"，已用 RCC_CSR 验证
+# 真的产生 PINRSTF）。所以这里**不定义** nrst 激励：定义了会让 caps 报"具备 gpio:nrst"，
+# 而 RTS 那根线根本没接到 NRST —— 将来哪个 spec 用了它，会静默地什么都不做，
+# 那种假绿灯比"缺能力"危险得多。
+# 真要改成夹具驱动，就打开下面这段，并且**必须再跑一次 `cli.py probe reset-test`
+# 把 nrst_method 改成 "fixture"**（否则 reset 步骤仍然走 programmer）。
+# [fixture.stimuli.nrst]
+# backend = "modem"
+# line = "RTS"
+# active_low = true           # NRST 低有效：拉低 = 复位
+# pulse_ms = 120
+
+# case06 的 PA8→PA0"可控杜邦线" —— **用继电器 + 适配器剩下的 IO0 实现，不需要 ESP32**。
+#
+# 2026-10-16 实测（`cli.py fixture verify-jumper`，不用固件）：
+#   PA8 驱动高、读 PA0 —— DTR 松开时 PA0=0（触点断开），DTR 断言时 PA0=1（触点闭合）
+#   ⇒ **DTR 控制这根跳线，断言即闭合**（对应模块的"低电平触发"档）
+#   同时 RTS 对触点无影响 ⇒ 和按钮（在 RST 上、受 RTS 控制）互不干扰，
+#   两条线可以同时挂着，不用在题目之间换线。
+#
+# 接线：适配器 IO0 → 模块 IN；模块 VCC 用 **Nucleo 的 +5V**（线圈 ~70mA，
+# 别用任何 3V3 —— 带不动还会把 CH340 拉挂，实测过一次）；模块 COM→PA8、NO→PA0；
+# 模块跳线帽设成**低电平触发**。
+[fixture.stimuli.jumper_pa8_pa0]
+backend = "modem"
+line = "DTR"
+active_low = true           # "闭合(closed)" = 断言 = IO0 拉低 = 继电器吸合
+# **松开必须是主动做出来的，不能靠"取消断言"**：IO0 是 sink-only 的脚，
+# 被灌低之后取消断言就悬空、电荷没处泄，触点**保持吸合** —— case06 的"拔线"
+# 就是这么静默失效的（2026-10-16 实测：拔线窗口 0 条 FAIL / 64 条 PASS）。
+# 交叉耦合真值表里"RTS 断言 ⇒ 触点断开"是无条件的，所以借它当强制断开的手。
+force_line = "RTS"          # 闭合 = 取消断言 RTS；断开 = 断言 RTS
+# 备选（如果哪天换成 ESP32 来做，还顺带能测频）：
+# backend = "esp32"
+# gpio = 4
+# active_low = true
+# ESP32 夹具固件的串口协议（P1 实现）：
+#   `G <pin> <0|1>`  → `OK`
+#   `P <pin> <ms>`   → `OK`（脉冲）
+#   `Q <pin>`        → `1|0`
+
+# 逻辑分析仪：24MHz 8 通道克隆板（fx2lafw 驱动，板上丝印 CH0..CH7）。
+# sigrok-cli 需另行安装（`winget` 里只有 PulseView，不含 CLI；用官方安装包，
+# 见 README『首次标定』第 2 步）。
+[la]
+# 2026-10-16 装好：sigrok-cli 0.7.2（官方安装包，含 fx2lafw 驱动）。
+# 用绝对路径，免得依赖 PATH。
+bin = "C:/Program Files/sigrok/sigrok-cli/sigrok-cli.exe"
+driver = "fx2lafw"        # 24MHz 8ch 克隆板的驱动；`cli.py la scan` 可复核
+samplerate = "4m"          # 见下方"采样率怎么选"
+max_samples = 0
+
+# 采样率怎么选（fx2lafw 的理论上限是 24MHz，但对本题没有意义）：
+#   测 20kHz 要 ≤1.5% 误差 → ≥1MHz 就够；4MHz 留足余量且稳。
+#   解 100kHz I2C 需要每个 bit 至少 ~10 个采样点 → 1MHz 勉强，4MHz 舒服。
+#   24MHz 只有在短促的单次抓取里才稳得住（usb2.0 带宽），长时间抓会丢样本。
+#   所以默认 4m，别贪高。
+
+# 引脚名 → 分析仪通道号（**0 起**）
+#
+# ⚠️ **丝印偏移**：这台分析仪的板上丝印是 **CH1..CH8**，而 sigrok 的通道号是
+#    0 起的 **D0..D7** ⇒ **丝印 CH1 = 软件 D0**，CH2=D1，CH3=D2，CH4=D3。
+#    填的时候按 D 编号填，别按丝印上的数字填。
+#
+# 2026-10-16 实测标定（不是猜的）：把其余脚设为内部下拉、每次只驱动一根，
+# 看哪个通道整段读高 —— 结果 CH1→PA8 / CH2→PA5 / CH3→PB8 / CH4→PB9。
+# 判据用"驱动高"配合"其余脚下拉"是为了排除悬空通道：**这块分析仪悬空输入读高**，
+# 所以"读到高"本身不能作为被驱动的证据。
+# 一定要填：写错/不填会得到"这根通道没有跳变"，而不是静默通过。
+[la.channel_map]
+PA8 = 0        # case02/05/06 的 PWM 输出（丝印 CH1）
+PA5 = 1        # LD2（case08 LED 实亮灭、case13/14 报警闪烁）（丝印 CH2）
+PB8 = 2        # OLED SCL（丝印 CH3）
+PB9 = 3        # OLED SDA（丝印 CH4）
+
+# 协议解码的通道绑定，传给 sigrok-cli 的 -P <decoder>:<options>。
+[la.decoders]
+i2c = "scl=2:sda=3"      # 与上面的 channel_map 对应（SCL=PB8→D2 / SDA=PB9→D3）
+
+[manual]
+# `manual_observe` 步骤等人回答的默认秒数。超时不是失败 —— 记成"未答"，
+# 评委**不得据此给分**（宁可少给，不可假绿）。裁判在旁边看着跑，通常几十秒就答完。
+timeout_s = 300
+
+[camera]
+# ffmpeg dshow；设备名用 `ffmpeg -f dshow -list_devices true -i dummy` 查得
+ffmpeg = "ffmpeg"
+device = "Integrated Camera"
+size = [160, 120]          # 缩放尺寸；纯 Python 逐像素循环靠它跑得动
+roi = []                   # [x, y, w, h]（按上面的缩放尺寸算），校准后填进来
+warmup_frames = 4          # 自动曝光前几帧不可信，丢弃
+
+[grade]
+# AI 评委端点（OpenAI 兼容 /chat/completions）。留空则只出机器分。
+base_url = ""
+model = ""
+api_key_env = "EVAL_JUDGE_API_KEY"
+temperature = 0.0
+# 公平性：两个 agent 必须用同一端点、同一模型、同一提示。
+
+# ─────────────────────────────────────────────────────────────────────────
+# 被测 agent 的模型与思考强度 —— **写进报告，供横向对比**
+#
+# 两个 agent 的模型/思考档不一致时，跑出来的分没有任何可比性；而这件事
+# 不会自己暴露（表面上都是"跑了同一道题"）。所以每轮的 `report.md` 头部会
+# 打印这一行，没声明就写"未声明"，不让人误以为是默认值。
+#
+# 当前统一要求（用户 2026-10-16 定）：**deepseek-v4.1-flash + thinking=high**
+# （思考强度三档：off / high / max，这里取 high）
+#
+# 跑之前请核对：agent 自己的配置里模型与思考档没有被默认值悄悄顶掉。
+# 被测 agent 只有两个（用户 2026-10-16 定）：firm 和 claude。
+# 模型 = **deepseek-flash**（DeepSeek 官方 anthropic 端点上的名字，
+# 用户已对照官网核实；我之前怀疑这名字是错的 —— 错的是我）。
+# 注意：这是"声明的配置"。真正的验证是跑完一题后从 agent 的会话记录里
+# 读实际使用的模型并与这里比对 —— 那一步还没做。
+# 被测 agent 只有两个（用户 2026-10-16 定）：firm 和 claude。
+# 模型 = **deepseek-flash**（DeepSeek 官方 anthropic 端点上的名字，
+# 用户已对照官网核实；我之前怀疑这名字是错的 —— 错的是我）。
+# 注意：这是"声明的配置"。真正的验证是跑完一题后从 agent 的会话记录里
+# 读实际使用的模型并与这里比对 —— 那一步还没做。
+[agents.firm]
+model = "deepseek-flash"
+thinking = "high"
+
+[agents.claude]
+model = "deepseek-flash"
+thinking = "high"

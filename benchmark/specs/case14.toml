@@ -1,0 +1,183 @@
+# case14 温度监测站（综合）—— 权重 7，时间盒 45min
+#
+# judge_table 判据（每项 0.6）：
+#   采样    每秒温度更新、数值合理 ±3°C、有 VDDA 折算
+#   显示    OLED 两行正确无花屏
+#   命令    SET TH 33.5 回 OK 立即生效；断电重上电 READY TH=33.5
+#   报警    阈值低于当前温度 → LD2 5Hz 闪烁；设高 → 熄灭
+#   按键    B1 短按切换第二行 TH/VDDA，无多触发
+#   H1      状态机/任务划分清晰；一锅 300 行阻塞循环 = 0.5；卡死 = 0
+#   H2      仅 SET 时写 flash；3 分钟耐力 + 10 次键 + 5 次 SET 无死机重启冻结
+#
+# 机器的分工：
+# * 命令  —— 串口能全自动判（SET → OK TH=，复位后 READY TH= 证明确实存了 flash）
+# * 报警  —— 分析仪看 PA5 的翻转次数。**注意判据的措辞歧义**："LD2 5Hz 闪烁"
+#            可以指 5 次亮/秒（=2.5Hz 方波）也可以指 5Hz 方波，所以容差放到
+#            ±40%，并在报告里把这层歧义写明，边界情况交 AI。
+# * 采样/显示/按键 —— 只在 OLED 上，所以要读屏幕文字，机器读不了（见 case12
+#            的说明），把这部分交 AI 看截图 + 时间线。
+# * 耐力  —— 3 分钟窗口内"没有中途重启"是机器能判的（看有没有第二行 READY）。
+
+id = "case14"
+title = "综合"
+weight = 7
+timebox_min = 45
+
+[caps]
+serial = ["dut_vcp"]
+flash = true
+reset = "swd"
+camera = true
+la = true
+gpio = ["button"]
+
+[fallback]
+on_missing = "skip"
+
+[[steps]]
+op = "flash"
+
+[[steps]]
+op = "serial_open"
+port = "dut_vcp"
+
+[[steps]]
+op = "reset"
+kind = "auto"
+
+# ---- 命令：上电打印 READY TH=<当前阈值> ----
+[[steps]]
+op = "serial_window"
+duration_ms = 4000
+save = "serial/boot-ready.log"
+asserts = [
+  { id = "cmd1", point = "命令", type = "serial_regex", pattern = 'READY\s+TH\s*=\s*-?[\d.]+' },
+]
+
+# ---- 命令：把阈值设低（低于室温）触发报警 ----
+[[steps]]
+op = "serial_send"
+text = "SET TH 20.0"
+
+[[steps]]
+op = "serial_window"
+duration_ms = 1500
+save = "serial/set-low.log"
+asserts = [
+  { id = "cmd2", point = "命令", type = "serial_parse", expr = 'OK\s+TH\s*=\s*(-?[\d.]+)', checks = [ { field = 1, ref = 20.0, tol_abs = 0.15 } ] },
+]
+
+# ---- 报警 ON：阈值低于当前温度 → LD2 应闪 ----
+[[steps]]
+op = "la_capture"
+duration_ms = 3000
+driver = "auto"
+samplerate = "1m"
+asserts = [
+  { id = "alarm1", point = "报警", type = "edges", channel = "PA5", min_count = 6 },
+]
+
+# ---- 命令：把阈值设高（高于室温）熄灭报警 ----
+[[steps]]
+op = "serial_send"
+text = "SET TH 33.5"
+
+[[steps]]
+op = "serial_window"
+duration_ms = 1500
+save = "serial/set-high.log"
+asserts = [
+  { id = "cmd3", point = "命令", type = "serial_parse", expr = 'OK\s+TH\s*=\s*(-?[\d.]+)', checks = [ { field = 1, ref = 33.5, tol_abs = 0.15 } ] },
+]
+
+# ---- 报警 OFF：LD2 应基本不动（留 2 次边沿的余量给刷新抖动） ----
+[[steps]]
+op = "la_capture"
+duration_ms = 3000
+driver = "auto"
+samplerate = "1m"
+asserts = [
+  { id = "alarm2", point = "报警", type = "edges", channel = "PA5", max_count = 2 },
+]
+
+# ---- 按键：短按 B1，同时录屏看第二行有没有切 ----
+[[steps]]
+op = "frame_burst"
+duration_ms = 6000
+fps = 20
+save = "case14-button"
+asserts = [
+  # 屏幕本来每秒刷新，所以"有变化"不足以证明按键生效；
+  # 这一条只是记录"画面确实在动"，按键本身交 AI 看帧序列
+  { id = "disp1", point = "显示", type = "motion", min_changed_fraction = 0.002 },
+]
+
+# ---- 屏幕这一环现在没有可用机位，由人看（问题逐字固定，两 agent 同一句）----
+[[steps]]
+op = "manual_observe"
+point = "显示"
+question = "OLED 两行现在显示什么？照抄你看到的，并说明有没有花屏/错位/残影。（正常 / 花屏 / 无显示 / 看不清）"
+timeout_s = 240
+
+[[steps]]
+op = "manual_observe"
+point = "采样"
+question = "刚才这 6 秒里，屏幕上的温度数值在逐秒更新吗？数值像不像室温（15~35°C）？（在变且合理 / 在变但离谱 / 不变 / 看不清）"
+choices = ["在变且合理", "在变但离谱", "不变", "看不清"]
+timeout_s = 180
+
+[[steps]]
+op = "gpio_pulse"
+name = "button"
+ms = 200
+count = 10
+gap_ms = 400
+
+[[steps]]
+op = "manual_observe"
+point = "按键"
+question = "刚才夹具自动短按了 10 次 B1，第二行有没有在 TH 与 VDDA 之间切换？（每次都切 / 切了但漏了几次 / 完全没切 / 没在看）"
+choices = ["每次都切", "切了但漏了几次", "完全没切", "没在看"]
+timeout_s = 180
+
+# ---- 保存验证：复位后阈值仍是 33.5 ----
+[[steps]]
+op = "reset"
+kind = "auto"
+
+[[steps]]
+op = "serial_window"
+duration_ms = 4000
+save = "serial/after-reset.log"
+asserts = [
+  { id = "cmd4", point = "命令", type = "serial_parse", expr = 'READY\s+TH\s*=\s*(-?[\d.]+)', checks = [ { field = 1, ref = 33.5, tol_abs = 0.15 } ] },
+]
+
+# ---- 耐力：3 分钟内不该出现第二次 READY（= 中途重启/看门狗复位） ----
+[[steps]]
+op = "serial_window"
+duration_ms = 180000
+save = "serial/endurance-3min.log"
+asserts = [
+  # 窗口是复位之后开始的，所以这 3 分钟里 READY 应当**一次都不出现**；
+  # 出现就说明中途又重启了（看门狗/死机复位）
+  #
+  # `allow_silent = true`：这一点的判据**就是**"什么都没发生"。不加这个标记，
+  # 空窗口只能记未观测（与 case11 的"空窗假绿"同一条防线），于是"耐力通过"
+  # 永远落不到机器判定上。防滥用靠第二个条件：本局此前必须收到过行
+  # （`ctx.link_alive`）—— 判分器没在听的时候，沉默仍然不算数。
+  { id = "endur1", point = "H2", type = "serial_count", pattern = 'READY\s+TH', expect = 0, allow_silent = true },
+  { id = "endur2", point = "H2", type = "serial_garbage", allow_silent = true },
+]
+
+[[steps]]
+op = "check"
+asserts = [
+  { id = "H2f", point = "H2", type = "code_static", rule = "case14.H2" },
+]
+
+[[steps]]
+op = "ai_judge"
+points = ["采样", "显示", "按键", "H1"]
+evidence = ["manual", "camera", "la", "diff", "session", "serial"]
+note = "采样/显示/按键的依据：人工观测记录（机位可用时再补截图）；H1 是架构印象"

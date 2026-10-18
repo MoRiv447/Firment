@@ -288,6 +288,21 @@ pub(crate) fn spawn_agent_task(
                         )))
                         .await;
                 }
+                AgentCmd::SetMaxIterations(n) => {
+                    let mut agent = agent.lock().await;
+                    agent.set_max_iterations(n);
+                    // 与 /budget 同一条纪律：写回 task_config 并落盘，否则下一次
+                    // 合并配置会把手输的值悄悄改回去。
+                    task_config.max_iterations = n.max(1);
+                    let _ = task_config.save(&task_config_path);
+                    let _ = agent.save_session();
+                    agent
+                        .emit(AgentEvent::Info(format!(
+                            "max iterations -> {} (saved)",
+                            n.max(1)
+                        )))
+                        .await;
+                }
                 AgentCmd::SetMaxOutputTokens(tokens) => {
                     let mut agent = agent.lock().await;
                     task_config.set_max_output_tokens(tokens);
@@ -840,6 +855,7 @@ pub(crate) enum AgentCmd {
     SetModel(String),
     SetThinking(ThinkingLevel),
     SetContextBudget(usize),
+    SetMaxIterations(usize),
     SetMaxOutputTokens(u32),
     SetToolVerbosity(ToolVerbosity),
     ShowContext,

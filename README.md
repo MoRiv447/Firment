@@ -4,7 +4,7 @@
 [![Version](https://img.shields.io/badge/version-1.0.0--rc-blue)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
-[![CI](https://img.shields.io/badge/CI-Rust%20%2B%20Web%20%2B%20GUI-green)](.github/workflows/ci.yml)
+[![CI](https://img.shields.io/badge/CI-Rust%20%2B%20GUI-green)](.github/workflows/ci.yml)
 [![Website](https://img.shields.io/badge/website-Firment%20official-ff5c9d)](https://moriv447.github.io/Firment-site/)
 
 **English** | [简体中文](README.zh-CN.md)
@@ -23,9 +23,8 @@ The kernel is a Rust coding agent with an embedded-first toolchain. A firmware c
 |---|---|---|
 | **CLI / TUI** | [`crates/`](crates/) | Rust (ratatui) — the core agent |
 | **GUI client** | [`gui/`](gui/) | Tauri + React/Vite (TypeScript) |
-| **Web** | [`web/`](web/) | Next.js + Tailwind (deployed on Vercel) — try it at [firment-web.vercel.app](https://firment-web.vercel.app) |
 
-The CLI is the source of truth; the GUI client shares the same Rust agent kernel through the unified `Tool` trait and session format, while the Web surface is a TypeScript reimplementation kept in sync via a committed tool-spec snapshot (`web/src/lib/tools/specs.json`).
+The CLI is the source of truth; the GUI client shares the same Rust agent kernel through the unified `Tool` trait and session format.
 
 ---
 
@@ -126,7 +125,6 @@ Run the guard + small-model classification on a local single-board computer (Deb
 | Surface | Screenshot |
 |---|---|
 | **GUI** — Tauri + React; tool cards stream live with success/failure, status pill tracks `idle Ns` / `tool Nm Ns`; the agent kernel lives in the same Rust binary as the CLI. Project workbench: session tree, pin registry, ADR decisions, device bindings, parallel chats | <img src="docs/screenshots/ide.png" alt="Firment GUI: tool cards (list_dir ✓, read_file ✕, todo ✓) with the running periph_init… tool 16s counter" width="900"> |
-| **Web** — Next.js on Vercel (`firment-web.vercel.app`); the same agent kernel reachable from any browser, with the same `Tool` trait and tool-spec snapshot | <img src="docs/screenshots/web.png" alt="Firment Web: ask 'Search for GPIO configuration patterns' — agent invokes grep/glob/list_dir/read_file and answers that the workspace is Next.js, not firmware" width="900"> |
 
 ---
 
@@ -173,11 +171,11 @@ above install the last stable one. Name the tag to choose otherwise (the variabl
 the *script*, so on the shell side it goes after the pipe):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | FIRMENT_VERSION=v1.0.0-rc sh
+curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | FIRMENT_VERSION=v1.0.0-rc3 sh
 ```
 
 ```powershell
-$env:FIRMENT_VERSION = 'v1.0.0-rc'   # then the iex line above
+$env:FIRMENT_VERSION = 'v1.0.0-rc3'   # then the iex line above
 ```
 
 **Offline or air-gapped machine.** Both installers download a release, so neither works
@@ -285,10 +283,9 @@ crates/
   firment-tui/    ratatui terminal UI (git status bar, model/session pickers)
   firment-cli/    clap entry point (bin: firm) + install/update/completions
 gui/              Tauri GUI client (React/Vite + src-tauri)
-web/              Next.js marketing/docs frontend (Vercel)
 sbc-guard/        SBC-side collector + deterministic guard (Python, MQTT + ollama)
 docs/             vendor-index.toml + cheatsheets/*.toml (hardware KB)
-.github/workflows/  CI: Rust (fmt/clippy/test) + web-check + gui-check
+.github/workflows/  CI: Rust (fmt/clippy/test) + gui-check
 ```
 
 ## 🧪 Development
@@ -297,10 +294,27 @@ docs/             vendor-index.toml + cheatsheets/*.toml (hardware KB)
 cargo test               # unit + integration tests (4 crates)
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
-# web / gui
-cd web && npm ci && npx tsc --noEmit && npm run build
+# gui
 cd gui && npm ci && npx tsc --noEmit && npm run build   # + npm run tauri build for installers
 ```
+
+## 🧪 Benchmark — 2026-10
+
+A 14-case hardware-in-the-loop benchmark: every case must build, flash, run and be **measured on
+the board** (logic analyser, serial, debug probe). Firment and one other agent were run on the
+same rig, three rounds each.
+
+| | |
+|---|---|
+| **Ran (8)** | 01 VCP hello · 04 button debounce · 05 PWM · 06 capture · 07 ring buffer · 08 DMA+IDLE · 10 flash counter · 11 IWDG — 57/100 weight |
+| **Not run (6)** | 02, 03, 09, 12, 13, 14 — **43/100 weight**. 12/14 need a camera aimed at the board (not available here); 13 needs the Bluetooth peer online; 03/09 need a human to answer one prompt (and a multimeter for 09) |
+| **Scoring** | frozen at `r7`; `freeze_check.py` verifies all 27 files |
+| **Reproduce** | the test set lives in this repo under `benchmark/` — its README has the exact commands, the wiring, and the per-case evidence format |
+
+The per-case results, the reasoning for every machine-unjudgeable point, and the build the
+numbers belong to are in `benchmark/RESULTS.md`. The short version: 6 of 8 cases were identical
+across both agents; the two that moved were a board-polarity assumption (both agents fell for the
+same one) and a debounce state machine.
 
 ## 🗺️ Roadmap
 
@@ -311,7 +325,6 @@ cd gui && npm ci && npx tsc --noEmit && npm run build   # + npm run tauri build 
 - SWO/trace streaming deeper into the agent loop
 - Tree-sitter structural edits and completions
 - MCP servers on the unified tool registry
-- Web backend: containerized Rust agent behind the web frontend
 - Skills: installable tool packs (declarative external-command tools + schemas + prompts)
 
 *(Streaming-token animation shipped in v0.6.3 — time-driven spinners, batched deltas, cached wrapping.

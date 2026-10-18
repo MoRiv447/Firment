@@ -1,0 +1,65 @@
+# case01 VCP 问好 —— 权重 5，时间盒 20min
+#
+# judge_table 判据：
+#   F1  VCP 115200 出现 HELLO <n>，序号正确
+#   F2  相邻行间隔 1s±5%（数 10 行计时）
+#   F3  连续 60s 无乱码无丢行无停发
+#   H1  输出物理上走 PA2/PA3（VCP）
+#   H2  未与 BSP COM 双重初始化冲突
+#
+# 采集顺序：烧录 → SWD 复位 → 开串口 → 65s 窗口。
+# 注意"先开串口再复位"是做不到的：复位会打断 ST-Link VCP 的稳定状态，
+# 所以接受"可能漏掉头 1-2 行"，序号断言按"从抓到的第一个值起连续"判。
+
+id = "case01"
+title = "VCP 问好"
+weight = 5
+timebox_min = 20
+
+[caps]
+serial = ["dut_vcp"]
+flash = true
+reset = "swd"
+la = "optional"
+
+[fallback]
+on_missing = "skip"
+reason = "缺串口/烧录能力时，本题只能人工做"
+
+[[steps]]
+op = "flash"
+
+[[steps]]
+op = "reset"
+kind = "swd"
+
+[[steps]]
+op = "serial_open"
+port = "dut_vcp"
+baud = 115200
+
+[[steps]]
+op = "serial_window"
+duration_ms = 65000
+save = "serial/dut-60s.log"
+asserts = [
+  # F1：出现了规范的 HELLO 行，且序号从抓到的第一个值起逐个递增
+  { id = "F1a", point = "F1", type = "serial_regex", pattern = '^\s*HELLO\s+(\d+)\s*$', min_matches = 3 },
+  { id = "F1b", point = "F1", type = "serial_sequence", pattern = '^\s*HELLO\s+(\d+)\s*$', field = 1 },
+  # F2：相邻行 1s±5%，取前 10 个间隔
+  { id = "F2", type = "serial_timing", pattern = '^\s*HELLO\s+(\d+)\s*$', period_ms = 1000, tol_pct = 5, samples = 10 },
+  # F3：60s 无乱码、无丢行、无停发
+  { id = "F3g", point = "F3", type = "serial_garbage" },
+  { id = "F3n", point = "F3", type = "serial_regex", pattern = '^\s*HELLO\s+(\d+)\s*$', min_matches = 55 },
+  { id = "F3t", point = "F3", type = "serial_max_gap", pattern = '^\s*HELLO\s+(\d+)\s*$', max_gap_ms = 1500 },
+]
+
+# ---------------------------------------------------------------------------
+# 隐藏项：静态规则（跑不了会变成"无法判定"并转 AI，不会静默算通过）
+# ---------------------------------------------------------------------------
+[[steps]]
+op = "check"
+asserts = [
+  { id = "H1", type = "code_static", rule = "case01.H1" },
+  { id = "H2", type = "code_static", rule = "case01.H2" },
+]

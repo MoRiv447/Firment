@@ -291,7 +291,7 @@ topic = "Pinout / package"
 cheatsheet = "cheatsheets/stm32g4-pinout.toml"
 doc_section = "DS12589 pinout / UM2505 (NUCLEO-G431RB)"
 confidence = "verified"
-common_mistake = ["G431RB (LQFP64) has NO Port E — any PE* pin compiles but drives nothing (phantom-pin trap); NUCLEO: LED=PA5, button=PC13, ST-Link VCP=LPUART1 PA2/PA3; 5V tolerance is per-pin (FT vs TT_a)."]
+common_mistake = ["5 V tolerance is per-pin (FT vs TT_a): check the datasheet pin column for the exact part number, and read the linked cheatsheet for what a given package and board actually expose."]
 
 [[stm32.g4.quickref]]
 topic = "TIM / PWM"

@@ -4,7 +4,7 @@
 [![Version](https://img.shields.io/badge/version-1.0.0--rc-blue)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
-[![CI](https://img.shields.io/badge/CI-Rust%20%2B%20Web%20%2B%20GUI-green)](.github/workflows/ci.yml)
+[![CI](https://img.shields.io/badge/CI-Rust%20%2B%20GUI-green)](.github/workflows/ci.yml)
 [![Website](https://img.shields.io/badge/website-Firment%20官网-ff5c9d)](https://moriv447.github.io/Firment-site/)
 
 [English](README.md) | **简体中文**
@@ -17,15 +17,14 @@
 
 内核是一个嵌入式优先的 Rust 编码 Agent。模型把代码打印出来不算"完成"——一次固件改动要真正编译通过、落到目标板上、跑起来，且观测到的输出与预期一致，才算完成；在证据阶梯的最高一级，"观测"意味着照片显示 LED 真的亮了、逻辑分析仪采到的波形测出了正确频率，而不是模型的一面之词。
 
-**一个仓库，三端入口（monorepo）：**
+**一个仓库，两端入口（monorepo）：**
 
 | 端 | 路径 | 技术栈 |
 |---|---|---|
 | **CLI / TUI** | [`crates/`](crates/) | Rust (ratatui)——核心 Agent |
 | **GUI 客户端** | [`gui/`](gui/) | Tauri + React/Vite (TypeScript) |
-| **Web** | [`web/`](web/) | Next.js + Tailwind（Vercel 部署）——在线体验：[firment-web.vercel.app](https://firment-web.vercel.app) |
 
-CLI 是事实标准；GUI 客户端共用同一个 Rust Agent 内核（统一的 `Tool` trait 和会话格式），Web 端是 TypeScript 重新实现，通过提交的工具规格快照（`web/src/lib/tools/specs.json`）保持同步。
+CLI 是事实标准；GUI 客户端共用同一个 Rust Agent 内核（统一的 `Tool` trait 和会话格式）。
 
 ---
 
@@ -121,12 +120,11 @@ Firment 不把模型当 shell 脚本生成器，而是明确分工：
 
 把守卫 + 小模型分类跑在局域网单板机（Debian + systemd）上：mosquitto 代理、ollama 小模型、`sbc-guard` 守护进程与 PC 侧 provider 配置。从零到部署的完整手册（含逐项故障排查表）：**[docs/sbc-setup.zh-CN.md](docs/sbc-setup.zh-CN.md)**（英文版 [sbc-setup.md](docs/sbc-setup.md)）。验收只需一条命令：`firm --doctor --sbc`（六段检查，失败即带修复提示）。
 
-### 三端入口，同一个内核
+### 两端入口，同一个内核
 
 | 端 | 截图 |
 |---|---|
 | **GUI** —— Tauri + React；工具卡片实时流式（成功/失败红绿），状态徽章显示 `idle Ns` / `tool Nm Ns`；Agent 内核和 CLI 共用同一份 Rust 字节码。项目工作台：会话树、引脚登记、ADR 决策、设备绑定、并行对话 | <img src="docs/screenshots/ide.png" alt="Firment GUI：工具卡片（list_dir ✓、read_file ✕、todo ✓）与 running periph_init… tool 16s 状态条" width="900"> |
-| **Web** —— Next.js，部署在 Vercel（`firment-web.vercel.app`）；同一套 Agent 内核 + `Tool` trait + tool-spec 快照，浏览器即可用 | <img src="docs/screenshots/web.png" alt="Firment Web：问「Search for GPIO configuration patterns」—— Agent 调起 grep/glob/list_dir/read_file 后诚实告知当前是 Next.js 工程没有固件代码" width="900"> |
 
 ---
 
@@ -170,11 +168,11 @@ pre-release**——所以 `v1.0.0-rc` 挂着 pre-release 期间，上面这行�
 就指定 tag（注意变量是给脚本的，shell 那条要写在管道右边，不是 `curl` 前面）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | FIRMENT_VERSION=v1.0.0-rc sh
+curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | FIRMENT_VERSION=v1.0.0-rc3 sh
 ```
 
 ```powershell
-$env:FIRMENT_VERSION = 'v1.0.0-rc'   # 然后再执行上面的 iex 那行
+$env:FIRMENT_VERSION = 'v1.0.0-rc3'   # 然后再执行上面的 iex 那行
 ```
 
 **离线 / 物理隔离的机器。** 两个安装脚本都要下载 release，没有网络都用不了。改用这两条路之一：
@@ -280,10 +278,9 @@ crates/
   firment-tui/    ratatui 终端界面（git 状态栏、模型/会话选择器）
   firment-cli/    clap 入口（bin: firm）+ install/update/补全
 gui/              Tauri GUI 客户端（React/Vite + src-tauri）
-web/              Next.js 前端（Vercel）
 sbc-guard/        SBC 端侧采集器 + 确定性守卫（Python，MQTT + ollama）
 docs/             vendor-index.toml + cheatsheets/*.toml（硬件知识库）
-.github/workflows/  CI：Rust（fmt/clippy/test）+ web-check + gui-check
+.github/workflows/  CI：Rust（fmt/clippy/test）+ gui-check
 ```
 
 ## 🧪 开发
@@ -292,10 +289,25 @@ docs/             vendor-index.toml + cheatsheets/*.toml（硬件知识库）
 cargo test               # 单元 + 集成测试（4 个 crate）
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
-# web / gui
-cd web && npm ci && npx tsc --noEmit && npm run build
+# gui
 cd gui && npm ci && npx tsc --noEmit && npm run build   # + npm run tauri build 生成安装包
 ```
+
+## 🧪 基准测试 — 2026-10
+
+14 题硬件在环评测：每题都要编译、烧录、跑起来，并**在板子上量出结果**（逻辑分析仪 / 串口 / 探针）。
+Firment 与另一个 agent 在同一台架各跑三轮。
+
+| | |
+|---|---|
+| **已测（8 题）** | 01 VCP 问好 · 04 按键去抖 · 05 PWM · 06 捕获 · 07 环形缓冲 · 08 DMA+IDLE · 10 flash 计数 · 11 IWDG —— 57/100 权重 |
+| **未测（6 题）** | 02、03、09、12、13、14 —— **43/100 权重**。12/14 需要相机对着板子（本机拍不到）；13 需要蓝牙对端在线；03/09 需要人在跑分时回答一句（09 还要万用表） |
+| **判分口径** | 冻结在 `r7`，`freeze_check.py` 校验 27 个文件 |
+| **复现** | 测试集在本仓库 `benchmark/`，命令、接线与逐题证据格式见它的 README |
+
+逐题结果、每个"机器判不了"的点的裁定理由、以及分数属于哪份构建，都在 `benchmark/RESULTS.md`。
+一句话版本：8 题里有 6 题两侧完全相同，动过的两道题一个是板级极性假设（两个 agent 都栽了），
+一个是去抖状态机。
 
 ## 🗺️ 路线图
 
@@ -306,7 +318,6 @@ cd gui && npm ci && npx tsc --noEmit && npm run build   # + npm run tauri build 
 - SWO/trace 更深地接入 Agent 循环
 - tree-sitter 结构化编辑与补全
 - 统一工具注册表上的 MCP 接入
-- Web 后端：容器化 Rust Agent 支撑 Web 前端
 - 技能包：可安装的工具包（声明式外部命令工具 + schema + 提示词）
 
 *（流式 token 动画已在 v0.6.3 落地——时间驱动 spinner、增量合批、换行缓存。

@@ -1,0 +1,5 @@
+{
+  "_comment": "case01 中途停发 4 秒：F3 的 max_gap 应判失败，F1/F2 仍应通过（故障隔离）。",
+  "generator": {"pattern": "HELLO {i}", "start": 0, "count": 65, "period_ms": 1000},
+  "mutations": [{"kind": "delay", "at": 30, "ms": 4000}]
+}

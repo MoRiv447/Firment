@@ -14,9 +14,6 @@ const METAPROGRAMMING_PATTERNS: &[(&str, &str)] = &[
     ("$(", "command substitution $()"),
     ("${", "parameter substitution ${}"),
     ("$[", "arithmetic expansion $[]"),
-    ("<(", "process substitution <()"),
-    (">(", "process substitution >()"),
-    ("=(", "zsh process substitution =()"),
     ("IFS=", "IFS injection"),
     ("/proc/self/", "sensitive /proc access"),
     ("/etc/passwd", "sensitive file access"),
@@ -26,6 +23,19 @@ const METAPROGRAMMING_PATTERNS: &[(&str, &str)] = &[
     ("id_ed25519", "credential access"),
     ("id_dsa", "credential access"),
     ("authorized_keys", "credential access"),
+];
+
+/// 只有 POSIX/zsh 才有的进程替换写法。
+///
+/// 以前它们和上面那张表混在一起、无条件做子串匹配，于是在 Windows 上拦掉的是普通代码：
+/// 基准里那次就是 PowerShell 的 `$pairs=@(...)` 被 `=(` 命中（实际 shell 是 cmd/PowerShell，
+/// 那里 `=(` 不展开任何东西）。同文件里 `%VAR%` 那条已经按平台判断（`expands_cmd_variable`
+/// 只在 windows 生效），这三条却没有 —— 一个平台门只装了一半，比全无更容易骗过Reviewer。
+/// `$(`/`${` 留在无条件那张表里：PowerShell 确实会展开它们。
+const UNIX_ONLY_METAPROGRAMMING: &[(&str, &str)] = &[
+    ("<(", "process substitution <()"),
+    (">(", "process substitution >()"),
+    ("=(", "zsh process substitution =()"),
 ];
 
 /// Whether `command` holds the `%NAME%` shape that `cmd /C` expands.
@@ -67,6 +77,14 @@ pub fn dangerous_reason(command: &str) -> Option<&'static str> {
         return Some("shell metaprogramming (backticks; cannot be verified statically)");
     }
     for (pattern, why) in METAPROGRAMMING_PATTERNS {
+        if lower.contains(pattern) {
+            return Some(why);
+        }
+    }
+    for (pattern, why) in UNIX_ONLY_METAPROGRAMMING {
+        if !cfg!(unix) {
+            continue;
+        }
         if lower.contains(pattern) {
             return Some(why);
         }
@@ -465,7 +483,6 @@ mod tests {
             "e$(echo val) ls",
             "`rm -rf src`",
             "echo x `cat /etc/passwd`",
-            "cat <(echo evil)",
             "cat /etc/passwd",
             "cat /etc/shadow",
             "cat ~/.ssh/id_rsa",
@@ -475,6 +492,30 @@ mod tests {
                 dangerous_reason(cmd).is_some(),
                 "should detect metaprogramming: {cmd}"
             );
+        }
+        // Process substitution only *is* metaprogramming where the shell expands it.
+        // Asserting it unconditionally would encode the bug this split fixed.
+        if cfg!(unix) {
+            assert!(dangerous_reason("cat <(echo evil)").is_some());
+        }
+    }
+
+    #[test]
+    fn a_posix_only_construct_does_not_block_the_other_platform() {
+        // 基准实测：Windows 上 PowerShell 的 `$pairs=@()` 被 `=(` 的子串匹配拦下，
+        // 而 `=(` 在 cmd/PowerShell 里不展开任何东西 —— 护栏在别的平台上制造了一次
+        // 无意义的拒绝，还把人推向 `--allow-dangerous` 去绕过一道根本没保护他的门。
+        if !cfg!(unix) {
+            assert_eq!(
+                dangerous_reason("powershell -Command \"$pairs=@(1,2)\""),
+                None,
+                "zsh-only syntax must not block on Windows"
+            );
+        }
+        // 反向：同一段文字在真会展开它的平台上仍然要被拦下，别把修复做成一律放行。
+        if cfg!(unix) {
+            assert!(dangerous_reason("cat <(echo evil)").is_some());
+            assert!(dangerous_reason("diff =(sort a) =(sort b)").is_some());
         }
     }
 

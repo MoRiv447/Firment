@@ -1,0 +1,102 @@
+# case11 IWDG 复位溯源 —— 权重 7，时间盒 30min
+#
+# judge_table 判据：
+#   F1  ALIVE 每 500ms 一行，30s 无意外复位
+#   F2  按住 B1 打印 STUCK，~1s 内自动复位重启（0.8-1.5s 可接受）
+#   F3  IWDG 复位打印 RESET=IWDG；按 RESET 打印 RESET=POR
+#   H1  读 RCC_CSR 后置 RMVF。行为验证：IWDG 复位后再按 RESET——仍报 IWDG = 0
+#   H2  LSI≈32kHz 推出 PSC/RLR≈1s；死锁分支真停喂狗；IWDG 无中断
+#
+# **本题是"SWD 复位不算数"的题。** RESET=POR 只对 NRST 引脚复位成立
+# （RCC_CSR 里留的是 PINRSTF；SWD 的系统复位留 SFTRSTF）。所以那两步
+# 显式 require_caps = ["reset:nrst"]：**没标定过真 NRST 路径时它们不会跑**，
+# 断言记成"未观测"推给 AI，而不是拿一次系统复位冒充按键复位骗过一个绿灯。
+#
+# 真 NRST 有三条候选路径，哪条算数必须先标定（`cli.py probe reset-test`
+# 会读 RCC_CSR 告诉你）：夹具 modem 线 / STM32_Programmer_CLI -rst /
+# OpenOCD srst_only。标定结果填进 config.toml 的 [probe].nrst_method。
+#
+# F2 的 0.8-1.5s 用 serial_gap 量：从 STUCK 到 RESET=IWDG 的间隔。
+# 判据给的是"~1s"，容差取 0.6-2.2s —— 比判据松一档，把"启动打印本身要时间"
+# 这点留出来，真正的边界情况由 AI 看原始日志裁。
+
+id = "case11"
+title = "IWDG"
+weight = 7
+timebox_min = 30
+
+[caps]
+serial = ["dut_vcp"]
+flash = true
+reset = "swd"
+gpio = ["button"]
+
+[fallback]
+on_missing = "skip"
+
+[[steps]]
+op = "flash"
+
+[[steps]]
+op = "serial_open"
+port = "dut_vcp"
+
+[[steps]]
+op = "reset"
+kind = "auto"
+
+[[steps]]
+op = "serial_window"
+duration_ms = 32000
+save = "serial/alive-30s.log"
+asserts = [
+  { id = "F1a", type = "serial_timing", pattern = '^\s*ALIVE\s+\d+\s*$', period_ms = 500, tol_pct = 5, samples = 10 },
+  { id = "F1b", type = "serial_max_gap", pattern = '^\s*ALIVE\s+\d+\s*$', max_gap_ms = 900 },
+  { id = "F1c", type = "serial_regex", pattern = '^\s*ALIVE\s+\d+\s*$', min_matches = 55 },
+]
+
+# 按住 B1 三秒 → 应打印 STUCK 且约 1 秒后自动复位
+[[steps]]
+op = "gpio_pulse"
+name = "button"
+ms = 3000
+
+[[steps]]
+op = "serial_window"
+duration_ms = 6000
+scope = "all"
+save = "serial/stuck.log"
+asserts = [
+  { id = "F2a", type = "serial_regex", pattern = 'STUCK' },
+  { id = "F2b", type = "serial_gap", from_pattern = 'STUCK', to_pattern = 'RESET=IWDG', min_ms = 600, max_ms = 2200 },
+  { id = "F2c", type = "serial_regex", pattern = 'RESET=IWDG' },
+]
+
+# 按板载 RESET（必须是真 NRST）→ 应打印 RESET=POR
+[[steps]]
+op = "reset"
+kind = "nrst"
+require_caps = ["reset:nrst"]
+
+[[steps]]
+op = "serial_window"
+duration_ms = 4000
+save = "serial/por.log"
+# **from_prev：窗口从"上一步（按 RESET）开始执行之前"算起。**
+# RESET=POR 是在 reset handler 自己执行期间到达的（实测比旧起点早 3ms），
+# 按旧语义它必然掉在窗口外 ⇒ 两边同挂的假红；而 H1b（serial_absent RESET=IWDG）
+# 因为同一个原因"看不见"而**假绿** —— 一个缺陷同时造出假红和假绿，这条最危险。
+# 起点回退到上一步派发处：既收得到 POR，又不会把更早那次 RESET=IWDG 纳进来。
+from_prev = true
+asserts = [
+  { id = "F3", type = "serial_regex", pattern = 'RESET=POR' },
+  # H1 的行为验证：标志清干净了，这次 NRST 就不该再报 IWDG
+  { id = "H1b", type = "serial_absent", pattern = 'RESET=IWDG' },
+]
+
+[[steps]]
+op = "check"
+asserts = [
+  { id = "H1a", type = "code_static", rule = "case11.H1" },
+  { id = "H2", type = "code_static", rule = "case11.H2" },
+]

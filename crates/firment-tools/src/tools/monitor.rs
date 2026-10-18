@@ -119,7 +119,9 @@ fn read_serial(
     )?;
     // Only this wrapper knows the port name, so it owns the empty-case text.
     if text.is_empty() {
-        Ok(format!("no data received on {port} within {timeout_ms} ms"))
+        Ok(format!(
+            "no data received on {port} within {timeout_ms} ms — the device produced nothing. That is evidence of silence, not evidence that the path works; do not report a functional check as passing on the strength of it"
+        ))
     } else {
         Ok(text)
     }
@@ -435,6 +437,15 @@ pub fn port_names() -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// 本机第一个可用串口，用于 `port="auto"`。
+///
+/// 抽出来之前这段只存在于 hil 的 monitor 步骤里（`hil.rs` 直接取 `ports[0]`），monitor
+/// 工具自己却没有 auto —— 于是"自动选口"这件事在一个入口存在、在另一个入口不存在，
+/// 而基准里 monitor 失败的 6/8 题正是模型没口可填的时候。两个入口现在共用一份实现。
+pub fn auto_port() -> Option<String> {
+    port_names().into_iter().next()
+}
+
 #[async_trait]
 impl Tool for Monitor {
     fn name(&self) -> &'static str {
@@ -449,7 +460,7 @@ impl Tool for Monitor {
         json!({
             "type": "object",
             "properties": {
-                "port": {"type": "string", "description": "Serial port, e.g. COM3 or /dev/ttyUSB0 (defaults to [tools] monitor_port)"},
+                "port": {"type": "string", "description": "Serial port, e.g. COM3 or /dev/ttyUSB0; \"auto\" takes the first detected port (defaults to [tools] monitor_port)"},
                 "baud": {"type": "integer", "minimum": 1, "description": "Baud rate (defaults to [tools] monitor_baud)"},
                 "autodetect": {"type": "boolean", "default": false, "description": "Probe common baud rates (9600..921600) and use the first that yields valid data; overrides baud"},
                 "timestamp": {"type": "boolean", "default": true, "description": "Prefix each line with its arrival time [SS.mmm]"},
@@ -476,11 +487,24 @@ impl Tool for Monitor {
             .or_else(|| ctx.monitor_port.clone())
             .ok_or_else(|| {
                 ToolError::new(format!(
-                    "[InvalidInput] missing port: pass a port parameter (e.g. COM3) or set \
-                     monitor_port in [tools] of config.toml. Detected ports: {}",
+                    "[InvalidInput] missing port: pass a port parameter (e.g. COM3), pass \
+                     port=\"auto\", or set monitor_port in [tools] of config.toml. Detected \
+                     ports: {}",
                     enumerate_ports()
                 ))
             })?;
+        // `auto` is resolved here as well as in hil so the two paths cannot drift: a stale
+        // comment in one of them already cost 6 of 8 benchmark runs a avoidable error.
+        let port = if port == "auto" {
+            auto_port().ok_or_else(|| {
+                ToolError::new(format!(
+                    "[InvalidInput] port=\"auto\" but no serial port is attached. Detected: {}",
+                    enumerate_ports()
+                ))
+            })?
+        } else {
+            port
+        };
         let baud = match args.get("baud").and_then(|b| b.as_u64()) {
             // u32 cast would silently wrap a nonsense value (2^32 + k → k).
             Some(b) if b <= u32::MAX as u64 => b as u32,

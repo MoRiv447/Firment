@@ -597,9 +597,21 @@ pub async fn session_context_usage(
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clone();
     let session = store.load(&session_id).map_err(|e| e.to_string())?;
-    let system_chars = firment_core::context::system_prompt_for(&session.cwd, session.mode)
-        .chars()
-        .count() as u64;
+    // The prompt's "what is available here" section is generated from the registry, so the
+    // estimate has to use the same list — a hardcoded `&[]` here would quietly under-report the
+    // prompt the model is actually sent. Pruned-by-config tools are not re-derived in this
+    // panel; the built-in set is the upper bound the comment above already acknowledges.
+    let tools = firment_core::PromptTools::new(
+        &firment_tools::default_registry()
+            .names()
+            .iter()
+            .map(|n| n.to_string())
+            .collect::<Vec<String>>(),
+    );
+    let system_chars =
+        firment_core::context::system_prompt_for(&session.cwd, session.mode, &tools)
+            .chars()
+            .count() as u64;
     // The compaction digest rides the transcript's number here as well: it is sent inside the first
     // user turn on every request, so a reading that ignored it would shrink when the session grows.
     let transcript_chars: u64 = session

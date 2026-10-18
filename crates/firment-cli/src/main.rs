@@ -241,6 +241,11 @@ enum Command {
         /// Print the effective configuration with keys masked, and exit.
         #[arg(long)]
         show: bool,
+        /// Open config.toml in $EDITOR (notepad on Windows when $EDITOR is unset).
+        /// 没有图形设置页覆盖到的键（`[tools.la]` 等）走这里改 —— 比手写
+        /// `config --set k=v` 安全，因为不会重写文件、丢注释。
+        #[arg(long)]
+        edit: bool,
     },
     /// Review something and report findings. `deps` audits the dependency graph (licences
     /// always, advisories when `cargo-audit` is installed); `last` reviews the newest
@@ -443,11 +448,13 @@ async fn main() -> anyhow::Result<()> {
                 let registry = firment_tools::default_registry();
                 println!("{}", serde_json::to_string_pretty(&registry.specs())?);
             }
-            Command::Config { show } => {
+            Command::Config { show, edit } => {
                 let path = cli.config.clone().unwrap_or_else(config_path);
                 if *show {
                     let config = Config::load_or_create(&path)?;
                     show_config(&config, &path, &mut std::io::stdout())?;
+                } else if *edit {
+                    edit_config(&path)?;
                 } else {
                     run_config(&path).await?;
                 }
@@ -1389,6 +1396,32 @@ fn masked_key(key: &str) -> String {
 /// resolves it (inline, then auth.json, then the environment). Display only: the
 /// usability verdict below comes from the kernel, so the two cannot disagree about
 /// *whether* a key exists — only this line can name the wrong place.
+/// `firm config --edit`: hand the file to the user's editor.
+///
+/// 为什么不是 `--set key=value`：那要序列化整个 TOML，会丢掉用户写的注释和顺序。
+/// 打开编辑器则一行都不改，用户看到的就是磁盘上的原文。
+fn edit_config(path: &Path) -> std::io::Result<()> {
+    if !path.exists() {
+        // 先落一份默认配置，否则编辑器打开的是"新建空文件"，用户不知道该写什么。
+        let _ = Config::load_or_create(path);
+    }
+    let editor = std::env::var("EDITOR")
+        .or_else(|_| std::env::var("VISUAL"))
+        .unwrap_or_else(|_| {
+            if cfg!(windows) {
+                "notepad".to_string()
+            } else {
+                "vi".to_string()
+            }
+        });
+    println!("opening {} with {editor}", path.display());
+    let status = std::process::Command::new(&editor).arg(path).status()?;
+    if !status.success() {
+        eprintln!("{editor} exited with {status}");
+    }
+    Ok(())
+}
+
 /// `firm config --show`: the effective configuration, with every secret masked.
 fn show_config(config: &Config, path: &Path, out: &mut impl std::io::Write) -> std::io::Result<()> {
     writeln!(out, "config file: {}", path.display())?;

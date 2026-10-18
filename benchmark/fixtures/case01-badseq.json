@@ -1,0 +1,5 @@
+{
+  "_comment": "case01 序号从第 20 行起跳变 +3：F1 的递增连续性应判失败。",
+  "generator": {"pattern": "HELLO {i}", "start": 0, "count": 65, "period_ms": 1000},
+  "mutations": [{"kind": "bump", "at": 20, "by": 3}]
+}

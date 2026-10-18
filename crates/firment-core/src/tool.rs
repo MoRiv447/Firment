@@ -213,6 +213,18 @@ impl ToolError {
     }
 }
 
+/// 一个工具要真正可用，还缺哪一项配置。**工具存在性的唯一裁决依据。**
+///
+/// 为什么要有这个而不是在提示词里写一段话：手写清单和注册表一定会分叉，而分叉的两个方向
+/// 都实测过 —— 提示词写了 `verify` 而本机没配 `verify_command`，模型每道题撞一次
+/// `[InvalidInput] verify tool is not configured`；反过来 `la` 配好了却没人提，也没人用。
+/// 让工具自己声明前置条件，注册表据此裁剪，schema 和提示词就只剩一个事实来源。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolRequirement {
+    /// `[tools] verify_command` must be set.
+    VerifyCommand,
+}
+
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &'static str;
@@ -228,6 +240,16 @@ pub trait Tool: Send + Sync {
 
     fn description(&self) -> &'static str;
     fn input_schema(&self) -> Value;
+
+    /// 这个工具的前置配置。`None` = 无条件可用（绝大多数工具）。
+    ///
+    /// 注册表按它在**装配时**裁剪：不满足的工具既不进 schema，也不进提示词。
+    /// 因此"摘掉一个没配置的工具"不会把调用它的代码打硬错 —— 门会自然消失，
+    /// 这一点必须被测试钉住（`agent.rs` 的验证门已经是
+    /// `registry.get("verify").is_some()` 的写法）。
+    fn requires(&self) -> Option<ToolRequirement> {
+        None
+    }
 
     /// Return a human-readable reason if this invocation needs explicit approval.
     fn approval(&self, _args: &Value) -> Option<String> {

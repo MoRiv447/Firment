@@ -1,0 +1,108 @@
+# case06 输入捕获自测 —— 权重 7，时间盒 30min
+#
+# judge_table 判据：
+#   F1  分析仪确认 PA8 输出 10kHz/40%（±1.5%）
+#   F2  插线后 MEAS ≈10000Hz±2%、40%±2pt，数值稳定
+#   F3  拔线打 FAIL/明显异常值，插回恢复 PASS
+#   H1  真捕获外设（PWM 输入模式 CH1+CH2 或双边沿切换）；轮询 GPIO+GetTick = 0.5
+#   H2  捕获定时器按 170MHz 换算无数量级错；PA0=TIM2_CH1 AF1
+#
+# 裁判动作（插线→PASS / 拔线→FAIL / 再插回）由夹具的"可控杜邦线"完成，
+# 需要 ESP32（CH340 只有两根 modem 线，做不了这个）。夹具没到位时这三段会
+# 记成"未观测"推给 AI —— 不会因为没插线就把 FAIL 判成通过。
+#
+# 三段必须按顺序且不能共用窗口里的行：所以第一段用 scope=window（默认），
+# 后两段才用 scope=all 看全过程。否则第一段的 PASS 会满足第三段的断言。
+
+id = "case06"
+title = "捕获自测"
+weight = 7
+timebox_min = 30
+
+[caps]
+serial = ["dut_vcp"]
+flash = true
+reset = "swd"
+gpio = ["jumper_pa8_pa0"]
+la = true
+
+[fallback]
+on_missing = "skip"
+
+[[steps]]
+op = "flash"
+
+[[steps]]
+op = "reset"
+kind = "swd"
+
+[[steps]]
+op = "serial_open"
+port = "dut_vcp"
+
+# ① 插线：应 PASS 且实测值对
+[[steps]]
+op = "gpio_set"
+name = "jumper_pa8_pa0"
+value = "closed"
+
+# 取窗锚点回退到"上一步（插线）开始执行之前"：固件在**跳线闭合的那一刻**打印
+# 的那一行，正好是它自己的硬件动作产生的。若固件选择"只在状态变化时打印"，
+# 晚一步开窗就永远看不到 PASS —— 那是合法实现，不该被判红。
+[[steps]]
+op = "serial_window"
+duration_ms = 9000
+from_prev = true
+save = "serial/connected.log"
+asserts = [
+  { id = "F2a", point = "F2", type = "serial_regex", pattern = 'SELFTEST\s+PASS' },
+  { id = "F2b", point = "F2", type = "serial_parse", expr = 'MEAS\s+f=(\d+)\s*d=([\d.]+)', checks = [ { field = 1, ref = 10000, tol_pct = 2 }, { field = 2, ref = 40, tol_pt = 2 } ], stability = [ { field = 1, max_range_abs = 200 } ] },
+]
+
+# ② 拔线：应 FAIL 或给出明显异常值
+[[steps]]
+op = "gpio_set"
+name = "jumper_pa8_pa0"
+value = "open"
+
+[[steps]]
+op = "serial_window"
+duration_ms = 7000
+from_prev = true
+save = "serial/disconnected.log"
+asserts = [
+  { id = "F3a", point = "F3", type = "serial_regex", pattern = 'SELFTEST\s+FAIL' },
+]
+
+# ③ 再插回：应恢复 PASS
+[[steps]]
+op = "gpio_set"
+name = "jumper_pa8_pa0"
+value = "closed"
+
+[[steps]]
+op = "serial_window"
+duration_ms = 7000
+from_prev = true
+save = "serial/reconnected.log"
+asserts = [
+  { id = "F3b", point = "F3", type = "serial_regex", pattern = 'SELFTEST\s+PASS' },
+]
+
+# F1：分析仪复核 PA8 的源信号本身是 10kHz/40%
+[[steps]]
+op = "la_capture"
+duration_ms = 300
+driver = "auto"
+samplerate = "4m"
+asserts = [
+  { id = "F1a", point = "F1", type = "frequency", channel = "PA8", hz = 10000, tol_pct = 1.5 },
+  { id = "F1b", point = "F1", type = "duty", channel = "PA8", pct = 40, tol_pt = 1.5 },
+]
+
+[[steps]]
+op = "check"
+asserts = [
+  { id = "H1", type = "code_static", rule = "case06.H1" },
+  { id = "H2", type = "code_static", rule = "case06.H2" },
+]

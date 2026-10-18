@@ -1,0 +1,74 @@
+# case09 内部温度+VDDA —— 权重 8，时间盒 30min
+#
+# judge_table 判据：
+#   F1  显示 VDDA 与万用表实测 ±60mV 内（打印恒定 3300 = 0）
+#   F2  温度与室温 ±3°C；捏芯片 10s 温升 ≥1°C
+#   F3  每秒一行，2 分钟无停发；相邻行跳变 >2°C = 异常
+#   H1  有 VDDA 折算（TS_CAL×VDDA/3000）
+#   H2  内部通道采样时间足够（≥5µs 级）
+#
+# 自动化取舍：
+# * F1 的"万用表实测"改成合理区间 [3150, 3450] mV。这里是刻意的降级：
+#   硬编码 3300 会落进区间，但 H1 的静态规则（必须引用 VREFINT/VREFINT_CAL）
+#   会把它抓住 —— judge_table 也写了"打印恒定 3300 = 0"。两条一起看才准。
+# * F2 的"捏芯片温升 ≥1°C"机器造不出来（需要受控热源 + 独立温度基准），
+#   按 plan §0 显式 skip，不进分母；室温合理性与稳定性并入 F3 判定。
+#   读数本身会落进证据，人工复核时看得到。
+
+id = "case09"
+title = "内部 ADC"
+weight = 8
+timebox_min = 30
+
+[caps]
+serial = ["dut_vcp"]
+flash = true
+reset = "swd"
+
+[fallback]
+on_missing = "skip"
+
+[[steps]]
+op = "flash"
+
+[[steps]]
+op = "reset"
+kind = "swd"
+
+[[steps]]
+op = "serial_open"
+port = "dut_vcp"
+
+[[steps]]
+op = "serial_window"
+duration_ms = 125000
+save = "serial/adc-2min.log"
+asserts = [
+  # F1：VDDA 落在 USB 供电 3.3V 的合理带内
+  { id = "F1", type = "serial_parse", expr = 'VDDA\s*=\s*(\d+)\s*T\s*=\s*(-?[\d.]+)', checks = [ { field = 1, lo = 3150, hi = 3450 } ] },
+  # F3：每秒一行、两分钟不停发；温度数值合理且不跳变
+  { id = "F3n", point = "F3", type = "serial_regex", pattern = 'VDDA\s*=\s*\d+\s*T\s*=', min_matches = 100 },
+  { id = "F3t", point = "F3", type = "serial_timing", pattern = 'VDDA\s*=\s*\d+\s*T\s*=', period_ms = 1000, tol_pct = 10, samples = 10 },
+  { id = "F3v", point = "F3", type = "serial_parse", expr = 'VDDA\s*=\s*(\d+)\s*T\s*=\s*(-?[\d.]+)', checks = [ { field = 2, lo = 5, hi = 45 } ], stability = [ { field = 2, max_range_abs = 4 } ] },
+]
+
+# 万用表实测值：机器的 F1 只能把 VDDA 框在 3150~3450mV 这个"USB 供电合理带"里，
+# 而 rubric 要的是"接近实测"。所以让人量一个真数记进证据，评委据此判偏差。
+# 这条不改变 F1 的机器判定，只是给评委一个基准值。
+[[steps]]
+op = "manual_observe"
+point = "F1"
+question = "用万用表直流档量板上 3V3 排针对 GND 的电压，照实报数字（单位 V，两位小数）。没量就答『没量』。"
+timeout_s = 240
+
+[[steps]]
+op = "skip_annotated"
+points = ["F2"]
+reason = "『手指捏芯片 10s 温升 ≥1°C』需要受控热源 + 独立温度基准，机器造不出来；室温合理性与 2 分钟稳定性已在 F3 里判，原始读数在 serial/adc-2min.log"
+
+[[steps]]
+op = "check"
+asserts = [
+  { id = "H1", type = "code_static", rule = "case09.H1" },
+  { id = "H2", type = "code_static", rule = "case09.H2" },
+]

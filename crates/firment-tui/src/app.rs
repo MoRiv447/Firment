@@ -171,6 +171,11 @@ pub(crate) struct App {
     /// read through `theme::*`; kept on the App so tests can pin a tier instead
     /// of inheriting whatever `COLORTERM` the test runner happens to have.
     pub(crate) tier: crate::theme::Tier,
+    /// 单轮工具调用上限的显示值。真正的执行上限在 `Agent` 里；这里只为了
+    /// `/max-iterations` 不带参数时能报"当前是多少"，以及 `/config` 能显示。
+    /// 启动后由 `lib.rs` 从合并后的配置覆盖（和 `tool_verbosity` 同一手法，
+    /// 免得给 `App::new` 再加一个参数、连累七个测试构造点）。
+    pub(crate) max_iterations: usize,
 }
 
 impl App {
@@ -225,6 +230,7 @@ impl App {
             provider,
             thinking,
             mode,
+            max_iterations: 30,
             pending_new_session: false,
             pending_new_session_since: None,
             new_session_wait: NEW_SESSION_WAIT,
@@ -2235,7 +2241,7 @@ impl App {
             .unwrap_or((command, ""));
         match name {
             "help" => self.items.push(Item::System(
-                "Commands: /new  /plan [on|off]  /agent  /models  /model <id>  /sessions (use ↑/↓ to select)  /session <id>  /delete <id>  /undo [n] (files only — the transcript is not rewritten)  /undo --before <seq> (rewind past the turn that made that tool call)  /ledger  /retry-last  /review-last  /review <path>  /ledger [--export [path]]  /pin <path>  /unpin <path>  /copy  /provider <name>  /add-provider <name> <openai|anthropic> <base_url> <model>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /budget <chars>  /output <tokens>  /verbosity [summary|normal|expanded]  /context  /config  /clear  /help  /quit\nKeys: ↑/↓ browse history when input is empty, move the input cursor on multi-line input, scroll the transcript on single-line input · Shift+Enter manual newline · PgUp/PgDn/wheel scroll · Ctrl+P model picker · Ctrl+O expand/collapse the diff on the selected tool card (the newest one when nothing is selected) · Ctrl+T collapse/expand every diff at once · inside /sessions: c copies the selected id to clipboard, d deletes it (drag-select and right-click are disabled because the TUI captures mouse events; press Esc to dismiss the picker, then your terminal's native selection works in the scrollback) · Ctrl+C copies the selection (copies the last reply when there is none) · Ctrl+V paste · Ctrl+Shift+C copy last reply · ←/→ move the input cursor · y/n/a permission answers · Esc interrupts AI output (Esc twice while working; clears input when idle) · Ctrl+Q quit\nInput box: auto-wraps and grows to up to 5 lines; taller content scrolls, large pastes collapse into 【line x-y】, and the title shows hidden/collapsed line counts before sending"
+                "Commands: /new  /plan [on|off]  /agent  /models  /model <id>  /sessions (use ↑/↓ to select)  /session <id>  /delete <id>  /undo [n] (files only — the transcript is not rewritten)  /undo --before <seq> (rewind past the turn that made that tool call)  /ledger  /retry-last  /review-last  /review <path>  /ledger [--export [path]]  /pin <path>  /unpin <path>  /copy  /provider <name>  /add-provider <name> <openai|anthropic> <base_url> <model>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /max-iterations <n>  /budget <chars>  /output <tokens>  /verbosity [summary|normal|expanded]  /context  /config  /clear  /help  /quit\nKeys: ↑/↓ browse history when input is empty, move the input cursor on multi-line input, scroll the transcript on single-line input · Shift+Enter manual newline · PgUp/PgDn/wheel scroll · Ctrl+P model picker · Ctrl+O expand/collapse the diff on the selected tool card (the newest one when nothing is selected) · Ctrl+T collapse/expand every diff at once · inside /sessions: c copies the selected id to clipboard, d deletes it (drag-select and right-click are disabled because the TUI captures mouse events; press Esc to dismiss the picker, then your terminal's native selection works in the scrollback) · Ctrl+C copies the selection (copies the last reply when there is none) · Ctrl+V paste · Ctrl+Shift+C copy last reply · ←/→ move the input cursor · y/n/a permission answers · Esc interrupts AI output (Esc twice while working; clears input when idle) · Ctrl+Q quit\nInput box: auto-wraps and grows to up to 5 lines; taller content scrolls, large pastes collapse into 【line x-y】, and the title shows hidden/collapsed line counts before sending"
                     .to_string(),
             )),
             "retry-last" => self.retry_last(),
@@ -2333,6 +2339,31 @@ impl App {
                 self.send_cmd(AgentCmd::SetThinking(level));
                 self.items
                     .push(Item::System(format!("thinking -> {}", level.label())));
+            }
+            "max-iterations" | "max_iterations" => {
+                if arg.is_empty() {
+                    self.items.push(Item::System(format!(
+                        "usage: /max-iterations <n>  (current: {})\n\
+                         one turn may make at most this many tool calls; it is saved to config",
+                        self.max_iterations
+                    )));
+                    return;
+                }
+                match arg.parse::<usize>() {
+                    Ok(n) if n > 0 => {
+                        // 夹到 1000：真有人写 100000 时，循环不会跑十亿次才报错。
+                        let n = n.min(1000);
+                        self.max_iterations = n;
+                        self.send_cmd(AgentCmd::SetMaxIterations(n));
+                        self.items
+                            .push(Item::System(format!("max iterations -> {n} (saving…)…")));
+                    }
+                    _ => {
+                        self.items.push(Item::System(format!(
+                            "invalid value '{arg}': expected a positive integer"
+                        )));
+                    }
+                }
             }
             "budget" => {
                 if arg.is_empty() {
@@ -2580,10 +2611,11 @@ impl App {
             }
             "config" => {
                 self.items.push(Item::System(format!(
-                    "provider: {} · model: {} · thinking: {} · cwd: {}\nconfig: {}\nauth: {}",
+                    "provider: {} · model: {} · thinking: {} · max_iterations: {} · cwd: {}\nconfig: {}\nauth: {}",
                     self.provider,
                     self.model,
                     self.thinking.label(),
+                    self.max_iterations,
                     self.cwd.display(),
                     self.config_path.display(),
                     firment_core::auth_path().display(),

@@ -39,7 +39,9 @@ pub use config::{
     AuthMap, CompactionStrategy, Config, ConfigError, ElfConfig, LaConfig, ProviderConfig,
     ToolVerbosity, UiConfig, UiTheme, auth_path, config_dir, config_path, load_auth, save_auth,
 };
-pub use context::{default_system_prompt, delegation_section, system_prompt_for};
+pub use context::{
+    PromptTools, default_system_prompt, delegation_section, section_titles, system_prompt_for,
+};
 pub use http::{http_builder, provider_client, provider_client_with};
 pub use journal::{EditJournal, Ledger, LedgerChange, UndoSummary};
 pub use permission::{
@@ -53,7 +55,7 @@ pub use provider::{
 pub use providers::{CATALOG, ProviderPreset};
 pub use session::{Session, SessionError, SessionKind, SessionStore, SessionSummary};
 pub use subagent::{NullSink, SubagentCall, SubagentFactory, SubagentRunner};
-pub use tool::{Tool, ToolContext, ToolError, ToolOutput, ToolRegistry};
+pub use tool::{Tool, ToolContext, ToolError, ToolOutput, ToolRegistry, ToolRequirement};
 pub use types::{ChatMessage, SessionMode, ThinkingLevel, ToolCall, ToolSpec};
 pub use workbench::DecisionEntry;
 pub use workbench::DeviceEntry;

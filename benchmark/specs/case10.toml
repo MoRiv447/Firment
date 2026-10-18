@@ -1,0 +1,99 @@
+# case10 flash 掉电计数 —— 权重 7，时间盒 30min
+#
+# judge_table 判据：
+#   F1  5 次复位序号严格连续递增，无跳号无重复（2 分）
+#   F2  断电重上电计数继续递增不归零
+#   H1  用 FLASH_TYPEPROGRAM_DOUBLEWORD（8B）
+#   H2  unlock→擦最后一页（页 63，0x0801F800）→写→lock；有首次运行检测
+#
+# 复位用 kind="auto"：装了夹具就走真 NRST，没装退到 SWD 系统复位。
+# 本题只判"计数跨复位连续"，两种复位都够用；NRST 的语义差异在 case11 才要紧。
+#
+# 绝对序号不参与判定：flash 里可能留着 agent 自己调试时的计数，所以断言按
+# "从抓到的第一个值起连续"判（判据原文也是"连续递增"，不是"从 1 开始"）。
+
+id = "case10"
+title = "flash 计数"
+weight = 7
+timebox_min = 30
+
+[caps]
+serial = ["dut_vcp"]
+flash = true
+reset = "swd"
+
+[fallback]
+on_missing = "skip"
+
+[[steps]]
+op = "flash"
+
+# 先把串口打开再复位：复位后立即打印的 BOOT 行不能被漏掉，
+# 而端口打开要几百毫秒 —— 先开再复位能抓到完整的 5 次。
+[[steps]]
+op = "serial_open"
+port = "dut_vcp"
+
+[[steps]]
+op = "reset"
+kind = "auto"
+
+[[steps]]
+op = "serial_window"
+duration_ms = 2500
+
+[[steps]]
+op = "reset"
+kind = "auto"
+
+[[steps]]
+op = "serial_window"
+duration_ms = 2500
+
+[[steps]]
+op = "reset"
+kind = "auto"
+
+[[steps]]
+op = "serial_window"
+duration_ms = 2500
+
+[[steps]]
+op = "reset"
+kind = "auto"
+
+[[steps]]
+op = "serial_window"
+duration_ms = 2500
+
+[[steps]]
+op = "reset"
+kind = "auto"
+
+[[steps]]
+op = "serial_window"
+duration_ms = 2500
+
+# 5 次复位后统一判：scope=all 才能看到跨复位的全过程
+[[steps]]
+op = "serial_window"
+duration_ms = 600
+scope = "all"
+save = "serial/boot-seq.log"
+asserts = [
+  { id = "F1a", point = "F1", type = "serial_regex", pattern = '^\s*BOOT\s+#?(\d+)\s*$', min_matches = 5 },
+  { id = "F1b", point = "F1", type = "serial_sequence", pattern = '^\s*BOOT\s+#?(\d+)\s*$', field = 1 },
+  { id = "F1g", point = "F1", type = "serial_garbage" },
+]
+
+[[steps]]
+op = "skip_annotated"
+points = ["F2"]
+reason = "『拔 USB 断电 5 秒重插』需要可控电源（继电器切 E5V，板子供电跳线拔掉）。按 plan §0 标 skip 不进分母，留人工或等夹具到位"
+
+[[steps]]
+op = "check"
+asserts = [
+  { id = "H1", type = "code_static", rule = "case10.H1" },
+  { id = "H2", type = "code_static", rule = "case10.H2" },
+]

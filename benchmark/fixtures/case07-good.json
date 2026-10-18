@@ -1,0 +1,8 @@
+{
+  "_comment": "case07 正常设备：收到什么回显什么（20ms 延迟），STATS 回报累计字节数。用于无板自测整条回显链路。",
+  "echo": true,
+  "echo_delay_ms": 20,
+  "reply": {
+    "STATS": [[30, "RX {sent_bytes_excluding_last}"]]
+  }
+}

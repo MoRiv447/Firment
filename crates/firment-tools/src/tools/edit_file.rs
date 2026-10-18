@@ -254,8 +254,14 @@ fn apply_edit_spec(
 
     if let Some(anchor) = hashline {
         let end_hashline = spec.get("end_hashline").and_then(|h| h.as_str());
+        // `edit_by_hashline` already tags its own error — `[ConcurrentChange]` when the file moved
+        // under us, `[InvalidInput]` when the anchor is ambiguous. Wrapping it in a second
+        // `[InvalidInput]` produced `[InvalidInput] [ConcurrentChange] ...`, and the model acts on
+        // the first tag: it was told to fix an input problem when the real instruction was to
+        // re-read the file. `prefix` here is only the "which spec entry" label, so keep that and
+        // let the inner tag stand.
         return edit_by_hashline(content, anchor, end_hashline, &new_norm)
-            .map_err(|e| ToolError::new(format!("[InvalidInput] {prefix}{}", e.message)));
+            .map_err(|e| ToolError::new(format!("{prefix}{}", e.message)));
     }
 
     if let Some(old) = old_text {
@@ -622,8 +628,11 @@ fn edit_by_hashline(
                  changed; re-read with read_file and retry"
             ))),
             _ => Err(ToolError::new(format!(
-                "[InvalidInput] anchor hash {anchor} matches {} line(s), not unique: re-read \
-                 with read_file hashlines=true and use a longer hash",
+                "[InvalidInput] anchor hash {anchor} matches {} line(s), so it names no single \
+                 line — making the hash longer cannot help (identical lines share the FULL hash; \
+                 this is usually blank lines or repeated closers). Either pass the surrounding \
+                 text as old_text with enough context to be unique, or address the line by its \
+                 line number.",
                 matches.len()
             ))),
         }
@@ -970,7 +979,23 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(err.message.contains("not unique"), "got: {}", err.message);
+        // 断言"给出可执行的替代方案"而不是某句原话：旧文案让人"用一个更长的哈希",
+        // 而哈希是定长的 —— 相同的行共享完整哈希，加长物理上做不到，那是把模型推向死路。
+        assert!(
+            err.message.contains("[InvalidInput]"),
+            "got: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("old_text") || err.message.contains("line number"),
+            "ambiguous anchor must name a way out: {}",
+            err.message
+        );
+        assert!(
+            !err.message.to_ascii_lowercase().contains("longer hash"),
+            "the advice must not be physically impossible: {}",
+            err.message
+        );
     }
 
     #[tokio::test]

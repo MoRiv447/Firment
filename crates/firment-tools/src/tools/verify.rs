@@ -12,7 +12,13 @@ impl Tool for Verify {
     }
 
     fn description(&self) -> &'static str {
-        "Run the project's configured verification command (config [tools] verify_command, e.g. \"cargo check\"). Use it after code changes before declaring the task done; a non-zero exit means verification failed."
+        "Run the project's configured verification command (config [tools] verify_command, e.g. \"cargo check\"). Use it after code changes before declaring the task done; a non-zero exit means verification failed. This is the quick compile-level gate and it must pass BEFORE completion; a full hardware-in-the-loop run is a separate, stronger claim on top of it."
+    }
+
+    /// 没配 `verify_command` 就没有这个工具 —— 以前它照样被注册、照样被提示词提到，
+    /// 于是模型每道题都去调一次然后收到 `[InvalidInput] verify tool is not configured`。
+    fn requires(&self) -> Option<firment_core::ToolRequirement> {
+        Some(firment_core::ToolRequirement::VerifyCommand)
     }
 
     fn input_schema(&self) -> Value {

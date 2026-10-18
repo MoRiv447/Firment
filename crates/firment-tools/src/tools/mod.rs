@@ -8,6 +8,7 @@ mod edit_file;
 pub(crate) mod elf_analyze;
 pub(crate) mod flash;
 mod glob;
+mod gpio_decode;
 mod grep;
 mod hil;
 

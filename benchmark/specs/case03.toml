@@ -1,0 +1,71 @@
+# case03 呼吸灯 —— 权重 6，时间盒 20min
+#
+# judge_table 判据：
+#   F1  肉眼平滑呼吸、无闪烁无阶梯          → 相机（P2），现在交 AI
+#   F2  呼吸周期 2s±10%                     → PEAK 行间隔就是呼吸周期（题面把它们绑在一起）
+#   F3  每周期一行 PEAK <n> 序号递增、与峰值同步
+#   H1  硬件 PWM：TIM2_CH1(AF1) 驱动 PA5
+#   H2  ARR≥999（平滑）
+#
+# 说明：F2 用 PEAK 间隔而不是相机，是因为题面明确"每次到达亮度峰值时打印
+# PEAK"—— 只要固件按题面实现，PEAK 间隔在物理上就等于呼吸周期。相机那一路
+# （F1 的"无阶梯"）留给 P2，届时 F1 会有自己的亮度序列断言。
+
+id = "case03"
+title = "呼吸灯"
+weight = 6
+timebox_min = 20
+
+[caps]
+serial = ["dut_vcp"]
+flash = true
+reset = "swd"
+camera = "optional"
+
+[fallback]
+on_missing = "skip"
+
+[[steps]]
+op = "flash"
+
+[[steps]]
+op = "reset"
+kind = "swd"
+
+[[steps]]
+op = "serial_open"
+port = "dut_vcp"
+
+[[steps]]
+op = "serial_window"
+duration_ms = 13000
+save = "serial/peak.log"
+asserts = [
+  { id = "F3a", point = "F3", type = "serial_regex", pattern = '^\s*PEAK\s+(\d+)\s*$', min_matches = 4 },
+  { id = "F3b", point = "F3", type = "serial_sequence", pattern = '^\s*PEAK\s+(\d+)\s*$', field = 1 },
+  { id = "F3c", point = "F3", type = "serial_timing", pattern = '^\s*PEAK\s+(\d+)\s*$', period_ms = 2000, tol_pct = 10, samples = 3 },
+  { id = "F2", type = "serial_timing", pattern = '^\s*PEAK\s+(\d+)\s*$', period_ms = 2000, tol_pct = 10, samples = 3 },
+]
+
+# F1「平滑无阶梯」：相机机位现在拍不到板子，改由人看一眼。
+# 问题写死在这里 ⇒ 两个 agent 拿到逐字同一句；回答连时间戳+当时串口行落盘。
+# 不答/超时 = 记"未观测"，评委不得据此给分。
+[[steps]]
+op = "manual_observe"
+point = "F1"
+question = "LD2 现在正在呼吸。它是平滑渐亮渐暗，还是有明显分级跳变/闪烁？（平滑 / 分级跳变 / 不亮 / 看不出）"
+choices = ["平滑", "分级跳变", "不亮", "看不出"]
+timeout_s = 180
+
+[[steps]]
+op = "ai_judge"
+points = ["F1"]
+evidence = ["diff", "session", "camera", "manual"]
+note = "『平滑无阶梯』的依据：优先相机亮度序列（机位可用时），否则人工观测记录"
+
+[[steps]]
+op = "check"
+asserts = [
+  { id = "H1", type = "code_static", rule = "case03.H1" },
+  { id = "H2", type = "code_static", rule = "case03.H2" },
+]

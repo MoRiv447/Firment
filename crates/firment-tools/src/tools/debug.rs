@@ -649,10 +649,19 @@ impl Tool for Debug {
                 )
                 .await
                 .map_err(probe_err)?;
+                // 原始字之后补一行字段解码：让"这个 1 是内部上拉造成的"这种事实
+                // 直接可见，而不是留给调用者去查 RM0440 的位定义。
+                let words_read = super::gpio_decode::parse_words(&text, words as usize);
+                let decoded = super::gpio_decode::decode(Some(chip.as_str()), addr, &words_read)
+                    .or_else(|| super::gpio_decode::unknown_layout_note(Some(chip.as_str()), addr));
+                let body = match decoded {
+                    Some(d) => format!("{text}\n{d}"),
+                    None => text,
+                };
                 finish(
                     code,
                     &format!("memory {addr:#010x} ({width}, {words} words)"),
-                    &text,
+                    &body,
                 )
             }
             "write" => {
@@ -670,10 +679,24 @@ impl Tool for Debug {
                 )
                 .await
                 .map_err(probe_err)?;
+                // 「别驱动你正在量的脚」：写 GPIO 时给一句后果说明。
+                // 2026-10-18 基准里，agent 用调试器把 PC13 配成输出去伪造按键，
+                // 再用同一次读数证明"按键正常"——那是自己给自己出题。
+                let body = if super::gpio_decode::is_gpio(Some(chip.as_str()), addr) {
+                    format!(
+                        "{text}\n⚠ this write lands in a GPIO port while the firmware is \
+                         running. If these pins are inputs the firmware samples, the level \
+                         you drive here is your own stimulus, not the board's — a result you \
+                         read back from it does not prove the button (or any external signal) \
+                         works."
+                    )
+                } else {
+                    text
+                };
                 finish(
                     code,
                     &format!("wrote {value:#x} to {addr:#010x} ({width})"),
-                    &text,
+                    &body,
                 )
             }
             "analyze" => {

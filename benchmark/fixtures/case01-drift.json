@@ -1,0 +1,5 @@
+{
+  "_comment": "case01 周期漂到 900ms（从第 5 行起）：F2 的 1s±5% 应判失败。",
+  "generator": {"pattern": "HELLO {i}", "start": 0, "count": 65, "period_ms": 1000},
+  "mutations": [{"kind": "drift", "at": 5, "period_ms": 900}]
+}

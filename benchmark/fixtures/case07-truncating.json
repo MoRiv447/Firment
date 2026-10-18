@@ -1,0 +1,9 @@
+{
+  "_comment": "case07 故障设备：回显时丢掉每段正文的最后 40 个字符（模拟缓冲区溢出截断）。F1 应失败，F2 应仍能对上（STATS 报的是它自己没丢的字节数）。",
+  "echo": true,
+  "echo_delay_ms": 20,
+  "truncate_chars": 40,
+  "reply": {
+    "STATS": [[30, "RX {sent_bytes_excluding_last}"]]
+  }
+}

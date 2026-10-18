@@ -209,6 +209,8 @@ pub async fn run(
     // so the seven test constructors keep their current shape. Read from the
     // USER config: `[ui]` is deliberately not project-overridable.
     app.tool_verbosity = tool_verbosity;
+    // 同一个理由：显示用的迭代上限从合并后的配置读，不加构造参数。
+    app.max_iterations = config.max_iterations;
     // What this session is aimed at, for the DEVICE block. Built from the
     // MERGED config -- the same one the tools see -- or the panel would describe
     // a target the flash tool is not actually going to use.

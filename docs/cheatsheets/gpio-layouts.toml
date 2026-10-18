@@ -1,0 +1,53 @@
+# GPIO 寄存器布局（机器可读）
+#
+# 谁读这张表：`firment-tools` 的 `gpio_decode` 用它把 `debug mem` 读到的原始字
+# 拆成 `PUPDR PC13=pull-down` 这样的字段。**不是给模型读的**——散文在各自的
+# `<family>-gpio.toml` 里；这张表只给代码解析。
+#
+# 为什么要单独一张表：2026-10-18 的基准里，agent 读到 `IDR bit13 = 1` 就断定
+# "外部上拉"，而同一份快照的 `PUPDR` 就是内部上拉——电平是它自己配的。
+# 把字段拆开能避免这种误读，但前提是**每个家族的布局都得对**，只写测试用的
+# 那一块，就成了"专门为这一块板优化"。
+#
+# 加一个家族：往下面加一段 `[[layout]]`，把 `source` 填成你核过的手册章节。
+# 校验（`cargo test -p firment-tools gpio_layout`）会检查：base 按 stride 对齐、
+# stride 不小于 0x400、source 非空、kind 是已知取值。
+#
+# kind 的取值：
+#   moder   —— MODER/PUPDR/IDR/ODR 布局（F0/F3/F4/G0/G4/L4/U5/H7…）
+#   crl_crh —— CRL/CRH 的 4 位 CNF+MODE 编码（F1 一类）
+
+[[layout]]
+chip_prefix = "stm32f1"
+kind = "crl_crh"
+base = 0x40010800
+stride = 0x400
+source = "RM0008 §9.2 GPIO registers (CRL/CRH)"
+
+[[layout]]
+chip_prefix = "stm32f4"
+kind = "moder"
+base = 0x40020000
+stride = 0x400
+source = "RM0090 §8.4 GPIO registers (MODER/PUPDR)"
+
+[[layout]]
+chip_prefix = "stm32g0"
+kind = "moder"
+base = 0x50000000
+stride = 0x400
+source = "RM0444 §8.4 GPIO registers (MODER/PUPDR)"
+
+[[layout]]
+chip_prefix = "stm32g4"
+kind = "moder"
+base = 0x48000000
+stride = 0x400
+source = "RM0440 §9.4 GPIO registers (MODER/PUPDR)"
+
+[[layout]]
+chip_prefix = "stm32h7"
+kind = "moder"
+base = 0x58020000
+stride = 0x400
+source = "RM0433 §12.4 GPIO registers (MODER/PUPDR)"

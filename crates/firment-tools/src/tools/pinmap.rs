@@ -64,6 +64,7 @@ fn board_arg(args: &Value) -> Result<String, ToolError> {
 fn render_board(
     name: &str,
     pins: &std::collections::BTreeMap<String, firment_core::PinEntry>,
+    ctx: &ToolContext,
 ) -> String {
     let mut text = format!("## board: {name}\n| pin | func | owner |\n|---|---|---|\n");
     for (pin, entry) in pins {
@@ -71,6 +72,14 @@ fn render_board(
             "| {pin} | {} | {} |\n",
             entry.func,
             owner_display(&entry.owner)
+        ));
+        // 出处**总是**显示一行：没有出处时印 `[unverified]`。
+        // 只在有出处时才印，等于让"什么都没写"变成沉默 —— 而沉默会被下一个
+        // 读者（很可能还是自己）当成已验证。这一行正是 R2 那类"说取自 BSP、
+        // 其实引的是 .h" 能被一眼看出来的地方。
+        text.push_str(&format!(
+            "  `{pin}` source: {}\n",
+            super::util::source_note(ctx, &entry.source)
         ));
     }
     text
@@ -101,7 +110,8 @@ impl Tool for Pinmap {
                 "board": {"type": "string", "description": "Board name (= MQTT node name), e.g. s3-node-1. Required for list/check/claim/release."},
                 "pins": {"type": "string", "description": "Pin names for check/claim/release, e.g. \"PA9/PA10\" or \"PB6,PB7\""},
                 "func": {"type": "string", "description": "Intended function, e.g. \"USART1_TX\" or \"user LED\" (required for check/claim)"},
-                "force": {"type": "boolean", "default": false, "description": "claim: overwrite an existing different-func claim instead of refusing"}
+                "force": {"type": "boolean", "default": false, "description": "claim: overwrite an existing different-func claim instead of refusing"},
+                "source": {"type": "string", "description": "claim: where the electrical part of 'func' comes from — 'path:line' (quoted back on list) or 'measured: <reading>'. Omit and the entry is listed as [unverified]."}
             },
             "required": ["action"]
         })
@@ -165,7 +175,7 @@ impl Tool for Pinmap {
                 match board {
                     Some(name) => match cfg.pinmap.get(&name) {
                         Some(pins) if !pins.is_empty() => Ok(ToolOutput {
-                            text: render_board(&name, pins),
+                            text: render_board(&name, pins, ctx),
                         }),
                         _ => Ok(ToolOutput {
                             text: format!("board '{name}' has no claimed pins."),
@@ -179,7 +189,7 @@ impl Tool for Pinmap {
                         }
                         let mut text = String::new();
                         for (name, pins) in &cfg.pinmap {
-                            text.push_str(&render_board(name, pins));
+                            text.push_str(&render_board(name, pins, ctx));
                         }
                         Ok(ToolOutput { text })
                     }
@@ -239,6 +249,12 @@ impl Tool for Pinmap {
                     .and_then(|o| o.as_str())
                     .unwrap_or("agent")
                     .to_string();
+                let source = args
+                    .get("source")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
                 // Conflict guard within THIS board: refuse when any requested
                 // pin is claimed by a DIFFERENT function and force was not
                 // set. Same-func re-claims are idempotent.
@@ -269,6 +285,7 @@ impl Tool for Pinmap {
                         firment_core::PinEntry {
                             func: func.clone(),
                             owner: owner.clone(),
+                            source: source.clone(),
                         },
                     );
                 }
@@ -280,10 +297,11 @@ impl Tool for Pinmap {
                 tx.commit(ctx, &cfg)?;
                 Ok(ToolOutput {
                     text: format!(
-                        "claimed on '{board}': {} -> {} ({} pins total across boards)",
+                        "claimed on '{board}': {} -> {} ({} pins total across boards) {}",
                         pins.join(", "),
                         func,
-                        total
+                        total,
+                        super::util::source_note(ctx, &source)
                     ),
                 })
             }
@@ -527,6 +545,7 @@ mod tests {
             firment_core::PinEntry {
                 func: "LED".to_string(),
                 owner: "agent".to_string(),
+                source: String::new(),
             },
         );
         tx.commit(&mine, &cfg)
@@ -607,5 +626,75 @@ mod tests {
                 "the prompt has to name what is being taken: {reason}"
             );
         }
+    }
+
+    /// 出处不是装饰：有 `source` 就把被引用的那一行原样引出来，没有就标
+    /// `[unverified]`。这条针对 2026-10-18 基准里的真实失败——decision 声称
+    /// "taken from the BSP"，实际引的是只定义引脚的 `.h`，而 pull 配置在 `.c` 里。
+    #[tokio::test]
+    async fn source_is_quoted_back_or_flagged_unverified() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("bsp.c"),
+            "static void init(void)\n{\n  gpio.Pull = GPIO_PULLDOWN;\n}\n",
+        )
+        .unwrap();
+
+        Pinmap
+            .run(
+                json!({"action": "claim", "board": "b", "pins": "PC13",
+                       "func": "user button B1", "source": "bsp.c:3"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        let out = Pinmap
+            .run(json!({"action": "list", "board": "b"}), &ctx(dir.path()))
+            .await
+            .unwrap();
+        assert!(
+            out.text.contains("gpio.Pull = GPIO_PULLDOWN;"),
+            "cite 的行要原样引出来，否则读者只能相信摘要：{}",
+            out.text
+        );
+
+        Pinmap
+            .run(
+                json!({"action": "claim", "board": "b", "pins": "PA5", "func": "LED"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        let out = Pinmap
+            .run(json!({"action": "list", "board": "b"}), &ctx(dir.path()))
+            .await
+            .unwrap();
+        assert!(
+            out.text.contains("`PA5` source: [unverified]"),
+            "没有出处必须标未验证：{}",
+            out.text
+        );
+    }
+
+    #[tokio::test]
+    async fn source_outside_the_workspace_is_not_followed() {
+        let dir = tempdir().unwrap();
+        Pinmap
+            .run(
+                json!({"action": "claim", "board": "b", "pins": "PC13", "func": "B1",
+                       "source": "../../etc/passwd:1"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        let out = Pinmap
+            .run(json!({"action": "list", "board": "b"}), &ctx(dir.path()))
+            .await
+            .unwrap();
+        assert!(
+            out.text.contains("[src ?"),
+            "工作区外的出处不许读，也不能假装验证过：{}",
+            out.text
+        );
     }
 }

@@ -153,7 +153,7 @@ impl Tool for Hil {
     }
 
     fn description(&self) -> &'static str {
-        "Hardware-in-the-loop suite: orchestrated build → flash → monitor/trace (with expectations) → elf_analyze, with replay. Prefer this over calling build/flash/monitor separately for firmware verification. Suites live in .firment/hil.toml; inline steps work too. Supports dry-run and replay. flash/run/elf steps auto-infer .pio/build/*/firmware.elf when file/elf is omitted."
+        "Hardware-in-the-loop suite: orchestrated build → flash → monitor/trace (with expectations) → elf_analyze, with replay. Prefer this over calling build/flash/monitor separately for firmware verification. Suites live in .firment/hil.toml; inline steps work too. When no suite is defined and no inline steps are given, this tool cannot run — fall back to the manual build → flash → monitor chain rather than assuming a suite exists. flash/run/elf steps auto-infer .pio/build/*/firmware.elf when file/elf is omitted. dry_run rehearses the pipeline without touching hardware: expect assertions ALWAYS report [HIL_EXPECT:FAIL] under it and there is no hardware data, so a dry run never counts as verification and must never be reported as one. Each run writes a replay id; replay=\"list\" or replay=\"<id>\" reviews it afterwards."
     }
 
     fn input_schema(&self) -> Value {
@@ -1244,13 +1244,11 @@ async fn run_monitor_step(
         ));
     }
 
-    // auto port (real run only)
+    // auto port (real run only) — same implementation the monitor tool uses, so the
+    // "auto means the first detected port" rule cannot mean two different things.
     let port = if port_raw == "auto" {
-        let ports = serialport::available_ports().unwrap_or_default();
-        if ports.is_empty() {
-            return Err("[InvalidInput] monitor auto: no serial ports detected".to_string());
-        }
-        ports[0].port_name.clone()
+        crate::tools::monitor::auto_port()
+            .ok_or_else(|| "[InvalidInput] monitor auto: no serial ports detected".to_string())?
     } else {
         port_raw.clone()
     };
@@ -2254,7 +2252,9 @@ fn read_serial_with_expect(
     }
     let text = lines.join("\n");
     if text.is_empty() {
-        Ok(format!("no data received on {port} within {timeout_ms} ms"))
+        Ok(format!(
+            "no data received on {port} within {timeout_ms} ms — the device produced nothing. That is evidence of silence, not evidence that the path works; do not report a functional check as passing on the strength of it"
+        ))
     } else {
         Ok(crate::tools::util::truncate(&text, 32_000))
     }

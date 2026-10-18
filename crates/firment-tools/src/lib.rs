@@ -31,6 +31,45 @@ pub fn default_registry() -> Arc<ToolRegistry> {
     Arc::new(registry)
 }
 
+/// 把"前置配置没满足"的工具从注册表里摘掉。**装配时调用一次。**
+///
+/// 为什么在注册表这一层做而不是在提示词里加一句"如果没配置就别用"：那句话管不住
+/// schema —— 模型看见的工具列表和读到的一段劝告互相矛盾时，信列表。摘掉之后
+/// schema、提示词、`registry.get(...)` 的门三处同时一致，不需要谁记得去同步。
+///
+/// 摘掉一个工具会让依赖它的**门**静默消失（`agent.rs` 的验证门写的是
+/// `registry.get("verify").is_some()`）。这是有意的：没配置的验证不是"没通过验证"，
+/// 而是"这台机器上没有这一步"。它必须被测试钉住，而不是靠读代码的人记住。
+pub fn prune_unconfigured(
+    registry: Arc<ToolRegistry>,
+    config: &firment_core::Config,
+) -> (Arc<ToolRegistry>, Vec<String>) {
+    let mut kept = ToolRegistry::new();
+    let mut dropped = Vec::new();
+    for name in registry.names() {
+        let Some(tool) = registry.get(&name) else {
+            continue;
+        };
+        let met = match tool.requires() {
+            None => true,
+            Some(firment_core::ToolRequirement::VerifyCommand) => config
+                .tools
+                .verify_command
+                .as_deref()
+                .is_some_and(|c| !c.trim().is_empty()),
+        };
+        if met {
+            kept.register(tool);
+        } else {
+            dropped.push(name.to_string());
+        }
+    }
+    if dropped.is_empty() {
+        return (registry, dropped);
+    }
+    (Arc::new(kept), dropped)
+}
+
 /// Read-only registry used in PLAN mode and for research subagents:
 /// investigation tools only, plus the non-mutating research/planning tools.
 /// Mutating tools are not even advertised to the model.

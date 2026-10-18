@@ -1,0 +1,79 @@
+# case07 中断环形缓冲回显 —— 权重 8，时间盒 30min
+#
+# judge_table 判据：
+#   F1  1KB×3 全部原样返回无丢无乱序（丢 1-10 字节 = 0.5，更多 = 0）
+#   F2  STATS\n → RX <n>，n 与实际发送字节数一致
+#   F3  回显风暴期间主循环存活（STATS 响应及时）
+#   H1  RX 用 Receive_IT/裸中断；主循环阻塞 = 0（本题核心）
+#   H2  环形缓冲溢出处理不越界；指针回绕正确
+#
+# F2 的符号引用：RX 的期望值 = 发送的总字节数减去最后一条（STATS）自身。
+# tol_abs=8 是刻意留的口子 —— 判据没写清 STATS 自身算不算，两种理解都要能过，
+# 这个歧义留给 AI 评委在报告里说明，不由正则替它决定。
+#
+# 三次 payload 用不同种子（41/42/43）而不是同一段文本：同一段文本被回显三遍
+# 时，任何一次的比较都能被另一次的残留满足，"丢字节"就测不出来了。
+
+id = "case07"
+title = "环形缓冲"
+weight = 8
+timebox_min = 30
+
+[caps]
+serial = ["dut_vcp"]
+flash = true
+reset = "swd"
+
+[fallback]
+on_missing = "skip"
+
+[[steps]]
+op = "flash"
+
+[[steps]]
+op = "reset"
+kind = "swd"
+
+[[steps]]
+op = "serial_open"
+port = "dut_vcp"
+
+[[steps]]
+op = "serial_send"
+payload = { chars = 1024, seed = 41, line_chars = 63 }
+repeat = 3
+gap_ms = 700
+note = "三次粘贴 ~1KB 文本，对应裁判动作『粘贴 1KB 随机文本 ×3』"
+
+[[steps]]
+op = "serial_window"
+duration_ms = 3500
+scope = "all"
+save = "serial/echo.log"
+note = "scope=all：回显在发送步骤期间就到达了，按窗口截会把它们切掉"
+asserts = [
+  { id = "F1a", point = "F1", type = "serial_echo", send = 0 },
+  { id = "F1b", point = "F1", type = "serial_echo", send = 1 },
+  { id = "F1c", point = "F1", type = "serial_echo", send = 2 },
+]
+
+[[steps]]
+op = "serial_send"
+text = "STATS"
+
+[[steps]]
+op = "serial_window"
+duration_ms = 1500
+save = "serial/stats.log"
+asserts = [
+  { id = "F2a", point = "F2", type = "serial_regex", pattern = '^\s*RX\s+(\d+)\s*$' },
+  { id = "F2b", point = "F2", type = "serial_parse", expr = 'RX\s+(\d+)', checks = [ { field = 1, ref = "sent_bytes_excluding_last", tol_abs = 8 } ] },
+  { id = "F3", type = "serial_latency", send = -1, pattern = '^\s*RX\s+(\d+)\s*$', max_ms = 800 },
+]
+
+[[steps]]
+op = "check"
+asserts = [
+  { id = "H1", type = "code_static", rule = "case07.H1" },
+  { id = "H2", type = "code_static", rule = "case07.H2" },
+]

@@ -1502,11 +1502,13 @@ six earlier rounds"
             title: "I2C bus runs at 400k".into(),
             body: "sensor max clock; PA9/PA10 reserved".into(),
             date: "2026-08-24".into(),
+            source: String::new(),
         });
         cfg.decision.push(crate::workbench::DecisionEntry {
             title: "UART bootloader stays at 115200".into(),
             body: String::new(),
             date: "2026-08-20".into(),
+            source: String::new(),
         });
         cfg.save(dir.path()).unwrap();
 
@@ -1552,6 +1554,7 @@ six earlier rounds"
             title: "传感器总线选 CAN 而非 RS485".into(),
             body: "节点数可能扩到 16".into(),
             date: "2026-08-25".into(),
+            source: String::new(),
         });
         cfg.save(dir.path()).unwrap();
         let child3 = store.create_branch("parent-1", "重写传感器驱动").unwrap();

@@ -424,7 +424,7 @@
   },
   {
     "name": "grep",
-    "description": "Search file contents with a regular expression. Optionally filter by glob and line count.",
+    "description": "Search file contents with a regular expression. `path` may be a directory (walked recursively, hidden entries skipped unless include_hidden) or a single file — use the file form to find a specific line in one authoritative file (a BSP driver, a generated init, an index) instead of guessing a window with read_file. Optionally filter by glob and line count; results are `path:line:text`.",
     "input_schema": {
       "properties": {
         "case_sensitive": {
@@ -460,7 +460,7 @@
   },
   {
     "name": "hil",
-    "description": "Hardware-in-the-loop suite: orchestrated build → flash → monitor/trace (with expectations) → elf_analyze, with replay. Prefer this over calling build/flash/monitor separately for firmware verification. Suites live in .firment/hil.toml; inline steps work too. Supports dry-run and replay. flash/run/elf steps auto-infer .pio/build/*/firmware.elf when file/elf is omitted.",
+    "description": "Hardware-in-the-loop suite: orchestrated build → flash → monitor/trace (with expectations) → elf_analyze, with replay. Prefer this over calling build/flash/monitor separately for firmware verification. Suites live in .firment/hil.toml; inline steps work too. When no suite is defined and no inline steps are given, this tool cannot run — fall back to the manual build → flash → monitor chain rather than assuming a suite exists. flash/run/elf steps auto-infer .pio/build/*/firmware.elf when file/elf is omitted. dry_run rehearses the pipeline without touching hardware: expect assertions ALWAYS report [HIL_EXPECT:FAIL] under it and there is no hardware data, so a dry run never counts as verification and must never be reported as one. Each run writes a replay id; replay=\"list\" or replay=\"<id>\" reviews it afterwards.",
     "input_schema": {
       "properties": {
         "chip": {
@@ -649,7 +649,7 @@
           "type": "string"
         },
         "port": {
-          "description": "Serial port, e.g. COM3 or /dev/ttyUSB0 (defaults to [tools] monitor_port)",
+          "description": "Serial port, e.g. COM3 or /dev/ttyUSB0; \"auto\" takes the first detected port (defaults to [tools] monitor_port)",
           "type": "string"
         },
         "timeout_ms": {
@@ -1079,7 +1079,7 @@
   },
   {
     "name": "verify",
-    "description": "Run the project's configured verification command (config [tools] verify_command, e.g. \"cargo check\"). Use it after code changes before declaring the task done; a non-zero exit means verification failed.",
+    "description": "Run the project's configured verification command (config [tools] verify_command, e.g. \"cargo check\"). Use it after code changes before declaring the task done; a non-zero exit means verification failed. This is the quick compile-level gate and it must pass BEFORE completion; a full hardware-in-the-loop run is a separate, stronger claim on top of it.",
     "input_schema": {
       "properties": {
         "timeout_ms": {

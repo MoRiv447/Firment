@@ -14,7 +14,7 @@ encoders = "TIM2/TIM3/TIM4 support quadrature encoder input and pulse counting (
 
 [af_mapping]
 note = "ALWAYS read the AF table in the datasheet for the exact part — channel pin mappings differ per package. Verified examples on G431: TIM3_CH2 = PA4, PA7, PB5 or PC7 (AF2); TIM1_CH1 = PA8 (AF1) or PE9 (AF1, LQFP100 only); TIM2_CH1 = PA0 (AF1) or PA5 (AF1)"
-pitfall = "case01 lesson: 'TIM3_CH2 on PE5' is a hallucination — there is no PE5 on G431RB (LQFP64). Pick the channel pin from the datasheet AF table for the ACTUAL package, never from memory"
+pitfall = "A channel/pin/AF triple copied from memory or from another package is the classic failure: the same timer channel is bonded to different pins (and sometimes a different AF) per package, and pins that exist in the header may not be bonded at all on a small package. Read the AF table for the exact part marking before choosing a pin."
 af_number = "AF values are per-pin numbers (AF0-AF15 in GPIOx_AFRL/AFRH); TIM pins are usually AF1/AF2 but the mapping varies — verify each pin individually"
 
 [hal_flow]

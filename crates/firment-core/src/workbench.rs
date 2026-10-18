@@ -107,6 +107,18 @@ pub struct PinEntry {
     pub func: String,
     #[serde(default)]
     pub owner: String,
+    /// Where the *electrical* part of `func` comes from: `path:line` or
+    /// `measured: <reading>`. Empty = the entry is an allocation claim, not a
+    /// verified fact; the tool prints `[unverified]` for it.
+    ///
+    /// Why this exists (2026-10-18 benchmark): an entry said
+    /// `user button B1 (active low, pull-up)` and a decision claimed it was
+    /// "taken from the BSP" — while the pull config lives 20 lines away in the
+    /// `.c` body, not in the `.h` it cited. The registry then echoed the claim
+    /// back as if it were a measurement. A source makes that visible without
+    /// the tool having to understand the fact.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
 }
 
 /// Per-board device registration ([devices] in workbench.toml). The key is
@@ -206,6 +218,11 @@ pub struct DecisionEntry {
     pub body: String,
     #[serde(default)]
     pub date: String,
+    /// Same contract as `PinEntry::source`: `path:line` or `measured: …`.
+    /// A decision that cites a file is only as good as the line it cites, so
+    /// the tool quotes that line back instead of trusting the prose.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

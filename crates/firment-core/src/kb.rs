@@ -3,7 +3,20 @@ use std::fs;
 use std::path::Path;
 
 /// Bump when the bundled seed knowledge base changes (forces re-materialization).
-pub const SEED_VERSION: &str = "7";
+///
+/// 8：把知识库里**替读者把考题答完**的那几句改写成方法。`vendor-index.toml` 的 G4
+/// pinout 条目曾直接列出 "NO Port E … (phantom-pin trap); NUCLEO: LED=PA5, button=PC13,
+/// ST-Link VCP=LPUART1 PA2/PA3"，`stm32g4-tim.toml` 里还留着 "(case01 lesson: …)" 这种
+/// 带测试用例编号的句子 —— 那是把某一道题的答案写进了每个用户都会读到的产品资料。
+/// 引脚表、AF 表、"先核封装再写代码"这类通用知识全部保留。
+/// 9：8 里漏改的一条 —— `stm32g4-gpio.toml` 的 common_mistake 仍写着 "Picking PE* pins on a
+/// G431RB (LQFP64) — no Port E on that package"。它没有 case 编号，所以当时那条按 case 编号
+/// 扫的合同测试抓不到；改写成"照别块板子的例程写引脚名、先对封装"的通用教训。判据从"有没有
+/// 提 case 号"收紧成"坑列表里不许出现被测板的名字"，见 `prompt_contract.rs`。
+/// 10：新增 `cheatsheets/gpio-layouts.toml`（GPIO 字段解码的机器可读布局，
+/// 见 `firment-tools/src/tools/gpio_decode.rs`）。版本号必须跟着 bump，
+/// 否则已有用户的 KB 副本里没有这张表，`debug mem` 会退化成只回原始字。
+pub const SEED_VERSION: &str = "10";
 
 const SEED_FILES: &[(&str, &str)] = &[
     (
@@ -113,6 +126,10 @@ const SEED_FILES: &[(&str, &str)] = &[
     (
         "cheatsheets/stm32g4-tim.toml",
         include_str!("../../../docs/cheatsheets/stm32g4-tim.toml"),
+    ),
+    (
+        "cheatsheets/gpio-layouts.toml",
+        include_str!("../../../docs/cheatsheets/gpio-layouts.toml"),
     ),
     (
         "cheatsheets/stm32g4-gpio.toml",

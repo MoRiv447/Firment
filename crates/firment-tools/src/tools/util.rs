@@ -1,4 +1,4 @@
-use firment_core::{Cancellable, ToolError};
+use firment_core::{Cancellable, ToolContext, ToolError};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,6 +11,53 @@ use tokio::process::{ChildStderr, ChildStdout, Command};
 pub(crate) fn resolve(cwd: &Path, path: &str) -> PathBuf {
     let p = PathBuf::from(path);
     if p.is_absolute() { p } else { cwd.join(p) }
+}
+
+/// Render a `source:` citation as a short note that **quotes the cited line**.
+///
+/// The tool deliberately does not decide whether the citation supports the
+/// claim — it only shows what is written there. That is enough to catch the
+/// failure this was built for (2026-10-18): a decision said "taken from the
+/// BSP" for a pull-up polarity, while the cited header only defines the pin;
+/// the pull lives in the `.c` body. Quoting turns that into a visible mismatch
+/// without teaching the tool any board facts.
+///
+/// `measured: …` is passed through as-is (an instrument reading has no line to
+/// quote). Anything unresolvable renders `[src ? …]` rather than pretending.
+pub(crate) fn source_note(ctx: &ToolContext, source: &str) -> String {
+    let s = source.trim();
+    if s.is_empty() {
+        return "[unverified]".to_string();
+    }
+    if let Some(rest) = s.strip_prefix("measured:") {
+        return format!("[measured:{}]", rest.trim());
+    }
+    // Split off a trailing line number. `rsplit_once(':')` keeps Windows drive
+    // letters and URL-ish paths intact; only a pure number counts as a line.
+    let (path, line) = match s.rsplit_once(':') {
+        Some((p, n)) if n.trim().parse::<usize>().is_ok() => (p, n.trim().parse::<usize>().ok()),
+        _ => (s, None),
+    };
+    let resolved = match resolve_within(&ctx.cwd, path, &ctx.allowed_roots) {
+        Ok(p) => p,
+        Err(_) => return format!("[src ? {path}]"),
+    };
+    let text = match fs::read_to_string(&resolved) {
+        Ok(t) => t,
+        Err(_) => return format!("[src ? {path}]"),
+    };
+    let Some(n) = line else {
+        return format!("[src {path}]");
+    };
+    let Some(raw) = text.lines().nth(n.saturating_sub(1)) else {
+        return format!("[src ? {path}:{n} (no such line)]");
+    };
+    let trimmed = raw.trim();
+    let mut quoted: String = trimmed.chars().take(160).collect();
+    if trimmed.chars().count() > 160 {
+        quoted.push('…');
+    }
+    format!("[src {path}:{n} \"{quoted}\"]")
 }
 
 /// Resolve `path` and enforce the workspace boundary: the canonical target

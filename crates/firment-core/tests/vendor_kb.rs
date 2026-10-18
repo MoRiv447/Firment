@@ -1,5 +1,15 @@
 use toml::Value;
 
+/// The KB sections are generated from the session's tool list (`read_file` gates the built-in
+/// one), so these tests have to state which tools exist rather than assume the old always-on text.
+fn tools() -> firment_core::PromptTools {
+    firment_core::PromptTools::new(&[
+        "read_file".to_string(),
+        "grep".to_string(),
+        "list_dir".to_string(),
+    ])
+}
+
 fn collect_cheatsheets(value: &Value, out: &mut Vec<String>) {
     if let Value::Table(table) = value {
         if let Some(quickrefs) = table.get("quickref").and_then(|q| q.as_array()) {
@@ -27,11 +37,17 @@ fn seed_index_is_not_injected_twice_when_project_index_is_identical() {
         firment_core::kb::seed_index_text(),
     )
     .unwrap();
-    let prompt = firment_core::context::default_system_prompt(dir.path());
+    let prompt = firment_core::context::default_system_prompt(dir.path(), &tools());
+    // 两节现在各有各的名字，所以"只出现一次"是有对象的断言，而不是靠同名相消。
     assert_eq!(
-        prompt.matches("Hardware knowledge base").count(),
+        prompt.matches("# Built-in hardware knowledge base").count(),
         1,
-        "seed + identical project index must not both be injected"
+        "the shipped KB is always announced"
+    );
+    assert_eq!(
+        prompt.matches("# Project hardware notes").count(),
+        0,
+        "a project index identical to the seed must not be injected a second time"
     );
 }
 
@@ -43,11 +59,16 @@ fn distinct_project_index_is_injected_alongside_seed() {
         "meta = { schema_version = \"1\" }\n[my-board]\n",
     )
     .unwrap();
-    let prompt = firment_core::context::default_system_prompt(dir.path());
+    let prompt = firment_core::context::default_system_prompt(dir.path(), &tools());
     assert_eq!(
-        prompt.matches("Hardware knowledge base").count(),
-        2,
-        "seed and a distinct project index should both be injected"
+        prompt.matches("# Built-in hardware knowledge base").count(),
+        1,
+        "seed section still present"
+    );
+    assert_eq!(
+        prompt.matches("# Project hardware notes").count(),
+        1,
+        "a distinct project index gets its own section, not a duplicate heading"
     );
     assert!(prompt.contains("my-board"), "project index content missing");
 }

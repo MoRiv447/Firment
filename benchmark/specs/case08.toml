@@ -1,0 +1,113 @@
+# case08 DMA+IDLE 命令帧 —— 权重 9（本套最重），时间盒 30min
+#
+# judge_table 判据：
+#   F1  100 帧全对 1.5；90-99 帧 1；70-89 帧 0.5；更低 0
+#   F2  五命令响应格式全对（含 LED 实际亮灭）
+#   F3  COUNT? 返回值 = 实际正确处理帧数
+#   H1  HAL_UARTEx_ReceiveToIdle_DMA（或手写 IDLE+DMA）
+#   H2  circular 指针由 __HAL_DMA_GET_COUNTER 推导
+#
+# 帧表 4 项轮换 100 帧 → 每项 25 帧：LED ON/LED OFF 各 25 → OK 共 50，
+# PING 25 → PONG，ECHO E1 25 → E1。判定用"恰好 50/25/25"而不是"至少"，
+# 因为 judge_table 的 F1 是分档给分，"全对"才是 1.5。
+#
+# F2 的"LED 实际亮灭"要逻辑分析仪夹 PA5（P2）。没接仪器时那条断言会跳过，
+# 于是 F2 自动落到 AI 手里 —— 这是刻意的：不许用"格式对"冒充"灯真的亮了"。
+
+id = "case08"
+title = "DMA+IDLE"
+weight = 9
+timebox_min = 30
+
+[caps]
+serial = ["dut_vcp"]
+flash = true
+reset = "swd"
+la = "optional"
+
+[fallback]
+on_missing = "skip"
+
+[[steps]]
+op = "flash"
+
+[[steps]]
+op = "reset"
+kind = "swd"
+
+[[steps]]
+op = "serial_open"
+port = "dut_vcp"
+
+[[steps]]
+op = "serial_burst"
+frames = ["LED ON", "LED OFF", "PING", "ECHO E1"]
+count = 100
+gap_ms = 50
+note = "对应裁判动作『50ms 间隔连发 100 帧』"
+
+[[steps]]
+op = "serial_window"
+duration_ms = 2000
+scope = "all"
+save = "serial/burst.log"
+asserts = [
+  { id = "F1a", point = "F1", type = "serial_count", pattern = '^\s*OK\s*$', expect = 50 },
+  { id = "F1b", point = "F1", type = "serial_count", pattern = '^\s*PONG\s*$', expect = 25 },
+  { id = "F1c", point = "F1", type = "serial_count", pattern = '^\s*E1\s*$', expect = 25 },
+  { id = "F2a", point = "F2", type = "serial_regex", pattern = '^\s*OK\s*$', min_matches = 50 },
+  { id = "F2b", point = "F2", type = "serial_regex", pattern = '^\s*PONG\s*$', min_matches = 25 },
+  { id = "F2c", point = "F2", type = "serial_regex", pattern = '^\s*E1\s*$', min_matches = 25 },
+  { id = "F1g", point = "F1", type = "serial_garbage" },
+]
+
+# LED 真的亮灭（需要逻辑分析仪夹 PA5；没仪器则自动跳过）
+[[steps]]
+op = "la_capture"
+duration_ms = 3000
+driver = "auto"
+port = "dut_vcp"
+# **激励排在采集窗内，不排在它前面。** 原来 LED ON/OFF 是 burst 步骤发的，等
+# la_capture 开始跑时引脚已经恒定 ≥2 秒 ⇒ 8 个通道全 0 边沿 ⇒ 两个 agent 的
+# F2a/b/c 全过、引脚也选对了（PA5），却一起挂在 F2d 上。这是判分器失明，不是被测失败。
+# at_ms 相对"开始发激励"计，前面还让出 stimulus_delay_ms 等 sigrok 真正起采。
+#
+# **时刻表压在 1.75s 内**（r6，2026-10-18）：这块 fx2lafw 克隆板实测会在 2.6–3.0s
+# 之间随机收工（与采样率无关）。原来末条 2200ms + 400ms 起采补偿 = 2.6s，正好压在
+# 截断边缘 —— 5 条命令只看到 3 个边沿，F2d 假红。现在末条 2.15s，采到 2.6s 也全覆盖。
+# 万一仍被截断：`runner` 会把该步**判红**的断言降成未观测（截断只能藏边沿，不会凭空多出边沿）。
+during = [
+  { text = "LED ON",  at_ms = 150 },
+  { text = "LED OFF", at_ms = 550 },
+  { text = "LED ON",  at_ms = 950 },
+  { text = "LED OFF", at_ms = 1350 },
+  { text = "LED ON",  at_ms = 1750 },
+]
+asserts = [
+  { id = "F2d", point = "F2", type = "edges", channel = "PA5", min_count = 4 },
+]
+
+[[steps]]
+op = "serial_send"
+text = "COUNT?"
+
+[[steps]]
+op = "serial_window"
+duration_ms = 1200
+save = "serial/count.log"
+scope = "all"
+asserts = [
+  { id = "F3a", point = "F3", type = "serial_regex", pattern = '^\s*COUNT\s+(\d+)\s*$' },
+  # ref = 裁判实际注入的**数据帧**总数（burst 100 + la_capture 窗内 LED 5 = 105）。
+  # tol_abs=1 是刻意留的口子：固件把"正在回答的这条 COUNT?"算不算进"已正确处理帧数"，
+  # 答 105（先答后加）和 106（先加后答）都符合判据字面，与 case07 的 STATS 计数歧义同类
+  # （那边用 tol_abs=8 处理）。判据没写清的事不许由 tol=0 替它决定 —— 那等于掷硬币扣分。
+  { id = "F3b", point = "F3", type = "serial_parse", expr = 'COUNT\s+(\d+)', checks = [ { field = 1, ref = "sent_frames", tol_abs = 1 } ] },
+]
+
+[[steps]]
+op = "check"
+asserts = [
+  { id = "H1", type = "code_static", rule = "case08.H1" },
+  { id = "H2", type = "code_static", rule = "case08.H2" },
+]

@@ -20,7 +20,7 @@ exti = "EXTI: GPIO_MODE_IT_RISING/FALLING/RISING_FALLING + enable the EXTIx_IRQn
 
 common_mistake = [
   "Assuming the F1/F4 default (floating input after reset) — G4 pins come up in analog mode, so an uninitialized pin reads weird values and LEDs stay off",
-  "Picking PE* pins on a G431RB (LQFP64) — no Port E on that package (see stm32g4-pinout.toml)",
+  "Naming a pin from another board's example code without checking it against the pin table for YOUR package — the port can be declared in the CMSIS header and still not be bonded out",
   "Treating every pin as 5 V tolerant — check FT/TT_a per pin",
   "Configuring two pins on the same EXTI line number (e.g. PA0 and PB0 both EXTI0) — only one input per line can be selected; the other must use a different line",
   "Forgetting NVIC enable for EXTI — the pin is set up but the interrupt never fires",

@@ -1,0 +1,4 @@
+{
+  "_comment": "case01 只跑了 20 秒就停：F3 的 min_matches=55 应判失败（无停发/覆盖整窗口）。",
+  "generator": {"pattern": "HELLO {i}", "start": 0, "count": 20, "period_ms": 1000}
+}

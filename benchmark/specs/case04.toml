@@ -1,0 +1,92 @@
+# case04 按键长短按去抖 —— 权重 8，时间盒 20min
+#
+# judge_table 判据：
+#   F1  10 次短按恰好 SHORT 1..10，不多记不少记
+#   F2  3 次长按全部 LONG，无一次误判 SHORT
+#   F3  序号连续、格式严格、两种计数独立
+#   H1  有真实去抖（时间戳判定/状态机/定时确认）；纯中断直连 = 0；ISR 里 HAL_Delay = 0.5
+#   H2  共享计数 volatile/临界区意识；回调链正确、无重复注册 EXTI 双重触发
+#
+# 裁判动作由夹具做：10 次短按（每次 200ms、间隔 400ms）+ 3 次长按（每次 1500ms）。
+# 判据里短按是 100-300ms、长按约 1.5s，取区间中间值。
+#
+# 计数用"恰好等于"而不是"至少"：F1 的原文是"不多记不少记"，多按出一次抖动
+# 恰恰是本题要抓的失败模式 —— 若写成 >=，去抖失效反而更容易通过。
+#
+# H1（去抖方案是真是假）只能读代码，交 AI。
+
+id = "case04"
+title = "按键去抖"
+weight = 8
+timebox_min = 20
+
+[caps]
+serial = ["dut_vcp"]
+flash = true
+reset = "swd"
+gpio = ["button"]
+
+[fallback]
+on_missing = "skip"
+
+[[steps]]
+op = "flash"
+
+[[steps]]
+op = "reset"
+kind = "swd"
+
+[[steps]]
+op = "serial_open"
+port = "dut_vcp"
+
+# 10 次短按：200ms 按下，400ms 间隔
+[[steps]]
+op = "gpio_pulse"
+name = "button"
+ms = 200
+count = 10
+gap_ms = 400
+note = "对应裁判动作『快速连按 10 次（每次 100-300ms）』"
+
+[[steps]]
+op = "serial_window"
+duration_ms = 1500
+
+# 3 次长按：1500ms 按下，1200ms 间隔
+[[steps]]
+op = "gpio_pulse"
+name = "button"
+ms = 1500
+count = 3
+gap_ms = 1200
+note = "对应裁判动作『再 3 次长按（每次按住约 1.5 秒）』"
+
+[[steps]]
+op = "serial_window"
+duration_ms = 4000
+scope = "all"
+save = "serial/short-long.log"
+asserts = [
+  # F1：不多记不少记
+  { id = "F1", type = "serial_count", pattern = '^\s*SHORT\s+\d+\s*$', expect = 10 },
+  # F2：3 次长按全部 LONG
+  { id = "F2a", point = "F2", type = "serial_count", pattern = '^\s*LONG\s+\d+\s*$', expect = 3 },
+  { id = "F2b", point = "F2", type = "serial_sequence", pattern = '^\s*LONG\s+(\d+)\s*$', field = 1, start = 1, count = 3 },
+  # F3：序号连续、格式严格（^\s*...\s*$ 就是格式严格）、两种计数各自独立从 1 起
+  { id = "F3a", point = "F3", type = "serial_sequence", pattern = '^\s*SHORT\s+(\d+)\s*$', field = 1, start = 1, count = 10 },
+  { id = "F3b", point = "F3", type = "serial_sequence", pattern = '^\s*LONG\s+(\d+)\s*$', field = 1, start = 1, count = 3 },
+  { id = "F3g", point = "F3", type = "serial_garbage" },
+]
+
+[[steps]]
+op = "ai_judge"
+points = ["H1"]
+evidence = ["diff", "session"]
+note = "真时间戳去抖 vs ISR 里 HAL_Delay(20) vs 纯中断直连 —— 判据给的是 1 / 0.5 / 0 三档，只能读实现"
+
+[[steps]]
+op = "check"
+asserts = [
+  { id = "H2", type = "code_static", rule = "case04.H2" },
+]

@@ -73,6 +73,11 @@ pub fn assemble_agent(
         &merged.plugins,
         &firment_core::plugin::plugin_command_base(),
     );
+    // **存在性在这里定，不在提示词里定。** 一个前置配置没满足的工具，摘掉之后
+    // schema、提示词的"本会话可用"一节、以及依赖它的门三处同时一致。
+    // 这里刻意不报警：没配 verify 不是"某个东西没加载"，而是"这台机器上没有这一步"
+    // （与 plugin_refusals 的区别就在这个判断上，那条是用户以为在用的东西没生效）。
+    let (registry, _pruned) = crate::prune_unconfigured(registry, merged);
     let agent_permission: Arc<dyn PermissionChecker> = if plan {
         Arc::new(PlanModePermission::new(permission.clone()))
     } else {
@@ -186,7 +191,13 @@ pub fn assemble_agent(
             // `subagent_registry_for`, not the opt-in flag read directly: a planning session's
             // child gets the read-only set whatever `[tools] subagents_may_write` says, because
             // the mode promise is the parent's and the child is the only writer in the tree.
-            crate::subagent_registry_for(plan, merged.tools.subagents_may_write),
+            // Pruned with the same config as the parent's registry: a child that advertises a
+            // tool the host has not configured would hit the same wall the main agent does.
+            crate::prune_unconfigured(
+                crate::subagent_registry_for(plan, merged.tools.subagents_may_write),
+                merged,
+            )
+            .0,
             agent.session().provider.clone(),
             agent.session().model.clone(),
             asker,
@@ -295,6 +306,63 @@ mod tests {
             None,
             false,
         )
+    }
+
+    /// 存在性的唯一裁决处就是这里：**没配置的工具既不进 schema，也不进提示词。**
+    /// 基准里 `verify` 被写了 9 次而本机没配 `verify_command`，模型 4 道题各撞一次
+    /// `[InvalidInput] verify tool is not configured` —— 那堵墙本来不该存在。
+    #[test]
+    fn an_unconfigured_verify_is_not_advertised() {
+        let names = advertised(SessionMode::Agent, |config| {
+            config.tools.verify_command = None;
+        });
+        assert!(
+            !names.iter().any(|n| n == "verify"),
+            "verify must be absent when verify_command is unset: {names:?}"
+        );
+    }
+
+    /// 反向钉子：不能把裁剪写成"永远不注册"，否则配了也不出现，门就悄悄没了。
+    #[test]
+    fn a_configured_verify_is_advertised() {
+        let names = advertised(SessionMode::Agent, |config| {
+            config.tools.verify_command = Some("cargo check".to_string());
+        });
+        assert!(
+            names.iter().any(|n| n == "verify"),
+            "verify must appear once configured: {names:?}"
+        );
+    }
+
+    /// 空白值不算配置：`verify_command = ""` 会让工具在注册表里存在、在运行时失败，
+    /// 正是这次要修掉的那个形状。
+    #[test]
+    fn a_blank_verify_command_counts_as_unconfigured() {
+        let names = advertised(SessionMode::Agent, |config| {
+            config.tools.verify_command = Some("   ".to_string());
+        });
+        assert!(!names.iter().any(|n| n == "verify"), "got: {names:?}");
+    }
+
+    fn advertised(mode: SessionMode, tweak: impl FnOnce(&mut firment_core::Config)) -> Vec<String> {
+        let mut config = test_config();
+        tweak(&mut config);
+        let assembly = assemble_agent(
+            &config,
+            test_session(mode),
+            SessionStore::new(std::env::temp_dir().join("firment-assembly-test")),
+            Arc::new(NullSink),
+            Arc::new(AllowAll),
+            None,
+            false,
+        );
+        assembly
+            .agent
+            .registry()
+            .specs()
+            .into_iter()
+            .map(|s| s.name)
+            .collect()
     }
 
     #[test]

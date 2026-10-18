@@ -1,0 +1,82 @@
+# case05 精密 PWM + 心跳 —— 权重 6，时间盒 20min
+#
+# judge_table 判据：
+#   F1  实测 20kHz±1.5%
+#   F2  实测占空比 30%±2%
+#   F3  UP <n> 每秒一行 1s±5%；PWM 输出不被打印打断（分析仪无缺口）
+#   H1  PSC/ARR 基于 170MHz 推出（PSC=0,ARR=8499,CCR1=2550 类）
+#   H2  追问"为何不是正好 20.000kHz"
+#
+# 容差按判据的 ±1.5% 写死，但**先要标定分析仪**：拿 ESP32 输出一个已知
+# 20kHz 量一遍，把仪器偏差算进去（README『首次标定』）。HSI 本身有 ±1%，
+# 与仪器偏差同量级，不标定就没法区分"固件错"和"尺子歪"。
+#
+# F3 的"无缺口"用 pulse_width 量最短高电平脉宽：20kHz/30% 的正常脉宽是 15µs，
+# 若打印打断了 PWM，会出现远小于 15µs 的碎片。
+#
+# H2 是追问出来的答案，所以本规格里带一个 probe_question 步骤 —— 对两个
+# agent 投递的是**同一句话**（judge_table 原文的追问），保证公平。
+
+id = "case05"
+title = "精密 PWM"
+weight = 6
+timebox_min = 20
+
+[caps]
+serial = ["dut_vcp"]
+flash = true
+reset = "swd"
+la = true
+
+[fallback]
+on_missing = "skip"
+
+[[steps]]
+op = "flash"
+
+[[steps]]
+op = "reset"
+kind = "swd"
+
+[[steps]]
+op = "serial_open"
+port = "dut_vcp"
+
+# F3 的串口部分：UP <n> 每秒一行
+[[steps]]
+op = "serial_window"
+duration_ms = 6000
+save = "serial/up.log"
+asserts = [
+  { id = "F3a", point = "F3", type = "serial_regex", pattern = '^\s*UP\s+(\d+)\s*$', min_matches = 4 },
+  { id = "F3b", point = "F3", type = "serial_timing", pattern = '^\s*UP\s+(\d+)\s*$', period_ms = 1000, tol_pct = 5, samples = 4 },
+]
+
+# F1/F2/F3 的波形部分
+[[steps]]
+op = "la_capture"
+duration_ms = 500
+driver = "auto"
+samplerate = "4m"
+asserts = [
+  { id = "F1", type = "frequency", channel = "PA8", hz = 20000, tol_pct = 1.5 },
+  { id = "F2", type = "duty", channel = "PA8", pct = 30, tol_pt = 2 },
+  { id = "F3c", point = "F3", type = "pulse_width", channel = "PA8", us = 15, tol_pct = 15 },
+]
+
+# 追问：与 judge_table 的追问同义，措辞对两个 agent 完全一致
+[[steps]]
+op = "probe_question"
+text = "实测频率不是正好 20.000kHz，为什么？请简短回答。"
+
+[[steps]]
+op = "ai_judge"
+points = ["H2"]
+evidence = ["session", "diff"]
+note = "追问答辩：答出 HSI/RC 派生 = 1；答『仪器误差』 = 0.5；坚称重调 = 0"
+
+[[steps]]
+op = "check"
+asserts = [
+  { id = "H1", type = "code_static", rule = "case05.H1" },
+]

@@ -1,0 +1,187 @@
+# case13 HC-05 蓝牙桥 —— 权重 8，时间盒 30min
+#
+# judge_table 判据：
+#   F1  VCP→蓝牙、蓝牙→VCP 各 3 句文本完整到达（1 句错/丢扣 0.5）（1.5）
+#   F2  手机发 LED ON/OFF：灯实际亮灭 + 蓝牙侧收 OK
+#   F3  蓝牙侧 9600（HC-05 出厂默认）一次配对成功；需进 AT 改配置 = 0
+#   H1  两路 UART 都中断/DMA 驱动
+#   H2  VCP 115200 洪峰时 BT 9600 不丢；NVIC 优先级有显式考量
+#
+# "手机 App"由 PC 的蓝牙 SPP 出站串口代替：本机已配对过一个远端 SPP 设备
+# （COM5）。**跑之前先确认那就是 HC-05**（见 README 的首次标定）——若不是，
+# 换第二块预配好的 HC-05 当 master。
+#
+# 两个串口同时开着，各算各的采集：跑 bt_peer 的窗口时看的是蓝牙那一路的
+# 缓冲，不是 VCP 的。所以"蓝牙→VCP 到达"与"VCP→蓝牙到达"是两个独立观测。
+#
+# 每个 send 后面的窗口都带 `from_prev = true`：桥接可能在 `serial_send` 自己
+# 执行期间就把回吐的行送达，按旧起点（窗口步派发之后）会确定性丢这一行。
+# 锚点回退到上一个步骤开始处即可，且各窗口的锚点仍晚于前一个窗口的闭窗处
+# ⇒ 不会把上一句的到达重复计进这一句。
+
+id = "case13"
+title = "HC-05 桥"
+weight = 8
+timebox_min = 30
+
+[caps]
+serial = ["dut_vcp", "bt_peer"]
+flash = true
+reset = "swd"
+la = "optional"
+
+[fallback]
+on_missing = "skip"
+
+[[steps]]
+op = "flash"
+
+[[steps]]
+op = "reset"
+kind = "auto"
+
+[[steps]]
+op = "serial_open"
+port = "dut_vcp"
+
+[[steps]]
+op = "serial_open"
+port = "bt_peer"
+baud = 9600
+
+# ---- VCP → 蓝牙 三句 ----
+[[steps]]
+op = "serial_send"
+port = "dut_vcp"
+text = "V2B-1"
+
+[[steps]]
+op = "serial_window"
+port = "bt_peer"
+duration_ms = 900
+from_prev = true
+save = "serial/bt-rx-1.log"
+asserts = [ { id = "F1a", point = "F1", type = "serial_regex", pattern = 'V2B-1' } ]
+
+[[steps]]
+op = "serial_send"
+port = "dut_vcp"
+text = "V2B-2"
+
+[[steps]]
+op = "serial_window"
+port = "bt_peer"
+duration_ms = 900
+from_prev = true
+save = "serial/bt-rx-2.log"
+asserts = [ { id = "F1b", point = "F1", type = "serial_regex", pattern = 'V2B-2' } ]
+
+[[steps]]
+op = "serial_send"
+port = "dut_vcp"
+text = "V2B-3"
+
+[[steps]]
+op = "serial_window"
+port = "bt_peer"
+duration_ms = 900
+from_prev = true
+save = "serial/bt-rx-3.log"
+asserts = [ { id = "F1c", point = "F1", type = "serial_regex", pattern = 'V2B-3' } ]
+
+# ---- 蓝牙 → VCP 三句 ----
+[[steps]]
+op = "serial_send"
+port = "bt_peer"
+text = "B2V-1"
+
+[[steps]]
+op = "serial_window"
+port = "dut_vcp"
+duration_ms = 900
+from_prev = true
+save = "serial/vcp-rx-1.log"
+asserts = [ { id = "F1d", point = "F1", type = "serial_regex", pattern = 'B2V-1' } ]
+
+[[steps]]
+op = "serial_send"
+port = "bt_peer"
+text = "B2V-2"
+
+[[steps]]
+op = "serial_window"
+port = "dut_vcp"
+duration_ms = 900
+from_prev = true
+save = "serial/vcp-rx-2.log"
+asserts = [ { id = "F1e", point = "F1", type = "serial_regex", pattern = 'B2V-2' } ]
+
+[[steps]]
+op = "serial_send"
+port = "bt_peer"
+text = "B2V-3"
+
+[[steps]]
+op = "serial_window"
+port = "dut_vcp"
+duration_ms = 900
+from_prev = true
+save = "serial/vcp-rx-3.log"
+asserts = [ { id = "F1f", point = "F1", type = "serial_regex", pattern = 'B2V-3' } ]
+
+# ---- LED 命令：蓝牙侧发，灯要真亮，蓝牙侧收 OK ----
+[[steps]]
+op = "serial_send"
+port = "bt_peer"
+text = "LED ON"
+
+[[steps]]
+op = "serial_window"
+port = "bt_peer"
+duration_ms = 1200
+from_prev = true
+save = "serial/led-on.log"
+asserts = [
+  { id = "F2a", point = "F2", type = "serial_regex", pattern = '^\s*OK\s*$' },
+]
+
+# 灯是否真亮：分析仪看 PA5 的电平翻身（没仪器则跳过，F2 落 AI）
+[[steps]]
+op = "la_capture"
+duration_ms = 2500
+driver = "auto"
+port = "bt_peer"
+# 同 case08 F2d：激励必须在窗内。这里在采集期间来回切 LED，
+# 窗内至少应看到 4 次电平翻身（原来只发一次 ON，翻身发生在窗外 ⇒ 恒 0 边沿）。
+during = [
+  { text = "LED OFF", at_ms = 300 },
+  { text = "LED ON",  at_ms = 800 },
+  { text = "LED OFF", at_ms = 1300 },
+  { text = "LED ON",  at_ms = 1800 },
+]
+asserts = [
+  { id = "F2b", point = "F2", type = "edges", channel = "PA5", min_count = 4 },
+]
+
+[[steps]]
+op = "serial_send"
+port = "bt_peer"
+text = "LED OFF"
+
+[[steps]]
+op = "serial_window"
+port = "bt_peer"
+duration_ms = 1200
+from_prev = true
+save = "serial/led-off.log"
+asserts = [
+  { id = "F2c", point = "F2", type = "serial_regex", pattern = '^\s*OK\s*$' },
+]
+
+[[steps]]
+op = "check"
+asserts = [
+  { id = "F3", type = "code_static", rule = "case13.F3" },
+  { id = "H1", type = "code_static", rule = "case13.H1" },
+  { id = "H2", type = "code_static", rule = "case13.H2" },
+]

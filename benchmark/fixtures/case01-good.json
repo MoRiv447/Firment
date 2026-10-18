@@ -1,0 +1,4 @@
+{
+  "_comment": "case01 正常：65 行 HELLO，1s 周期，65s 窗口。F1/F2/F3 全绿。",
+  "generator": {"pattern": "HELLO {i}", "start": 0, "count": 65, "period_ms": 1000}
+}

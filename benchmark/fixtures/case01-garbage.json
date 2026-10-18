@@ -1,0 +1,5 @@
+{
+  "_comment": "case01 出现一行乱码（解码失败 U+FFFD）：只应触发 F3 的 garbage 断言，不影响 F1/F2。",
+  "generator": {"pattern": "HELLO {i}", "start": 0, "count": 65, "period_ms": 1000},
+  "rx": [[12000, "HELLO \ufffd\ufffd 12"]]
+}

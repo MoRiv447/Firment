@@ -1,0 +1,6 @@
+reports/
+sessions/
+probe-fw/
+config.toml
+__pycache__/
+*.sr

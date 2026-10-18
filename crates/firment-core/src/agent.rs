@@ -642,6 +642,12 @@ impl Agent {
         self.context_budget_chars = budget;
     }
 
+    /// 单轮最多几次工具调用。0 会让循环一次都不跑（等于什么都没做就报
+    /// MaxIterations），所以夹到 1 —— 这是"改小"最容易被踩的边界。
+    pub fn set_max_iterations(&mut self, n: usize) {
+        self.max_iterations = n.max(1);
+    }
+
     /// Provider list surfaced in the delegation guidance (see
     /// `context::delegation_section`). Set by the assembly from the merged
     /// config.
@@ -660,17 +666,35 @@ impl Agent {
         self.provider_endpoints = endpoints;
     }
 
+    /// The system prompt for this session, built from **this registry's** tool names.
+    ///
+    /// Both request assembly and `/context` sizing go through here. They used to compose the
+    /// same two calls independently, which is exactly how a prompt and its own size report
+    /// drift apart: the report says one thing, the model is sent another.
+    ///
+    /// The tool list comes from the registry rather than a constant so "what exists" has one
+    /// source — a tool that is not configured is absent from the schemas *and* from the prose.
+    fn system_prompt(&self) -> String {
+        let tools = crate::PromptTools::new(
+            &self
+                .registry
+                .names()
+                .iter()
+                .map(|n| n.to_string())
+                .collect::<Vec<String>>(),
+        );
+        format!(
+            "{}{}",
+            system_prompt_for(&self.session.cwd, self.session.mode, &tools),
+            crate::context::delegation_section(&self.providers)
+        )
+    }
+
     /// Rough per-part context usage (char counts) for the `/context`
     /// command: system prompt, tool schemas, and message history, against
     /// the current budget.
     pub fn context_usage(&self) -> String {
-        let system_chars = format!(
-            "{}{}",
-            crate::context::system_prompt_for(&self.session.cwd, self.session.mode),
-            crate::context::delegation_section(&self.providers)
-        )
-        .chars()
-        .count();
+        let system_chars = self.system_prompt().chars().count();
         let tools_chars = serde_json::to_string(&self.registry.specs())
             .map(|s| s.chars().count())
             .unwrap_or(0);
@@ -1114,11 +1138,7 @@ impl Agent {
         messages.insert(
             0,
             ChatMessage::System {
-                content: format!(
-                    "{}{}",
-                    system_prompt_for(&self.session.cwd, self.session.mode),
-                    crate::context::delegation_section(&self.providers)
-                ),
+                content: self.system_prompt(),
             },
         );
         ChatRequest {

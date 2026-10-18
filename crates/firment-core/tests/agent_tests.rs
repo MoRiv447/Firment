@@ -524,10 +524,12 @@ fn system_prompt_auto_discovers_vendor_index() {
         "[stm32.f4]\nfamily = \"STM32F4xx\"\n",
     )
     .unwrap();
-    let prompt = firment_core::default_system_prompt(dir.path());
-    assert!(prompt.contains("Hardware knowledge base"), "got: {prompt}");
+    let prompt = firment_core::default_system_prompt(dir.path(), &firmware_tools());
+    assert!(prompt.contains("# Project hardware notes"), "got: {prompt}");
     assert!(prompt.contains("vendor-index.toml"), "got: {prompt}");
-    assert!(prompt.contains("cheatsheets"), "got: {prompt}");
+    // 断言"指向知识库文件"这件事，而不是某一句的措辞：单复数一换，钉住文字的测试就会
+    // 逼人改断言而不是改行为。
+    assert!(prompt.contains("cheatsheet"), "got: {prompt}");
     assert!(
         prompt.contains("STM32F4xx"),
         "index content must be embedded: {prompt}"
@@ -538,6 +540,36 @@ fn system_prompt_auto_discovers_vendor_index() {
     );
 }
 
+/// 帮助函数：装配一份"典型固件会话"的工具名。存在性现在由注册表决定，
+/// 所以任何关于提示词文字的断言都得先说清"这一会话有什么工具"。
+fn firmware_tools() -> firment_core::PromptTools {
+    firment_core::PromptTools::new(
+        &[
+            "read_file",
+            "edit_file",
+            "write_file",
+            "grep",
+            "glob",
+            "list_dir",
+            "shell",
+            "build",
+            "flash",
+            "monitor",
+            "debug",
+            "elf_analyze",
+            "periph_init",
+            "pinmap",
+            "hil",
+            "verify",
+            "observe",
+            "la",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<String>>(),
+    )
+}
+
 #[test]
 fn system_prompt_covers_core_guidance_and_plan_contract() {
     let dir = tempdir().unwrap();
@@ -546,28 +578,23 @@ fn system_prompt_covers_core_guidance_and_plan_contract() {
         "Use this board's HAL layer for all GPIO access.\n",
     )
     .unwrap();
-    let prompt = firment_core::default_system_prompt(dir.path());
+    let prompt = firment_core::default_system_prompt(dir.path(), &firmware_tools());
     for needle in [
         "Firment",
         "Working directory",
-        "read_file",
-        "edit_file",
-        "shell",
         "path:line",
         "AGENTS.md",
-        "verify",
-        "Hardware knowledge base",
         "vendor-index.toml",
-        "periph_init",
-        "Build loop",
-        "never re-initialize",
+        "# Embedded firmware workflow",
+        "The project's existing configuration is authoritative",
         "Report outcomes faithfully",
         "Use this board's HAL layer",
     ] {
         assert!(prompt.contains(needle), "default prompt missing: {needle}");
     }
 
-    let plan_prompt = firment_core::system_prompt_for(dir.path(), SessionMode::Plan);
+    let plan_prompt =
+        firment_core::system_prompt_for(dir.path(), SessionMode::Plan, &firmware_tools());
     assert!(plan_prompt.contains("PLAN mode (read-only)"));
     assert!(plan_prompt.contains("decision-complete"));
     assert!(plan_prompt.contains("MUST NOT write"));

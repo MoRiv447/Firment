@@ -52,6 +52,7 @@ impl Tool for Decision {
                 "action": {"type": "string", "enum": ["list", "add", "remove"], "description": "What to do"},
                 "title": {"type": "string", "description": "add: short decision headline, e.g. \"I2C bus uses 400k\""},
                 "body": {"type": "string", "description": "add: rationale/constraints, e.g. \"sensor max clock 400k; PA9/PA10 reserved\""},
+                "source": {"type": "string", "description": "add: where a load-bearing fact in this decision comes from — 'path:line' (quoted back on list) or 'measured: <reading>'. Omit and the decision is listed as [unverified]."},
                 "index": {"type": "integer", "description": "remove: 1-based index from list"}
             },
             "required": ["action"]
@@ -102,6 +103,11 @@ impl Tool for Decision {
                     if !d.body.is_empty() {
                         text.push_str(&format!("   {}\n", d.body.replace('\n', "\n   ")));
                     }
+                    // 出处：引用原行，而不是替读者相信标题里的措辞。
+                    text.push_str(&format!(
+                        "   source: {}\n",
+                        super::util::source_note(ctx, &d.source)
+                    ));
                 }
                 Ok(ToolOutput { text })
             }
@@ -124,10 +130,17 @@ impl Tool for Decision {
                     .unwrap_or_default()
                     .trim()
                     .to_string();
+                let source = args
+                    .get("source")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
                 cfg.decision.push(firment_core::DecisionEntry {
                     title,
                     body,
                     date: now_date(),
+                    source,
                 });
                 let total = cfg.decision.len();
                 tx.commit(ctx, &cfg)?;
@@ -246,5 +259,42 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.message.contains("out of range"), "got: {}", err.message);
+    }
+
+    #[tokio::test]
+    async fn decision_source_is_quoted_and_absent_source_is_flagged() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("bsp.c"), "a\ngpio.Pull = GPIO_PULLDOWN;\n").unwrap();
+
+        Decision
+            .run(
+                json!({"action": "add", "title": "B1 polarity", "body": "active high",
+                       "source": "bsp.c:2"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        Decision
+            .run(
+                json!({"action": "add", "title": "UART pins", "body": "PA2/PA3"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+
+        let out = Decision
+            .run(json!({"action": "list"}), &ctx(dir.path()))
+            .await
+            .unwrap();
+        assert!(
+            out.text.contains("gpio.Pull = GPIO_PULLDOWN;"),
+            "被引用的行要出现在列表里：{}",
+            out.text
+        );
+        assert!(
+            out.text.contains("[unverified]"),
+            "没有出处的决策要标未验证：{}",
+            out.text
+        );
     }
 }
