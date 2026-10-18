@@ -281,6 +281,7 @@ pub async fn workbench_pinmap_set(
         firment_core::PinEntry {
             func: func.trim().to_string(),
             owner: owner.trim().to_string(),
+            source: String::new(),
         },
     );
     save_workbench(&cfg, &root, read.as_deref())?;
@@ -536,6 +537,7 @@ pub async fn workbench_decision_add(
         body: body.trim().to_string(),
         // Same stamp the agent-side `decision` tool uses.
         date: chrono_like_today(),
+        source: String::new(),
     });
     save_workbench(&cfg, &root, read.as_deref())?;
     workbench_decision_list(cwd).await
@@ -1156,6 +1158,7 @@ mod tests {
             firment_core::PinEntry {
                 func: "LED".to_string(),
                 owner: "gui".to_string(),
+                source: String::new(),
             },
         );
 
@@ -1191,6 +1194,7 @@ mod tests {
             firment_core::PinEntry {
                 func: "LED".to_string(),
                 owner: "gui".to_string(),
+                source: String::new(),
             },
         );
         save_workbench(&ours, &root, read.as_deref()).expect("nothing moved since this read");
