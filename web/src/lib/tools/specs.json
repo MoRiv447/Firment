@@ -151,6 +151,10 @@
           "description": "remove: 1-based index from list",
           "type": "integer"
         },
+        "source": {
+          "description": "add: where a load-bearing fact in this decision comes from — 'path:line' (quoted back on list) or 'measured: <reading>'. Omit and the decision is listed as [unverified].",
+          "type": "string"
+        },
         "title": {
           "description": "add: short decision headline, e.g. \"I2C bus uses 400k\"",
           "type": "string"
@@ -819,6 +823,10 @@
         },
         "pins": {
           "description": "Pin names for check/claim/release, e.g. \"PA9/PA10\" or \"PB6,PB7\"",
+          "type": "string"
+        },
+        "source": {
+          "description": "claim: where the electrical part of 'func' comes from — 'path:line' (quoted back on list) or 'measured: <reading>'. Omit and the entry is listed as [unverified].",
           "type": "string"
         }
       },
