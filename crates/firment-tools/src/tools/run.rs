@@ -182,7 +182,12 @@ impl Tool for Run {
                 });
             }
             LibRun::NoRtt { segs, why } => {
+                // probe-rs 的这句话后面跟着四行"怎么让 RTT 工作"的建议；对一次
+                // 明确的 "this firmware has no RTT" 来说那是噪音，只取第一行。
+                let why = why.lines().next().unwrap_or(&why).to_string();
                 // 已经烧好了。这里只 attach，**不再烧** —— 一次 `run` 只该烧一次。
+                // 先放开我们自己的句柄，否则 CLI 打不开探针（实测 error 5）。
+                crate::probe::release();
                 let mut args = vec!["attach".to_string(), "--chip".to_string(), chip.clone()];
                 if let Some(p) = probe.as_ref() {
                     args.push("--probe".to_string());
@@ -201,6 +206,11 @@ impl Tool for Run {
                 .await
                 {
                     Ok((text, _)) => text,
+                    // attach 本来就会一直跑；到这个工具的窗口结束是正常收尾，不是失败。
+                    // 超时错误里带着已经捕获的输出（），保留它。
+                    Err(e) if e.starts_with("[Timeout]") => {
+                        format!("attached for {timeout_ms} ms, stream ended by the window\n{e}")
+                    }
                     Err(e) => format!("(could not stream with the CLI: {e})"),
                 };
                 return Ok(ToolOutput {
@@ -210,7 +220,10 @@ impl Tool for Run {
                     ),
                 });
             }
-            LibRun::Failed => {}
+            LibRun::Failed => {
+                // 下面若走 CLI 的 `probe-rs run`，同样要先把句柄放掉。
+                crate::probe::release();
+            }
         }
 
         let probe_rs_ok = super::util::probe_rs_present().await;
@@ -335,6 +348,14 @@ mod tests {
             )
             .await
             .expect("run through the tool");
+        // 真机验证时用 --nocapture 看这段原文：断言只证明包含什么，
+        // 而人要看的是整段输出读起来像不像话。
+        println!(
+            "--- run output ---
+{}
+--- end ---",
+            out.text
+        );
         assert!(
             out.text.contains("no RTT control block"),
             "expected the NoRtt branch, got: {}",

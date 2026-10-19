@@ -282,6 +282,8 @@ impl Tool for Flash {
                         "note: probe-rs library flash failed, falling back to the CLI: {}",
                         e.message()
                     );
+                    // 把探针还给 CLI，否则它打不开（库的 Session 持有 USB 句柄）。
+                    crate::probe::release();
                     None
                 }
                 Err(_) => None,

@@ -260,6 +260,15 @@ pub fn flash_elf(
     Ok(n)
 }
 
+/// 释放缓存会话。**每次要把探针交给 CLI 之前都必须调**：库里的 `Session`
+/// 持有 USB 句柄，`probe-rs attach` / `probe-rs run` 会以 "failed to open device"
+/// 失败 —— 2026-10-19 在 `run` 的回退路径上实测到了这个错误。
+pub fn release() {
+    if let Ok(mut slot) = SESSION.lock() {
+        *slot = None;
+    }
+}
+
 // 进程退出时不做显式释放：闲置 30 秒（`IDLE_RELEASE`）会自己放掉探针，
 // 而在 `main` 的每条返回路径上插一句 release 只会多出几个漏掉的出口。
 
