@@ -264,22 +264,6 @@ pub(crate) fn load_capture_waves(ctx: &ToolContext, arg: &str) -> Result<LaCaptu
     })
 }
 
-/// `sigrok-cli -L` prints FIVE sections (hardware drivers, input formats,
-/// output formats, transform modules, protocol decoders). Matching a driver
-/// name against the whole blob would report `uart` (a decoder) or `srzip`
-/// (a format) as a supported driver — only the first section counts.
-fn drivers_section(text: &str) -> &str {
-    let start = match text.find("Supported hardware drivers:") {
-        Some(i) => i + "Supported hardware drivers:".len(),
-        None => return "",
-    };
-    let rest = &text[start..];
-    match rest.find("\nSupported ") {
-        Some(end) => &rest[..end],
-        None => rest,
-    }
-}
-
 impl La {
     async fn run_detect(
         &self,
@@ -311,6 +295,8 @@ impl La {
             ))));
         }
         let version = parse_sigrok_version(&ver_text);
+        // 解析成结构体并缓存：`decode` 之后要用同一份判断 decoder 在不在，
+        // 不必为它再起一个进程。
         let (drv_text, _) = self
             .backend
             .exec(
@@ -322,6 +308,8 @@ impl La {
             )
             .await
             .map_err(|e| ToolError::new(la_cmd::sigrok_err_hint(&e)))?;
+        let caps = crate::la_caps::Capabilities::parse(&drv_text, &ver_text);
+        crate::la_caps::remember(bin, caps.clone());
         let want = args
             .get("driver")
             .and_then(|v| v.as_str())
@@ -338,10 +326,7 @@ impl La {
             ),
         };
         if let Some(want) = want {
-            let listed = drivers_section(&drv_text).lines().any(|l| {
-                l.split(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_')
-                    .any(|tok| tok == want)
-            });
+            let listed = caps.has_driver(want);
             text.push_str(&format!(
                 "\n  configured driver '{want}': {}",
                 if listed {
@@ -355,11 +340,11 @@ impl La {
                 "\n  no driver configured — set [tools.la] driver=... or pass driver explicitly",
             );
         }
-        let n_drivers = drivers_section(&drv_text)
-            .lines()
-            .filter(|l| !l.trim().is_empty() && !l.starts_with("Supported"))
-            .count();
-        text.push_str(&format!("\n  {n_drivers} hardware driver lines reported"));
+        text.push_str(&format!(
+            "\n  {} hardware drivers · {} protocol decoders in this build",
+            caps.drivers.len(),
+            caps.decoders.len()
+        ));
         Ok(ToolOutput {
             text: truncate(&text, 32_000),
         })
@@ -802,6 +787,41 @@ impl La {
         let sr_path = stem.with_extension("sr");
         let argv = build_decode_argv(&sr_path, decoder, &opts).map_err(ToolError::new)?;
         let bin = cfg.bin.as_deref().unwrap_or("sigrok-cli");
+        // 能力门：decoder 在不在是这台机器的事实，不是 schema 能保证的。
+        // 第一次 decode 时查一次 `-L` 并缓存；查不到（老版本、权限）就不拦，
+        // 让真正的那次调用去报错 —— 一次本可成功的 decode 不该被预检挡住。
+        let caps = match crate::la_caps::cached(bin) {
+            Some(c) => Some(c),
+            None => {
+                match self
+                    .backend
+                    .exec(
+                        bin,
+                        &drivers_argv(),
+                        &ctx.cwd,
+                        exec_timeout(cfg, None),
+                        Some(ctx.cancel.clone()),
+                    )
+                    .await
+                {
+                    Ok((list_text, Some(0))) => {
+                        let caps = crate::la_caps::Capabilities::parse(&list_text, "");
+                        crate::la_caps::remember(bin, caps.clone());
+                        Some(std::sync::Arc::new(caps))
+                    }
+                    _ => None,
+                }
+            }
+        };
+        if let Some(caps) = &caps
+            && !caps.has_decoder(decoder)
+        {
+            return Err(ToolError::new(format!(
+                "[InvalidInput] this sigrok-cli build has no decoder '{decoder}'. It does have: \
+                 {}. `la` action=detect prints the full list.",
+                caps.similar_decoders(decoder).join(", ")
+            )));
+        }
         let (text, code) = self
             .backend
             .exec(

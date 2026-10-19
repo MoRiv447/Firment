@@ -6,6 +6,7 @@ pub mod assembly;
 pub mod decode;
 pub mod forensic;
 pub mod hardware;
+pub mod la_caps;
 pub mod la_cmd;
 pub mod la_measure;
 pub mod plugin_tool;

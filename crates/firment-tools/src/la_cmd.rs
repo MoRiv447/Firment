@@ -493,6 +493,15 @@ pub fn sigrok_err_hint(raw: &str) -> String {
              see what this build supports.\n{raw}"
         );
     }
+    if (lower.contains("decoder") && (lower.contains("not found") || lower.contains("unknown")))
+        || lower.contains("no such decoder")
+    {
+        return format!(
+            "[InvalidInput] this sigrok-cli build has no such protocol decoder. The list comes \
+             from `sigrok-cli -L`; `la` action=detect prints it, and it is also checked before \
+             `decode` starts.\n{raw}"
+        );
+    }
     if lower.contains("unknown") && lower.contains("key") {
         return format!(
             "[InvalidInput] sigrok rejected a config/decoder key — run `la` action=info to see \
