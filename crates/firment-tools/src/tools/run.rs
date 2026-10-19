@@ -49,7 +49,7 @@ impl Tool for Run {
     }
 
     fn description(&self) -> &'static str {
-        "Flash and run the firmware on the target via probe-rs, streaming RTT logs. Use a bounded timeout so you can observe the output."
+        "Flash and run the firmware on the target, streaming RTT logs (semihosting through the CLI fallback). Use a bounded timeout so you can observe the output. Firmware that prints over a UART is not visible here — use `monitor` for that."
     }
 
     fn input_schema(&self) -> Value {
@@ -113,6 +113,25 @@ impl Tool for Run {
                 s.store(true, std::sync::atomic::Ordering::Relaxed);
             })
         };
+        // 三种结局，而不是"成功/失败"两种：
+        //   Done   —— 烧好了，也收到了 RTT 字节；
+        //   NoRtt  —— 烧好了，但这个固件没有 RTT 控制块。**不能再烧一遍**：
+        //             固件已经在跑，回退 `probe-rs run` 会重新烧录，而它要做的
+        //             只是 attach（semihosting 也走 attach）；
+        //   Failed —— 库没烧成，交给 CLI 那条完整路径。
+        enum LibRun {
+            Done {
+                segs: usize,
+                bytes: usize,
+                out: Vec<u8>,
+            },
+            NoRtt {
+                segs: usize,
+                why: String,
+            },
+            Failed,
+        }
+
         let lib_run = {
             let chip_lib = chip.clone();
             let probe_lib = probe.clone();
@@ -120,38 +139,78 @@ impl Tool for Run {
             let stop_lib = stop.clone();
             let dur = std::time::Duration::from_millis(timeout_ms);
             tokio::task::spawn_blocking(move || {
-                let segs = crate::probe::flash_elf(&chip_lib, probe_lib.as_deref(), &file_lib)?;
+                let segs = match crate::probe::flash_elf(&chip_lib, probe_lib.as_deref(), &file_lib)
+                {
+                    Ok(n) => n,
+                    Err(_) => return LibRun::Failed,
+                };
                 let mut out: Vec<u8> = Vec::new();
-                let bytes = crate::probe::rtt_stream(
+                match crate::probe::rtt_stream(
                     &chip_lib,
                     probe_lib.as_deref(),
                     dur,
                     &stop_lib,
                     |chunk| out.extend_from_slice(chunk),
-                )?;
-                Ok::<_, crate::probe::ProbeError>((segs, bytes, out))
+                ) {
+                    Ok(bytes) => LibRun::Done { segs, bytes, out },
+                    Err(e) => LibRun::NoRtt {
+                        segs,
+                        why: e.message().to_string(),
+                    },
+                }
             })
             .await
-            .ok()
-            .and_then(|r| r.ok())
+            .unwrap_or(LibRun::Failed)
         };
         watcher.abort();
-        if let Some((segs, bytes, out)) = lib_run {
-            if ctx.cancel.is_cancelled() {
-                return Err(ToolError::new(format!(
-                    "[Cancelled] run interrupted by turn cancellation after {bytes} RTT bytes; \
-                     captured output://n{}",
-                    String::from_utf8_lossy(&out)
-                )));
+        match lib_run {
+            LibRun::Done { segs, bytes, out } => {
+                if ctx.cancel.is_cancelled() {
+                    return Err(ToolError::new(format!(
+                        "[Cancelled] run interrupted by turn cancellation after {bytes} RTT bytes; \
+                         captured output://n{}",
+                        String::from_utf8_lossy(&out)
+                    )));
+                }
+                let text = String::from_utf8_lossy(&out).into_owned();
+                return Ok(ToolOutput {
+                    text: format!(
+                        "run timed out after {timeout_ms} ms; captured output [probe-rs lib]\n\
+                         (flashed {segs} loadable segment(s), {bytes} RTT bytes)\n{}",
+                        crate::forensic::append_fault_marker(text)
+                    ),
+                });
             }
-            let text = String::from_utf8_lossy(&out).into_owned();
-            return Ok(ToolOutput {
-                text: format!(
-                    "run timed out after {timeout_ms} ms; captured output [probe-rs lib]\n\
-                     (flashed {segs} loadable segment(s), {bytes} RTT bytes)\n{}",
-                    crate::forensic::append_fault_marker(text)
-                ),
-            });
+            LibRun::NoRtt { segs, why } => {
+                // 已经烧好了。这里只 attach，**不再烧** —— 一次 `run` 只该烧一次。
+                let mut args = vec!["attach".to_string(), "--chip".to_string(), chip.clone()];
+                if let Some(p) = probe.as_ref() {
+                    args.push("--probe".to_string());
+                    args.push(p.clone());
+                }
+                let hint = "hint: `run` only carries RTT (and semihosting via the CLI). \
+                            Firmware that logs over a UART — most of this project's — shows \
+                            nothing here; use `monitor` on that port instead.";
+                let streamed = match super::util::run_probe_rs(
+                    args,
+                    &ctx.cwd,
+                    timeout_ms,
+                    Some(ctx.cancel.clone()),
+                    &[],
+                )
+                .await
+                {
+                    Ok((text, _)) => text,
+                    Err(e) => format!("(could not stream with the CLI: {e})"),
+                };
+                return Ok(ToolOutput {
+                    text: format!(
+                        "flashed {segs} loadable segment(s) [probe-rs lib], then no RTT control \
+                         block ({why})\n{streamed}\n\n{hint}"
+                    ),
+                });
+            }
+            LibRun::Failed => {}
         }
 
         let probe_rs_ok = super::util::probe_rs_present().await;
@@ -250,6 +309,46 @@ mod tests {
         assert!(
             out.text.contains("firment-rtt-smoke"),
             "expected RTT content, got: {}",
+            out.text
+        );
+    }
+
+    /// 没有 RTT 的固件：**只烧一次**，然后 attach，并把"日志可能走 UART"说清楚。
+    ///
+    /// ```text
+    /// FIRMENT_TEST_ELF=<一份不初始化 RTT 的 ELF> \
+    ///   cargo test -p firment-tools --lib reports_no_rtt_instead_of_reflashing -- --ignored
+    /// ```
+    #[tokio::test]
+    #[ignore = "needs a NUCLEO-G431RB and a firmware ELF without RTT"]
+    async fn reports_no_rtt_instead_of_reflashing() {
+        let elf = std::env::var("FIRMENT_TEST_ELF").expect("set FIRMENT_TEST_ELF");
+        let dir = tempdir().unwrap();
+        std::fs::copy(&elf, dir.path().join("no-rtt.elf")).unwrap();
+        let mut c = ctx(dir.path());
+        c.default_chip = Some("stm32g431rb".to_string());
+
+        let out = Run
+            .run(
+                json!({"file": "no-rtt.elf", "chip": "stm32g431rb", "timeout_ms": 2000}),
+                &c,
+            )
+            .await
+            .expect("run through the tool");
+        assert!(
+            out.text.contains("no RTT control block"),
+            "expected the NoRtt branch, got: {}",
+            out.text
+        );
+        // 关键：不能再走 `probe-rs run`（那会重烧一遍）。
+        assert!(
+            !out.text.contains("probe-rs run"),
+            "the fallback must attach, not re-flash: {}",
+            out.text
+        );
+        assert!(
+            out.text.contains("monitor"),
+            "the hint should point at monitor: {}",
             out.text
         );
     }
