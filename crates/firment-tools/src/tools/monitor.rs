@@ -612,6 +612,8 @@ mod tests {
                 serial_number: Some("SN123".into()),
                 manufacturer: Some("STMicroelectronics".into()),
                 product: Some("STM32 STLink".into()),
+                // serialport 4.9 新增的字段；测试只关心 label 的拼装。
+                interface: None,
             }),
         };
         assert_eq!(

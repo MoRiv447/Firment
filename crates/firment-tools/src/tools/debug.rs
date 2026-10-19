@@ -640,15 +640,50 @@ impl Tool for Debug {
             }
             "mem" => {
                 let addr = address.unwrap();
-                let (text, code) = run_probe_rs_retry(
-                    read_args(&chip, probe.as_deref(), &width, addr, words as usize),
-                    &cwd,
-                    timeout_ms,
-                    cancel.clone(),
-                    &[],
-                )
-                .await
-                .map_err(probe_err)?;
+                // 库优先：一次 attach 可服务后续调用，返回的是类型化的错误，
+                // 不必从 CLI 的 stdout 里把十六进制字再捞出来。
+                // 只有 b32 走库（CLI 的 b8/b16/b64 拼写没有对应验证），
+                // 且库拿不到探针时**回退 CLI** —— 老探针、缺驱动、USB 被抢占
+                // 都不该让一次本来能成功的读变成失败。
+                let lib_read = if width == "b32" && (1..=1024).contains(&words) {
+                    let chip_lib = chip.clone();
+                    let probe_lib = probe.clone();
+                    let n = words as usize;
+                    match tokio::task::spawn_blocking(move || {
+                        crate::probe::read_words(&chip_lib, probe_lib.as_deref(), addr, n)
+                    })
+                    .await
+                    {
+                        Ok(Ok(v)) => Some(Ok(v)),
+                        Ok(Err(crate::probe::ProbeError::Unavailable(_))) => None,
+                        Ok(Err(e)) => Some(Err(e.message().to_string())),
+                        Err(e) => Some(Err(format!("[Io] probe task failed: {e}"))),
+                    }
+                } else {
+                    None
+                };
+                let (text, code) = match lib_read {
+                    Some(Ok(words_read)) => {
+                        let mut s = format!(
+                            "[probe-rs lib] {addr:#010x} (b32, {} words)\n",
+                            words_read.len()
+                        );
+                        for w in &words_read {
+                            s.push_str(&format!("{w:08x} "));
+                        }
+                        (s, Some(0))
+                    }
+                    Some(Err(msg)) => return Err(ToolError::new(msg)),
+                    None => run_probe_rs_retry(
+                        read_args(&chip, probe.as_deref(), &width, addr, words as usize),
+                        &cwd,
+                        timeout_ms,
+                        cancel.clone(),
+                        &[],
+                    )
+                    .await
+                    .map_err(probe_err)?,
+                };
                 // 原始字之后补一行字段解码：让"这个 1 是内部上拉造成的"这种事实
                 // 直接可见，而不是留给调用者去查 RM0440 的位定义。
                 let words_read = super::gpio_decode::parse_words(&text, words as usize);
@@ -670,15 +705,44 @@ impl Tool for Debug {
                     .get("value")
                     .and_then(|v| v.as_u64())
                     .ok_or_else(|| ToolError::new("[InvalidInput] write needs a value"))?;
-                let (text, code) = run_probe_rs_retry(
-                    write_args(&chip, probe.as_deref(), &width, addr, value),
-                    &cwd,
-                    timeout_ms,
-                    cancel.clone(),
-                    &[],
-                )
-                .await
-                .map_err(probe_err)?;
+                // 与 `mem` 同一策略：b32 先走库，库拿不到探针再回退 CLI。
+                let lib_write = if width == "b32" {
+                    let chip_lib = chip.clone();
+                    let probe_lib = probe.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        crate::probe::write_word(
+                            &chip_lib,
+                            probe_lib.as_deref(),
+                            addr,
+                            value as u32,
+                        )
+                    })
+                    .await
+                    {
+                        Ok(Ok(())) => Some(Ok(())),
+                        Ok(Err(crate::probe::ProbeError::Unavailable(_))) => None,
+                        Ok(Err(e)) => Some(Err(e.message().to_string())),
+                        Err(e) => Some(Err(format!("[Io] probe task failed: {e}"))),
+                    }
+                } else {
+                    None
+                };
+                let (text, code) = match lib_write {
+                    Some(Ok(())) => (
+                        format!("[probe-rs lib] wrote {value:#x} to {addr:#010x} (b32)"),
+                        Some(0),
+                    ),
+                    Some(Err(msg)) => return Err(ToolError::new(msg)),
+                    None => run_probe_rs_retry(
+                        write_args(&chip, probe.as_deref(), &width, addr, value),
+                        &cwd,
+                        timeout_ms,
+                        cancel.clone(),
+                        &[],
+                    )
+                    .await
+                    .map_err(probe_err)?,
+                };
                 // 「别驱动你正在量的脚」：写 GPIO 时给一句后果说明。
                 // 2026-10-18 基准里，agent 用调试器把 PC13 配成输出去伪造按键，
                 // 再用同一次读数证明"按键正常"——那是自己给自己出题。

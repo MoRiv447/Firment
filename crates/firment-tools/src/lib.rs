@@ -10,6 +10,7 @@ pub mod la_caps;
 pub mod la_cmd;
 pub mod la_measure;
 pub mod plugin_tool;
+pub mod probe;
 pub mod redteam;
 pub mod review;
 pub mod tools;

@@ -10,6 +10,7 @@ futures.workspace = true
 globset.workspace = true
 ignore.workspace = true
 image.workspace = true
+probe-rs.workspace = true
 object.workspace = true
 reqwest = { workspace = true, features = ["cookies"] }
 regex.workspace = true

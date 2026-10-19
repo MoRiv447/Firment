@@ -10,7 +10,9 @@ members = [
 [workspace.package]
 version = "1.0.0-rc3"
 edition = "2024"
-rust-version = "1.85"
+# 1.89 是 `probe-rs 0.32` 的下限。抬它是一次有意的取舍：把探针从"调 CLI"
+# 换成"链接库"（会话常驻、结构化错误、RTT），代价是 1.85–1.88 的工具链不能构建。
+rust-version = "1.89"
 license = "MIT"
 
 [workspace.dependencies]
@@ -29,6 +31,9 @@ ignore = "0.4"
 image = "0.25"
 # default-features 里带 `compression`（ruzstd）—— 2026-10 它挂着一条 HIGH 通告
 # （RUSTSEC-2026-0344，解压炸弹），而仓库里没有任何代码调解压 API：关掉它。
+# 只用 builtin-targets（按芯片名解析）+ cmsisdap_v1（ST-Link）；
+# coredump / builtin-formats 等默认项暂时不要，编译时间优先。
+probe-rs = { version = "0.32", default-features = false, features = ["builtin-targets", "cmsisdap_v1"] }
 object = { version = "0.36", default-features = false, features = ["read_core", "write", "std"] }
 ratatui = "0.29"
 serialport = "4"
