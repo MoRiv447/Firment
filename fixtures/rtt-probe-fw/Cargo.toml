@@ -1,0 +1,21 @@
+[package]
+name = "rtt-probe-fw"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# 这是一份**测试夹具**，不是产品的一部分：它唯一的职责是初始化 RTT 控制块
+# 并持续打印，用来验证 `probe::rtt_stream` 真的能收到字节。
+# `[workspace]` 空表让 cargo 不要把它并进 Firment 的 workspace。
+[workspace]
+
+[dependencies]
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7"
+panic-halt = "0.2"
+rtt-target = "0.6"
+
+[profile.release]
+codegen-units = 1
+lto = true
+debug = 2
