@@ -32,7 +32,7 @@ static SESSION: Mutex<Option<Cached>> = Mutex::new(None);
 
 /// 错误分三类，调用方据此决定要不要回退到 CLI。
 #[derive(Debug)]
-pub(crate) enum ProbeError {
+pub enum ProbeError {
     /// 库拿不到探针/芯片：退回 CLI 是合理的（CLI 可能配了别的探针选择方式）。
     Unavailable(String),
     /// 拿到了，操作失败：这是真错误，回退只会把同一个错误再报一次。
@@ -40,7 +40,7 @@ pub(crate) enum ProbeError {
 }
 
 impl ProbeError {
-    pub(crate) fn message(&self) -> &str {
+    pub fn message(&self) -> &str {
         match self {
             Self::Unavailable(m) | Self::Failed(m) => m,
         }
@@ -100,7 +100,7 @@ fn core(session: &mut Session) -> Result<probe_rs::Core<'_>, ProbeError> {
 }
 
 /// 读 `n` 个 32 位字。
-pub(crate) fn read_words(
+pub fn read_words(
     chip: &str,
     probe: Option<&str>,
     addr: u64,
@@ -116,7 +116,7 @@ pub(crate) fn read_words(
 }
 
 /// 写一个 32 位字。**调用方负责知道自己在写什么**（见 `debug` 的 GPIO 警告）。
-pub(crate) fn write_word(
+pub fn write_word(
     chip: &str,
     probe: Option<&str>,
     addr: u64,
@@ -139,7 +139,7 @@ pub(crate) fn write_word(
 ///
 /// 返回写出的字节数。没有控制块（固件没接 RTT）时返回 `Failed`，由调用方
 /// 决定回退 CLI —— 那可能是 semihosting 的工程。
-pub(crate) fn rtt_stream(
+pub fn rtt_stream(
     chip: &str,
     probe: Option<&str>,
     duration: Duration,
@@ -225,7 +225,7 @@ fn elf_segments(bytes: &[u8]) -> Result<Vec<(u64, Vec<u8>)>, ProbeError> {
 ///
 /// 会话与读路径共用：一次 `flash` 之后紧接着 `debug mem` 不必再 attach 一次。
 /// `commit` 内部完成擦除与写入，`reset` 让目标从新固件启动。
-pub(crate) fn flash_elf(
+pub fn flash_elf(
     chip: &str,
     probe: Option<&str>,
     elf: &std::path::Path,

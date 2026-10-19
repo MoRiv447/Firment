@@ -687,8 +687,21 @@ impl Tool for Debug {
                 // 原始字之后补一行字段解码：让"这个 1 是内部上拉造成的"这种事实
                 // 直接可见，而不是留给调用者去查 RM0440 的位定义。
                 let words_read = super::gpio_decode::parse_words(&text, words as usize);
-                let decoded = super::gpio_decode::decode(Some(chip.as_str()), addr, &words_read)
-                    .or_else(|| super::gpio_decode::unknown_layout_note(Some(chip.as_str()), addr));
+                // 全 0xFF 不是寄存器内容，是"读不到"：外设时钟没开、或总线报错。
+                // 解码它会给出"每个脚都是 analog + 上拉"这种**自信的错话**
+                // （2026-10-19 在 GPIOC 上实测：RCC 没使能 AHB2 时整段读回 FF）。
+                let decoded = if !words_read.is_empty() && words_read.iter().all(|w| *w == u32::MAX)
+                {
+                    Some(format!(
+                        "note: every word at {addr:#010x} read back as 0xFFFFFFFF — a peripheral \
+                         whose clock is gated, or a bus error, reads like this. Field decoding is \
+                         skipped because it would describe a register that is not there."
+                    ))
+                } else {
+                    super::gpio_decode::decode(Some(chip.as_str()), addr, &words_read).or_else(
+                        || super::gpio_decode::unknown_layout_note(Some(chip.as_str()), addr),
+                    )
+                };
                 let body = match decoded {
                     Some(d) => format!("{text}\n{d}"),
                     None => text,
