@@ -608,10 +608,9 @@ pub async fn session_context_usage(
             .map(|n| n.to_string())
             .collect::<Vec<String>>(),
     );
-    let system_chars =
-        firment_core::context::system_prompt_for(&session.cwd, session.mode, &tools)
-            .chars()
-            .count() as u64;
+    let system_chars = firment_core::context::system_prompt_for(&session.cwd, session.mode, &tools)
+        .chars()
+        .count() as u64;
     // The compaction digest rides the transcript's number here as well: it is sent inside the first
     // user turn on every request, so a reading that ignored it would shrink when the session grows.
     let transcript_chars: u64 = session

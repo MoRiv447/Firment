@@ -1,116 +1,126 @@
-# 结果：Firment × Claude Code，2026-10-18（三轮全列）
+# Results: Firment × Claude Code, 2026-10-18 (all three rounds listed)
 
-> **不取最高、不取中值/均值**——三轮全部列出，读者自己看分布。
-> 每题分数为 **0–5 分（机器判定 + AI 裁定）**；case05 的 H2 按口径排除（满分 4），
-> case10 的 F2 按约定跳过（满分 4）。
+> **No best-of, no mean, no median** — every round is listed so the spread is visible.
+> Each case is scored **0–5 (machine verdict + ruling)**. case05 excludes H2 by the rubric's own
+> rule (max 4); case10 skips F2 by the frozen convention (max 4).
 
-## 条件
+## Conditions
 
-| 项 | 值 |
+| | |
 |---|---|
-| 台架 | NUCLEO-G431RB + CH340 夹具 + fx2lafw 分析仪 |
-| 被测配置 | 两侧均 `deepseek-flash` + `thinking=high`（报告逐局核验） |
-| 题数 | **8 / 14**（01/04/05/06/07/08/10/11）；未跑 02/03/09/12/13/14，**合计 43/100 权重未测** |
-| 判分器 | r6；case10 用 r7 重判（r7 只改 case10 的"符号页号"识别） |
-| 二进制 | 主榜 `40bc50adc844526fa768ab2c69bff086`；**case04 使用发版构建 `742fa4c23d954d0879836525d6418375`**（见文末「构建说明」） |
-| 夹具 | agent 会话期间夹具保持「松手」并持有句柄（实测对按键线电平**无影响**：仍读到 `IDR=1`） |
-| 轮次 | 2026-10-18 11:05–17:30，每侧每轮独立会话、工作区从零开始 |
+| Rig | NUCLEO-G431RB + CH340 fixture + fx2lafw analyser |
+| Agent config | both sides `deepseek-flash` + `thinking=high`, verified per run in each report |
+| Cases | **8 / 14** (01/04/05/06/07/08/10/11); 02/03/09/12/13/14 were **not run — 43/100 of the weight** |
+| Judge | r6; case10 re-graded with r7 (r7 only widens the symbolic page-index form) |
+| Binary | main board `40bc50adc844526fa768ab2c69bff086`; **case04 uses the release build `742fa4c23d954d0879836525d6418375`** (see "Build note") |
+| Fixture | the fixture holds the button lines released for the whole agent session (measured effect on the line level: **none** — `IDR=1` either way) |
+| Rounds | 2026-10-18 11:05–17:30, each side a fresh session per round, workspace wiped |
 
-## 逐题（三轮全部列出）
+## Per case (every round listed)
 
-| 题 | 权重 | firm R1 | firm R2 | firm R3 | claude R1 | claude R2 | claude R3 |
+| Case | Weight | firm R1 | firm R2 | firm R3 | claude R1 | claude R2 | claude R3 |
 |---|---|---|---|---|---|---|---|
-| case01 VCP 问好 | 5 | 5.0 | 5.0 | 5.0 | 5.0 | 5.0 | 5.0 |
-| case04 按键去抖 | 8 | **5.0**¹ | **2.0**¹ | **5.0**¹ | **5.0** | **5.0** | **2.0** |
-| case05 精密 PWM | 6 | 4.0 | 4.0 | 4.0 | 4.0 | 4.0 | 4.0 |
-| case06 捕获自测 | 7 | 5.0 | 5.0 | 5.0 | 5.0 | 5.0 | 5.0 |
-| case07 环形缓冲 | 8 | 5.0 | 5.0 | 5.0 | 5.0 | 5.0 | 5.0 |
+| case01 VCP hello | 5 | 5.0 | 5.0 | 5.0 | 5.0 | 5.0 | 5.0 |
+| case04 button debounce | 8 | **5.0**¹ | **2.0**¹ | **5.0**¹ | **5.0** | **5.0** | **2.0** |
+| case05 precision PWM | 6 | 4.0 | 4.0 | 4.0 | 4.0 | 4.0 | 4.0 |
+| case06 capture self-test | 7 | 5.0 | 5.0 | 5.0 | 5.0 | 5.0 | 5.0 |
+| case07 ring buffer | 8 | 5.0 | 5.0 | 5.0 | 5.0 | 5.0 | 5.0 |
 | case08 DMA+IDLE | 9 | 5.0 | 5.0 | 5.0 | 5.0 | 5.0 | 5.0 |
-| case10 flash 计数 | 7 | 4.0 | 4.0 | 4.0 | 4.0 | 4.0 | 4.0 |
+| case10 flash counter | 7 | 4.0 | 4.0 | 4.0 | 4.0 | 4.0 | 4.0 |
 | case11 IWDG | 7 | 5.0 | 5.0 | 5.0 | 5.0 | 5.0 | **4.0** |
-| **加权总分（/57）** | | **54.4** | **49.6** | **54.4** | **54.4** | **54.4** | **48.2** |
+| **Weighted total (/57)** | | **54.4** | **49.6** | **54.4** | **54.4** | **54.4** | **48.2** |
 
-¹ firm 的 case04 三次来自**发版构建**的独立复测（短按计数 10 / 9 / 10），按顺序对应 R1/R2/R3；不是同一局的产物。旧构建同题为 5.0 / 2.0 / 3.0。
+¹ firm's three case04 numbers come from three independent runs of the **release build** (short-press
+counts 10 / 9 / 10), mapped in order to R1/R2/R3; they are not the same run as the other cases. The
+old build scored 5.0 / 2.0 / 3.0 on this case.
 
-**两侧唯一有波动的题是 case04 和 claude 的 case11。** 其余 6 题 18 局逐点相同。
+**The only cases that moved are case04 and claude's case11.** The other six were identical across
+all 18 runs.
 
-## case04 到底发生了什么
+## What actually happened in case04
 
-**firm（发版构建的三次）**
+**firm (three runs of the release build)**
 
-| 次 | 分 | 短按/长按 | 原因 |
+| Run | Score | Short / long | Why |
 |---|---|---|---|
-| 1 | 5.0 | 10 / 3 | 读 `nucleo.c:256..375` 看到 `:284 Pull = GPIO_PULLDOWN`，判高有效 |
-| 2 | **2.0** | **9 / 4** | 状态机两头都错位：漏一次短按、多报一次长按。**不是极性**——本轮它读 GPIO 时看到了 `PUPDR PC13=pull-down` |
-| 3 | 5.0 | 10 / 3 | 同上，正常 |
+| 1 | 5.0 | 10 / 3 | read `nucleo.c:256..375`, saw `:284 Pull = GPIO_PULLDOWN`, concluded active-high |
+| 2 | **2.0** | **9 / 4** | the state machine was wrong at both ends: one short press missed, one long press invented. **Not polarity** — this run read `PUPDR PC13=pull-down` |
+| 3 | 5.0 | 10 / 3 | as run 1 |
 
-**claude（三轮）**
+**claude (three rounds)**
 
-| 轮 | 分 | 原因 |
+| Round | Score | Why |
 |---|---|---|
-| R1 | 5.0 | 读 BSP，判高有效 |
-| R2 | 5.0 | 同 |
-| R3 | 2.0 | 代码注释直写 "B1 (PC13, **active low** on the NUCLEO-G431RB)"，配 `PULLUP` → 0 字节静默 |
+| R1 | 5.0 | read the BSP, concluded active-high |
+| R2 | 5.0 | same |
+| R3 | 2.0 | the code comment says "B1 (PC13, **active low** on the NUCLEO-G431RB)" and configures `PULLUP` → 0 bytes of output |
 
-> 旧构建下 firm 的三次是 5.0 / 2.0 / 3.0：R2 静默（极性错）、R3 漏一次短按。
-> 新构建把"整局静默"这一类消掉了（3 次都打印），**但去抖状态机的时序问题还在**（第 2 次 9/10 且多报一次长按）。
-> claude 那一次仍是同一个先验：把"Nucleo 的 B1 是低有效"当事实。
+> On the old build firm scored 5.0 / 2.0 / 3.0 here: R2 silent (wrong polarity), R3 one missed press.
+> The release build removes the "whole run is silent" class (all three printed) but **the debounce
+> state machine still loses a press** (run 2: 9/10 and an extra long press).
+> claude's failure is the same prior both times: treating "the Nucleo's B1 is active-low" as a fact.
 
-## 构建说明（为什么 case04 与其余题不是同一份二进制）
+## Build note (why case04 is not the same binary as the rest)
 
-主榜 7 题用的是 `40bc50ad`。之后为发版做了四处**工具输出层**的改动，判分器本身没有动
-（`engine/`、`specs/`、`hal/` 冻结在 r7）：
+The seven other cases were measured with `40bc50ad`. Before the release, four changes landed in the
+**tool output layer**; the judge itself did not move (`engine/`, `specs/`, `hal/` are frozen at r7):
 
-| 改动 | 位置 |
+| Change | Where |
 |---|---|
-| 读 GPIO 时解码 MODER/PUPDR/IDR/ODR（布局表放 KB，覆盖 F1/F4/G0/G4/H7） | `tools/gpio_decode.rs` + `cheatsheets/gpio-layouts.toml` |
-| `monitor` 空窗从「没收到数据」改成「这是沉默的证据，不是通路正常的证据」 | `tools/monitor.rs` |
-| 写 GPIO 时提示「你驱动的电平是你自己的刺激」 | `tools/debug.rs` |
-| `grep` 命中定义时提示「a hit is not a read，去读实现体」 | `tools/grep.rs` |
+| GPIO reads decode MODER/PUPDR/IDR/ODR (layout table in the KB, F1/F4/G0/G4/H7) | `tools/gpio_decode.rs` + `cheatsheets/gpio-layouts.toml` |
+| `monitor`'s empty window now says it is evidence of silence, not of a working path | `tools/monitor.rs` |
+| Writing a GPIO says the level you drive is your own stimulus | `tools/debug.rs` |
+| `grep` says "a hit is not a read — open the definition body" | `tools/grep.rs` |
 
-发版构建 `742fa4c2` 在 case04 上复测 3 次：**5.0 / 2.0 / 5.0**（短按 10 / 9 / 10）。
-抽检两题各 1 次：case08 = 5.0（旧榜 5.0）、case10 = 4.0/4（旧榜 4.0/4）。
-未抽检的 5 题沿用旧构建。
+The release build `742fa4c2` was run three times on case04: **5.0 / 2.0 / 5.0** (short counts
+10 / 9 / 10). Two cases were spot-checked once each: case08 = 5.0 (same as the old board) and
+case10 = 4.0/4 (same). The remaining five cases keep their old-build numbers.
 
-**case10 的 H2 机器判红是假红**：这轮写成 `COUNTER_PAGE_INDEX = (COUNTER_PAGE_ADDR - FLASH_BASE) / FLASH_PAGE_SIZE`，
-值的算法正确（页 63 / `0x0801F800`），但规则解析不了 CMSIS 的 `FLASH_BASE`。人工裁定给 1 分，
-依据见 `ai-rulings.md`。
+**case10's H2 machine failure is a false red**: this run wrote
+`COUNTER_PAGE_INDEX = (COUNTER_PAGE_ADDR - FLASH_BASE) / FLASH_PAGE_SIZE`, which evaluates to 63
+(`0x0801F800`), but the rule cannot resolve the CMSIS `FLASH_BASE`. The ruling awards the point; see
+`ai-rulings.md`.
 
-## 这份结果的边界（作者声明）
+## Boundaries of this result (author's statement)
 
-1. **构建混合**：case04 来自发版构建，其余来自上一构建。判分路径未变，但 agent 行为没有在新构建下全量重测。
-2. **n 小**：每题 3 次（旧构建）或 1 次（抽检）；case04 为 3 次。
-3. **14 题只测了 8 题**：02/03/09/12/13/14 因相机、蓝牙对端或人工观测未就绪**未测**，占 43/100 权重。
-4. **可复现**：判分器冻结在 r7、测试集随仓库开源，台架接线写在各 spec 的 `caps` 里。
-   任何人可以用同一台架重跑；跑不出来，说明这份结果有问题——请直接开 issue。
+1. **Mixed builds**: case04 comes from the release build, the rest from the previous one. The scoring
+   path did not change, but agent behaviour was not re-measured end to end on the new build.
+2. **Small n**: three runs per case on the old build, one on the spot-checks; case04 has three.
+3. **8 of 14 cases**: 02/03/09/12/13/14 were not run because the camera, the Bluetooth peer or the
+   human observer was not available — 43/100 of the weight.
+4. **Reproducible**: the judge is frozen at r7 and ships with the repository; the wiring is described
+   in each spec's `caps`. Anyone can re-run it on the same rig. If you cannot reproduce it, the
+   result is wrong — open an issue.
 
-## 怎么复现
+## Re-running it
 
 ```
-cd eval
+cd benchmark
 <venv python> -m campaign firm   case01 case04 case05 case06 case07 case08 case10 case11
 <venv python> -m campaign claude case01 case04 case05 case06 case07 case08 case10 case11
 ```
 
-判分前的完整检查（不改任何文件）：
+Checks before grading (none of them modify anything):
 
 ```
-<venv python> cli.py caps          # 端口 / 探针 / 分析仪
-<venv python> cli.py readiness    # 逐题就绪度
-<venv python> freeze_check.py     # 判分器是否仍与冻结清单一致
+<venv python> cli.py caps         # ports / probe / analyser
+<venv python> cli.py readiness    # per-case readiness
+<venv python> freeze_check.py     # is the judge still the frozen one
 ```
 
-## 怎么读这张表
+## How to read the table
 
-1. **逐题看，不看总分排名。** 6 题 18 局完全相同，总分差全部来自 case04 与 claude 的 case11。
-2. **单局不可当结论。** 同一模型同一题，三轮里 5.0→2.0→5.0（firm）、5.0→5.0→2.0（claude），
-   摆动幅度 3 分（加权 4.8），比两侧总分之差还大。
-3. **要一个数就写**：firm R1/R2/R3 = 54.4 / 49.6 / 54.4；claude = 54.4 / 54.4 / 48.2。
-   不合成，不取最好。
+1. **Read it per case, not as a ranking.** Six cases were identical across 18 runs; the whole
+   difference comes from case04 and claude's case11.
+2. **A single run is not a conclusion.** Same model, same case: 5.0 → 2.0 → 5.0 for firm and
+   5.0 → 5.0 → 2.0 for claude — a 3-point swing (4.8 weighted), larger than the gap between the two
+   agents.
+3. **If you need one number**, write: firm 54.4 / 49.6 / 54.4, claude 54.4 / 54.4 / 48.2. Do not
+   combine them, and do not pick the best.
 
-## 证据位置
+## Where the evidence is
 
-- 每局报告：`eval/reports/20261018-*-{firm,claude}-case*/report.md`
-- AI 裁定：`ai-rulings.md`（本次三轮的裁定都在文末三节，逐条带 file:line 与复核命令）
-- 工作区原件：`D:\Firment-bench-archive\<agent>-<case>\run-N\`
-- 判分口径：`eval/FROZEN.md`（r5→r6→r7 的每一次改动与影响面）
+- Per-run reports: `reports/20261018-*-{firm,claude}-case*/report.md` (not shipped — 72 MB)
+- Rulings: `ai-rulings.md`, one entry per point with the report id and a re-check command
+- Workspace copies: `D:\Firment-bench-archive\<agent>-<case>\run-N\` (author's machine only)
+- Scoring revision: `FROZEN.md` — every change from r5 to r7 and what it can affect

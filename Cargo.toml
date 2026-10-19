@@ -27,7 +27,9 @@ futures = "0.3"
 globset = "0.4"
 ignore = "0.4"
 image = "0.25"
-object = "0.36"
+# default-features 里带 `compression`（ruzstd）—— 2026-10 它挂着一条 HIGH 通告
+# （RUSTSEC-2026-0344，解压炸弹），而仓库里没有任何代码调解压 API：关掉它。
+object = { version = "0.36", default-features = false, features = ["read_core", "write", "std"] }
 ratatui = "0.29"
 serialport = "4"
 sha2 = "0.10"

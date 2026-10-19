@@ -1,71 +1,82 @@
 # Changelog
 
-## v1.0.0-rc3 (2026-10-18) — 读寄存器不再靠猜，结果可以被别人重跑
+## v1.0.0-rc3 (2026-10-18) — registers stop being guessed, and the results can be re-run by anyone
 
-这一版的主线只有一句：**把"原始数据"变成"带注释的数据"**。起因是一次基准里的真实失败——
-agent 读 `0x48000800` 拿到 `f3ffffff … 04000000 00002000 …`，把 `IDR bit13=1` 解释成
-"外部上拉"，而同一份快照里 `PUPDR=0x04000000` 就是它自己配的内部上拉。
+The release has one line: **turn raw data into data with its meaning attached**. It came out of a
+real failure in the benchmark — an agent read `0x48000800` as `f3ffffff … 04000000 00002000 …`,
+took `IDR bit13 = 1` for "an external pull-up", and the snapshot's own `PUPDR = 0x04000000` was the
+internal pull-up it had configured itself.
 
-### 读寄存器：`debug mem` 解码 GPIO 字段
+### Registers: `debug mem` decodes GPIO fields
 
-- `debug mem` 读 GPIO 时追加一行解码：`GPIOC decode [moder]: PUPDR PC13=pull-down; IDR PC13=1`。
-  只列非默认位，全 0 的端口不刷屏。
-- 布局**不写死在代码里**：`cheatsheets/gpio-layouts.toml` 按家族给 base/stride/出处，
-  已覆盖 **F1 / F4 / G0 / G4 / H7**；F1 的 CRL/CRH 是另一套编码，单独实现。
-- 不认识的芯片输出 `no GPIO layout known for chip '<x>'`，不再沉默；缺出处或未对齐的条目
-  直接丢弃——一个错 base 会打印"权威的错误值"。
+- A GPIO read now comes with a decoded line: `GPIOC decode [moder]: PUPDR PC13=pull-down; IDR PC13=1`.
+  Only non-default bits are listed; an all-zero port prints nothing.
+- The layout is **not hard-coded**: `cheatsheets/gpio-layouts.toml` carries base/stride/source per
+  family and covers **F1 / F4 / G0 / G4 / H7**; F1's CRL/CRH encoding is a separate path.
+- An unknown chip prints `no GPIO layout known for chip '<x>'` instead of staying silent; entries
+  without a manual reference (or misaligned) are dropped — a wrong base would print an authoritative
+  wrong value.
 
-### 出处：断言和它的证据放在一起
+### Provenance: a claim travels with its evidence
 
-- `pinmap` / `decision` 新增 `source`（`path:line` 或 `measured: …`）；列表时**引用被 cite 的那一行**，
-  没有出处就标 `[unverified]`。
-- registry 的提示词改成"记的是 claims，电气事实要出处"——原来那句是"信 registry 而不是凭记忆"，
-  而 registry 里全是 agent 自己写的断言。
+- `pinmap` / `decision` take an optional `source` (`path:line` or `measured: …`); the listing quotes
+  the cited line back, and prints `[unverified]` when there is none.
+- The registry prompt now says it holds *claims*, and that an electrical fact needs a source. The
+  previous line said "trust the registry over memory" — while the registry is full of the agent's
+  own assertions.
 
-### 工具输出的三处语义修正
+### Three tool outputs that now say what they mean
 
-- `monitor` 空窗从"没收到数据"改成"**这是沉默的证据**，不是通路正常的证据"。
-- 写 GPIO 时提示"你驱动的电平是你自己的刺激，读回来的结果不能证明按键工作"。
-- `grep` 命中 `fn/#define/struct/impl/def/function` 时追加 `hint: a hit is not a read，去读实现体`。
+- `monitor`: an empty window reads "the device produced nothing — that is evidence of silence, not
+  evidence that the path works".
+- Writing a GPIO says the level you drive is your own stimulus, and a result read back from it does
+  not prove the button works.
+- `grep` appends `hint: a hit is not a read` when a hit lands on `fn/#define/struct/impl/def/function`.
 
-### 工具层（含此前在树里未提交的改动）
+### Configurability
 
-- **工具存在性由注册表裁决**：没配 `verify_command` 的机器上，`verify` 不再出现在 schema 和
-  提示词的"本会话可用"一节里——原来提示词点名了它，模型每道题撞一次 `[InvalidInput]`。
-- `shell` 的进程替换检测（`<(…)` / `>(…)` / `=(…)`）改成按 shell 家族判断，而不是一律拦。
-- `edit_file` 不再把 `[ConcurrentChange]` 包进第二个 `[InvalidInput]`：模型只读第一个标签，
-  会把"文件被改了"当成"参数写错了"。
-- `verify` 的 description 补上"这是编译级门，硬件在环是另一层更强的证据"。
+- TUI: `/max-iterations <n>` (same shape as `/budget` and `/output`), and `/config` shows the value.
+- `firm config --edit` opens `config.toml` in `$EDITOR` (notepad on Windows) — it does not rewrite the
+  file, so comments survive.
+- The GUI already exposed Max iterations in its settings card; this release closes the TUI gap.
 
-### 可配置性
+### Benchmark and test set
 
-- TUI 新增 `/max-iterations <n>`（与 `/budget`、`/output` 同一套写法），`/config` 显示当前值。
-- `firm config --edit` 用 `$EDITOR`（Windows 回退 notepad）打开 `config.toml`——不重写文件，不丢注释。
-- GUI 的设置面板本来就有 Max iterations 字段（`AgentCard.tsx`），这次把 TUI 补齐。
+- New `benchmark/`: the 14-case hardware-in-the-loop suite — specs, judge, fixture drivers, assertion
+  engine — frozen at `r7`, with `freeze_check.py` verifying the 27 files.
+- `benchmark/RESULTS.md` carries the run that was actually made (8 of 14 cases), the build each number
+  belongs to, and the boundary statement. **The six cases that were not run are named**, with why.
+- Headline: firm 54.4 / 49.6 / 54.4, claude 54.4 / 54.4 / 48.2 (n=3 per side, listed per round, no
+  averaging).
 
-### 基准与测试集
+### Judge (r5 → r7)
 
-- 新增 `benchmark/`：14 题硬件在环评测的题面、判据、夹具驱动与断言引擎，判分口径冻结在 `r7`，
-  `freeze_check.py` 校验 27 个文件的 merkle。
-- `benchmark/RESULTS.md` 记录当次结果（8/14 题）、构建说明与边界声明；**未测的 6 题明确标注**。
-- 主榜结果：firm 54.4 / 49.6 / 54.4，claude 54.4 / 54.4 / 48.2（n=3，逐轮列出，不合成）。
+- r6: `case8`'s zero-activity guard — eight flat channels means unobserved, not failed.
+- r7: `case10.H2` accepts a symbolic page index (`#define BOOT_PAGE_INDEX ((FLASH_SIZE/PAGE_SIZE)-1)`).
+  Both were the same defect: the rule knew spellings, not arithmetic.
 
-### 判据（r5 → r7）
+### Web surface
 
-- r6：`case8` 的 zero-activity 防线（8 通道全无跳变时记未观测，不判红）。
-- r7：`case10.H2` 认符号页号（`#define BOOT_PAGE_INDEX ((FLASH_SIZE/PAGE_SIZE)-1)`）。
-  两次都是"只认拼写、不认算法"的同源缺陷。
+- Removed from the README and the screenshot set; the `web/` code stays but is **frozen**.
 
-### Web 端
+### Tool layer (also carries work that had been sitting in the tree)
 
-- 从 README 与截图集里移除；`web/` 代码保留但**冻结**，不再作为发布面。
+- Tool existence is decided by the registry: on a machine without `verify_command`, `verify` no
+  longer appears in the schema or the prompt's "available this session" section — the prompt used to
+  name it and the model hit `[InvalidInput]` on every task.
+- `shell`'s process-substitution detection (`<(…)` / `>(…)` / `=(…)`) keys off the shell family.
+- `edit_file` no longer wraps `[ConcurrentChange]` in a second `[InvalidInput]`: the model reads the
+  first tag, and was told to fix its input when the file had moved under it.
+- `verify`'s description now says it is the compile-level gate and that a hardware-in-the-loop run is
+  a separate, stronger claim on top of it.
 
-### 已知缺口
+### Known gaps
 
-- `case02.F3` 写死 `channel = "PA8"`，而题面允许任选定时器通道——选 PA6 之类物理上测不到。
-- `eval_int` 不含 CMSIS 头文件，用 `FLASH_BASE` 写的页号会被误判（有 AI 裁定兜底）。
-- GUI 设置面板还没有 `[tools.la]` 字段；改它仍要 `firm config --edit`。
-
+- `case02.F3` hard-codes `channel = "PA8"` while the task allows any timer pin; a choice like PA6
+  cannot be measured on this wiring.
+- `eval_int` does not read CMSIS headers, so a page index written with `FLASH_BASE` reads as red
+  (an AI ruling covers it today).
+- The GUI settings card has no `[tools.la]` fields yet; `firm config --edit` is the way in.
 
 ## v1.0.0-rc2 (2026-10-09) — the second candidate: 112 commits, 72 of them fixes, and the shape they share
 
