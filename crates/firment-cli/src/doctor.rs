@@ -553,11 +553,6 @@ pub(crate) fn toolchain_checks(
             "ARM cross-compiler for bare-metal C/C++",
         ),
         (
-            "probe-rs",
-            "probe-rs",
-            "flashing and running (flash/run tools)",
-        ),
-        (
             "openocd",
             "openocd",
             "alternative debug-probe driver (GDB server)",
@@ -578,6 +573,29 @@ pub(crate) fn toolchain_checks(
         match version_of(bin, &["--version"]) {
             Some(v) => checks.push(Check::found(bin, v)),
             None => checks.push(Check::missing(bin, state, detail, install_hint(what))),
+        }
+    }
+
+    // probe-rs 单独判：库已经链进来了，`flash` / `debug` 不再依赖 PATH 上的 CLI。
+    // 探针可见就是"能用"；`run` 还需要 CLI（RTT 尚未接进来），所以在文字里说清楚。
+    let visible = firment_tools::probe::probes_visible();
+    if visible > 0 {
+        checks.push(Check::found(
+            "probe-rs",
+            format!(
+                "{visible} probe(s) visible to the built-in library — flash/debug work without \
+                 the CLI; `run` still needs `probe-rs` on PATH for RTT"
+            ),
+        ));
+    } else {
+        match version_of("probe-rs", &["--version"]) {
+            Some(v) => checks.push(Check::found("probe-rs", v)),
+            None => checks.push(Check::missing(
+                "probe-rs",
+                State::Optional,
+                "flashing and running (flash/run tools)",
+                install_hint("probe-rs"),
+            )),
         }
     }
 

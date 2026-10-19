@@ -132,6 +132,14 @@ pub(crate) fn write_word(
 // halt / resume 先不包：它们要和 flash/run 一起切过来才有意义，
 // 单独切换会让"CLI 烧录 + 库 halt"这种混搭状态更难解释。
 
+/// 这台机器上现在能看到几个探针（只枚举，不 attach）。
+///
+/// `doctor` 用它回答"能不能烧/读"，而不要求 CLI 在 PATH 上 —— 库已经链进来了，
+/// 能力不该由"有没有装那个命令行"决定。
+pub fn probes_visible() -> usize {
+    probe_rs::probe::list::Lister::new().list_all().len()
+}
+
 /// 从一个 ELF 里取出要写进 flash 的段。
 ///
 /// probe-rs 0.32 不再提供 ELF 读取入口（`builtin-formats` 不在它的 feature 列表里），
