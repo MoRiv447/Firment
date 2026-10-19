@@ -613,6 +613,14 @@ impl Tool for Debug {
         let cancel = Some(ctx.cancel.clone());
         match action {
             "halt" => {
+                if let Some(r) =
+                    lib_core_op(chip.clone(), probe.clone(), crate::probe::CoreOp::Halt).await
+                {
+                    return match r {
+                        Ok(()) => finish(Some(0), "target halted", "[probe-rs lib] halted"),
+                        Err(m) => Err(ToolError::new(m)),
+                    };
+                }
                 // Attach resumes the target, so halt it explicitly with the
                 // no-argument `break` REPL command.
                 let (text, code) = run_probe_rs_retry(
@@ -1040,6 +1048,14 @@ impl Tool for Debug {
                 )
             }
             "step" => {
+                if let Some(r) =
+                    lib_core_op(chip.clone(), probe.clone(), crate::probe::CoreOp::Step).await
+                {
+                    return match r {
+                        Ok(()) => finish(Some(0), "stepped", "[probe-rs lib] one instruction"),
+                        Err(m) => Err(ToolError::new(m)),
+                    };
+                }
                 let (text, code) = run_probe_rs_retry(
                     debug_args(&chip, probe.as_deref(), &["break", "step", "info reg"]),
                     &cwd,
@@ -1052,6 +1068,21 @@ impl Tool for Debug {
                 finish(code, "single step (registers after step)", &text)
             }
             "continue" => {
+                if let Some(r) =
+                    lib_core_op(chip.clone(), probe.clone(), crate::probe::CoreOp::Resume).await
+                {
+                    return match r {
+                        // 与 CLI 的语义不同：CLI 一退出就把目标停住；常驻会话不会，
+                        // 它会一直跑，直到我们停它或会话闲置 30 秒被释放。
+                        Ok(()) => finish(
+                            Some(0),
+                            "resumed execution",
+                            "[probe-rs lib] running; the session keeps it running until it is \
+                             halted or released (30 s idle)",
+                        ),
+                        Err(m) => Err(ToolError::new(m)),
+                    };
+                }
                 let (text, code) = run_probe_rs_retry(
                     debug_args(&chip, probe.as_deref(), &["c"]),
                     &cwd,
@@ -1179,6 +1210,26 @@ fn probe_err(e: String) -> ToolError {
 }
 
 /// Wrap a probe-rs exit code into the tool result text.
+/// 库优先的核操作：`Some(Ok/Err)` 表示库给了答案，`None` 表示"拿不到探针，去用 CLI"。
+///
+/// 回退只发生在 `Unavailable`：attach 失败说明库这条路在这台机器上不通
+/// （老探针、驱动、被别的会话占着），CLI 可能用另一条路打开它。而 `Failed`
+/// 是"拿到了但操作失败"，回退只会把同一个失败再报一次。
+async fn lib_core_op(
+    chip: String,
+    probe: Option<String>,
+    op: crate::probe::CoreOp,
+) -> Option<Result<(), String>> {
+    match tokio::task::spawn_blocking(move || crate::probe::core_op(&chip, probe.as_deref(), op))
+        .await
+    {
+        Ok(Ok(())) => Some(Ok(())),
+        Ok(Err(crate::probe::ProbeError::Unavailable(_))) => None,
+        Ok(Err(e)) => Some(Err(e.message().to_string())),
+        Err(e) => Some(Err(format!("[Io] probe task failed: {e}"))),
+    }
+}
+
 fn finish(code: Option<i32>, what: &str, text: &str) -> Result<ToolOutput, ToolError> {
     match code {
         Some(0) => Ok(ToolOutput {

@@ -23,6 +23,7 @@ fn main() {
     let mut rtt_ms: u64 = 0;
     let mut addr: u64 = 0x4800_0800; // GPIOC 基址
     let mut words: usize = 6;
+    let mut ops: Vec<&'static str> = Vec::new();
 
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -39,6 +40,9 @@ fn main() {
                     .unwrap_or(addr)
             }
             "--words" => words = args.next().and_then(|v| v.parse().ok()).unwrap_or(words),
+            "--halt" => ops.push("halt"),
+            "--step" => ops.push("step"),
+            "--resume" => ops.push("resume"),
             "--help" | "-h" => {
                 println!(
                     "usage: probe_smoke [--chip <id>] [--elf <file>] [--rtt-ms <n>] [--addr <hex>] [--words <n>]"
@@ -96,6 +100,24 @@ fn main() {
             ),
             Err(e) => println!(
                 "[FAIL] write: {} ({} ms)",
+                e.message(),
+                t.elapsed().as_millis()
+            ),
+        }
+    }
+
+    // 3.5 核操作（halt / step / resume）
+    for op in &ops {
+        let which = match *op {
+            "halt" => probe::CoreOp::Halt,
+            "step" => probe::CoreOp::Step,
+            _ => probe::CoreOp::Resume,
+        };
+        let t = Instant::now();
+        match probe::core_op(&chip, None, which) {
+            Ok(()) => println!("[ok] {op} ({} ms)", t.elapsed().as_millis()),
+            Err(e) => println!(
+                "[FAIL] {op}: {} ({} ms)",
                 e.message(),
                 t.elapsed().as_millis()
             ),

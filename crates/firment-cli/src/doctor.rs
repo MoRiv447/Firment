@@ -586,9 +586,10 @@ pub(crate) fn toolchain_checks(
             // without the CLI"，而 `debug` 的 11 个动作里只有 mem/write 走库；
             // 一句话把 9 个动作说成"不依赖"，正是这个仓库最不该犯的错。
             format!(
-                "{visible} probe(s) visible to the built-in library — `flash`, `debug mem` and \
-                 `debug write` work without the CLI; the other `debug` actions and `run`'s \
-                 semihosting fallback still need `probe-rs` on PATH"
+                "{visible} probe(s) visible to the built-in library — `flash`, `debug \
+                 mem`/`write`/`halt`/`continue`/`step` work without the CLI; `debug \
+                 regs`/`break`/`backtrace`/`trace`/`analyze`/`forensic` and `run`'s semihosting \
+                 fallback still need `probe-rs` on PATH"
             ),
         ));
     } else {

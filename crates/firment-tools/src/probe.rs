@@ -182,6 +182,38 @@ pub fn rtt_stream(
     })
 }
 
+/// 核的状态操作。三个都用 `Core` 的直接方法，不需要解析任何文本。
+#[derive(Debug, Clone, Copy)]
+pub enum CoreOp {
+    Halt,
+    Resume,
+    Step,
+}
+
+/// 停核 / 放开 / 单步。
+///
+/// 与 CLI 的语义差异要写下来：CLI 的 `continue` 会在**它自己退出时**把目标再停住
+/// （probe-rs 的 REPL 是 attach 式的）；这里的会话是常驻的，`Resume` 之后目标一直跑，
+/// 直到我们停它、或者会话闲置 30 秒被释放。调用方的输出要照这个事实写。
+pub fn core_op(chip: &str, probe: Option<&str>, op: CoreOp) -> Result<(), ProbeError> {
+    with_session(chip, probe, |session| {
+        let mut core = core(session)?;
+        match op {
+            CoreOp::Halt => core
+                .halt(Duration::from_millis(500))
+                .map(|_| ())
+                .map_err(|e| ProbeError::Failed(format!("[Io] halt: {e}"))),
+            CoreOp::Resume => core
+                .run()
+                .map_err(|e| ProbeError::Failed(format!("[Io] resume: {e}"))),
+            CoreOp::Step => core
+                .step()
+                .map(|_| ())
+                .map_err(|e| ProbeError::Failed(format!("[Io] step: {e}"))),
+        }
+    })
+}
+
 /// 这台机器上现在能看到几个探针（只枚举，不 attach）。
 ///
 /// `doctor` 用它回答"能不能烧/读"，而不要求 CLI 在 PATH 上 —— 库已经链进来了，
