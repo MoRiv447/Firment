@@ -132,6 +132,56 @@ pub(crate) fn write_word(
 // halt / resume 先不包：它们要和 flash/run 一起切过来才有意义，
 // 单独切换会让"CLI 烧录 + 库 halt"这种混搭状态更难解释。
 
+/// 采集 RTT 输出，直到 `duration` 到点或 `stop` 被置位。
+///
+/// RTT 是"库能做到、CLI 做不到"的那件事：`probe-rs run` 只在它自己的进程里
+/// 打印，我们拿不到结构化输出，也没法在同一个会话里接着读寄存器。
+///
+/// 返回写出的字节数。没有控制块（固件没接 RTT）时返回 `Failed`，由调用方
+/// 决定回退 CLI —— 那可能是 semihosting 的工程。
+pub(crate) fn rtt_stream(
+    chip: &str,
+    probe: Option<&str>,
+    duration: Duration,
+    stop: &std::sync::atomic::AtomicBool,
+    mut sink: impl FnMut(&[u8]),
+) -> Result<usize, ProbeError> {
+    use std::sync::atomic::Ordering;
+
+    with_session(chip, probe, |session| {
+        let mut core = core(session)?;
+        let mut rtt = probe_rs::rtt::Rtt::attach(&mut core).map_err(|e| {
+            ProbeError::Failed(format!(
+                "[NotFound] no RTT control block found — the firmware may not initialise RTT \
+                 (or uses semihosting): {e}"
+            ))
+        })?;
+        let deadline = Instant::now() + duration;
+        let mut buf = [0u8; 1024];
+        let mut total = 0usize;
+        while Instant::now() < deadline && !stop.load(Ordering::Relaxed) {
+            let mut got = false;
+            for i in 0..rtt.up_channels().len() {
+                let Some(channel) = rtt.up_channel(i) else {
+                    continue;
+                };
+                // 空通道返回 Ok(0)，不是错误；真正的错误（目标停了）留给下一轮。
+                if let Ok(n) = channel.read(&mut core, &mut buf)
+                    && n > 0
+                {
+                    sink(&buf[..n]);
+                    total += n;
+                    got = true;
+                }
+            }
+            if !got {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+        Ok(total)
+    })
+}
+
 /// 这台机器上现在能看到几个探针（只枚举，不 attach）。
 ///
 /// `doctor` 用它回答"能不能烧/读"，而不要求 CLI 在 PATH 上 —— 库已经链进来了，

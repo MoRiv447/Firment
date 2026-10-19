@@ -101,6 +101,59 @@ impl Tool for Run {
             .and_then(|t| t.as_u64())
             .unwrap_or(30_000);
 
+        // 先走库：烧录 + RTT，同一个会话。没有 CLI 也能跑成这一条路径。
+        // RTT 起不来（固件用 semihosting、或没初始化控制块）时回退 `probe-rs run`，
+        // 那条路径还负责 semihosting 与它自己的退出码语义。
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watcher = {
+            let s = stop.clone();
+            let c = ctx.cancel.clone();
+            tokio::spawn(async move {
+                c.cancelled().await;
+                s.store(true, std::sync::atomic::Ordering::Relaxed);
+            })
+        };
+        let lib_run = {
+            let chip_lib = chip.clone();
+            let probe_lib = probe.clone();
+            let file_lib = resolved.clone();
+            let stop_lib = stop.clone();
+            let dur = std::time::Duration::from_millis(timeout_ms);
+            tokio::task::spawn_blocking(move || {
+                let segs = crate::probe::flash_elf(&chip_lib, probe_lib.as_deref(), &file_lib)?;
+                let mut out: Vec<u8> = Vec::new();
+                let bytes = crate::probe::rtt_stream(
+                    &chip_lib,
+                    probe_lib.as_deref(),
+                    dur,
+                    &stop_lib,
+                    |chunk| out.extend_from_slice(chunk),
+                )?;
+                Ok::<_, crate::probe::ProbeError>((segs, bytes, out))
+            })
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+        };
+        watcher.abort();
+        if let Some((segs, bytes, out)) = lib_run {
+            if ctx.cancel.is_cancelled() {
+                return Err(ToolError::new(format!(
+                    "[Cancelled] run interrupted by turn cancellation after {bytes} RTT bytes; \
+                     captured output://n{}",
+                    String::from_utf8_lossy(&out)
+                )));
+            }
+            let text = String::from_utf8_lossy(&out).into_owned();
+            return Ok(ToolOutput {
+                text: format!(
+                    "run timed out after {timeout_ms} ms; captured output [probe-rs lib]\n\
+                     (flashed {segs} loadable segment(s), {bytes} RTT bytes)\n{}",
+                    crate::forensic::append_fault_marker(text)
+                ),
+            });
+        }
+
         let probe_rs_ok = super::util::probe_rs_present().await;
         if !probe_rs_ok {
             return Err(ToolError::new(
