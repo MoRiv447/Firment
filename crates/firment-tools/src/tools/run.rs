@@ -221,6 +221,39 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use tempfile::tempdir;
 
+    /// 端到端：真板 + 会打印 RTT 的夹具固件（`fixtures/rtt-probe-fw`）。
+    ///
+    /// ```text
+    /// FIRMENT_TEST_RTT_ELF=fixtures/rtt-probe-fw/target/thumbv7em-none-eabihf/release/rtt-probe-fw \
+    ///   cargo test -p firment-tools --lib streams_rtt_through_the_tool -- --ignored
+    /// ```
+    ///
+    /// 它把三段拼起来验：库烧录 → RTT attach → 收到的字节里有递增的序号。
+    /// 夹具在这里是固件，不是 CH340 —— 这条链只碰 ST-Link。
+    #[tokio::test]
+    #[ignore = "needs a NUCLEO-G431RB and the RTT fixture firmware"]
+    async fn streams_rtt_through_the_tool() {
+        let elf = std::env::var("FIRMENT_TEST_RTT_ELF").expect("set FIRMENT_TEST_RTT_ELF");
+        let dir = tempdir().unwrap();
+        std::fs::copy(&elf, dir.path().join("rtt.elf")).unwrap();
+        let mut c = ctx(dir.path());
+        c.default_chip = Some("stm32g431rb".to_string());
+
+        let out = Run
+            .run(
+                json!({"file": "rtt.elf", "chip": "stm32g431rb", "timeout_ms": 4000}),
+                &c,
+            )
+            .await
+            .expect("run through the tool");
+        assert!(out.text.contains("[probe-rs lib]"), "{}", out.text);
+        assert!(
+            out.text.contains("firment-rtt-smoke"),
+            "expected RTT content, got: {}",
+            out.text
+        );
+    }
+
     fn ctx(dir: &Path) -> ToolContext {
         ToolContext {
             cwd: dir.to_path_buf(),
