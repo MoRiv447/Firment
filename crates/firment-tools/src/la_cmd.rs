@@ -769,4 +769,40 @@ mod tests {
         assert!(sigrok_err_hint("Unknown config key: xyz").contains("info"));
         assert!(sigrok_err_hint("something else entirely").starts_with("[Io]"));
     }
+
+    /// 往返契约：打包顺序 → 解包 → 测量。
+    ///
+    /// 为什么需要这条：sigrok 换版本时，`-L` 的措辞会变、`.sr` 的元数据会变，
+    /// 但**位流布局**和**测量规则**是这个仓库自己的东西。两端钉死之后，任何一端
+    /// 漂移都会在这里亮红，而不是在某份报告里给出一个看起来合理的错数。
+    #[test]
+    fn capture_bits_round_trip_to_a_measured_1khz_square() {
+        const SR: f64 = 8_000_000.0;
+        const HZ: f64 = 1_000.0;
+        let period = (SR / HZ) as usize; // 8000 samples
+        let n_samples = period * 4;
+        // ch0 = 方波，ch1 = 常低：通道打包错位会让 ch1 变成方波。
+        let mut bytes = Vec::with_capacity(n_samples);
+        for i in 0..n_samples {
+            // 从低电平起步：这样 4 个周期里有 4 个上升沿，confidence 才够 HIGH。
+            // （从高电平起步只会有 3 个上升沿，测量仍然对，但置信度是 MEDIUM。）
+            let high = (i % period) >= period / 2;
+            bytes.push(if high { 1u8 } else { 0u8 });
+        }
+        let waves = unpack_bitstream(&bytes, 2).expect("well-formed stream");
+        assert_eq!(waves.len(), 2);
+        assert!(waves[1].iter().all(|&s| s == 0), "ch1 must stay low");
+
+        let f = crate::la_measure::measure_frequency(&waves[0], SR).expect("periodic");
+        assert!((f.hz - HZ).abs() < 1.0, "hz = {}", f.hz);
+        assert!(
+            f.hz_low <= HZ && HZ <= f.hz_high,
+            "range {:?} must contain {HZ}",
+            (f.hz_low, f.hz_high)
+        );
+        assert_eq!(f.confidence, crate::tools::observe::Confidence::High);
+
+        let d = crate::la_measure::measure_duty(&waves[0]).expect("duty");
+        assert!((d.fraction - 0.5).abs() < 0.01, "fraction = {}", d.fraction);
+    }
 }
