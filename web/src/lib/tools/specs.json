@@ -935,7 +935,7 @@
   },
   {
     "name": "run",
-    "description": "Flash and run the firmware on the target via probe-rs, streaming RTT logs. Use a bounded timeout so you can observe the output.",
+    "description": "Flash and run the firmware on the target, streaming RTT logs (semihosting through the CLI fallback). Use a bounded timeout so you can observe the output. Firmware that prints over a UART is not visible here — use `monitor` for that.",
     "input_schema": {
       "properties": {
         "chip": {
