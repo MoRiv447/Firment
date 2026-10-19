@@ -261,6 +261,49 @@ impl Tool for Flash {
         if let Some(progress) = ctx.progress.as_ref() {
             progress.phase("downloading to the target");
         }
+        // 先试库：已经在真板上验过（0.56s；CLI 是秒级），commit 内部完成擦除、
+        // 写入与复位。**任何**错误都回退 CLI —— 擦写路径上宁可多烧一次，
+        // 也不要让一个没预料到的库错误变成"烧录失败"。
+        //
+        // 用提前返回而不是把 CLI 那段包进 else：下面那段 `match` 有六个分支，
+        // 重新缩进一次就多一次改坏的机会。
+        let lib_flash = {
+            let chip_lib = chip.clone();
+            let probe_lib = probe.clone();
+            let path_lib = resolved.clone();
+            match tokio::task::spawn_blocking(move || {
+                crate::probe::flash_elf(&chip_lib, probe_lib.as_deref(), &path_lib)
+            })
+            .await
+            {
+                Ok(Ok(n)) => Some(n),
+                Ok(Err(e)) => {
+                    eprintln!(
+                        "note: probe-rs library flash failed, falling back to the CLI: {}",
+                        e.message()
+                    );
+                    None
+                }
+                Err(_) => None,
+            }
+        };
+        if let Some(n) = lib_flash {
+            let outcome: Result<ToolOutput, ToolError> = Ok(ToolOutput {
+                text: format!(
+                    "flash passed and target reset [probe-rs lib] ({n} loadable segment(s) written)"
+                ),
+            });
+            record_flash_history(
+                &ctx.cwd,
+                &hist_chip,
+                &hist_file,
+                hist_probe.as_deref(),
+                outcome.is_ok(),
+                outcome.as_ref().err().map(|e| e.message.as_str()),
+            );
+            return outcome;
+        }
+
         let result = run_probe_rs_watching(
             dl_args,
             &ctx.cwd,
@@ -339,6 +382,35 @@ mod tests {
     use std::path::Path;
     use std::sync::{Arc, Mutex};
     use tempfile::tempdir;
+
+    /// 端到端：真板 + 真固件，走**工具**这一层（而不只是 `probe::flash_elf`）。
+    ///
+    /// ```text
+    /// FIRMENT_TEST_ELF=/path/to/firmware.elf \
+    ///   cargo test -p firment-tools --lib flashes_a_real_elf_through_the_tool -- --ignored
+    /// ```
+    ///
+    /// 它验证的是接线本身：`flash` 先走库、输出带 `[probe-rs lib]`、烧完目标已复位。
+    #[tokio::test]
+    #[ignore = "needs a NUCLEO-G431RB and a firmware ELF"]
+    async fn flashes_a_real_elf_through_the_tool() {
+        let src = std::env::var("FIRMENT_TEST_ELF").expect("set FIRMENT_TEST_ELF");
+        let dir = tempdir().unwrap();
+        std::fs::copy(&src, dir.path().join("fw.elf")).unwrap();
+
+        let out = Flash
+            .run(
+                json!({"file": "fw.elf", "chip": "stm32g431rb"}),
+                &ctx(dir.path(), Some("stm32g431rb")),
+            )
+            .await
+            .expect("flash through the tool");
+        assert!(
+            out.text.contains("[probe-rs lib]"),
+            "expected the library path, got: {}",
+            out.text
+        );
+    }
 
     fn ctx(dir: &Path, default_chip: Option<&str>) -> ToolContext {
         ToolContext {

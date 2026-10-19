@@ -132,6 +132,76 @@ pub(crate) fn write_word(
 // halt / resume 先不包：它们要和 flash/run 一起切过来才有意义，
 // 单独切换会让"CLI 烧录 + 库 halt"这种混搭状态更难解释。
 
+/// 从一个 ELF 里取出要写进 flash 的段。
+///
+/// probe-rs 0.32 不再提供 ELF 读取入口（`builtin-formats` 不在它的 feature 列表里），
+/// 所以段由我们自己解析 —— 仓库里本来就有 `object`，`elf_analyze` 一直在用。
+/// 只取 `PT_LOAD` 且非空的段：地址 0 与空段不是要烧的内容。
+fn elf_segments(bytes: &[u8]) -> Result<Vec<(u64, Vec<u8>)>, ProbeError> {
+    use object::{Object as _, ObjectSegment as _};
+    let file = object::File::parse(bytes)
+        .map_err(|e| ProbeError::Failed(format!("[InvalidInput] not a readable ELF: {e}")))?;
+    let mut out = Vec::new();
+    for seg in file.segments() {
+        let addr = seg.address();
+        if addr == 0 {
+            continue;
+        }
+        let data = seg.data().map_err(|e| {
+            ProbeError::Failed(format!("[InvalidInput] unreadable ELF segment: {e}"))
+        })?;
+        if data.is_empty() {
+            continue;
+        }
+        out.push((addr, data.to_vec()));
+    }
+    if out.is_empty() {
+        return Err(ProbeError::Failed(
+            "[InvalidInput] the ELF has no loadable segments to flash".to_string(),
+        ));
+    }
+    Ok(out)
+}
+
+/// 把 ELF 烧进目标，返回写入的段数。
+///
+/// 会话与读路径共用：一次 `flash` 之后紧接着 `debug mem` 不必再 attach 一次。
+/// `commit` 内部完成擦除与写入，`reset` 让目标从新固件启动。
+pub(crate) fn flash_elf(
+    chip: &str,
+    probe: Option<&str>,
+    elf: &std::path::Path,
+) -> Result<usize, ProbeError> {
+    use probe_rs::config::TargetDescriptionSource;
+    use probe_rs::flashing::{DownloadOptions, FlashLoader};
+
+    let bytes = std::fs::read(elf)
+        .map_err(|e| ProbeError::Failed(format!("[Io] cannot read {}: {e}", elf.display())))?;
+    let segments = elf_segments(&bytes)?;
+    let n = segments.len();
+
+    with_session(chip, probe, |session| {
+        let memory_map = session.target().memory_map.clone();
+        let mut loader = FlashLoader::new(memory_map, TargetDescriptionSource::BuiltIn);
+        for (addr, data) in &segments {
+            loader.add_data(*addr, data).map_err(|e| {
+                ProbeError::Failed(format!(
+                    "[Io] flash loader refused segment at {addr:#010x} ({} bytes): {e}",
+                    data.len()
+                ))
+            })?;
+        }
+        loader
+            .commit(session, DownloadOptions::default())
+            .map_err(|e| ProbeError::Failed(format!("[Io] flash commit failed: {e}")))?;
+        let mut core = core(session)?;
+        core.reset()
+            .map_err(|e| ProbeError::Failed(format!("[Io] reset after flash: {e}")))?;
+        Ok(())
+    })?;
+    Ok(n)
+}
+
 // 进程退出时不做显式释放：闲置 30 秒（`IDLE_RELEASE`）会自己放掉探针，
 // 而在 `main` 的每条返回路径上插一句 release 只会多出几个漏掉的出口。
 
@@ -160,6 +230,23 @@ mod tests {
             words.iter().any(|w| *w != u32::MAX),
             "GPIOC read back as all-ones: {words:x?}"
         );
+    }
+
+    /// 需要真板子 + 一份固件：
+    ///
+    /// ```text
+    /// FIRMENT_TEST_ELF=/path/to/firmware.elf \
+    ///   cargo test -p firment-tools --lib flashes_a_real_elf -- --ignored
+    /// ```
+    ///
+    /// 它证明的是"库能擦、能写、能复位"，而不是"CLI 能"——后者已经在 24 局基准里跑过。
+    #[test]
+    #[ignore = "needs a NUCLEO-G431RB and a firmware ELF"]
+    fn flashes_a_real_elf_through_the_library() {
+        let path =
+            std::env::var("FIRMENT_TEST_ELF").expect("set FIRMENT_TEST_ELF to a firmware .elf");
+        let n = flash_elf("stm32g431rb", None, std::path::Path::new(&path)).expect("flash");
+        assert!(n >= 1, "expected at least one loadable segment, wrote {n}");
     }
 
     #[test]
