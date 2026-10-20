@@ -1100,6 +1100,17 @@ impl Tool for Debug {
             }
             "break" => {
                 let addr = break_addr.unwrap();
+                if let Some(r) = lib_break(chip.clone(), probe.clone(), addr, timeout_ms).await {
+                    return match r {
+                        Ok(r) => Ok(ToolOutput {
+                            text: format!(
+                                "debug breakpoint at {addr:#010x} (hit, [probe-rs lib])\n{}",
+                                render_registers(&r)
+                            ),
+                        }),
+                        Err(m) => Err(ToolError::new(m)),
+                    };
+                }
                 let break_cmd = format!("break *{addr:#x}");
                 // Halt first: `c` (continue) is rejected by probe-rs while the
                 // target is running ("The target is running. Only the 'break',
@@ -1177,7 +1188,44 @@ impl Tool for Debug {
                 )
             }
             "backtrace" => {
-                let elf_path = elf.unwrap();
+                let elf_path = elf.clone().unwrap();
+                if let Some(r) =
+                    lib_backtrace(chip.clone(), probe.clone(), elf_path.clone(), 32).await
+                {
+                    return match r {
+                        Ok(frames) => {
+                            let mut out = format!(
+                                "debug backtrace [probe-rs lib] ({} frame(s), DWARF)
+",
+                                frames.len()
+                            );
+                            for (i, f) in frames.iter().enumerate() {
+                                match &f.location {
+                                    Some(loc) => out.push_str(&format!(
+                                        "  #{i} {:#010x} in {} at {loc}
+",
+                                        f.pc, f.function
+                                    )),
+                                    None => out.push_str(&format!(
+                                        "  #{i} {:#010x} in {}
+",
+                                        f.pc, f.function
+                                    )),
+                                }
+                            }
+                            if frames.len() <= 1 {
+                                out.push_str(
+                                    "  (only one frame: the ELF may lack DWARF — rebuild with \
+                                     -g / debug = 2)\n",
+                                );
+                            }
+                            Ok(ToolOutput {
+                                text: truncate(&out, 32_000),
+                            })
+                        }
+                        Err(m) => Err(ToolError::new(m)),
+                    };
+                }
                 let (text, code) = run_probe_rs_retry(
                     debug_elf_args(
                         &chip,
@@ -1298,6 +1346,49 @@ async fn lib_read_words(
     .await
     {
         Ok(Ok(w)) => Some(Ok(w)),
+        Ok(Err(crate::probe::ProbeError::Unavailable(_))) => None,
+        Ok(Err(e)) => Some(Err(e.message().to_string())),
+        Err(e) => Some(Err(format!("[Io] probe task failed: {e}"))),
+    }
+}
+
+/// 库优先的栈回溯：`None` = 库拿不到探针，交给 CLI。
+async fn lib_backtrace(
+    chip: String,
+    probe: Option<String>,
+    elf: std::path::PathBuf,
+    max_frames: usize,
+) -> Option<Result<Vec<crate::probe::BacktraceFrame>, String>> {
+    match tokio::task::spawn_blocking(move || {
+        crate::probe::backtrace(&chip, probe.as_deref(), &elf, max_frames)
+    })
+    .await
+    {
+        Ok(Ok(f)) => Some(Ok(f)),
+        Ok(Err(crate::probe::ProbeError::Unavailable(_))) => None,
+        Ok(Err(e)) => Some(Err(e.message().to_string())),
+        Err(e) => Some(Err(format!("[Io] probe task failed: {e}"))),
+    }
+}
+
+/// 库优先的断点：`None` = 库拿不到探针，交给 CLI。
+async fn lib_break(
+    chip: String,
+    probe: Option<String>,
+    addr: u64,
+    timeout_ms: u64,
+) -> Option<Result<crate::probe::Registers, String>> {
+    match tokio::task::spawn_blocking(move || {
+        crate::probe::run_to_breakpoint(
+            &chip,
+            probe.as_deref(),
+            addr,
+            std::time::Duration::from_millis(timeout_ms),
+        )
+    })
+    .await
+    {
+        Ok(Ok(r)) => Some(Ok(r)),
         Ok(Err(crate::probe::ProbeError::Unavailable(_))) => None,
         Ok(Err(e)) => Some(Err(e.message().to_string())),
         Err(e) => Some(Err(format!("[Io] probe task failed: {e}"))),
@@ -1668,6 +1759,23 @@ XPSR/PSR: 0x01000000
             regs.text
         );
 
+        // 断点：拿刚读到的 pc 当目标 —— 夹具固件是循环，几毫秒内会再经过它。
+        let pc_hex = regs
+            .text
+            .split("pc  = ")
+            .nth(1)
+            .and_then(|s| s.split_whitespace().next())
+            .expect("pc in the register table");
+        let hit = Debug
+            .run(
+                json!({"action": "break", "chip": "stm32g431rb", "address": pc_hex, "timeout_ms": 3000}),
+                &c,
+            )
+            .await
+            .expect("break");
+        println!("--- break ---\n{}\n---", hit.text);
+        assert!(hit.text.contains("(hit, [probe-rs lib])"), "{}", hit.text);
+
         if let Ok(elf) = std::env::var("FIRMENT_TEST_ELF") {
             // 工具的路径沙箱只认工作区内的文件，所以先拷进去。
             std::fs::copy(&elf, dir.path().join("fw.elf")).expect("copy fixture elf");
@@ -1680,6 +1788,16 @@ XPSR/PSR: 0x01000000
                 .expect("forensic");
             println!("--- forensic ---\n{}\n---", report.text);
             assert!(report.text.contains("forensic report"), "{}", report.text);
+            // 栈回溯：同一份 ELF 带 DWARF（fixture 的 release profile 有 debug = 2）。
+            let bt = Debug
+                .run(
+                    json!({"action": "backtrace", "chip": "stm32g431rb", "elf": "fw.elf"}),
+                    &c,
+                )
+                .await
+                .expect("backtrace");
+            println!("--- backtrace ---\n{}\n---", bt.text);
+            assert!(bt.text.contains("[probe-rs lib]"), "{}", bt.text);
         }
     }
 

@@ -182,6 +182,151 @@ pub fn rtt_stream(
     })
 }
 
+/// 一帧栈回溯。只保留工具层要显示的东西，不把 `probe_rs_debug` 的类型漏出去。
+#[derive(Debug, Clone)]
+pub struct BacktraceFrame {
+    pub pc: u64,
+    pub function: String,
+    pub location: Option<String>,
+}
+
+/// DWARF 栈回溯。
+///
+/// 库 `probe-rs-debug` 才是这套东西的实现者 —— `probe-rs-debugger` 是空壳，
+/// `probe-rs-tools` 是纯二进制。这里只做"停核 → 取寄存器 → unwind → 摊平成字符串"。
+///
+/// `elf` 必须带 DWARF（`-g`）。没有调试信息时 unwind 会退化成只有 pc 的帧，
+/// 调用方据此提示重建，而不是报错。
+pub fn backtrace(
+    chip: &str,
+    probe: Option<&str>,
+    elf: &std::path::Path,
+    max_frames: usize,
+) -> Result<Vec<BacktraceFrame>, ProbeError> {
+    use probe_rs::InstructionSet;
+    use probe_rs_debug::DebugInfo;
+    use probe_rs_debug::registers::DebugRegisters;
+
+    let info = DebugInfo::from_file(elf).map_err(|e| {
+        ProbeError::Failed(format!(
+            "[InvalidInput] cannot read debug info from {}: {e}",
+            elf.display()
+        ))
+    })?;
+
+    with_session(chip, probe, |session| {
+        let mut core = core(session)?;
+        let _ = core.halt(Duration::from_millis(500));
+        let regs = DebugRegisters::from_core(&mut core);
+        // 按核类型取对应的异常帧解析器（Armv6/7/8、RISC-V、Xtensa 都有）。
+        let handler = probe_rs_debug::exception_handler_for_core(core.core_type());
+        let frames = info
+            .unwind(
+                &mut core,
+                regs,
+                handler.as_ref(),
+                Some(InstructionSet::Thumb2),
+                max_frames,
+            )
+            .map_err(|e| ProbeError::Failed(format!("[Io] unwind failed: {e}")))?;
+
+        Ok(frames
+            .iter()
+            .map(|f| BacktraceFrame {
+                pc: match f.pc {
+                    probe_rs::RegisterValue::U32(v) => u64::from(v),
+                    probe_rs::RegisterValue::U64(v) => v,
+                    probe_rs::RegisterValue::U128(v) => v as u64,
+                },
+                function: f.function_name.clone(),
+                location: f
+                    .source_location
+                    .as_ref()
+                    .map(|l| format!("{}:{}", l.path.to_string_lossy(), l.line.unwrap_or(0))),
+            })
+            .collect())
+    })
+}
+
+/// 跑到某个地址并停在那里。
+///
+/// 与 CLI 的 `-c break -c "break *addr" -c c -c "info reg"` 对应，但：
+/// 断点是硬件比较器、命中由 `status()` 报出来，不是靠解析文本；
+/// 而且**无论成功与否都会清掉断点**，否则下一次 `run` 会莫名其妙停住。
+pub fn run_to_breakpoint(
+    chip: &str,
+    probe: Option<&str>,
+    addr: u64,
+    timeout: Duration,
+) -> Result<Registers, ProbeError> {
+    with_session(chip, probe, |session| {
+        let mut core = core(session)?;
+        // 设断点要求核已停：先停一下，再装比较器。
+        let _ = core.halt(Duration::from_millis(500));
+        core.set_hw_breakpoint(addr).map_err(|e| {
+            ProbeError::Failed(format!(
+                "[Io] could not set a hardware breakpoint at {addr:#010x}: {e}"
+            ))
+        })?;
+
+        // 收尾：清断点在**所有**返回路径上都要发生。
+        let cleanup = |core: &mut probe_rs::Core<'_>| {
+            let _ = core.clear_hw_breakpoint(addr);
+        };
+
+        if let Err(e) = core.run() {
+            cleanup(&mut core);
+            return Err(ProbeError::Failed(format!(
+                "[Io] resume to breakpoint: {e}"
+            )));
+        }
+
+        let deadline = Instant::now() + timeout;
+        loop {
+            match core.status() {
+                Ok(probe_rs::CoreStatus::Halted(reason)) => {
+                    let regs = snapshot(&mut core);
+                    cleanup(&mut core);
+                    return match regs {
+                        Ok(r) => {
+                            if r.pc != addr && r.pc != addr + 2 {
+                                // 停在了别的原因上（异常、看门狗）——别假装是断点。
+                                return Err(ProbeError::Failed(format!(
+                                    "[Io] the core stopped at {:#010x} ({reason:?}), not at the \
+                                     breakpoint {addr:#010x}",
+                                    r.pc
+                                )));
+                            }
+                            Ok(r)
+                        }
+                        Err(e) => Err(e),
+                    };
+                }
+                Ok(probe_rs::CoreStatus::LockedUp) => {
+                    cleanup(&mut core);
+                    return Err(ProbeError::Failed(
+                        "[Io] the core locked up before reaching the breakpoint".to_string(),
+                    ));
+                }
+                Err(e) => {
+                    cleanup(&mut core);
+                    return Err(ProbeError::Failed(format!("[Io] status: {e}")));
+                }
+                _ => {}
+            }
+            if Instant::now() >= deadline {
+                cleanup(&mut core);
+                return Err(ProbeError::Failed(format!(
+                    "[Timeout] the breakpoint at {addr:#010x} was not hit within {} ms; the \
+                     target is left running",
+                    timeout.as_millis()
+                )));
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    })
+}
+
 /// 核的状态操作。三个都用 `Core` 的直接方法，不需要解析任何文本。
 #[derive(Debug, Clone, Copy)]
 pub enum CoreOp {
@@ -250,50 +395,55 @@ pub fn registers(chip: &str, probe: Option<&str>) -> Result<Registers, ProbeErro
         // 先停核：Cortex-M 的核寄存器经 DCRSR/DCRDR 读，目标在跑时读数不可靠，
         // CLI 路径同样先 `-c break` 再 `info reg`。已经停下时 `halt` 是幂等的。
         let _ = core.halt(Duration::from_millis(500));
-        // `registers()` 返回 `&'static CoreRegisters`，不借用 `core`，
-        // 所以下面可以一边遍历描述、一边 `read_core_reg`。
-        let described = core.registers();
-        let mut out = Registers::default();
-        let mut read_ok = 0usize;
-        let mut first_err: Option<String> = None;
-        for r in described.core_registers() {
-            let Ok(v) = core.read_core_reg::<u32>(r.id()) else {
-                if first_err.is_none() {
-                    first_err = Some(format!("register {} could not be read", r.name()));
-                }
-                continue;
-            };
-            read_ok += 1;
-            let v = u64::from(v);
-            let name = r.name().to_ascii_lowercase();
-            match name.as_str() {
-                "pc" | "r15" => out.pc = v,
-                "sp" | "r13" => out.sp = v,
-                "lr" | "r14" => out.lr = v,
-                "xpsr" => out.xpsr = v,
-                "msp" => out.msp = v,
-                "psp" => out.psp = v,
-                other => {
-                    if let Some(n) = other
-                        .strip_prefix('r')
-                        .and_then(|d| d.parse::<usize>().ok())
-                        .filter(|n| *n < 13)
-                    {
-                        out.r[n] = v;
-                    }
+        snapshot(&mut core)
+    })
+}
+
+/// 读一次寄存器快照。调用方负责让核处于可读状态（停下）。
+fn snapshot(core: &mut probe_rs::Core<'_>) -> Result<Registers, ProbeError> {
+    // `registers()` 返回 `&'static CoreRegisters`，不借用 `core`，
+    // 所以下面可以一边遍历描述、一边 `read_core_reg`。
+    let described = core.registers();
+    let mut out = Registers::default();
+    let mut read_ok = 0usize;
+    let mut first_err: Option<String> = None;
+    for r in described.core_registers() {
+        let Ok(v) = core.read_core_reg::<u32>(r.id()) else {
+            if first_err.is_none() {
+                first_err = Some(format!("register {} could not be read", r.name()));
+            }
+            continue;
+        };
+        read_ok += 1;
+        let v = u64::from(v);
+        let name = r.name().to_ascii_lowercase();
+        match name.as_str() {
+            "pc" | "r15" => out.pc = v,
+            "sp" | "r13" => out.sp = v,
+            "lr" | "r14" => out.lr = v,
+            "xpsr" => out.xpsr = v,
+            "msp" => out.msp = v,
+            "psp" => out.psp = v,
+            other => {
+                if let Some(n) = other
+                    .strip_prefix('r')
+                    .and_then(|d| d.parse::<usize>().ok())
+                    .filter(|n| *n < 13)
+                {
+                    out.r[n] = v;
                 }
             }
         }
-        // 一个都读不到就是失败，不能把"全 0"当成快照交出去 ——
-        // 那会让 analyze 报"pc=0"，看起来像固件跳飞了。
-        if read_ok == 0 {
-            return Err(ProbeError::Failed(format!(
-                "[Io] no core register could be read{}",
-                first_err.map(|e| format!(" ({e})")).unwrap_or_default()
-            )));
-        }
-        Ok(out)
-    })
+    }
+    // 一个都读不到就是失败，不能把"全 0"当成快照交出去 ——
+    // 那会让 analyze 报"pc=0"，看起来像固件跳飞了。
+    if read_ok == 0 {
+        return Err(ProbeError::Failed(format!(
+            "[Io] no core register could be read{}",
+            first_err.map(|e| format!(" ({e})")).unwrap_or_default()
+        )));
+    }
+    Ok(out)
 }
 
 /// 这台机器上现在能看到几个探针（只枚举，不 attach）。

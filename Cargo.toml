@@ -34,6 +34,9 @@ image = "0.25"
 # 只用 builtin-targets（按芯片名解析）+ cmsisdap_v1（ST-Link）；
 # coredump / builtin-formats 等默认项暂时不要，编译时间优先。
 probe-rs = { version = "0.32", default-features = false, features = ["builtin-targets", "cmsisdap_v1"] }
+# DWARF 栈回溯。`probe-rs-debugger` 是空壳、`probe-rs-tools` 是纯二进制；
+# 真正提供 `DebugInfo` / `DebugRegisters` 的是这个 crate，版本要求与本仓的 probe-rs 对齐。
+probe-rs-debug = "0.32"
 object = { version = "0.36", default-features = false, features = ["read_core", "write", "std"] }
 ratatui = "0.29"
 serialport = "4"

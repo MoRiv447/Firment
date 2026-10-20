@@ -11,6 +11,7 @@ globset.workspace = true
 ignore.workspace = true
 image.workspace = true
 probe-rs.workspace = true
+probe-rs-debug.workspace = true
 object.workspace = true
 reqwest = { workspace = true, features = ["cookies"] }
 regex.workspace = true
