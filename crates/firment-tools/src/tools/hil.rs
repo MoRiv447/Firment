@@ -1352,30 +1352,75 @@ async fn run_trace_step(
              with expect_contains instead."
         ));
     }
-    let probe_ok = crate::tools::util::probe_rs_present().await;
-    if !probe_ok {
-        return Err("[NotFound] probe-rs not on PATH".to_string());
-    }
-    // probe-rs itm swo takes no --chip/--probe flags; use env vars
+    // 库优先：与 `debug trace` 走同一条实现（`probe::swo_trace` + `itm_decode`）。
+    //
+    // 这份代码以前是 `debug.rs` 的复制品：同样的 `itm swo` 参数、同样的超时语义，
+    // 却各改各的 —— 两处对"窗口结束算不算成功"的理解一度就不一致。现在只剩一份。
+    let lib = {
+        let chip_l = chip.clone();
+        let probe_l = probe.clone();
+        let dur = std::time::Duration::from_millis(duration);
+        tokio::task::spawn_blocking(move || {
+            crate::probe::swo_trace(&chip_l, probe_l.as_deref(), dur, clk_hz as u32, baud)
+        })
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+    };
+
+    // 窗口总量：库路径与 CLI 回退都用它（CLI 还要多留 5s 给进程启动）。
     let outer = duration.saturating_add(5_000).min(remaining.max(5_000));
-    let mut envs: Vec<(String, String)> = vec![("PROBE_RS_CHIP".to_string(), chip.clone())];
-    if let Some(p) = probe {
-        envs.push(("PROBE_RS_PROBE".to_string(), p));
-    }
-    let args = vec![
-        "itm".to_string(),
-        "swo".to_string(),
-        duration.to_string(),
-        clk_hz.to_string(),
-        baud.to_string(),
-    ];
-    let result =
-        crate::tools::util::run_probe_rs(args, &ctx.cwd, outer, Some(ctx.cancel.clone()), &envs)
+
+    // 判据与 `debug trace` 一致：解出了行才算库路径成功；
+    // 只收到同步字节同样回退（有字节不等于有话）。
+    let (text, code) = match lib.filter(|s| !s.lines.is_empty()) {
+        Some(swo) => {
+            let mut out = format!(
+                "SWO/ITM {} ms, {} bytes, {} line(s) [probe-rs lib]\n",
+                duration,
+                swo.bytes,
+                swo.lines.len()
+            );
+            for line in &swo.lines {
+                out.push_str(&format!("[{0}] {1}\n", line.port, line.text));
+            }
+            (out, Some(0))
+        }
+        None => {
+            let probe_ok = crate::tools::util::probe_rs_present().await;
+            if !probe_ok {
+                return Err(
+                    "[NotFound] probe-rs not on PATH (needed for the CLI fallback; \
+                            the library path captured no lines)"
+                        .to_string(),
+                );
+            }
+            // probe-rs itm swo takes no --chip/--probe flags; use env vars
+            let mut envs: Vec<(String, String)> = vec![("PROBE_RS_CHIP".to_string(), chip.clone())];
+            if let Some(p) = probe.clone() {
+                envs.push(("PROBE_RS_PROBE".to_string(), p));
+            }
+            let args = vec![
+                "itm".to_string(),
+                "swo".to_string(),
+                duration.to_string(),
+                clk_hz.to_string(),
+                baud.to_string(),
+            ];
+            let result = crate::tools::util::run_probe_rs(
+                args,
+                &ctx.cwd,
+                outer,
+                Some(ctx.cancel.clone()),
+                &envs,
+            )
             .await;
-    let (text, code) = match result {
-        Ok(v) => v,
-        Err(e) if e.contains("[Timeout]") => (String::new(), None),
-        Err(e) => return Err(crate::tools::util::probe_rs_err(e).message),
+            match result {
+                Ok(v) => v,
+                Err(e) if e.contains("[Timeout]") => (String::new(), None),
+                Err(e) => return Err(crate::tools::util::probe_rs_err(e).message),
+            }
+        }
     };
     // Expectations are read once, and graded whichever way the capture window closed. The
     // resolution goes through `Expectation` like every other step that accepts `expect_*`; the
