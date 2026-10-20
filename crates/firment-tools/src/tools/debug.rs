@@ -915,96 +915,133 @@ impl Tool for Debug {
                     ))
                 })?;
 
-                // 1. Halt + register read.
-                let (regs_text, regs_code) = run_probe_rs_retry(
-                    debug_args(&chip, probe.as_deref(), &["break", "info reg"]),
-                    &cwd,
-                    timeout_ms,
-                    cancel.clone(),
-                    &[],
-                )
-                .await
-                .map_err(probe_err)?;
-                if regs_code != Some(0) {
-                    return Err(ToolError::new(format!(
-                        "[Io] debug attach/halt/regs failed (exit {regs_code:?})
-{regs_text}
-                         hint: the target must still be sitting in the fault — a watchdog                          reset or a reflash destroys the scene"
-                    )));
-                }
-                let regs = parse_regs(&regs_text);
-                let Some(pc) = regs.get("pc").copied() else {
-                    return Err(ToolError::new("[Io] no pc in the probe-rs register table"));
+                // 1. 停核 + 读寄存器。库路径把下面四步放进**同一个会话**：
+                //    原来是四个进程，中间隔着的每一段都是目标可能被看门狗复位的时间窗。
+                let regs = match lib_registers(chip.clone(), probe.clone()).await {
+                    Some(Ok(r)) => r,
+                    Some(Err(m)) => return Err(ToolError::new(m)),
+                    None => {
+                        let (regs_text, regs_code) = run_probe_rs_retry(
+                            debug_args(&chip, probe.as_deref(), &["break", "info reg"]),
+                            &cwd,
+                            timeout_ms,
+                            cancel.clone(),
+                            &[],
+                        )
+                        .await
+                        .map_err(probe_err)?;
+                        if regs_code != Some(0) {
+                            return Err(ToolError::new(format!(
+                                "[Io] debug attach/halt/regs failed (exit {regs_code:?})\n{regs_text}\n\
+                                 hint: the target must still be sitting in the fault — a \
+                                 watchdog reset or a reflash destroys the scene"
+                            )));
+                        }
+                        registers_from_text(&regs_text)
+                    }
                 };
-                let lr = regs.get("lr").copied().unwrap_or(0);
-                let Some(sp) = regs.get("sp").copied().or_else(|| regs.get("r13").copied()) else {
-                    return Err(ToolError::new("[Io] no sp in the probe-rs register table"));
-                };
+                // pc/sp 为 0 不再被当成"没解析到"：跳飞到 0 本身就是故障现场，
+                // 报告里写出来比在这里拦掉更有用。
+                let pc = regs.pc;
+                let lr = regs.lr;
+                let sp = regs.sp;
 
-                // 2. Fault registers.
-                let (fault_text, fault_code) = run_probe_rs_retry(
-                    read_args(&chip, probe.as_deref(), "b32", 0xE000_ED28, 5),
-                    &cwd,
-                    timeout_ms,
-                    cancel.clone(),
-                    &[],
-                )
-                .await
-                .map_err(probe_err)?;
+                // 2. Fault registers（同一会话；读不到就明确说 UNREADABLE）。
+                let fault_read: Result<Vec<u64>, String> =
+                    match lib_read_words(chip.clone(), probe.clone(), 0xE000_ED28, 5).await {
+                        Some(Ok(w)) => Ok(w.into_iter().map(u64::from).collect()),
+                        Some(Err(m)) => Err(m),
+                        None => {
+                            let (fault_text, fault_code) = run_probe_rs_retry(
+                                read_args(&chip, probe.as_deref(), "b32", 0xE000_ED28, 5),
+                                &cwd,
+                                timeout_ms,
+                                cancel.clone(),
+                                &[],
+                            )
+                            .await
+                            .map_err(probe_err)?;
+                            if fault_code == Some(0) {
+                                Ok(parse_hex_words(&fault_text))
+                            } else {
+                                Err(fault_text)
+                            }
+                        }
+                    };
                 let mut fault_regs = [0u64; 5];
                 // A failed read is not a clean fault scene: the zeros that would be analysed here
                 // print "CFSR = 0x00000000 (no configurable fault flags set)", which reads as a
                 // statement about the target and is really a statement about the probe. The
                 // `analyze` path avoids this by carrying a Vec and saying when there is none.
-                let cfsr_lines = if fault_code == Some(0) {
-                    for (i, w) in parse_hex_words(&fault_text).iter().take(5).enumerate() {
-                        fault_regs[i] = *w;
+                let cfsr_lines = match &fault_read {
+                    Ok(words) if words.len() >= 5 => {
+                        for (i, w) in words.iter().take(5).enumerate() {
+                            fault_regs[i] = *w;
+                        }
+                        fault_analysis(&fault_regs).unwrap_or_else(|| {
+                            vec![
+                                "  fault registers: the block did not parse as five words — \
+                                  read again or check the probe-rs version"
+                                    .to_string(),
+                            ]
+                        })
                     }
-                    fault_analysis(&fault_regs).unwrap_or_else(|| {
-                        vec![
-                            "  fault registers: the block did not parse as five words — read \
-                              again or check the probe-rs version"
-                                .to_string(),
-                        ]
-                    })
-                } else {
-                    vec![format!(
-                        "  fault registers: UNREADABLE (exit {fault_code:?}). No fault flag is \
-                         confirmed either way; the register state above is the only fault \
-                         evidence in this report. Output was:\n{}",
-                        crate::tools::util::truncate(&fault_text, 500)
-                    )]
+                    Ok(_) => vec![
+                        "  fault registers: fewer than five words came back — no flag is \
+                         confirmed either way"
+                            .to_string(),
+                    ],
+                    Err(why) => vec![format!(
+                        "  fault registers: UNREADABLE. No fault flag is confirmed either way; \
+                         the register state above is the only fault evidence in this report. \
+                         Output was://n{}",
+                        crate::tools::util::truncate(why, 500)
+                    )],
                 };
 
                 // 3. Stack window: exception frame + call-chain candidates.
-                let (stack_words, stack_addr) = match run_probe_rs_retry(
-                    read_args(&chip, probe.as_deref(), "b32", sp, 64),
-                    &cwd,
-                    timeout_ms,
-                    cancel.clone(),
-                    &[],
-                )
-                .await
-                {
-                    Ok((t, Some(0))) => (parse_hex_words(&t), sp),
-                    _ => (Vec::new(), sp),
+                let (stack_words, stack_addr): (Vec<u64>, u64) = if sp == 0 {
+                    (Vec::new(), 0)
+                } else {
+                    match lib_read_words(chip.clone(), probe.clone(), sp, 64).await {
+                        Some(Ok(w)) => (w.into_iter().map(u64::from).collect(), sp),
+                        Some(Err(_)) => (Vec::new(), sp),
+                        None => match run_probe_rs_retry(
+                            read_args(&chip, probe.as_deref(), "b32", sp, 64),
+                            &cwd,
+                            timeout_ms,
+                            cancel.clone(),
+                            &[],
+                        )
+                        .await
+                        {
+                            Ok((t, Some(0))) => (parse_hex_words(&t), sp),
+                            _ => (Vec::new(), sp),
+                        },
+                    }
                 };
 
                 // 4. Scene-stability check: re-read PC. A watchdog reset
                 // between captures moves the core; the report must say so
                 // instead of presenting a mixed scene as coherent.
-                let (regs2_text, _c2) = run_probe_rs_retry(
-                    debug_args(&chip, probe.as_deref(), &["break", "info reg"]),
-                    &cwd,
-                    timeout_ms,
-                    cancel.clone(),
-                    &[],
-                )
-                .await
-                .map_err(probe_err)?;
-                let pc_drifted = parse_regs(&regs2_text)
-                    .get("pc")
-                    .is_some_and(|pc2| *pc2 != pc);
+                // 第二次读：同一个会话里的重读，中间没有进程启动的间隔。
+                let pc2 = match lib_registers(chip.clone(), probe.clone()).await {
+                    Some(Ok(r)) => Some(r.pc),
+                    Some(Err(_)) => None,
+                    None => match run_probe_rs_retry(
+                        debug_args(&chip, probe.as_deref(), &["break", "info reg"]),
+                        &cwd,
+                        timeout_ms,
+                        cancel.clone(),
+                        &[],
+                    )
+                    .await
+                    {
+                        Ok((regs2_text, _)) => Some(registers_from_text(&regs2_text).pc),
+                        Err(_) => None,
+                    },
+                };
+                let pc_drifted = pc2.is_some_and(|pc2| pc2 != pc);
 
                 // Change-ledger correlation (7-day window, newest first).
                 let now = std::time::SystemTime::now()
@@ -1364,6 +1401,7 @@ async fn run_probe_rs_retry(
 mod tests {
     use super::*;
     use std::sync::Arc;
+    use tempfile::tempdir;
 
     #[test]
     fn parse_address_hex_and_symbol_forms() {
@@ -1601,6 +1639,48 @@ XPSR/PSR: 0x01000000
             "got: {report}"
         );
         assert!(report.contains("0x20001abc: 0xdeadbeef"), "got: {report}");
+    }
+
+    /// 真板：`regs` 与 `forensic` 走工具层（而不只是 `probe::registers`）。
+    ///
+    /// ```text
+    /// FIRMENT_TEST_ELF=fixtures/rtt-probe-fw/target/thumbv7em-none-eabihf/release/rtt-probe-fw \
+    ///   cargo test -p firment-tools --lib debug_actions_read_the_board -- --ignored --nocapture
+    /// ```
+    ///
+    /// 它要证明的是接线：`regs` 输出带 `[probe-rs lib]` 且 pc 落在 flash；
+    /// `forensic` 不再回 `unknown action`，并能产出一份报告。
+    #[tokio::test]
+    #[ignore = "needs a NUCLEO-G431RB (and FIRMENT_TEST_ELF for forensic)"]
+    async fn debug_actions_read_the_board() {
+        let dir = tempdir().unwrap();
+        let c = ctx(dir.path());
+
+        let regs = Debug
+            .run(json!({"action": "regs", "chip": "stm32g431rb"}), &c)
+            .await
+            .expect("regs");
+        println!("--- regs ---\n{}\n---", regs.text);
+        assert!(regs.text.contains("[probe-rs lib]"), "{}", regs.text);
+        assert!(
+            regs.text.contains("pc  = 0x0800"),
+            "pc should be in flash: {}",
+            regs.text
+        );
+
+        if let Ok(elf) = std::env::var("FIRMENT_TEST_ELF") {
+            // 工具的路径沙箱只认工作区内的文件，所以先拷进去。
+            std::fs::copy(&elf, dir.path().join("fw.elf")).expect("copy fixture elf");
+            let report = Debug
+                .run(
+                    json!({"action": "forensic", "chip": "stm32g431rb", "elf": "fw.elf"}),
+                    &c,
+                )
+                .await
+                .expect("forensic");
+            println!("--- forensic ---\n{}\n---", report.text);
+            assert!(report.text.contains("forensic report"), "{}", report.text);
+        }
     }
 
     fn ctx(dir: &Path) -> ToolContext {
