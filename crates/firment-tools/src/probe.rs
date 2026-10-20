@@ -182,6 +182,48 @@ pub fn rtt_stream(
     })
 }
 
+/// 目标侧的 TPIU / ITM 配置。
+///
+/// probe-rs 把 `configure_tpiu` 留成了 crate 私有（只给 CLI 用），而 `enable_swo`
+/// 只切探针侧的引脚模式。后果是：库路径能"成功打开 SWO"却收不到任何字节 ——
+/// 2026-10-20 用 `fixtures/itm-probe-fw` 实测到的就是这一条。
+///
+/// 这些寄存器都是**内存映射**的（TPIU 0xE0040000、ITM 0xE0000000），所以不必碰
+/// 私有的 Coresight 组件 API，直接用 `MemoryInterface` 写就行。取值照 ARMv7-M
+/// 与 probe-rs 的实现：1 位端口、NRZ 异步、prescaler = clk/baud - 1、FFCR=0x100。
+fn configure_itm_swo(
+    core: &mut probe_rs::Core<'_>,
+    tpiu_hz: u32,
+    baud: u32,
+) -> Result<(), ProbeError> {
+    use probe_rs::MemoryInterface;
+
+    const ITM_LAR: u64 = 0xE000_0FB0;
+    const ITM_TCR: u64 = 0xE000_0E80;
+    const TPIU_CSPSR: u64 = 0xE004_0004;
+    const TPIU_ACPR: u64 = 0xE004_0010;
+    const TPIU_SPPR: u64 = 0xE004_00F0;
+    const TPIU_FFCR: u64 = 0xE004_0304;
+
+    let write = |core: &mut probe_rs::Core<'_>, addr: u64, value: u32| {
+        core.write_word_32(addr, value)
+            .map_err(|e| ProbeError::Failed(format!("[Io] write {addr:#010x} <- {value:#x}: {e}")))
+    };
+
+    // ITM 解锁（不写这个，TCR/TER 的写入会被忽略）。
+    write(core, ITM_LAR, 0xC5AC_CE55)?;
+    // TCR: ITMENA（bit0）。TraceBusID 保持 0 —— 单源、无全局时间戳。
+    write(core, ITM_TCR, 0x1)?;
+
+    // TPIU：1 位端口、异步 NRZ、prescaler、格式化器透传。
+    write(core, TPIU_CSPSR, 0x1)?;
+    let prescaler = tpiu_hz / baud.max(1);
+    write(core, TPIU_ACPR, prescaler.saturating_sub(1))?;
+    write(core, TPIU_SPPR, 0x2)?;
+    write(core, TPIU_FFCR, 0x100)?;
+    Ok(())
+}
+
 /// 一次 SWO 采集的结果。
 pub struct SwoTrace {
     pub lines: Vec<crate::itm_decode::ItmLine>,
@@ -204,13 +246,27 @@ pub fn swo_trace(
     use probe_rs::architecture::arm::swo::SwoConfig;
 
     with_session(chip, probe, |session| {
+        let config = SwoConfig::new(tpiu_hz).set_baud(baud);
+
+        // `get_arm_interface()` 与 `core()` 都要可变借用 session，所以分开取用完就放。
+        {
+            let interface = session
+                .get_arm_interface()
+                .map_err(|e| ProbeError::Failed(format!("[Io] no ARM interface for SWO: {e}")))?;
+            interface
+                .enable_swo(&config)
+                .map_err(|e| ProbeError::Failed(format!("[Io] could not enable SWO: {e}")))?;
+        }
+
+        // 探针侧配好后，配目标侧（TPIU/ITM）。两边都要配，只配一边就收不到字节。
+        {
+            let mut trace_core = core(session)?;
+            configure_itm_swo(&mut trace_core, tpiu_hz, baud)?;
+        }
+
         let interface = session
             .get_arm_interface()
             .map_err(|e| ProbeError::Failed(format!("[Io] no ARM interface for SWO: {e}")))?;
-        let config = SwoConfig::new(tpiu_hz).set_baud(baud);
-        interface
-            .enable_swo(&config)
-            .map_err(|e| ProbeError::Failed(format!("[Io] could not enable SWO: {e}")))?;
 
         let mut decoder = crate::itm_decode::ItmDecoder::new();
         let mut lines = Vec::new();

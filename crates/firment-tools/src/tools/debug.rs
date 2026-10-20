@@ -1275,7 +1275,9 @@ impl Tool for Debug {
                 // （`configure_tpiu`）留在 crate 私有作用域里，库路径只能打开探针
                 // 侧的 SWO，配不了目标侧的 TPIU —— 2026-10-20 用 ITM 夹具固件实测：
                 // enable 成功、读回 0 字节。CLI 内部会配 TPIU，所以那条路能收到数据。
-                let lib = lib.filter(|s| s.bytes > 0);
+                // 判据是"解出了行"，不是"收到了字节"：2026-10-20 实测到 1 个字节
+                // （一次同步）但没有内容，那种情况同样该回退 —— 有字节不等于有话。
+                let lib = lib.filter(|s| !s.lines.is_empty());
                 if let Some(swo) = lib {
                     let mut out = format!(
                         "debug trace [probe-rs lib] {} ms of SWO/ITM (clk {trace_clk} Hz, baud \
