@@ -214,6 +214,88 @@ pub fn core_op(chip: &str, probe: Option<&str>, op: CoreOp) -> Result<(), ProbeE
     })
 }
 
+/// 一个核的寄存器快照。
+///
+/// 为什么用结构体而不是 `info reg` 的文本：`analyze` / `forensic` 现在靠正则从
+/// 那段表格里捞 `pc`/`sp`/`lr`，而正则对版式敏感 —— 0.32 的 `r15` 写法会让
+/// `forensic` 取不到 pc（`parse_regs` 只认 `pc`，没有 `r15` 回退）。
+/// 结构体字段没有这个问题，也顺手把"同一时刻"这件事做实了。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Registers {
+    pub pc: u64,
+    pub sp: u64,
+    pub lr: u64,
+    pub xpsr: u64,
+    pub msp: u64,
+    pub psp: u64,
+    /// r0..=r12
+    pub r: [u64; 13],
+}
+
+impl Registers {
+    /// 按名字取一个通用寄存器（r0..r12），越界返回 None。
+    pub fn gpr(&self, n: usize) -> Option<u64> {
+        self.r.get(n).copied()
+    }
+}
+
+/// 读一次完整的寄存器组。**不改变运行状态**：调用方若要"意外现场的读数"，
+/// 先 `core_op(Halt)` 再读（`analyze` / `forensic` 就是这么做的）。
+///
+/// 单个寄存器读失败记 0：MSP/PSP 在只有单栈的核上可能不存在，一个可选寄存器
+/// 缺失不该让整张表失败。
+pub fn registers(chip: &str, probe: Option<&str>) -> Result<Registers, ProbeError> {
+    with_session(chip, probe, |session| {
+        let mut core = core(session)?;
+        // 先停核：Cortex-M 的核寄存器经 DCRSR/DCRDR 读，目标在跑时读数不可靠，
+        // CLI 路径同样先 `-c break` 再 `info reg`。已经停下时 `halt` 是幂等的。
+        let _ = core.halt(Duration::from_millis(500));
+        // `registers()` 返回 `&'static CoreRegisters`，不借用 `core`，
+        // 所以下面可以一边遍历描述、一边 `read_core_reg`。
+        let described = core.registers();
+        let mut out = Registers::default();
+        let mut read_ok = 0usize;
+        let mut first_err: Option<String> = None;
+        for r in described.core_registers() {
+            let Ok(v) = core.read_core_reg::<u32>(r.id()) else {
+                if first_err.is_none() {
+                    first_err = Some(format!("register {} could not be read", r.name()));
+                }
+                continue;
+            };
+            read_ok += 1;
+            let v = u64::from(v);
+            let name = r.name().to_ascii_lowercase();
+            match name.as_str() {
+                "pc" | "r15" => out.pc = v,
+                "sp" | "r13" => out.sp = v,
+                "lr" | "r14" => out.lr = v,
+                "xpsr" => out.xpsr = v,
+                "msp" => out.msp = v,
+                "psp" => out.psp = v,
+                other => {
+                    if let Some(n) = other
+                        .strip_prefix('r')
+                        .and_then(|d| d.parse::<usize>().ok())
+                        .filter(|n| *n < 13)
+                    {
+                        out.r[n] = v;
+                    }
+                }
+            }
+        }
+        // 一个都读不到就是失败，不能把"全 0"当成快照交出去 ——
+        // 那会让 analyze 报"pc=0"，看起来像固件跳飞了。
+        if read_ok == 0 {
+            return Err(ProbeError::Failed(format!(
+                "[Io] no core register could be read{}",
+                first_err.map(|e| format!(" ({e})")).unwrap_or_default()
+            )));
+        }
+        Ok(out)
+    })
+}
+
 /// 这台机器上现在能看到几个探针（只枚举，不 attach）。
 ///
 /// `doctor` 用它回答"能不能烧/读"，而不要求 CLI 在 PATH 上 —— 库已经链进来了，

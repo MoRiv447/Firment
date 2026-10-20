@@ -24,6 +24,7 @@ fn main() {
     let mut addr: u64 = 0x4800_0800; // GPIOC 基址
     let mut words: usize = 6;
     let mut ops: Vec<&'static str> = Vec::new();
+    let mut show_regs = false;
 
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -43,6 +44,7 @@ fn main() {
             "--halt" => ops.push("halt"),
             "--step" => ops.push("step"),
             "--resume" => ops.push("resume"),
+            "--regs" => show_regs = true,
             "--help" | "-h" => {
                 println!(
                     "usage: probe_smoke [--chip <id>] [--elf <file>] [--rtt-ms <n>] [--addr <hex>] [--words <n>]"
@@ -100,6 +102,29 @@ fn main() {
             ),
             Err(e) => println!(
                 "[FAIL] write: {} ({} ms)",
+                e.message(),
+                t.elapsed().as_millis()
+            ),
+        }
+    }
+
+    // 3.2 寄存器快照
+    if show_regs {
+        let t = Instant::now();
+        match probe::registers(&chip, None) {
+            Ok(r) => {
+                println!("[ok] registers ({} ms)", t.elapsed().as_millis());
+                println!(
+                    "     pc={:#010x} sp={:#010x} lr={:#010x} xpsr={:#010x} msp={:#010x} psp={:#010x}",
+                    r.pc, r.sp, r.lr, r.xpsr, r.msp, r.psp
+                );
+                let gprs: Vec<String> = (0..13)
+                    .map(|i| format!("r{i}={:#010x}", r.gpr(i).unwrap_or(0)))
+                    .collect();
+                println!("     {}", gprs.join(" "));
+            }
+            Err(e) => println!(
+                "[FAIL] registers: {} ({} ms)",
                 e.message(),
                 t.elapsed().as_millis()
             ),

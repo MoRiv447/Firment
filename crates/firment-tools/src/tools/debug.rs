@@ -332,20 +332,36 @@ fn write_args(chip: &str, probe: Option<&str>, width: &str, addr: u64, value: u6
 }
 
 /// Combine the raw probe-rs outputs into the one-shot fault report.
+/// 寄存器表的文本形状。`pc = 0x...` 这种写法同时照顾两件事：
+/// 人读得懂，`parse_regs` 也仍然认（CLI 回退路径还在用）。
+fn render_registers(r: &crate::probe::Registers) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "pc  = {:#010x}  sp  = {:#010x}  lr  = {:#010x}  xpsr = {:#010x}\n",
+        r.pc, r.sp, r.lr, r.xpsr
+    ));
+    out.push_str(&format!("msp = {:#010x}  psp = {:#010x}\n", r.msp, r.psp));
+    for row in 0..4 {
+        for col in 0..4 {
+            let i = row * 4 + col;
+            if i < 13 {
+                out.push_str(&format!("r{i:<2}= {:#010x}  ", r.r[i]));
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
 fn analysis_report(
     chip: &str,
-    regs_text: &str,
+    regs: &crate::probe::Registers,
     cfsr_words: &[u64],
     stack_words: &[u64],
     stack_addr: u64,
     elf: Option<&Path>,
 ) -> String {
     let mut out = format!("=== debug analyze (chip {chip}) ===\n");
-    let regs = parse_regs(regs_text);
-    let pc = reg_value(&regs, &["pc", "r15"]);
-    let lr = reg_value(&regs, &["lr", "r14"]);
-    let sp = reg_value(&regs, &["sp", "r13"]);
-    let xpsr = reg_value(&regs, &["xpsr"]);
     out.push_str("target: halted\n");
     let decode = |addr: u64| -> String {
         if let Some(elf) = elf {
@@ -356,22 +372,11 @@ fn analysis_report(
             format!("{addr:#010x}")
         }
     };
-    match pc {
-        Some(pc) => out.push_str(&format!("pc  : {pc:#010x} -> {}\n", decode(pc))),
-        None => out.push_str("pc  : (not parsed from probe-rs output)\n"),
-    }
-    match lr {
-        Some(lr) => out.push_str(&format!("lr  : {lr:#010x} -> {}\n", decode(lr))),
-        None => out.push_str("lr  : (not parsed)\n"),
-    }
-    match sp {
-        Some(sp) => out.push_str(&format!("sp  : {sp:#010x}\n")),
-        None => out.push_str("sp  : (not parsed)\n"),
-    }
-    match xpsr {
-        Some(xpsr) => out.push_str(&format!("xpsr: {xpsr:#010x}\n")),
-        None => out.push_str("xpsr: (not parsed)\n"),
-    }
+    // 结构化之后这些字段一定存在：没有"没解析到"这一档了。
+    out.push_str(&format!("pc  : {:#010x} -> {}\n", regs.pc, decode(regs.pc)));
+    out.push_str(&format!("lr  : {:#010x} -> {}\n", regs.lr, decode(regs.lr)));
+    out.push_str(&format!("sp  : {:#010x}\n", regs.sp));
+    out.push_str(&format!("xpsr: {:#010x}\n", regs.xpsr));
 
     if let Some(lines) = fault_analysis(cfsr_words) {
         for line in lines {
@@ -555,6 +560,10 @@ impl Tool for Debug {
                 | "mem"
                 | "write"
                 | "analyze"
+                //  一直在 schema 的 enum 里，却漏在这张白名单上：
+                // 它和 redteam 的崩溃后取证（redteam.rs 的 forensic 调用）每次都拿到
+                // "unknown action"，整段代码不可达。2026-10-19 由一次只读勘察发现。
+                | "forensic"
                 | "break"
                 | "step"
                 | "continue"
@@ -635,6 +644,17 @@ impl Tool for Debug {
                 finish(code, "target halted", &text)
             }
             "regs" => {
+                if let Some(r) = lib_registers(chip.clone(), probe.clone()).await {
+                    return match r {
+                        Ok(r) => Ok(ToolOutput {
+                            text: format!(
+                                "debug registers [probe-rs lib]\n{}",
+                                render_registers(&r)
+                            ),
+                        }),
+                        Err(m) => Err(ToolError::new(m)),
+                    };
+                }
                 let (text, code) = run_probe_rs_retry(
                     debug_args(&chip, probe.as_deref(), &["break", "info reg"]),
                     &cwd,
@@ -798,58 +818,76 @@ impl Tool for Debug {
                          ESP-IDF panic backtrace via `monitor`)."
                     )));
                 }
-                let (regs_text, regs_code) = run_probe_rs_retry(
-                    debug_args(&chip, probe.as_deref(), &["break", "info reg"]),
-                    &cwd,
-                    timeout_ms,
-                    cancel.clone(),
-                    &[],
-                )
-                .await
-                .map_err(probe_err)?;
-                if regs_code != Some(0) {
-                    return Err(ToolError::new(format!(
-                        "[Io] debug attach/halt/regs failed (exit {:?})\n{regs_text}",
-                        regs_code
-                    )));
-                }
-                let (fault_text, fault_code) = run_probe_rs_retry(
-                    read_args(&chip, probe.as_deref(), "b32", 0xE000_ED28, 5),
-                    &cwd,
-                    timeout_ms,
-                    cancel.clone(),
-                    &[],
-                )
-                .await
-                .map_err(probe_err)?;
-                let cfsr_words = if fault_code == Some(0) {
-                    parse_hex_words(&fault_text)
-                } else {
-                    Vec::new()
-                };
-                let sp = parse_regs(&regs_text)
-                    .get("sp")
-                    .copied()
-                    .or_else(|| parse_regs(&regs_text).get("r13").copied());
-                let (stack_words, stack_addr) = if let Some(sp) = sp {
-                    match run_probe_rs_retry(
-                        read_args(&chip, probe.as_deref(), "b32", sp, 8),
-                        &cwd,
-                        timeout_ms,
-                        cancel.clone(),
-                        &[],
-                    )
-                    .await
-                    {
-                        Ok((t, Some(0))) => (parse_hex_words(&t), sp),
-                        _ => (Vec::new(), sp),
+                // 寄存器优先走库（顺带停核）；CLI 路径保留为"库拿不到探针"的退路。
+                let regs = match lib_registers(chip.clone(), probe.clone()).await {
+                    Some(Ok(r)) => r,
+                    Some(Err(m)) => return Err(ToolError::new(m)),
+                    None => {
+                        let (regs_text, regs_code) = run_probe_rs_retry(
+                            debug_args(&chip, probe.as_deref(), &["break", "info reg"]),
+                            &cwd,
+                            timeout_ms,
+                            cancel.clone(),
+                            &[],
+                        )
+                        .await
+                        .map_err(probe_err)?;
+                        if regs_code != Some(0) {
+                            return Err(ToolError::new(format!(
+                                "[Io] debug attach/halt/regs failed (exit {:?})\n{regs_text}",
+                                regs_code
+                            )));
+                        }
+                        registers_from_text(&regs_text)
                     }
-                } else {
+                };
+
+                // 故障寄存器：同一次会话里读，和上面的 pc/sp 是同一个时刻。
+                let cfsr_words: Vec<u64> =
+                    match lib_read_words(chip.clone(), probe.clone(), 0xE000_ED28, 5).await {
+                        Some(Ok(w)) => w.into_iter().map(u64::from).collect(),
+                        Some(Err(_)) => Vec::new(),
+                        None => {
+                            let (fault_text, fault_code) = run_probe_rs_retry(
+                                read_args(&chip, probe.as_deref(), "b32", 0xE000_ED28, 5),
+                                &cwd,
+                                timeout_ms,
+                                cancel.clone(),
+                                &[],
+                            )
+                            .await
+                            .map_err(probe_err)?;
+                            if fault_code == Some(0) {
+                                parse_hex_words(&fault_text)
+                            } else {
+                                Vec::new()
+                            }
+                        }
+                    };
+
+                let (stack_words, stack_addr): (Vec<u64>, u64) = if regs.sp == 0 {
                     (Vec::new(), 0)
+                } else {
+                    match lib_read_words(chip.clone(), probe.clone(), regs.sp, 8).await {
+                        Some(Ok(w)) => (w.into_iter().map(u64::from).collect(), regs.sp),
+                        Some(Err(_)) => (Vec::new(), regs.sp),
+                        None => match run_probe_rs_retry(
+                            read_args(&chip, probe.as_deref(), "b32", regs.sp, 8),
+                            &cwd,
+                            timeout_ms,
+                            cancel.clone(),
+                            &[],
+                        )
+                        .await
+                        {
+                            Ok((t, Some(0))) => (parse_hex_words(&t), regs.sp),
+                            _ => (Vec::new(), regs.sp),
+                        },
+                    }
                 };
                 let report = analysis_report(
                     &chip,
-                    &regs_text,
+                    &regs,
                     &cfsr_words,
                     &stack_words,
                     stack_addr,
@@ -1210,6 +1248,58 @@ fn probe_err(e: String) -> ToolError {
 }
 
 /// Wrap a probe-rs exit code into the tool result text.
+/// 库优先的批量读字：`None` = 库拿不到探针，交给 CLI。
+async fn lib_read_words(
+    chip: String,
+    probe: Option<String>,
+    addr: u64,
+    n: usize,
+) -> Option<Result<Vec<u32>, String>> {
+    match tokio::task::spawn_blocking(move || {
+        crate::probe::read_words(&chip, probe.as_deref(), addr, n)
+    })
+    .await
+    {
+        Ok(Ok(w)) => Some(Ok(w)),
+        Ok(Err(crate::probe::ProbeError::Unavailable(_))) => None,
+        Ok(Err(e)) => Some(Err(e.message().to_string())),
+        Err(e) => Some(Err(format!("[Io] probe task failed: {e}"))),
+    }
+}
+
+/// 库优先的寄存器快照：`None` = 拿不到探针，交给 CLI 路径。
+async fn lib_registers(
+    chip: String,
+    probe: Option<String>,
+) -> Option<Result<crate::probe::Registers, String>> {
+    match tokio::task::spawn_blocking(move || crate::probe::registers(&chip, probe.as_deref()))
+        .await
+    {
+        Ok(Ok(r)) => Some(Ok(r)),
+        Ok(Err(crate::probe::ProbeError::Unavailable(_))) => None,
+        Ok(Err(e)) => Some(Err(e.message().to_string())),
+        Err(e) => Some(Err(format!("[Io] probe task failed: {e}"))),
+    }
+}
+
+/// 把 CLI 的寄存器表转成同一个结构体，让两条路径的消费者只有一份代码。
+fn registers_from_text(text: &str) -> crate::probe::Registers {
+    let m = parse_regs(text);
+    let mut r = crate::probe::Registers {
+        pc: reg_value(&m, &["pc", "r15"]).unwrap_or(0),
+        lr: reg_value(&m, &["lr", "r14"]).unwrap_or(0),
+        sp: reg_value(&m, &["sp", "r13"]).unwrap_or(0),
+        xpsr: reg_value(&m, &["xpsr"]).unwrap_or(0),
+        msp: reg_value(&m, &["msp"]).unwrap_or(0),
+        psp: reg_value(&m, &["psp"]).unwrap_or(0),
+        ..Default::default()
+    };
+    for i in 0..13 {
+        r.r[i] = reg_value(&m, &[&*format!("r{i}")]).unwrap_or(0);
+    }
+    r
+}
+
 /// 库优先的核操作：`Some(Ok/Err)` 表示库给了答案，`None` 表示"拿不到探针，去用 CLI"。
 ///
 /// 回退只发生在 `Unavailable`：attach 失败说明库这条路在这台机器上不通
@@ -1493,7 +1583,15 @@ XPSR/PSR: 0x01000000
         let regs_text = "pc (r15) = 0x08005678\nlr (r14) = 0x08001234\nsp (r13) = 0x20001abc\nxpsr = 0x01000000\n";
         let cfsr = vec![1 << 16, 0x4000_0000, 0, 0, 0]; // CFSR, HFSR, DFSR, MMFAR, BFAR
         let stack = vec![0xdead_beef, 0x0800_1234, 0, 0, 0, 0, 0, 0];
-        let report = analysis_report("stm32g431rb", regs_text, &cfsr, &stack, 0x2000_1abc, None);
+        // 顺便覆盖 CLI 回退路径的转换器：这段文本就是 probe-rs 的 "pc (r15) = …" 版式。
+        let report = analysis_report(
+            "stm32g431rb",
+            &registers_from_text(regs_text),
+            &cfsr,
+            &stack,
+            0x2000_1abc,
+            None,
+        );
         assert!(report.contains("chip stm32g431rb"), "got: {report}");
         assert!(report.contains("pc  : 0x08005678"), "got: {report}");
         assert!(report.contains("sp  : 0x20001abc"), "got: {report}");
