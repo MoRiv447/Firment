@@ -1256,6 +1256,46 @@ impl Tool for Debug {
                 }
             }
             "trace" => {
+                // 库优先：SWO 传输在库里，ITM 解码在 `itm_decode`。
+                // 拿不到探针（或探针不支持 SWO）时回退 CLI —— 这条路径**任何**错误
+                // 都回退：trace 是只读采集，多试一次不会伤到目标。
+                let lib = {
+                    let chip_lib = chip.clone();
+                    let probe_lib = probe.clone();
+                    let dur = std::time::Duration::from_millis(trace_duration);
+                    let (clk, baud) = (trace_clk as u32, trace_baud as u32);
+                    tokio::task::spawn_blocking(move || {
+                        crate::probe::swo_trace(&chip_lib, probe_lib.as_deref(), dur, clk, baud)
+                    })
+                    .await
+                    .ok()
+                    .and_then(|r| r.ok())
+                };
+                if let Some(swo) = lib {
+                    let mut out = format!(
+                        "debug trace [probe-rs lib] {} ms of SWO/ITM (clk {trace_clk} Hz, baud \
+                         {trace_baud})\n  bytes: {}  source packets: {}  timestamps: {}  \
+                         overflow: {}  sync: {}\n",
+                        trace_duration,
+                        swo.bytes,
+                        swo.stats.source_packets,
+                        swo.stats.timestamp_packets,
+                        swo.stats.overflow_packets,
+                        swo.stats.sync_bytes
+                    );
+                    for line in swo.lines.iter().take(200) {
+                        out.push_str(&format!("  [{}] {}\n", line.port, line.text));
+                    }
+                    if swo.bytes == 0 {
+                        out.push_str(
+                            "  (0 bytes: either the firmware does not emit ITM, or SWO is not \
+                             wired on this probe)\n",
+                        );
+                    }
+                    return Ok(ToolOutput {
+                        text: truncate(&out, 32_000),
+                    });
+                }
                 // probe-rs 0.32 checks the capture duration inside the packet
                 // loop, so with no ITM traffic the command never exits on its
                 // own — the outer timeout ending the session is therefore the

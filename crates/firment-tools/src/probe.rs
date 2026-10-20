@@ -182,6 +182,65 @@ pub fn rtt_stream(
     })
 }
 
+/// 一次 SWO 采集的结果。
+pub struct SwoTrace {
+    pub lines: Vec<crate::itm_decode::ItmLine>,
+    pub stats: crate::itm_decode::ItmStats,
+    pub bytes: usize,
+}
+
+/// 采 `duration` 的 SWO 并用本地 ITM 解码器解出 stimulus 输出。
+///
+/// 传输在库里（`SwoAccess`），解码在 `itm_decode`（我们自己的）。
+/// 这与 CLI 的 `probe-rs itm swo` 是同一件事，区别是字节回到我们手里，
+/// 能直接进工具输出、也能被 `hil` 的 trace 步骤复用。
+pub fn swo_trace(
+    chip: &str,
+    probe: Option<&str>,
+    duration: Duration,
+    tpiu_hz: u32,
+    baud: u32,
+) -> Result<SwoTrace, ProbeError> {
+    use probe_rs::architecture::arm::swo::SwoConfig;
+
+    with_session(chip, probe, |session| {
+        let interface = session
+            .get_arm_interface()
+            .map_err(|e| ProbeError::Failed(format!("[Io] no ARM interface for SWO: {e}")))?;
+        let config = SwoConfig::new(tpiu_hz).set_baud(baud);
+        interface
+            .enable_swo(&config)
+            .map_err(|e| ProbeError::Failed(format!("[Io] could not enable SWO: {e}")))?;
+
+        let mut decoder = crate::itm_decode::ItmDecoder::new();
+        let mut lines = Vec::new();
+        let mut bytes = 0usize;
+        let deadline = Instant::now() + duration;
+        while Instant::now() < deadline {
+            // 50 ms 一片：既不会把 CPU 占死，也不会让缓冲溢出。
+            match interface.read_swo_timeout(Duration::from_millis(50)) {
+                Ok(chunk) => {
+                    bytes += chunk.len();
+                    lines.extend(decoder.push(&chunk));
+                }
+                // 读失败不是"没有数据"，但 SWO 的读失败通常是探针端缓冲问题；
+                // 记下来，别把它当成空采集。
+                Err(e) => {
+                    let _ = interface.disable_swo();
+                    return Err(ProbeError::Failed(format!("[Io] SWO read failed: {e}")));
+                }
+            }
+        }
+        let _ = interface.disable_swo();
+        lines.extend(decoder.flush());
+        Ok(SwoTrace {
+            lines,
+            stats: decoder.stats(),
+            bytes,
+        })
+    })
+}
+
 /// 一帧栈回溯。只保留工具层要显示的东西，不把 `probe_rs_debug` 的类型漏出去。
 #[derive(Debug, Clone)]
 pub struct BacktraceFrame {
