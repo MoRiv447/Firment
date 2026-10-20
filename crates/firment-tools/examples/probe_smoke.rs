@@ -25,6 +25,7 @@ fn main() {
     let mut words: usize = 6;
     let mut ops: Vec<&'static str> = Vec::new();
     let mut show_regs = false;
+    let mut trace_ms: u64 = 0;
 
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -45,6 +46,7 @@ fn main() {
             "--step" => ops.push("step"),
             "--resume" => ops.push("resume"),
             "--regs" => show_regs = true,
+            "--trace-ms" => trace_ms = args.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             "--help" | "-h" => {
                 println!(
                     "usage: probe_smoke [--chip <id>] [--elf <file>] [--rtt-ms <n>] [--addr <hex>] [--words <n>]"
@@ -165,6 +167,38 @@ fn main() {
         }
     } else {
         println!("[skip] flash (no --elf)");
+    }
+
+    // 4.5 SWO / ITM
+    if trace_ms > 0 {
+        let t = Instant::now();
+        match probe::swo_trace(
+            &chip,
+            None,
+            Duration::from_millis(trace_ms),
+            170_000_000,
+            2_000_000,
+        ) {
+            Ok(s) => {
+                println!(
+                    "[ok] SWO {} bytes, {} source packets, {} line(s) ({} ms)",
+                    s.bytes,
+                    s.stats.source_packets,
+                    s.lines.len(),
+                    t.elapsed().as_millis()
+                );
+                for l in s.lines.iter().take(10) {
+                    println!("  [{}] {}", l.port, l.text);
+                }
+            }
+            Err(e) => println!(
+                "[FAIL] SWO: {} ({} ms)",
+                e.message(),
+                t.elapsed().as_millis()
+            ),
+        }
+    } else {
+        println!("[skip] SWO (--trace-ms 0)");
     }
 
     // 5. RTT

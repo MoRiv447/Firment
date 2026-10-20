@@ -1271,6 +1271,11 @@ impl Tool for Debug {
                     .ok()
                     .and_then(|r| r.ok())
                 };
+                // 库路径先跑；0 字节时**回退 CLI**：probe-rs 把 TPIU 的配置函数
+                // （`configure_tpiu`）留在 crate 私有作用域里，库路径只能打开探针
+                // 侧的 SWO，配不了目标侧的 TPIU —— 2026-10-20 用 ITM 夹具固件实测：
+                // enable 成功、读回 0 字节。CLI 内部会配 TPIU，所以那条路能收到数据。
+                let lib = lib.filter(|s| s.bytes > 0);
                 if let Some(swo) = lib {
                     let mut out = format!(
                         "debug trace [probe-rs lib] {} ms of SWO/ITM (clk {trace_clk} Hz, baud \
