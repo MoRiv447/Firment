@@ -31,7 +31,13 @@ $installDir = if ($env:FIRMENT_INSTALL_DIR) {
     Join-Path $env:USERPROFILE '.firment\bin'
 }
 
-$arch = $env:PROCESSOR_ARCHITECTURE
+# A 32-bit PowerShell on 64-bit Windows reports x86 in PROCESSOR_ARCHITECTURE;
+# PROCESSOR_ARCHITEW6432 carries the real machine architecture.
+$arch = if ($env:PROCESSOR_ARCHITEW6432) {
+    $env:PROCESSOR_ARCHITEW6432
+} else {
+    $env:PROCESSOR_ARCHITECTURE
+}
 if ($arch -eq 'AMD64') {
     $arch = 'x86_64'
 } elseif ($arch -eq 'ARM64') {
@@ -75,7 +81,9 @@ if ($env:FIRMENT_DRY_RUN -eq '1') {
     Write-Host "  安装目录  : $installDir"
     Write-Host '  步骤      : 下载 -> SHA256 校验 -> 解压 -> firm install --to $安装目录（写用户 PATH + PowerShell 补全）'
     Write-Host '[dry-run] 结束。去掉 FIRMENT_DRY_RUN=1 后重新执行即可真正安装。'
-    exit 0
+    # `irm ... | iex` runs this file in the caller's session; `exit 0` would
+    # close the user's PowerShell window. A dry run is the safe preview path.
+    return
 }
 
 $tmp = Join-Path $env:TEMP "firment-install-$([guid]::NewGuid().ToString('N'))"

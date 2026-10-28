@@ -117,16 +117,26 @@ install -m 755 "$BIN" "$STAGE"
 mv -f "$STAGE" "$INSTALL_DIR/firm"
 STAGE=""
 
+FISH=0
 case "${SHELL:-}" in
     *zsh*) RC="$HOME/.zshrc" ;;
     *bash*) RC="$HOME/.bashrc" ;;
-    *) RC="$HOME/.profile" ;;
+    *fish*) RC="$HOME/.config/fish/config.fish"; FISH=1 ;;
+    *) RC="" ;;
 esac
 # The directory the binary actually landed in, not the default one: with
 # FIRMENT_INSTALL_DIR set, the old line put a path on PATH that nothing had been
 # installed into and still reported success. Same string on both sides of the
 # check, so a second run does not append a second copy.
-if ! grep -qF "$INSTALL_DIR" "$RC" 2>/dev/null; then
+if [ -z "$RC" ]; then
+    echo "未识别的 shell（${SHELL:-unknown}）：请手动把 $INSTALL_DIR 加入 PATH" >&2
+elif [ "$FISH" = 1 ]; then
+    mkdir -p "$(dirname "$RC")"
+    if ! grep -qF "fish_add_path" "$RC" 2>/dev/null; then
+        printf '\n# firment\nfish_add_path "%s"\n' "$INSTALL_DIR" >> "$RC"
+        echo "已把 $INSTALL_DIR 加入 PATH（写入 $RC，新终端生效）"
+    fi
+elif ! grep -qF "$INSTALL_DIR" "$RC" 2>/dev/null; then
     printf '\n# firment\nexport PATH="%s:$PATH"\n' "$INSTALL_DIR" >> "$RC"
     echo "已把 $INSTALL_DIR 加入 PATH（写入 $RC，新终端生效）"
 fi

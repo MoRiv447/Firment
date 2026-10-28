@@ -1016,8 +1016,12 @@ fn print_tools_config(cwd: &Path, tools: &firment_core::config::ToolsConfig) {
 /// `firm --doctor --sbc`: end-to-end check of the SBC edge-model data plane.
 /// Every failing stage stops the chain with a concrete fix hint — the point
 /// is to answer "is the SBC side actually set up?" without reading logs.
-pub(crate) async fn doctor_sbc(config: &Config) {
+pub(crate) async fn doctor_sbc(config: &Config, cwd: &Path) -> Vec<Check> {
     println!("\nsbc edge-model checks:");
+    // The caller folds these into the same exit-code decision as the toolchain
+    // checks. It used to return `()`, so every stage could print ✗ and `doctor
+    // --sbc` still exited 0.
+    let mut failures: Vec<Check> = Vec::new();
 
     // Stage 1 — [mqtt] broker must be configured and parseable.
     let broker = config.mqtt.broker.trim().to_string();
@@ -1026,7 +1030,13 @@ pub(crate) async fn doctor_sbc(config: &Config) {
         println!("    hint: add to {} :", config_path().display());
         println!("      [mqtt]");
         println!("      broker = \"<sbc-ip>:1883\"   # mosquitto on the SBC");
-        return;
+        failures.push(Check::missing(
+            "sbc mqtt broker",
+            State::Required,
+            format!("broker missing or invalid ({broker:?})"),
+            "set [mqtt] broker in config.toml",
+        ));
+        return failures;
     };
     println!("  ✓ [mqtt] broker = {host}:{port}");
 
@@ -1049,12 +1059,24 @@ pub(crate) async fn doctor_sbc(config: &Config) {
                     "    hint: wrong IP or firewall; pin the SBC IP in the router's DHCP reservations"
                 );
             }
-            return;
+            failures.push(Check::missing(
+                "sbc mqtt tcp",
+                State::Required,
+                format!("{host}:{port} is not reachable"),
+                format!("start mosquitto on {host}, or fix the broker address"),
+            ));
+            return failures;
         }
         Err(_) => {
             println!("  ✗ tcp {host}:{port} timed out after 4s");
             println!("    hint: host unreachable (wrong IP? SBC offline? wifi down?)");
-            return;
+            failures.push(Check::missing(
+                "sbc mqtt tcp",
+                State::Required,
+                format!("{host}:{port} timed out"),
+                "check the SBC address and that it is online",
+            ));
+            return failures;
         }
     }
 
@@ -1097,7 +1119,13 @@ pub(crate) async fn doctor_sbc(config: &Config) {
         let detail = mqtt_err.map(|e| format!(" ({e})")).unwrap_or_default();
         println!("  ✗ mqtt CONNACK failed{detail}");
         println!("    hint: is that port really mosquitto? check listener + allow_anonymous");
-        return;
+        failures.push(Check::missing(
+            "sbc mqtt CONNACK",
+            State::Required,
+            format!("CONNACK failed{detail}"),
+            format!("check the mosquitto listener on {host}:{port}"),
+        ));
+        return failures;
     }
     println!("  ✓ mqtt CONNACK");
 
@@ -1110,6 +1138,12 @@ pub(crate) async fn doctor_sbc(config: &Config) {
             println!(
                 "          quick fix: ssh <user>@{host} -- sudo systemctl enable --now firment-guard"
             );
+            failures.push(Check::missing(
+                "sbc guard status",
+                State::Required,
+                "no retained firment/guard/status within 6s",
+                format!("enable firment-guard on {host}"),
+            ));
         }
         Some(json) => match serde_json::from_str::<serde_json::Value>(&json) {
             Ok(v) => {
@@ -1135,6 +1169,12 @@ pub(crate) async fn doctor_sbc(config: &Config) {
                             println!(
                                 "    hint: guardd died after its last beat — journalctl -u firment-guard on the SBC"
                             );
+                            failures.push(Check::missing(
+                                "sbc guard status",
+                                State::Required,
+                                format!("heartbeat is stale (age {age}s)"),
+                                "restart firment-guard on the SBC",
+                            ));
                         }
                     }
                     None => println!(
@@ -1216,6 +1256,12 @@ pub(crate) async fn doctor_sbc(config: &Config) {
                             ids.iter().take(5).cloned().collect::<Vec<_>>().join(", ")
                         );
                         println!("    hint: ssh <user>@{host} -- ollama pull {}", p.model);
+                        failures.push(Check::missing(
+                            "sbc model",
+                            State::Required,
+                            format!("{name}: model '{}' is not pulled", p.model),
+                            format!("ollama pull {}", p.model),
+                        ));
                     }
                 }
                 Ok(Err(e)) => {
@@ -1223,19 +1269,30 @@ pub(crate) async fn doctor_sbc(config: &Config) {
                     println!(
                         "    hint: ollama not running on the SBC: ssh <user>@{host} -- systemctl status ollama"
                     );
+                    failures.push(Check::missing(
+                        "sbc model",
+                        State::Required,
+                        format!("{name}: {base}/models unreachable"),
+                        "start ollama on the SBC",
+                    ));
                 }
                 Err(_) => {
                     println!(
                         "  ✗ {name}: {base}/models timed out (cold start can take ~70s; retry once)"
                     );
+                    failures.push(Check::missing(
+                        "sbc model",
+                        State::Required,
+                        format!("{name}: {base}/models timed out"),
+                        "retry once, then check ollama on the SBC",
+                    ));
                 }
             }
         }
     }
 
     // Stage 6 — bound devices from the project's workbench.toml (if any).
-    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    match firment_core::WorkbenchConfig::load(&cwd) {
+    match firment_core::WorkbenchConfig::load(cwd) {
         Ok(wb) if !wb.devices.is_empty() => {
             let nodes: Vec<String> = wb.devices.keys().cloned().collect();
             println!("  ✓ devices bound: {}", nodes.join(", "));
@@ -1245,6 +1302,7 @@ pub(crate) async fn doctor_sbc(config: &Config) {
             println!("  · no workbench.toml in cwd — device list skipped (run from project root)")
         }
     }
+    failures
 }
 
 /// Split "host:port" (port optional → 1883).
@@ -1480,5 +1538,19 @@ mod tests {
         } else {
             assert!(!gcc.fix.is_empty(), "a required gap must name its fix");
         }
+    }
+
+    #[tokio::test]
+    async fn sbc_doctor_reports_a_missing_broker_as_required() {
+        // `doctor --sbc` used to print ✗ and exit 0 because the function returned
+        // (). The exit code is now computed from these checks.
+        let mut config = Config::default_config();
+        config.mqtt.broker.clear();
+        let checks = doctor_sbc(&config, Path::new(".")).await;
+        let missing = first_required_missing(&checks);
+        assert!(
+            missing.as_deref().is_some_and(|name| name.contains("mqtt")),
+            "a missing broker must be a required failure, got {checks:?}"
+        );
     }
 }

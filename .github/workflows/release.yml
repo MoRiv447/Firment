@@ -18,7 +18,9 @@ jobs:
             target: x86_64-pc-windows-msvc
             asset: firm-x86_64-pc-windows-msvc.zip
             package: zip
-          - os: ubuntu-latest
+          # Match the CI test image rather than `ubuntu-latest`: the generic
+          # Linux asset's glibc floor comes from the runner that builds it.
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             asset: firm-x86_64-unknown-linux-gnu.tar.gz
             package: tar
@@ -33,6 +35,18 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Tag matches the crate and GUI versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          cargo_version="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+          gui_version="$(grep -m1 '"version"' gui/src-tauri/tauri.conf.json | cut -d'"' -f4)"
+          echo "tag=$tag cargo=$cargo_version gui=$gui_version"
+          if [ "$tag" != "$cargo_version" ] || [ "$tag" != "$gui_version" ]; then
+            echo "::error::the tag ($tag) does not match Cargo.toml ($cargo_version) and tauri.conf.json ($gui_version); bump both before tagging"
+            exit 1
+          fi
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -65,6 +79,18 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Tag matches the crate and GUI versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          cargo_version="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+          gui_version="$(grep -m1 '"version"' gui/src-tauri/tauri.conf.json | cut -d'"' -f4)"
+          echo "tag=$tag cargo=$cargo_version gui=$gui_version"
+          if [ "$tag" != "$cargo_version" ] || [ "$tag" != "$gui_version" ]; then
+            echo "::error::the tag ($tag) does not match Cargo.toml ($cargo_version) and tauri.conf.json ($gui_version); bump both before tagging"
+            exit 1
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: 22

@@ -5,10 +5,16 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Default install location: `%USERPROFILE%\.firment\bin` (or
-/// `$HOME/.firment/bin` on Unix). `FIRMENT_BIN_DIR` overrides it for tests.
+/// `$HOME/.firment/bin` on Unix). `FIRMENT_INSTALL_DIR` is the installers'
+/// primary override; `FIRMENT_BIN_DIR` is its documented alias.
 pub fn default_bin_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("FIRMENT_BIN_DIR") {
-        return PathBuf::from(dir);
+    // The installers' documented primary name is FIRMENT_INSTALL_DIR; the CLI
+    // only knew the alias, so `firm update` after a custom install wrote to the
+    // default directory and reported success while PATH still held the old file.
+    for var in ["FIRMENT_INSTALL_DIR", "FIRMENT_BIN_DIR"] {
+        if let Ok(dir) = std::env::var(var) {
+            return PathBuf::from(dir);
+        }
     }
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
@@ -146,37 +152,119 @@ pub fn update(source: Option<PathBuf>, to: Option<PathBuf>) -> Result<()> {
     let dir = to.unwrap_or_else(default_bin_dir);
     let target = dir.join(exe_name());
     let current = std::env::current_exe()?;
-    update_impl(&source, &target, &current)?;
 
-    let output = std::process::Command::new(&target)
+    // Verify the SOURCE before touching the installed binary. The old order
+    // replaced first and ran --version on the target, so `firm update <typo>`
+    // destroyed a working install and then told the user it had done so.
+    let source_output = std::process::Command::new(&source)
         .arg("--version")
         .output()
         .with_context(|| {
             format!(
-                "failed to verify the new version ({} cannot run --version)",
-                target.display()
+                "refusing to update: {} cannot be run (cannot execute it)",
+                source.display()
             )
         })?;
-    let version = probe_version(&output, &target)?;
-    println!(
-        "Updated: {} -> {}\nNew version: {}",
-        source.display(),
-        target.display(),
-        version
-    );
-    Ok(())
+    let source_version = probe_source_version(&source_output, &source)?;
+
+    // Keep a copy of the working install for the probe below. A copy rather
+    // than a rename: the target may be running, and MoveFileEx can replace a
+    // running image.
+    let backup = if target.exists() {
+        let name = target
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "firm".to_string());
+        let path = target.with_file_name(format!(".{name}.backup.{}", std::process::id()));
+        fs::copy(&target, &path)
+            .with_context(|| format!("cannot back up {} before updating", target.display()))?;
+        Some(path)
+    } else {
+        None
+    };
+
+    update_impl(&source, &target, &current)?;
+
+    let output = std::process::Command::new(&target)
+        .arg("--version")
+        .output();
+    let verified = match output {
+        Ok(output) => probe_version(&output, &target),
+        Err(e) => Err(anyhow::anyhow!(
+            "verification failed: {} cannot run --version: {e}",
+            target.display()
+        )),
+    };
+    match verified {
+        Ok(version) => {
+            if let Some(backup) = &backup {
+                let _ = fs::remove_file(backup);
+            }
+            println!(
+                "Updated: {} -> {}\nNew version: {} (target reports {})",
+                source.display(),
+                target.display(),
+                source_version,
+                version
+            );
+            Ok(())
+        }
+        Err(e) => {
+            restore_install(&target, &backup);
+            Err(e.context(
+                "the update did not produce a runnable binary; the previous install was restored \
+                 where possible",
+            ))
+        }
+    }
 }
 
-/// Judge the fresh binary's `--version` run. `update_impl` has already
-/// replaced the file at this point, so a probe that fails must be reported as
-/// a failed update — printing "Updated" would send the user off with a binary
-/// that cannot run and no copy of the one that could.
+fn probe_source_version(output: &std::process::Output, source: &Path) -> Result<String> {
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        bail!(
+            "refusing to update: {} exited {} on --version{}. The installed binary was not \
+             touched.",
+            source.display(),
+            output.status,
+            if detail.is_empty() {
+                String::new()
+            } else {
+                format!(" (stderr: {detail})")
+            }
+        );
+    }
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if version.is_empty() {
+        bail!(
+            "refusing to update: {} ran --version and printed no version. The installed binary \
+             was not touched.",
+            source.display()
+        );
+    }
+    Ok(version)
+}
+
+fn restore_install(target: &Path, backup: &Option<PathBuf>) {
+    match backup {
+        Some(backup) => {
+            let _ = fs::copy(backup, target);
+            let _ = fs::remove_file(backup);
+        }
+        // There was no previous install; do not leave a broken one behind.
+        None => {
+            let _ = fs::remove_file(target);
+        }
+    }
+}
+
+/// Judge the fresh binary's `--version` run. `update` restores the backup when
+/// this returns Err; the message must not imply the user is left with nothing.
 fn probe_version(output: &std::process::Output, target: &Path) -> Result<String> {
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
         bail!(
-            "verification failed: {} exited {} on --version{}. The previous install was already \
-             replaced — run `firm install` again from a binary that works.",
+            "verification failed: {} exited {} on --version{}.",
             target.display(),
             output.status,
             if detail.is_empty() {
@@ -189,8 +277,7 @@ fn probe_version(output: &std::process::Output, target: &Path) -> Result<String>
     let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if version.is_empty() {
         bail!(
-            "verification failed: {} ran --version and printed no version. The previous install \
-             was already replaced — run `firm install` again from a binary that works.",
+            "verification failed: {} ran --version and printed no version.",
             target.display()
         );
     }
@@ -699,6 +786,24 @@ mod tests {
         let (t, completions) = install_files(&target, dir.path()).unwrap();
         assert_eq!(fs::read(&t).unwrap(), b"installed-bytes");
         assert!(completions.is_file());
+    }
+
+    #[test]
+    fn a_failed_update_restores_the_previous_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("firm.exe");
+        let backup = dir.path().join(".firm.backup");
+        fs::write(&target, b"broken-new").unwrap();
+        fs::write(&backup, b"working-old").unwrap();
+        restore_install(&target, &Some(backup.clone()));
+        assert_eq!(fs::read(&target).unwrap(), b"working-old");
+        assert!(!backup.exists(), "the backup is consumed by the restore");
+
+        // No previous install: a failed verification must not leave the broken
+        // file behind.
+        fs::write(&target, b"broken-new").unwrap();
+        restore_install(&target, &None);
+        assert!(!target.exists());
     }
 
     #[test]

@@ -520,7 +520,7 @@ async fn main() -> anyhow::Result<()> {
                 let path = cli.config.clone().unwrap_or_else(config_path);
                 // Which probes each format runs is the only difference between the two branches;
                 // the verdict is taken once, below, from the checks either way produced.
-                let checks = if *json {
+                let mut checks = if *json {
                     // Machine-readable: only the toolchain report on stdout, so
                     // a caller does not have to strip prose before parsing.
                     let checks = doctor::doctor_tools(&cwd, &config.tools, true);
@@ -531,9 +531,6 @@ async fn main() -> anyhow::Result<()> {
                     doctor::doctor_install();
                     let locals = doctor::doctor_local(&config).await;
                     let checks = doctor::doctor_tools(&cwd, &config.tools, false);
-                    if *sbc {
-                        doctor::doctor_sbc(&config).await;
-                    }
                     // The answer, after the evidence: this is the line a reader who ran
                     // `doctor` to find out whether they can work actually needs.
                     println!(
@@ -542,6 +539,9 @@ async fn main() -> anyhow::Result<()> {
                     );
                     checks
                 };
+                if *sbc {
+                    checks.extend(doctor::doctor_sbc(&config, &cwd).await);
+                }
                 // Exit code: 0 clean, 2 something REQUIRED is missing.
                 // Warnings stay 0 -- a missing logic analyser is not a
                 // failure, and turning it into one would make `doctor`
@@ -730,7 +730,10 @@ async fn main() -> anyhow::Result<()> {
             missing = doctor::first_required_missing(&checks);
         }
         if cli.sbc {
-            doctor::doctor_sbc(&config).await;
+            let sbc_checks = doctor::doctor_sbc(&config, &cwd).await;
+            if missing.is_none() {
+                missing = doctor::first_required_missing(&sbc_checks);
+            }
         }
         if let Some(missing) = missing {
             eprintln!("\n✗ required tool missing: {missing}");
@@ -1417,7 +1420,12 @@ fn edit_config(path: &Path) -> std::io::Result<()> {
     println!("opening {} with {editor}", path.display());
     let status = std::process::Command::new(&editor).arg(path).status()?;
     if !status.success() {
-        eprintln!("{editor} exited with {status}");
+        // A script needs to know the editor never opened the file; eprintln
+        // followed by Ok(()) reported success.
+        return Err(std::io::Error::other(format!(
+            "{editor} exited with {status}; {} was not edited",
+            path.display()
+        )));
     }
     Ok(())
 }
@@ -1830,6 +1838,12 @@ fn run_replay(
     let log = EventLog::new(store.event_log_path(&id));
     let records = log.read().map_err(anyhow::Error::msg)?;
     if records.is_empty() {
+        // `--json` promised JSON; the human explanation used to be printed
+        // first, so a parser got prose and a mistyped id exited 0.
+        if json {
+            println!("[]");
+            return Ok(());
+        }
         println!(
             "no event log for session {id} — the log is written as the session runs \
              (turns, tools, reviews, errors), so a session from before it existed has none"

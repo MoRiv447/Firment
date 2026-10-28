@@ -106,6 +106,28 @@ jobs:
           cargo clippy --all-targets -- -D warnings
           cargo test --lib
 
+  # The Tauri app is Windows-only, but `gui-check` runs on Ubuntu: `#[cfg(windows)]`
+  # branches in src-tauri are neither compiled nor linted before the tag-triggered
+  # release job. This job only compiles them; the tests stay on the Linux job.
+  gui-check-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+      - name: Frontend build (Tauri needs its dist)
+        working-directory: gui
+        run: |
+          npm ci
+          npm run build
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust check (src-tauri, Windows)
+        working-directory: gui/src-tauri
+        run: cargo check --all-targets
+
   # Security advisories (v1.0 plan, item 6): the one gate that needs the network on
   # purpose -- the advisory database is a live feed, so caching it locally would be
   # caching the answer. Both lockfiles are audited, because `gui/src-tauri` is an

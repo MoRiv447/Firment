@@ -11,9 +11,11 @@ branding:
 
 inputs:
   version:
-    description: 'Firment version tag to install (`latest`, or e.g. v0.8.1)'
+    description: >-
+      Firment version tag to install. Pinned to a release that has `firm review`;
+      `latest` resolves to the last stable tag, which predates the subcommand.
     required: false
-    default: 'latest'
+    default: 'v1.0.0-rc3'
   paths:
     description: >-
       Files or directories to review. Empty (the default) uses the files this PR changed,
@@ -72,21 +74,45 @@ runs:
         fi
         # Only what the four rule-bearing extensions cover, and capped: a review of a
         # 3000-file PR is not a review, it is a timeout.
+        all=$(git diff --name-only "$base"...HEAD -- '*.rs' '*.c' '*.h' '*.s' | wc -l | tr -d ' ')
         files=$(git diff --name-only "$base"...HEAD -- '*.rs' '*.c' '*.h' '*.s' | head -200 | tr '\n' ' ')
-        echo "paths=${files:-.}" >> "$GITHUB_OUTPUT"
+        echo "paths=${files}" >> "$GITHUB_OUTPUT"
+        # An empty list is not "review the whole repository": that reports on history
+        # instead of the PR and can fail an unrelated change on a pre-existing finding.
+        if [ -z "$files" ]; then
+          echo "::notice::no .rs/.c/.h/.s files changed; nothing to review"
+        fi
+        if [ "$all" -gt 200 ]; then
+          echo "truncated=true" >> "$GITHUB_OUTPUT"
+          echo "::warning::changed file list truncated to the first 200 entries ($all matched)"
+        else
+          echo "truncated=false" >> "$GITHUB_OUTPUT"
+        fi
 
     - name: Review
       id: review
       shell: bash
       env:
         PATHS: ${{ steps.changed.outputs.paths }}
+        TRUNCATED: ${{ steps.changed.outputs.truncated }}
         DEPS: ${{ inputs.deps }}
       run: |
         set -uo pipefail
         # The reviews exit 2 when something high is found — that is the signal, not a
         # crash, so the code is captured rather than aborting the step.
-        firm review $PATHS --markdown > static.md 2>&1
-        static_status=$?
+        if [ -z "$PATHS" ]; then
+          printf '# Review: no reviewable files\n\nThis PR changed no .rs/.c/.h/.s files.\n' > static.md
+          static_status=0
+        else
+          # Read the space-separated list into an argv array so a path cannot be
+          # split by the shell twice.
+          read -r -a path_array <<< "$PATHS"
+          firm review "${path_array[@]}" --markdown > static.md 2>&1
+          static_status=$?
+        fi
+        if [ "$TRUNCATED" = "true" ]; then
+          printf '\n> Review covered only the first 200 changed files.\n' >> static.md
+        fi
 
         deps_status=0
         if [ "$DEPS" = "true" ] && [ -f Cargo.toml ]; then
