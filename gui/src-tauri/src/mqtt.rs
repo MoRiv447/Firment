@@ -231,12 +231,15 @@ fn forward(shared: &Arc<Shared>, topic: &str, payload: &[u8]) {
         Some(Route::Device { node, kind }) => {
             // Side-sink for the device_log tool: every frame lands in a
             // daily JSONL next to config.toml (single writer = this task,
-            // so plain appends are safe).
-            sink_frame(&frame);
+            // so plain appends are safe). The topic-derived node/kind are
+            // written WITH the payload; the tool filters on them, and the
+            // old sink discarded them, so every `kind=state` query matched
+            // only frames whose firmware happened to embed the same JSON.
+            sink_frame(&node, &kind, &frame);
             emit(shared, FrontendEvent::DeviceFrame { node, kind, frame });
         }
         Some(Route::GuardStatus) => {
-            sink_frame(&frame);
+            sink_frame("guard", "status", &frame);
             emit(shared, FrontendEvent::GuardStatus { frame });
         }
         None => {} // collab/presence etc. land in M4
@@ -252,7 +255,7 @@ const DEVICE_LOG_KEEP_DAYS: usize = 7;
 /// Keep the per-day sink bounded. It used to grow with every frame forever, and
 /// any publisher on the LAN broker could drive it; the flash history next door had
 /// a cap, this one did not. A new day also prunes all but the newest seven files.
-fn sink_frame(frame: &str) {
+fn sink_frame(node: &str, kind: &str, frame: &str) {
     use std::io::Write as _;
     let dir = firment_core::config::config_dir();
     let day = chrono::Utc::now().format("%Y%m%d");
@@ -266,7 +269,13 @@ fn sink_frame(frame: &str) {
         return;
     }
     let clean = frame.replace('\n', " ");
-    let line_len = clean.len() as u64 + 1;
+    let line = serde_json::json!({
+        "node": node,
+        "kind": kind,
+        "frame": clean,
+    })
+    .to_string();
+    let line_len = line.len() as u64 + 1;
     if size + line_len > DEVICE_LOG_MAX_BYTES {
         return;
     }
@@ -275,7 +284,7 @@ fn sink_frame(frame: &str) {
         .append(true)
         .open(&path)
     {
-        let _ = writeln!(f, "{clean}");
+        let _ = writeln!(f, "{line}");
     }
 }
 

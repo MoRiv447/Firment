@@ -75,8 +75,7 @@ impl Tool for DeviceLog {
         let mut matched: Vec<&str> = text
             .lines()
             .filter(|l| !l.trim().is_empty())
-            .filter(|l| node.is_empty() || l.contains(node))
-            .filter(|l| kind.is_empty() || l.contains(&format!("\"kind\":\"{kind}\"")))
+            .filter(|l| line_matches(l, node, kind))
             .collect();
         let total = matched.len();
         if total > tail {
@@ -91,6 +90,19 @@ impl Tool for DeviceLog {
             ),
         })
     }
+}
+
+/// A line written by the Tauri MQTT sink carries the topic-derived node and kind
+/// next to the payload. The old tool searched the raw payload for them, so a
+/// `kind=state` query matched nothing unless the firmware duplicated the fields.
+/// A legacy raw line has no envelope; it is visible only when no filter is asked.
+fn line_matches(line: &str, node: &str, kind: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+        return node.is_empty() && kind.is_empty();
+    };
+    let line_node = value.get("node").and_then(|v| v.as_str()).unwrap_or("");
+    let line_kind = value.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+    (node.is_empty() || line_node == node) && (kind.is_empty() || line_kind == kind)
 }
 
 #[cfg(test)]
@@ -132,5 +144,17 @@ mod tests {
         assert!(out.text.contains("3 matching frame"), "got: {}", out.text);
         let lines: usize = out.text.lines().count();
         assert_eq!(lines, 3, "header + 2 tail lines");
+    }
+
+    #[test]
+    fn the_envelope_is_matched_by_node_and_kind_not_by_substrings() {
+        let line = r#"{"node":"s3","kind":"state","frame":"{\"ack\":true}"}"#;
+        assert!(line_matches(line, "s3", "state"));
+        assert!(!line_matches(line, "s3", "alert"));
+        assert!(!line_matches(line, "other", "state"));
+        // A line written before the envelope existed is still shown by an
+        // unfiltered query, and never claims to match a node/kind.
+        assert!(line_matches("raw payload", "", ""));
+        assert!(!line_matches("raw payload", "s3", ""));
     }
 }
