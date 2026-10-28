@@ -547,6 +547,9 @@ impl App {
         let mut lines = Vec::new();
 
         lines.push(Line::from(Span::styled("SESSIONS", dim)));
+        // The list is the global store, and selecting a row moves the session cwd. The
+        // old "WORKSPACE" heading read as if these were scoped to the current project.
+        lines.push(Line::from(Span::styled("  (all projects)", dim)));
         if self.rail_sessions.is_empty() {
             lines.push(Line::from(Span::styled("  —", dim)));
         }
@@ -841,6 +844,10 @@ impl App {
         );
         let right = if self.interrupt_armed_at.is_some() {
             format!(" {} · {state} · ⏸ Esc again to interrupt ", spinner)
+        } else if self.busy && !self.interrupting && self.modal_up() {
+            // The first Esc answers the modal, not the turn. Telling the user "Esc×2
+            // interrupt" here made a question/permission dialog lose its answer.
+            format!(" {} · {state} · answer the modal first ", spinner)
         } else if self.busy && !self.interrupting {
             format!(" {} · {state} · Esc×2 interrupt ", spinner)
         } else {
@@ -984,14 +991,38 @@ impl App {
                     format!("Filter: {query} (Enter select · Esc close)"),
                     Style::default().fg(Color::DarkGray),
                 )));
-                if picker.models.is_empty() {
+                if !picker.loaded && picker.error.is_none() {
                     lines.push(Line::from(Span::styled(
-                        "Fetching model list…",
+                        "Fetching model list… (Esc closes)",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                } else if let Some(error) = &picker.error {
+                    lines.push(Line::from(Span::styled(
+                        format!("model list failed: {error}"),
+                        Style::default().fg(Color::Red),
+                    )));
+                    lines.push(Line::from(Span::styled(
+                        "Esc closes; Ctrl+P retries",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                } else if picker.models.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        "the provider returned no models (Esc closes)",
                         Style::default().fg(Color::DarkGray),
                     )));
                 } else {
                     let filtered = picker.filtered();
-                    for (idx, model) in filtered.iter().take(12).enumerate() {
+                    // The cursor can move past the first 12 rows; the old view always drew
+                    // the first 12, so Enter selected a model nobody could see.
+                    let start = picker.selected.saturating_sub(11);
+                    if start > 0 {
+                        lines.push(Line::from(Span::styled(
+                            format!("… {start} above"),
+                            Style::default().fg(Color::DarkGray),
+                        )));
+                    }
+                    for (offset, model) in filtered.iter().skip(start).take(12).enumerate() {
+                        let idx = start + offset;
                         let (marker, style) = if idx == picker.selected {
                             (
                                 "❯ ",
@@ -1004,9 +1035,9 @@ impl App {
                         };
                         lines.push(Line::from(Span::styled(format!("{marker}{model}"), style)));
                     }
-                    if filtered.len() > 12 {
+                    if filtered.len() > start + 12 {
                         lines.push(Line::from(Span::styled(
-                            format!("… {} more", filtered.len() - 12),
+                            format!("… {} more", filtered.len() - start - 12),
                             Style::default().fg(Color::DarkGray),
                         )));
                     }
@@ -1037,9 +1068,23 @@ impl App {
                     format!("Filter: {query} (↑/↓ select · Enter open · Esc close)"),
                     Style::default().fg(Color::DarkGray),
                 )));
-                if picker.sessions.is_empty() {
+                if let Some(error) = &picker.error {
                     lines.push(Line::from(Span::styled(
-                        "Loading session list…",
+                        format!("session list failed: {error}"),
+                        Style::default().fg(Color::Red),
+                    )));
+                    lines.push(Line::from(Span::styled(
+                        "Esc closes; /sessions retries",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                } else if !picker.loaded {
+                    lines.push(Line::from(Span::styled(
+                        "Loading session list… (Esc closes)",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                } else if picker.sessions.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        "no sessions saved yet",
                         Style::default().fg(Color::DarkGray),
                     )));
                 } else {
@@ -1072,6 +1117,16 @@ impl App {
                             format!("    id: {}", session.id),
                             Style::default().fg(Color::DarkGray),
                         )));
+                        // Sessions are global, and choosing one moves the tool cwd. The
+                        // picker used to show no cwd at all, so a session from another
+                        // project looked exactly like a local one.
+                        lines.push(Line::from(Span::styled(
+                            format!(
+                                "    cwd: {}",
+                                truncate_chars(&session.cwd.display().to_string(), 64)
+                            ),
+                            Style::default().fg(Color::DarkGray),
+                        )));
                     }
                     if filtered.len() > 6 {
                         lines.push(Line::from(Span::styled(
@@ -1079,8 +1134,14 @@ impl App {
                             Style::default().fg(Color::DarkGray),
                         )));
                     }
+                    if let Some(pending) = &picker.pending_delete {
+                        lines.push(Line::from(Span::styled(
+                            format!("press Ctrl+D again to delete {pending} (irreversible)"),
+                            Style::default().fg(Color::Red),
+                        )));
+                    }
                     lines.push(Line::from(Span::styled(
-                        "Keys: ↑/↓ select · Enter open · c copy id · d delete · Esc close",
+                        "Keys: ↑/↓ select · Enter open · Ctrl+C copy id · Ctrl+D delete · Esc close",
                         Style::default().fg(Color::DarkGray),
                     )));
                 }

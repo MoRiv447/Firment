@@ -2151,6 +2151,101 @@ mod tests {
     }
 
     #[test]
+    fn session_picker_letters_filter_and_ctrl_d_needs_two_presses() {
+        let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
+        let mut app = app_on(cmd_tx);
+        app.on_agent(AgentEvent::Sessions(vec![firment_core::SessionSummary {
+            id: "33333333-cccc".to_string(),
+            updated_at: 3,
+            model: "m".to_string(),
+            cwd: PathBuf::from("."),
+            preview: "debug the timer".to_string(),
+            kind: firment_core::SessionKind::Normal,
+            parent_session: None,
+        }]));
+        assert!(app.session_picker.is_some());
+
+        // `d` is a filter character, not a delete command.
+        app.on_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        assert!(
+            app.session_picker.as_ref().unwrap().query == vec!['d'],
+            "a plain letter must reach the filter"
+        );
+        assert!(
+            cmd_rx.try_recv().is_err(),
+            "typing must not delete anything"
+        );
+
+        // Ctrl+D arms, the second Ctrl+D deletes.
+        app.on_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        assert!(cmd_rx.try_recv().is_err(), "the first press only arms");
+        assert_eq!(
+            app.session_picker
+                .as_ref()
+                .unwrap()
+                .pending_delete
+                .as_deref(),
+            Some("33333333-cccc")
+        );
+        app.on_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        match cmd_rx.try_recv().unwrap() {
+            AgentCmd::DeleteSession(id) => assert_eq!(id, "33333333-cccc"),
+            _ => panic!("expected DeleteSession"),
+        }
+        assert!(
+            app.session_picker.as_ref().unwrap().sessions.is_empty(),
+            "the deleted row is removed from the picker"
+        );
+    }
+
+    #[test]
+    fn paste_lands_in_the_question_modal_not_the_hidden_composer() {
+        let mut app = test_app();
+        let (tx, _rx) = oneshot::channel();
+        app.question = Some(firment_core::ask::QuestionRequest {
+            question: "which pin?".to_string(),
+            options: vec!["PA9".to_string()],
+            reply: tx,
+        });
+        app.on_ui(crossterm::event::Event::Paste("PA10".to_string()));
+        assert_eq!(
+            app.question_input.iter().collect::<String>(),
+            "PA10",
+            "the answer belongs to the modal that is on screen"
+        );
+        assert!(
+            app.input.is_empty(),
+            "paste must not edit the composer behind the question"
+        );
+    }
+
+    #[test]
+    fn a_double_slash_sends_a_literal_leading_slash() {
+        let (cmd_tx, mut cmd_rx) = mpsc::channel(8);
+        let mut app = app_on(cmd_tx);
+        app.input = "//etc/hosts is wrong".chars().collect();
+        app.submit();
+        match cmd_rx.try_recv().unwrap() {
+            AgentCmd::User(text) => assert_eq!(text, "/etc/hosts is wrong"),
+            _ => panic!("a // message must be sent, not parsed as a command"),
+        }
+        assert!(app.input.is_empty(), "a sent prompt clears the composer");
+    }
+
+    #[test]
+    fn ctrl_p_closes_the_model_picker_instead_of_filtering_it() {
+        let mut app = test_app();
+        app.open_model_picker();
+        app.on_agent(AgentEvent::Models(vec!["m1".to_string(), "m2".to_string()]));
+        assert!(app.model_picker.is_some());
+        app.on_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        assert!(
+            app.model_picker.is_none(),
+            "Ctrl+P again must close the picker it opened"
+        );
+    }
+
+    #[test]
     fn last_output_text_returns_most_recent_assistant_message() {
         let mut app = test_app();
         assert!(app.last_output_text().is_none());

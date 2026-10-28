@@ -4,6 +4,10 @@ pub(crate) struct ModelPicker {
     pub(crate) query: Vec<char>,
     pub(crate) models: Vec<String>,
     pub(crate) selected: usize,
+    /// Whether the provider has answered. An empty model list means "no models" only
+    /// after this is true; before it, the picker is still waiting.
+    pub(crate) loaded: bool,
+    pub(crate) error: Option<String>,
 }
 
 impl ModelPicker {
@@ -12,6 +16,8 @@ impl ModelPicker {
             query: Vec::new(),
             models,
             selected: 0,
+            loaded: false,
+            error: None,
         }
     }
 
@@ -64,6 +70,12 @@ pub(crate) struct SessionPicker {
     pub(crate) query: Vec<char>,
     pub(crate) sessions: Vec<firment_core::SessionSummary>,
     pub(crate) selected: usize,
+    /// See `ModelPicker::loaded`.
+    pub(crate) loaded: bool,
+    pub(crate) error: Option<String>,
+    /// First Ctrl+D selects the row; the second deletes it. A single keypress deleting a
+    /// transcript is too cheap for an irreversible action.
+    pub(crate) pending_delete: Option<String>,
 }
 
 impl SessionPicker {
@@ -72,6 +84,9 @@ impl SessionPicker {
             query: Vec::new(),
             sessions,
             selected: 0,
+            loaded: false,
+            error: None,
+            pending_delete: None,
         }
     }
 

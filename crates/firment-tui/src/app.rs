@@ -593,10 +593,19 @@ impl App {
             }
             AgentEvent::Models(models) => {
                 if let Some(picker) = &mut self.model_picker {
+                    // The failure path emits Error and then an empty Models list. Clearing
+                    // the error here would replace it with "No models", which names the
+                    // wrong fact.
+                    if !models.is_empty() {
+                        picker.error = None;
+                    }
                     picker.models = models;
+                    picker.loaded = true;
                     picker.clamp();
                 } else if !self.model_picker_dismissed {
-                    self.model_picker = Some(ModelPicker::new(models));
+                    let mut picker = ModelPicker::new(models);
+                    picker.loaded = true;
+                    self.model_picker = Some(picker);
                 }
             }
             AgentEvent::Sessions(sessions) => {
@@ -604,10 +613,16 @@ impl App {
                 self.rail_sessions = rows;
                 self.rail_sessions_shed = shed;
                 if let Some(picker) = &mut self.session_picker {
+                    if !sessions.is_empty() {
+                        picker.error = None;
+                    }
                     picker.sessions = sessions;
+                    picker.loaded = true;
                     picker.clamp();
                 } else if !self.session_picker_dismissed {
-                    self.session_picker = Some(SessionPicker::new(sessions));
+                    let mut picker = SessionPicker::new(sessions);
+                    picker.loaded = true;
+                    self.session_picker = Some(picker);
                 }
             }
             AgentEvent::SessionLoaded(session) => {
@@ -667,6 +682,18 @@ impl App {
                 self.push_messages(&session.messages);
             }
             AgentEvent::Error(message) => {
+                // A picker that has not loaded yet is waiting on this request; without
+                // this it would say "Loading…" forever after the request failed.
+                if let Some(picker) = &mut self.model_picker
+                    && !picker.loaded
+                {
+                    picker.error = Some(message.clone());
+                }
+                if let Some(picker) = &mut self.session_picker
+                    && !picker.loaded
+                {
+                    picker.error = Some(message.clone());
+                }
                 self.items.push(Item::Error(message));
                 self.busy = false;
                 self.ai_thinking = false;
@@ -807,7 +834,7 @@ impl App {
             Event::Paste(text) => {
                 self.paste_burst.clear();
                 self.apply_burst_outputs();
-                self.insert_text_at_cursor(&text, true);
+                self.route_paste(&text);
                 false
             }
             Event::Mouse(mouse) if self.modal_up() => {
@@ -1499,6 +1526,22 @@ impl App {
 
     /// Insert text at the cursor; with `collapse` true, large text is folded
     /// into a placeholder.
+    /// A paste belongs to whichever input is actually showing. With a question modal up,
+    /// the hidden composer used to receive it while the modal stayed empty, so Enter
+    /// answered "empty" and the text appeared only after the modal closed. Permission and
+    /// picker modals own the keyboard for the same reason; a paste into them is ignored.
+    pub(crate) fn route_paste(&mut self, text: &str) {
+        if self.question.is_some() {
+            self.question_input
+                .extend(text.chars().filter(|c| *c != '\r'));
+            return;
+        }
+        if self.modal_up() {
+            return;
+        }
+        self.insert_text_at_cursor(text, true);
+    }
+
     pub(crate) fn insert_text_at_cursor(&mut self, text: &str, collapse: bool) {
         let text: String = text.chars().filter(|c| *c != '\r').collect();
         if text.is_empty() {
@@ -1656,6 +1699,19 @@ impl App {
                     picker.selected = count - 1;
                 }
             }
+            KeyCode::PageUp => picker.selected = picker.selected.saturating_sub(10),
+            KeyCode::PageDown => {
+                let count = picker.filtered().len();
+                if count > 0 {
+                    picker.selected = (picker.selected + 10).min(count - 1);
+                }
+            }
+            // Ctrl+P was the documented way to open this picker; pressing it again
+            // should close it, not append a "p" to the filter.
+            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.model_picker = None;
+                self.model_picker_dismissed = true;
+            }
             KeyCode::Enter => {
                 if let Some(model) = picker.selected_model() {
                     self.model = model.clone();
@@ -1670,7 +1726,10 @@ impl App {
                 picker.query.pop();
                 picker.clamp();
             }
-            KeyCode::Char(ch) => {
+            KeyCode::Char(ch)
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
                 picker.query.push(ch);
                 picker.clamp();
             }
@@ -1692,6 +1751,13 @@ impl App {
         let Some(picker) = self.session_picker.as_mut() else {
             return false;
         };
+        let ctrl_d = matches!(key.code, KeyCode::Char('d') | KeyCode::Char('D'))
+            && key.modifiers.contains(KeyModifiers::CONTROL);
+        if !ctrl_d {
+            // A confirmation armed with Ctrl+D is cancelled by anything else, so the
+            // second press is deliberate rather than "I kept arrowing".
+            picker.pending_delete = None;
+        }
         match key.code {
             KeyCode::Esc => {
                 self.session_picker = None;
@@ -1728,7 +1794,9 @@ impl App {
                 picker.query.pop();
                 picker.clamp();
             }
-            KeyCode::Char('c') | KeyCode::Char('C') => {
+            KeyCode::Char('c') | KeyCode::Char('C')
+                if key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
                 if let Some(session) = picker.filtered().get(picker.selected).cloned() {
                     match copy_to_clipboard(&session.id) {
                         Ok(()) => self.items.push(Item::System(format!(
@@ -1739,21 +1807,49 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('d') | KeyCode::Char('D') => {
-                if let Some(session) = picker.filtered().get(picker.selected).cloned() {
-                    let id = session.id.clone();
-                    self.send_cmd(AgentCmd::DeleteSession(id.clone()));
-                    self.items
-                        .push(Item::System(format!("deleting session {id}…")));
-                }
+            KeyCode::Char('d') | KeyCode::Char('D')
+                if key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.session_picker_delete_selected();
             }
-            KeyCode::Char(ch) => {
+            KeyCode::Char(ch)
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
                 picker.query.push(ch);
                 picker.clamp();
             }
             _ => {}
         }
         false
+    }
+
+    /// The two-press Ctrl+D delete. Split out so the picker borrow ends before the
+    /// command and transcript are touched; the first press only arms the confirmation.
+    fn session_picker_delete_selected(&mut self) {
+        let Some(picker) = self.session_picker.as_mut() else {
+            return;
+        };
+        let Some(session) = picker.filtered().get(picker.selected).cloned() else {
+            return;
+        };
+        let id = session.id.clone();
+        if picker.pending_delete.as_deref() == Some(id.as_str()) {
+            picker.pending_delete = None;
+            let active = id == self.session_id;
+            self.send_cmd(AgentCmd::DeleteSession(id.clone()));
+            self.items
+                .push(Item::System(format!("deleting session {id}…")));
+            if !active && let Some(picker) = self.session_picker.as_mut() {
+                picker.sessions.retain(|row| row.id != id);
+                picker.clamp();
+            }
+        } else {
+            picker.pending_delete = Some(id.clone());
+            self.items.push(Item::System(format!(
+                "press Ctrl+D again to delete session {id} (irreversible)"
+            )));
+        }
     }
 
     pub(crate) fn cell_to_content(&self, column: u16, row: u16) -> Option<(usize, usize)> {
@@ -1998,7 +2094,7 @@ impl App {
         let Ok(text) = arboard::Clipboard::new().and_then(|mut c| c.get_text()) else {
             return;
         };
-        self.insert_text_at_cursor(&text, true);
+        self.route_paste(&text);
     }
 
     pub(crate) fn last_output_text(&self) -> Option<String> {
@@ -2124,7 +2220,17 @@ impl App {
         if text.is_empty() {
             return;
         }
-        if let Some(command) = text.strip_prefix('/') {
+        // `//` sends a literal leading slash; without it a message that starts with an
+        // absolute path ("/etc/hosts is wrong") was parsed as an unknown command and never
+        // reached the model, with no escape documented anywhere.
+        let (text, escaped) = match text.strip_prefix("//") {
+            Some(rest) => (rest.to_string(), true),
+            None => (text, false),
+        };
+        if text.is_empty() {
+            return;
+        }
+        if !escaped && let Some(command) = text.strip_prefix('/') {
             self.run_command(command);
             return;
         }
@@ -2241,7 +2347,7 @@ impl App {
             .unwrap_or((command, ""));
         match name {
             "help" => self.items.push(Item::System(
-                "Commands: /new  /plan [on|off]  /agent  /models  /model <id>  /sessions (use ↑/↓ to select)  /session <id>  /delete <id>  /undo [n] (files only — the transcript is not rewritten)  /undo --before <seq> (rewind past the turn that made that tool call)  /ledger  /retry-last  /review-last  /review <path>  /ledger [--export [path]]  /pin <path>  /unpin <path>  /copy  /provider <name>  /add-provider <name> <openai|anthropic> <base_url> <model>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /max-iterations <n>  /budget <chars>  /output <tokens>  /verbosity [summary|normal|expanded]  /context  /config  /clear  /help  /quit\nKeys: ↑/↓ browse history when input is empty, move the input cursor on multi-line input, scroll the transcript on single-line input · Shift+Enter manual newline · PgUp/PgDn/wheel scroll · Ctrl+P model picker · Ctrl+O expand/collapse the diff on the selected tool card (the newest one when nothing is selected) · Ctrl+T collapse/expand every diff at once · inside /sessions: c copies the selected id to clipboard, d deletes it (drag-select and right-click are disabled because the TUI captures mouse events; press Esc to dismiss the picker, then your terminal's native selection works in the scrollback) · Ctrl+C copies the selection (copies the last reply when there is none) · Ctrl+V paste · Ctrl+Shift+C copy last reply · ←/→ move the input cursor · y/n/a permission answers · Esc interrupts AI output (Esc twice while working; clears input when idle) · Ctrl+Q quit\nInput box: auto-wraps and grows to up to 5 lines; taller content scrolls, large pastes collapse into 【line x-y】, and the title shows hidden/collapsed line counts before sending"
+                "Commands: /new  /plan [on|off]  /agent  /models  /model <id>  /sessions (use ↑/↓ to select)  /session <id>  /delete <id>  /undo [n] (files only — the transcript is not rewritten)  /undo --before <seq> (rewind past the turn that made that tool call)  /ledger  /retry-last  /review-last  /review <path>  /ledger [--export [path]]  /pin <path>  /unpin <path>  /copy  /provider <name>  /add-provider <name> <openai|anthropic> <base_url> <model>  /apikey [provider] <key>  /thinking [off|low|medium|high|xhigh|max]  /max-iterations <n>  /budget <chars>  /output <tokens>  /verbosity [summary|normal|expanded]  /context  /config  /clear  /help  /quit\nKeys: ↑/↓ browse history when input is empty, move the input cursor on multi-line input, scroll the transcript on single-line input · Shift+Enter manual newline · PgUp/PgDn/wheel scroll · Ctrl+P model picker · Ctrl+O expand/collapse the diff on the selected tool card (the newest one when nothing is selected) · Ctrl+T collapse/expand every diff at once · inside /sessions: Ctrl+C copies the selected id to clipboard, Ctrl+D twice deletes it (drag-select and right-click are disabled because the TUI captures mouse events; press Esc to dismiss the picker, then your terminal's native selection works in the scrollback) · Ctrl+C copies the selection (copies the last reply when there is none) · Ctrl+V paste · Ctrl+Shift+C copy last reply · a message starting with // is sent with its leading slash (so /etc/hosts is not parsed as a command) · /clear clears the screen, not the conversation — use /new to reset · ←/→ move the input cursor · y/n/a permission answers · Esc interrupts AI output (Esc twice while working; clears input when idle) · Ctrl+Q quit\nInput box: auto-wraps and grows to up to 5 lines; taller content scrolls, large pastes collapse into 【line x-y】, and the title shows hidden/collapsed line counts before sending"
                     .to_string(),
             )),
             "retry-last" => self.retry_last(),
@@ -2414,8 +2520,14 @@ impl App {
                     return;
                 }
                 self.send_cmd(AgentCmd::DeleteSession(arg.to_string()));
-                self.items
-                    .push(Item::System(format!("deleting session {arg}…")));
+                let queued = if self.busy {
+                    " (queued after the current turn)"
+                } else {
+                    ""
+                };
+                self.items.push(Item::System(format!(
+                    "deleting session {arg}…{queued}"
+                )));
             }
             "provider" if !arg.is_empty() => {
                 self.send_cmd(AgentCmd::SetProvider(arg.to_string()));
@@ -2443,8 +2555,13 @@ impl App {
             }
             "session" if !arg.is_empty() => {
                 self.send_cmd(AgentCmd::LoadSession(arg.to_string()));
+                let queued = if self.busy {
+                    " (queued after the current turn)"
+                } else {
+                    ""
+                };
                 self.items
-                    .push(Item::System(format!("Loading session {arg}…")));
+                    .push(Item::System(format!("Loading session {arg}…{queued}")));
             }
             "session" => {
                 self.open_session_picker();
