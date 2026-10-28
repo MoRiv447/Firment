@@ -557,15 +557,15 @@ impl SessionStore {
             // and a backup is the difference between "one line was lost" and "the loss is
             // permanent and silent".
             let backup = path.with_extension("jsonl.damaged");
-            if !backup.exists() {
-                if let Err(e) = fs::copy(&path, &backup) {
-                    tracing::warn!(
-                        "session {} has {corrupt_lines} unreadable line(s); could not save the \
-                         damaged original to {}: {e}",
-                        path.display(),
-                        backup.display()
-                    );
-                }
+            if !backup.exists()
+                && let Err(e) = fs::copy(&path, &backup)
+            {
+                tracing::warn!(
+                    "session {} has {corrupt_lines} unreadable line(s); could not save the \
+                     damaged original to {}: {e}",
+                    path.display(),
+                    backup.display()
+                );
             }
             tracing::warn!(
                 "session {} had {corrupt_lines} unreadable line(s); the original is preserved at {}",
@@ -1845,14 +1845,19 @@ six earlier rounds"
         });
         store.save(&old).unwrap();
         let old_path = store.path_for("older");
-        std::fs::File::open(&old_path)
+        // A read-only handle cannot set a file time on Windows (os error 5).
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&old_path)
             .unwrap()
             .set_modified(UNIX_EPOCH + std::time::Duration::from_secs(10))
             .unwrap();
 
         let newest = dir.path().join("newest.jsonl");
         std::fs::write(&newest, "not a meta line\n").unwrap();
-        std::fs::File::open(&newest)
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&newest)
             .unwrap()
             .set_modified(UNIX_EPOCH + std::time::Duration::from_secs(20))
             .unwrap();

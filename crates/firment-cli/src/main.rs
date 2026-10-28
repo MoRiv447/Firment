@@ -3682,16 +3682,11 @@ mod tests {
         // Keyed `<crate>/<path relative to its src dir>`, because an absolute path has more
         // components than a table row can honestly name, and the last three of them are not the
         // crate plus the file the row means.
-        const ALLOWED: [(&str, usize, &str); 9] = [
+        const ALLOWED: [(&str, usize, &str); 7] = [
             (
                 "firment-core/agent.rs",
                 1,
                 "spill file: the name is a fresh uuid, so nothing is ever replaced",
-            ),
-            (
-                "firment-core/journal.rs",
-                1,
-                "undo index: a unique (stamp, seq) name, and a torn one is refused by the reader rather than trusted",
             ),
             (
                 "firment-core/kb.rs",
@@ -3702,11 +3697,6 @@ mod tests {
                 "firment-core/local.rs",
                 1,
                 "endpoint discovery cache: rebuilt on the next probe if it came out torn",
-            ),
-            (
-                "firment-core/workbench.rs",
-                1,
-                "the temp half of the workbench save, which renames into place",
             ),
             (
                 "firment-tools/tools/debug.rs",

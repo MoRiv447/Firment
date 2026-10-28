@@ -91,6 +91,10 @@ impl Tool for WriteTool {
         "write_file"
     }
 
+    fn mutates(&self, _args: &Value, _ctx: &ToolContext) -> bool {
+        true
+    }
+
     fn description(&self) -> &'static str {
         "fake write tool"
     }
@@ -116,6 +120,10 @@ struct JournalingWriteTool;
 impl Tool for JournalingWriteTool {
     fn name(&self) -> &'static str {
         "write_file"
+    }
+
+    fn mutates(&self, _args: &Value, _ctx: &ToolContext) -> bool {
+        true
     }
 
     fn description(&self) -> &'static str {
@@ -158,6 +166,10 @@ struct FailingEditTool;
 impl Tool for FailingEditTool {
     fn name(&self) -> &'static str {
         "edit_file"
+    }
+
+    fn mutates(&self, _args: &Value, _ctx: &ToolContext) -> bool {
+        true
     }
 
     fn description(&self) -> &'static str {
@@ -911,6 +923,10 @@ struct DiffShapedTool;
 impl Tool for DiffShapedTool {
     fn name(&self) -> &'static str {
         "edit_file"
+    }
+
+    fn mutates(&self, _args: &Value, _ctx: &ToolContext) -> bool {
+        true
     }
 
     fn description(&self) -> &'static str {

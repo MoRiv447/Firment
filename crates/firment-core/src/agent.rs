@@ -3770,6 +3770,9 @@ mod tests {
             fn name(&self) -> &'static str {
                 "write_file"
             }
+            fn mutates(&self, _args: &Value, _ctx: &ToolContext) -> bool {
+                true
+            }
             fn description(&self) -> &'static str {
                 "ok write"
             }
@@ -3787,6 +3790,9 @@ mod tests {
         impl Tool for FailEdit {
             fn name(&self) -> &'static str {
                 "edit_file"
+            }
+            fn mutates(&self, _args: &Value, _ctx: &ToolContext) -> bool {
+                true
             }
             fn description(&self) -> &'static str {
                 "failing edit"
@@ -3886,6 +3892,9 @@ mod tests {
             fn name(&self) -> &'static str {
                 "write_file"
             }
+            fn mutates(&self, _args: &Value, _ctx: &ToolContext) -> bool {
+                true
+            }
             fn description(&self) -> &'static str {
                 "ok write"
             }
@@ -3903,6 +3912,9 @@ mod tests {
         impl Tool for BadAnchorEdit {
             fn name(&self) -> &'static str {
                 "edit_file"
+            }
+            fn mutates(&self, _args: &Value, _ctx: &ToolContext) -> bool {
+                true
             }
             fn description(&self) -> &'static str {
                 "failing edit"
@@ -3995,6 +4007,9 @@ mod tests {
             fn name(&self) -> &'static str {
                 "edit_file"
             }
+            fn mutates(&self, _args: &Value, _ctx: &ToolContext) -> bool {
+                true
+            }
             fn description(&self) -> &'static str {
                 "ok edit"
             }
@@ -4012,6 +4027,9 @@ mod tests {
         impl Tool for SandboxBlockedWrite {
             fn name(&self) -> &'static str {
                 "write_file"
+            }
+            fn mutates(&self, _args: &Value, _ctx: &ToolContext) -> bool {
+                true
             }
             fn description(&self) -> &'static str {
                 "blocked write"

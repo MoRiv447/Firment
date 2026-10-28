@@ -286,10 +286,7 @@ pub fn mask(text: &str) -> String {
         // only stripped punctuation from the front of the whole token; a key attached to
         // a name never started with the prefix. Try the part after the last `=`/`:` as
         // well, while keeping the name and separator in the output.
-        let secret_start = word
-            .rfind(|c: char| c == '=' || c == ':')
-            .map(|i| i + 1)
-            .unwrap_or(0);
+        let secret_start = word.rfind(['=', ':']).map(|i| i + 1).unwrap_or(0);
         let trimmed =
             word[secret_start..].trim_start_matches(|c: char| !c.is_alphanumeric() && c != '_');
         let candidate = trimmed.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '-');

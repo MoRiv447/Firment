@@ -693,10 +693,11 @@ mod tests {
         let dir = tempdir().unwrap();
         let ctx = ctx(dir.path());
         assert!(
-            RenameSymbol.mutates(
+            !RenameSymbol.mutates(
                 &json!({"from": "a", "to": "b", "paths": ["a.c"], "dry_run": true}),
                 &ctx
-            ) == false
+            ),
+            "a dry run writes nothing"
         );
         assert!(
             RenameSymbol.mutates(&json!({"from": "a", "to": "b", "paths": ["a.c"]}), &ctx),
