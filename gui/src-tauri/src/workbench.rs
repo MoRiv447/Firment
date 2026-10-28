@@ -817,7 +817,13 @@ pub async fn workbench_branch_create(
             ..Default::default()
         },
     );
-    save_workbench(&cfg, Path::new(&cwd), read.as_deref())?;
+    if let Err(e) = save_workbench(&cfg, Path::new(&cwd), read.as_deref()) {
+        // The branch session was written before its workbench entry. If the
+        // entry cannot be recorded, remove the orphan rather than report failure
+        // while leaving a session the agent's branch tools cannot find.
+        let _ = store.delete(&branch.id);
+        return Err(e);
+    }
 
     Ok(branch.id)
 }
