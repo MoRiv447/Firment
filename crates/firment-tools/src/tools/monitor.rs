@@ -340,25 +340,52 @@ const BAUD_CANDIDATES: [u32; 9] = [
     9_600, 19_200, 38_400, 57_600, 74_880, 115_200, 230_400, 460_800, 921_600,
 ];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BaudProbe {
+    /// Bytes arrived and looked like a real UART signal at this rate.
+    Data,
+    /// The port opened but produced no usable bytes.
+    NoData,
+    /// The port could not be opened at all (busy, permissions, unplugged).
+    OpenFailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BaudDetection {
+    rate: Option<u32>,
+    open_failed: usize,
+}
+
 /// Probe each common baud rate for `probe_ms` and return the first one that
 /// yields mostly-valid bytes (an incorrect baud rate reads noise — a high
 /// ratio of 0x00/0xFF bytes).
-fn detect_baud(port: &str, probe_ms: u64) -> Result<Option<u32>, String> {
+fn detect_baud(port: &str, probe_ms: u64) -> Result<BaudDetection, String> {
+    let mut open_failed = 0usize;
     for baud in BAUD_CANDIDATES {
-        if probe_baud(port, baud, probe_ms)? {
-            return Ok(Some(baud));
+        match probe_baud(port, baud, probe_ms)? {
+            BaudProbe::Data => {
+                return Ok(BaudDetection {
+                    rate: Some(baud),
+                    open_failed,
+                });
+            }
+            BaudProbe::NoData => {}
+            BaudProbe::OpenFailed => open_failed += 1,
         }
     }
-    Ok(None)
+    Ok(BaudDetection {
+        rate: None,
+        open_failed,
+    })
 }
 
-fn probe_baud(port: &str, baud: u32, probe_ms: u64) -> Result<bool, String> {
+fn probe_baud(port: &str, baud: u32, probe_ms: u64) -> Result<BaudProbe, String> {
     use std::io::Read;
     let Ok(mut reader) = serialport::new(port, baud)
         .timeout(Duration::from_millis(50))
         .open()
     else {
-        return Ok(false); // port busy on this attempt; try the next rate
+        return Ok(BaudProbe::OpenFailed);
     };
     let deadline = Instant::now() + Duration::from_millis(probe_ms);
     let mut bytes = 0u64;
@@ -384,10 +411,26 @@ fn probe_baud(port: &str, baud: u32, probe_ms: u64) -> Result<bool, String> {
             {
                 continue;
             }
-            Err(_) => return Ok(false),
+            Err(_) => return Ok(BaudProbe::NoData),
         }
     }
-    Ok(bytes > 0 && (junk as f64 / bytes as f64) < 0.9)
+    Ok(if bytes > 0 && (junk as f64 / bytes as f64) < 0.9 {
+        BaudProbe::Data
+    } else {
+        BaudProbe::NoData
+    })
+}
+
+/// A failed autodetect has two different causes and they need different advice.
+fn autodetect_failure(open_failed: usize) -> &'static str {
+    if open_failed >= BAUD_CANDIDATES.len() {
+        "could not open the serial port at any baud rate — it is probably held by another \
+         program (PulseView, a terminal, another firm session) or this process lacks permission; \
+         close the other holder and retry. Passing baud explicitly will not help"
+    } else {
+        "no valid data on the port at any common baud rate; if the firmware is known to log, \
+         pass baud explicitly"
+    }
 }
 
 /// Human-readable description of a serial port (manufacturer / product /
@@ -540,12 +583,14 @@ impl Tool for Monitor {
         let captured = tokio::task::spawn_blocking(move || -> Result<String, String> {
             let baud = if autodetect {
                 match detect_baud(&port_clone, 300)? {
-                    Some(found) => found,
-                    None => {
-                        return Ok(format!(
-                            "no valid data on {port_clone} at any common baud rate; \
-                             pass baud explicitly"
-                        ));
+                    BaudDetection {
+                        rate: Some(found), ..
+                    } => found,
+                    BaudDetection {
+                        rate: None,
+                        open_failed,
+                    } => {
+                        return Ok(format!("{port_clone}: {}", autodetect_failure(open_failed)));
                     }
                 }
             } else {
@@ -577,6 +622,20 @@ impl Tool for Monitor {
 mod tests {
     use super::*;
     use firment_core::{AutoApprove, EditJournal};
+
+    #[test]
+    fn autodetect_distinguishes_a_busy_port_from_a_silent_target() {
+        let busy = autodetect_failure(BAUD_CANDIDATES.len());
+        assert!(busy.contains("held by another program"), "got: {busy}");
+        assert!(
+            !busy.contains("pass baud explicitly"),
+            "a port that cannot be opened must not be answered with a baud hint: {busy}"
+        );
+
+        let silent = autodetect_failure(0);
+        assert!(silent.contains("no valid data"), "got: {silent}");
+        assert!(silent.contains("pass baud explicitly"), "got: {silent}");
+    }
     use serde_json::json;
     use std::path::Path;
     use std::sync::{Arc, Mutex};

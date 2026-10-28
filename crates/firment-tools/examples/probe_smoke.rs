@@ -206,10 +206,16 @@ fn main() {
         let stop = std::sync::atomic::AtomicBool::new(false);
         let t = Instant::now();
         let mut bytes = 0usize;
-        let res = probe::rtt_stream(&chip, None, Duration::from_millis(rtt_ms), &stop, |chunk| {
-            bytes += chunk.len();
-            print!("{}", String::from_utf8_lossy(chunk));
-        });
+        let res = probe::rtt_stream(
+            &chip,
+            None,
+            Some(Duration::from_millis(rtt_ms)),
+            &stop,
+            |chunk| {
+                bytes += chunk.len();
+                print!("{}", String::from_utf8_lossy(chunk));
+            },
+        );
         match res {
             Ok(_) => println!("\n[ok] RTT {bytes} bytes in {} ms", t.elapsed().as_millis()),
             Err(e) => println!(

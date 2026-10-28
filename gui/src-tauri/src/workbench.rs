@@ -340,7 +340,19 @@ pub async fn workbench_hardware_list(
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         probe_cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    let probe_out = probe_cmd.output().await;
+    // A wedged USB probe or a stalled `probe-rs list` must not park this command (and the
+    // Workbench's single `busy` flag) forever. Ten seconds is far above a healthy scan.
+    let probe_out = match tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        probe_cmd.output(),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => {
+            return Err("probe-rs list timed out after 10s (the probe may be wedged)".to_string());
+        }
+    };
     let (probes, probe_rs_available) = match probe_out {
         Ok(out) if out.status.success() => {
             let text = String::from_utf8_lossy(&out.stdout);

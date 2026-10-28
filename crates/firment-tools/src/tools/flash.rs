@@ -7,7 +7,7 @@ use firment_core::{Tool, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// probe-rs's own download percentage, when this line carries one.
 ///
@@ -28,6 +28,30 @@ fn parse_probe_percent(line: &str) -> Option<u64> {
     }
     let pct: u64 = digits.into_iter().rev().collect::<String>().parse().ok()?;
     (pct <= 100).then_some(pct)
+}
+
+fn lib_flash_text(reset: bool, segments: usize) -> String {
+    let reset_note = if reset {
+        "target reset"
+    } else {
+        "target not reset (reset=false)"
+    };
+    format!("flash passed and {reset_note} [probe-rs lib] ({segments} loadable segment(s) written)")
+}
+
+fn lib_flash_timeout_text(timeout_ms: u64) -> String {
+    // probe-rs has no cancellation API for a flash algorithm. Saying "cancelled" here would
+    // be a lie: the erase/program continues, and only the caller's wait is bounded.
+    format!(
+        "[Timeout] flash timed out after {timeout_ms} ms; the library flash is still running \
+         in the background, so the probe stays busy until it finishes. Do not retry before that."
+    )
+}
+
+fn lib_flash_cancel_text() -> String {
+    "[Cancelled] the turn was interrupted, but the library flash is still running in the \
+     background; the probe stays busy until it finishes. Do not retry before that."
+        .to_string()
 }
 
 /// How many burn records the project's flash history keeps.
@@ -192,14 +216,6 @@ impl Tool for Flash {
             .unwrap_or(180_000);
         let reset = args.get("reset").and_then(|r| r.as_bool()).unwrap_or(true);
 
-        let probe_rs_ok = super::util::probe_rs_present().await;
-        if !probe_rs_ok {
-            return Err(ToolError::new(
-                "[NotFound] probe-rs is not installed or not on PATH: install it with \
-                 `cargo install probe-rs-tools` or download from the probe-rs GitHub Releases",
-            ));
-        }
-
         let command = flash_command(&chip, &resolved.to_string_lossy(), probe.as_deref());
 
         // ESP32 targets are flashed through the ROM bootloader; probe-rs
@@ -261,39 +277,78 @@ impl Tool for Flash {
         if let Some(progress) = ctx.progress.as_ref() {
             progress.phase("downloading to the target");
         }
-        // 先试库：已经在真板上验过（0.56s；CLI 是秒级），commit 内部完成擦除、
-        // 写入与复位。**任何**错误都回退 CLI —— 擦写路径上宁可多烧一次，
-        // 也不要让一个没预料到的库错误变成"烧录失败"。
-        //
-        // 用提前返回而不是把 CLI 那段包进 else：下面那段 `match` 有六个分支，
-        // 重新缩进一次就多一次改坏的机会。
+        // 先试库：已经在真板上验过（0.56s；CLI 是秒级），commit 内部完成擦除与
+        // 写入，复位由 `reset` 决定。库的普通错误回退 CLI（擦写路径上宁可多烧
+        // 一次）；`[Busy]` 不回退——另一个持有者（包括一个超时后仍在后台烧录
+        // 的库任务）会让 CLI 得到同样的错误。用提前返回而不是把 CLI 那段包进
+        // else：下面那段 `match` 有六个分支，重新缩进一次就多一次改坏的机会。
         let lib_flash = {
             let chip_lib = chip.clone();
             let probe_lib = probe.clone();
             let path_lib = resolved.clone();
-            match tokio::task::spawn_blocking(move || {
-                crate::probe::flash_elf(&chip_lib, probe_lib.as_deref(), &path_lib)
-            })
-            .await
-            {
-                Ok(Ok(n)) => Some(n),
-                Ok(Err(e)) => {
+            let reset_lib = reset;
+            let task = tokio::task::spawn_blocking(move || {
+                crate::probe::flash_elf_with_reset(
+                    &chip_lib,
+                    probe_lib.as_deref(),
+                    &path_lib,
+                    reset_lib,
+                )
+            });
+            tokio::select! {
+                result = tokio::time::timeout(Duration::from_millis(timeout_ms.max(1)), task) => match result {
+                Ok(Ok(Ok(n))) => Some(n),
+                Ok(Ok(Err(e))) => {
+                    let message = e.message().to_string();
+                    if message.starts_with("[Busy]") {
+                        // Another holder, including a flash that timed out but is still
+                        // running in the background: falling back to the CLI would only
+                        // produce the same busy error from a second process.
+                        return Err(ToolError::new(message));
+                    }
                     eprintln!(
-                        "note: probe-rs library flash failed, falling back to the CLI: {}",
-                        e.message()
+                        "note: probe-rs library flash failed, falling back to the CLI: {message}"
                     );
-                    // 把探针还给 CLI，否则它打不开（库的 Session 持有 USB 句柄）。
-                    crate::probe::release();
                     None
                 }
-                Err(_) => None,
+                Ok(Err(join)) => {
+                    eprintln!("note: probe-rs library flash task failed: {join}");
+                    None
+                }
+                Err(_) => {
+                    // The blocking task keeps the probe and the lease until probe-rs returns;
+                    // this arm bounds the *caller's* wait and says what is actually true.
+                    let message = lib_flash_timeout_text(timeout_ms);
+                    record_flash_history(
+                        &ctx.cwd,
+                        &hist_chip,
+                        &hist_file,
+                        hist_probe.as_deref(),
+                        false,
+                        Some(message.as_str()),
+                    );
+                    return Err(ToolError::new(message));
+                }
+                },
+                _ = ctx.cancel.cancelled() => {
+                    // Same limitation as the timeout arm: the flash algorithm cannot be
+                    // aborted, so the probe stays leased until the blocking task returns.
+                    let message = lib_flash_cancel_text();
+                    record_flash_history(
+                        &ctx.cwd,
+                        &hist_chip,
+                        &hist_file,
+                        hist_probe.as_deref(),
+                        false,
+                        Some(message.as_str()),
+                    );
+                    return Err(ToolError::new(message));
+                }
             }
         };
         if let Some(n) = lib_flash {
             let outcome: Result<ToolOutput, ToolError> = Ok(ToolOutput {
-                text: format!(
-                    "flash passed and target reset [probe-rs lib] ({n} loadable segment(s) written)"
-                ),
+                text: lib_flash_text(reset, n),
             });
             record_flash_history(
                 &ctx.cwd,
@@ -304,6 +359,16 @@ impl Tool for Flash {
                 outcome.as_ref().err().map(|e| e.message.as_str()),
             );
             return outcome;
+        }
+        if !super::util::probe_rs_present().await {
+            // No CLI to fall back to; do not leave the library's cached session holding the
+            // probe for its full idle window.
+            crate::probe::release();
+            return Err(ToolError::new(
+                "[NotFound] the probe-rs library could not flash and the probe-rs CLI is not \
+                 installed or not on PATH: install it with `cargo install probe-rs-tools` or \
+                 download from the probe-rs GitHub Releases",
+            ));
         }
 
         let result = run_probe_rs_watching(
@@ -486,6 +551,41 @@ mod tests {
         assert!(!plain.contains("--probe"));
     }
 
+    #[test]
+    fn a_library_flash_says_whether_it_reset_the_target() {
+        let reset = lib_flash_text(true, 2);
+        assert!(reset.contains("target reset"), "got: {reset}");
+        assert!(!reset.contains("not reset"), "got: {reset}");
+
+        let kept = lib_flash_text(false, 2);
+        assert!(
+            kept.contains("target not reset (reset=false)"),
+            "got: {kept}"
+        );
+        assert!(
+            !kept.contains("flash passed and target reset"),
+            "got: {kept}"
+        );
+    }
+
+    #[test]
+    fn a_library_timeout_does_not_claim_cancellation() {
+        let text = lib_flash_timeout_text(1_000);
+        assert!(text.starts_with("[Timeout]"), "got: {text}");
+        assert!(
+            text.contains("still running in the background"),
+            "got: {text}"
+        );
+        assert!(!text.contains("[Cancelled]"), "got: {text}");
+
+        let cancelled = lib_flash_cancel_text();
+        assert!(cancelled.starts_with("[Cancelled]"), "got: {cancelled}");
+        assert!(
+            cancelled.contains("still running in the background"),
+            "an interrupted library flash is not stopped: {cancelled}"
+        );
+    }
+
     #[tokio::test]
     async fn missing_chip_is_an_error() {
         let dir = tempdir().unwrap();
@@ -536,7 +636,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            err.message.contains("probe-rs is not installed"),
+            err.message.contains("probe-rs CLI is not installed"),
             "got: {}",
             err.message
         );

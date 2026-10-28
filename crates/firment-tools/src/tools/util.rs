@@ -959,6 +959,16 @@ pub(crate) async fn run_argv(
     // The lease is taken here, at the spawn, rather than by whichever wrapper happens to know
     // about it: `let _lease` has to outlive the child, so it lives on this stack frame.
     let _lease = probe_lease(program, args.first().map(String::as_str))?;
+    if program == "probe-rs" {
+        // One tail site for the handover: the library keeps the USB handle in its cached
+        // session, and a CLI `probe-rs` cannot open the probe while it does. Callers used to
+        // remember this individually -- `run` and `flash` did, `debug` and `hil` did not, so
+        // their CLI fallbacks failed with "failed to open device" and blamed the target.
+        // Released only after the lease is ours: a timed-out library flash still holds that
+        // lease, and blocking here on the session mutex would hang the async worker instead
+        // of reporting `[Busy]`.
+        crate::probe::release();
+    }
     let mut cmd = Command::new(program);
     cmd.args(&args)
         .current_dir(cwd)
@@ -994,9 +1004,19 @@ pub(crate) async fn run_argv(
         None => PipeDrain::start(stdout, stderr),
     };
 
+    // 0 is the documented "wait forever" of `run`. It must not become a zero-length sleep
+    // that kills the child before it starts; `run_command` already read 0 this way, so the
+    // two spawn paths disagreed about the same number.
+    let timeout = async {
+        if timeout_ms == 0 {
+            std::future::pending::<()>().await;
+        } else {
+            tokio::time::sleep(Duration::from_millis(timeout_ms)).await;
+        }
+    };
     let status = tokio::select! {
         status = child.wait() => status,
-        _ = tokio::time::sleep(Duration::from_millis(timeout_ms)) => {
+        _ = timeout => {
             kill_tree(&mut child).await;
             // Whatever the program printed before it was killed IS the
             // diagnostic; a bare timeout message leaves the agent guessing.
@@ -1070,6 +1090,10 @@ pub(crate) async fn run_streaming(
     // Same rule as `run_argv`: whatever names a program here asks the probe first. This is the
     // path the `run` tool takes, and it used to reach the chip with no lease at all.
     let _lease = probe_lease(program, args.first().and_then(|arg| arg.to_str()))?;
+    if program == "probe-rs" {
+        // Same handover as `run_argv`: the cached library session holds the USB handle.
+        crate::probe::release();
+    }
     let mut cmd = Command::new(program);
     cmd.args(args);
     #[cfg(windows)]
@@ -1436,6 +1460,27 @@ mod tests {
         assert!(
             started.elapsed() < std::time::Duration::from_secs(5),
             "timeout returned too late: {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn run_argv_zero_timeout_waits_for_the_child_instead_of_killing_it() {
+        let dir = tempdir().unwrap();
+        let (program, args): (&str, Vec<String>) = if cfg!(windows) {
+            ("cmd", vec!["/C".into(), "echo zero-timeout-ok".into()])
+        } else {
+            ("sh", vec!["-c".into(), "echo zero-timeout-ok".into()])
+        };
+        let started = std::time::Instant::now();
+        let (text, code) = run_argv(program, args, dir.path(), 0, None, &[], None)
+            .await
+            .expect("a zero timeout is 'wait forever', not an immediate kill");
+        assert_eq!(code, Some(0), "got: {text}");
+        assert!(text.contains("zero-timeout-ok"), "got: {text}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the test child did not finish promptly: {:?}",
             started.elapsed()
         );
     }

@@ -15,6 +15,7 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use crate::tools::util::ProbeLease;
 use probe_rs::{MemoryInterface, Session, SessionConfig};
 
 /// 会话闲置多久后释放。拿太久会让 PulseView / `probe-rs` CLI 抢不到探针；
@@ -106,6 +107,7 @@ pub fn read_words(
     addr: u64,
     n: usize,
 ) -> Result<Vec<u32>, ProbeError> {
+    let _lease = ProbeLease::acquire("a library debug read").map_err(ProbeError::Failed)?;
     with_session(chip, probe, |session| {
         let mut core = core(session)?;
         let mut words = vec![0u32; n];
@@ -122,6 +124,7 @@ pub fn write_word(
     addr: u64,
     value: u32,
 ) -> Result<(), ProbeError> {
+    let _lease = ProbeLease::acquire("a library debug write").map_err(ProbeError::Failed)?;
     with_session(chip, probe, |session| {
         let mut core = core(session)?;
         core.write_word_32(addr, value)
@@ -142,12 +145,13 @@ pub fn write_word(
 pub fn rtt_stream(
     chip: &str,
     probe: Option<&str>,
-    duration: Duration,
+    duration: Option<Duration>,
     stop: &std::sync::atomic::AtomicBool,
     mut sink: impl FnMut(&[u8]),
 ) -> Result<usize, ProbeError> {
     use std::sync::atomic::Ordering;
 
+    let _lease = ProbeLease::acquire("a library RTT read").map_err(ProbeError::Failed)?;
     with_session(chip, probe, |session| {
         let mut core = core(session)?;
         let mut rtt = probe_rs::rtt::Rtt::attach(&mut core).map_err(|e| {
@@ -156,10 +160,10 @@ pub fn rtt_stream(
                  (or uses semihosting): {e}"
             ))
         })?;
-        let deadline = Instant::now() + duration;
+        let deadline = duration.map(|d| Instant::now() + d);
         let mut buf = [0u8; 1024];
         let mut total = 0usize;
-        while Instant::now() < deadline && !stop.load(Ordering::Relaxed) {
+        while deadline.is_none_or(|d| Instant::now() < d) && !stop.load(Ordering::Relaxed) {
             let mut got = false;
             for i in 0..rtt.up_channels().len() {
                 let Some(channel) = rtt.up_channel(i) else {
@@ -245,6 +249,7 @@ pub fn swo_trace(
 ) -> Result<SwoTrace, ProbeError> {
     use probe_rs::architecture::arm::swo::SwoConfig;
 
+    let _lease = ProbeLease::acquire("a library SWO trace").map_err(ProbeError::Failed)?;
     with_session(chip, probe, |session| {
         let config = SwoConfig::new(tpiu_hz).set_baud(baud);
 
@@ -322,6 +327,7 @@ pub fn backtrace(
     use probe_rs_debug::DebugInfo;
     use probe_rs_debug::registers::DebugRegisters;
 
+    let _lease = ProbeLease::acquire("a library backtrace").map_err(ProbeError::Failed)?;
     let info = DebugInfo::from_file(elf).map_err(|e| {
         ProbeError::Failed(format!(
             "[InvalidInput] cannot read debug info from {}: {e}",
@@ -374,6 +380,7 @@ pub fn run_to_breakpoint(
     addr: u64,
     timeout: Duration,
 ) -> Result<Registers, ProbeError> {
+    let _lease = ProbeLease::acquire("a library breakpoint run").map_err(ProbeError::Failed)?;
     with_session(chip, probe, |session| {
         let mut core = core(session)?;
         // 设断点要求核已停：先停一下，再装比较器。
@@ -456,6 +463,7 @@ pub enum CoreOp {
 /// （probe-rs 的 REPL 是 attach 式的）；这里的会话是常驻的，`Resume` 之后目标一直跑，
 /// 直到我们停它、或者会话闲置 30 秒被释放。调用方的输出要照这个事实写。
 pub fn core_op(chip: &str, probe: Option<&str>, op: CoreOp) -> Result<(), ProbeError> {
+    let _lease = ProbeLease::acquire("a library core operation").map_err(ProbeError::Failed)?;
     with_session(chip, probe, |session| {
         let mut core = core(session)?;
         match op {
@@ -490,6 +498,9 @@ pub struct Registers {
     pub psp: u64,
     /// r0..=r12
     pub r: [u64; 13],
+    /// True when this snapshot had to halt a running core. The target is left halted;
+    /// callers that show the snapshot must say so instead of implying a passive read.
+    pub halted_for_read: bool,
 }
 
 impl Registers {
@@ -499,18 +510,23 @@ impl Registers {
     }
 }
 
-/// 读一次完整的寄存器组。**不改变运行状态**：调用方若要"意外现场的读数"，
-/// 先 `core_op(Halt)` 再读（`analyze` / `forensic` 就是这么做的）。
+/// 读一次完整的寄存器组。**运行中的核会被停住并保持停住**：Cortex-M 的核寄存器
+/// 经 DCRSR/DCRDR 读，目标在跑时读数不可靠，CLI 路径同样先 `-c break` 再
+/// `info reg`。`halted_for_read` 记录这次读是否改变了运行状态，调用方必须把它
+/// 告诉用户，不能把一次有副作用的读说成“不改变运行状态”。
 ///
 /// 单个寄存器读失败记 0：MSP/PSP 在只有单栈的核上可能不存在，一个可选寄存器
 /// 缺失不该让整张表失败。
 pub fn registers(chip: &str, probe: Option<&str>) -> Result<Registers, ProbeError> {
+    let _lease = ProbeLease::acquire("a library register read").map_err(ProbeError::Failed)?;
     with_session(chip, probe, |session| {
         let mut core = core(session)?;
-        // 先停核：Cortex-M 的核寄存器经 DCRSR/DCRDR 读，目标在跑时读数不可靠，
-        // CLI 路径同样先 `-c break` 再 `info reg`。已经停下时 `halt` 是幂等的。
+        // 先停核；已经停下时 `halt` 是幂等的。
+        let was_running = !matches!(core.status(), Ok(probe_rs::CoreStatus::Halted(_)));
         let _ = core.halt(Duration::from_millis(500));
-        snapshot(&mut core)
+        let mut regs = snapshot(&mut core)?;
+        regs.halted_for_read = was_running;
+        Ok(regs)
     })
 }
 
@@ -575,17 +591,60 @@ pub fn probes_visible() -> usize {
 /// 所以段由我们自己解析 —— 仓库里本来就有 `object`，`elf_analyze` 一直在用。
 /// 只取 `PT_LOAD` 且非空的段：地址 0 与空段不是要烧的内容。
 fn elf_segments(bytes: &[u8]) -> Result<Vec<(u64, Vec<u8>)>, ProbeError> {
-    use object::{Object as _, ObjectSegment as _};
-    let file = object::File::parse(bytes)
-        .map_err(|e| ProbeError::Failed(format!("[InvalidInput] not a readable ELF: {e}")))?;
+    use object::read::elf::{ElfFile32, ElfFile64};
+
+    if bytes.len() < 5 {
+        return Err(ProbeError::Failed(
+            "[InvalidInput] not a readable ELF: file is too short".to_string(),
+        ));
+    }
+    // `ObjectSegment::address()` is p_vaddr. A `.data : { } > RAM AT > FLASH`
+    // segment has p_vaddr in RAM and p_paddr in FLASH; programming the vaddr
+    // puts the initial values in RAM (where the startup code then overwrites
+    // them from erased FLASH) and reports success. p_paddr is the load address.
+    match bytes[4] {
+        1 => segments_in(
+            &ElfFile32::<object::Endianness>::parse(bytes).map_err(|e| {
+                ProbeError::Failed(format!("[InvalidInput] not a readable ELF: {e}"))
+            })?,
+            bytes,
+        ),
+        2 => segments_in(
+            &ElfFile64::<object::Endianness>::parse(bytes).map_err(|e| {
+                ProbeError::Failed(format!("[InvalidInput] not a readable ELF: {e}"))
+            })?,
+            bytes,
+        ),
+        other => Err(ProbeError::Failed(format!(
+            "[InvalidInput] unsupported ELF class {other}"
+        ))),
+    }
+}
+
+fn segments_in<'data, Elf>(
+    file: &object::read::elf::ElfFile<'data, Elf, &'data [u8]>,
+    bytes: &'data [u8],
+) -> Result<Vec<(u64, Vec<u8>)>, ProbeError>
+where
+    Elf: object::read::elf::FileHeader,
+{
+    use object::read::elf::ProgramHeader as _;
+
+    let endian = file
+        .elf_header()
+        .endian()
+        .map_err(|e| ProbeError::Failed(format!("[InvalidInput] ELF endianness: {e}")))?;
     let mut out = Vec::new();
-    for seg in file.segments() {
-        let addr = seg.address();
+    for seg in file.elf_program_headers() {
+        if seg.p_type(endian) != object::elf::PT_LOAD {
+            continue;
+        }
+        let addr: u64 = seg.p_paddr(endian).into();
         if addr == 0 {
             continue;
         }
-        let data = seg.data().map_err(|e| {
-            ProbeError::Failed(format!("[InvalidInput] unreadable ELF segment: {e}"))
+        let data = seg.data(endian, bytes).map_err(|_| {
+            ProbeError::Failed("[InvalidInput] unreadable ELF segment (bad file range)".to_string())
         })?;
         if data.is_empty() {
             continue;
@@ -603,15 +662,30 @@ fn elf_segments(bytes: &[u8]) -> Result<Vec<(u64, Vec<u8>)>, ProbeError> {
 /// 把 ELF 烧进目标，返回写入的段数。
 ///
 /// 会话与读路径共用：一次 `flash` 之后紧接着 `debug mem` 不必再 attach 一次。
-/// `commit` 内部完成擦除与写入，`reset` 让目标从新固件启动。
+/// `commit` 内部完成擦除与写入；`reset` 由调用方决定，`false` 时目标保持
+/// 烧录算法留下的状态，调用方不得打印“target reset”。
 pub fn flash_elf(
     chip: &str,
     probe: Option<&str>,
     elf: &std::path::Path,
 ) -> Result<usize, ProbeError> {
+    flash_elf_with_reset(chip, probe, elf, true)
+}
+
+pub fn flash_elf_with_reset(
+    chip: &str,
+    probe: Option<&str>,
+    elf: &std::path::Path,
+    reset: bool,
+) -> Result<usize, ProbeError> {
     use probe_rs::config::TargetDescriptionSource;
     use probe_rs::flashing::{DownloadOptions, FlashLoader};
 
+    // The lease is the busy marker for a long library flash: if this call is
+    // abandoned on timeout, the blocking task keeps the lease until probe-rs
+    // returns, and every later CLI/library probe operation is refused instead
+    // of talking to a target that is still being erased.
+    let _lease = ProbeLease::acquire("a library flash").map_err(ProbeError::Failed)?;
     let bytes = std::fs::read(elf)
         .map_err(|e| ProbeError::Failed(format!("[Io] cannot read {}: {e}", elf.display())))?;
     let segments = elf_segments(&bytes)?;
@@ -631,17 +705,23 @@ pub fn flash_elf(
         loader
             .commit(session, DownloadOptions::default())
             .map_err(|e| ProbeError::Failed(format!("[Io] flash commit failed: {e}")))?;
-        let mut core = core(session)?;
-        core.reset()
-            .map_err(|e| ProbeError::Failed(format!("[Io] reset after flash: {e}")))?;
+        if reset {
+            let mut core = core(session)?;
+            core.reset()
+                .map_err(|e| ProbeError::Failed(format!("[Io] reset after flash: {e}")))?;
+        }
         Ok(())
     })?;
     Ok(n)
 }
 
-/// 释放缓存会话。**每次要把探针交给 CLI 之前都必须调**：库里的 `Session`
-/// 持有 USB 句柄，`probe-rs attach` / `probe-rs run` 会以 "failed to open device"
-/// 失败 —— 2026-10-19 在 `run` 的回退路径上实测到了这个错误。
+/// 释放缓存会话。**调用点只有两个尾站点**：`tools::util::run_argv` 与
+/// `run_streaming` 在拿到探针租约之后、spawn `probe-rs` 之前。库里的
+/// `Session` 持有 USB 句柄，`probe-rs attach` / `probe-rs run` 会以
+/// "failed to open device" 失败 —— 2026-10-19 在 `run` 的回退路径上实测到了
+/// 这个错误。把释放放在单个 spawn 尾站点，是为了让 `debug`/`hil` 的未来回退
+/// 也自动继承这条规则；直接在这里调用会绕过租约，并可能在后台烧录仍持锁时
+/// 卡在 session 互斥量上。
 pub fn release() {
     if let Ok(mut slot) = SESSION.lock() {
         *slot = None;
@@ -654,6 +734,49 @@ pub fn release() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A minimal ELF32 with one PT_LOAD whose p_vaddr and p_paddr differ, which is the
+    /// normal `.data : { } > RAM AT > FLASH` layout. Programming `address()` (p_vaddr)
+    /// would put the initial values in RAM and leave FLASH erased; the loader must use
+    /// p_paddr.
+    fn synthetic_elf32_with_split_load_address() -> Vec<u8> {
+        let mut bytes = vec![0u8; 0x104];
+        bytes[0..4].copy_from_slice(b"\x7fELF");
+        bytes[4] = 1; // ELFCLASS32
+        bytes[5] = 1; // little endian
+        bytes[6] = 1; // EV_CURRENT
+        bytes[16..18].copy_from_slice(&2u16.to_le_bytes()); // ET_EXEC
+        bytes[18..20].copy_from_slice(&40u16.to_le_bytes()); // EM_ARM
+        bytes[20..24].copy_from_slice(&1u32.to_le_bytes()); // EV_CURRENT
+        bytes[24..28].copy_from_slice(&0x0800_0000u32.to_le_bytes()); // entry
+        bytes[28..32].copy_from_slice(&52u32.to_le_bytes()); // e_phoff
+        bytes[40..42].copy_from_slice(&52u16.to_le_bytes()); // e_ehsize
+        bytes[42..44].copy_from_slice(&32u16.to_le_bytes()); // e_phentsize
+        bytes[44..46].copy_from_slice(&1u16.to_le_bytes()); // e_phnum
+        let ph = 52;
+        bytes[ph..ph + 4].copy_from_slice(&1u32.to_le_bytes()); // PT_LOAD
+        bytes[ph + 4..ph + 8].copy_from_slice(&0x100u32.to_le_bytes()); // p_offset
+        bytes[ph + 8..ph + 12].copy_from_slice(&0x2000_0000u32.to_le_bytes()); // p_vaddr
+        bytes[ph + 12..ph + 16].copy_from_slice(&0x0800_0000u32.to_le_bytes()); // p_paddr
+        bytes[ph + 16..ph + 20].copy_from_slice(&4u32.to_le_bytes()); // p_filesz
+        bytes[ph + 20..ph + 24].copy_from_slice(&4u32.to_le_bytes()); // p_memsz
+        bytes[ph + 24..ph + 28].copy_from_slice(&5u32.to_le_bytes()); // p_flags
+        bytes[ph + 28..ph + 32].copy_from_slice(&4u32.to_le_bytes()); // p_align
+        bytes[0x100..0x104].copy_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+        bytes
+    }
+
+    #[test]
+    fn elf_segments_uses_the_load_address_not_the_virtual_address() {
+        let bytes = synthetic_elf32_with_split_load_address();
+        let segments = elf_segments(&bytes).expect("the synthetic ELF must parse");
+        assert_eq!(segments.len(), 1, "one PT_LOAD: {segments:?}");
+        assert_eq!(
+            segments[0].0, 0x0800_0000,
+            "must program p_paddr; p_vaddr 0x2000_0000 is RAM and the reset would erase it"
+        );
+        assert_eq!(segments[0].1, vec![0xde, 0xad, 0xbe, 0xef]);
+    }
 
     /// 这台机器上没有探针时（CI 也一样），`open` 必须是 `Unavailable` 而不是 panic
     /// —— 它决定调用方要不要回退 CLI，判错的代价是一个本来能用的功能直接报错。

@@ -137,7 +137,10 @@ impl Tool for Run {
             let probe_lib = probe.clone();
             let file_lib = resolved.clone();
             let stop_lib = stop.clone();
-            let dur = std::time::Duration::from_millis(timeout_ms);
+            // 0 means "wait forever" in the schema. `None` keeps the loop alive until the
+            // cancellation watcher flips `stop`; a zero-length duration returned instantly
+            // and reported "run timed out after 0 ms".
+            let dur = (timeout_ms > 0).then(|| std::time::Duration::from_millis(timeout_ms));
             tokio::task::spawn_blocking(move || {
                 let segs = match crate::probe::flash_elf(&chip_lib, probe_lib.as_deref(), &file_lib)
                 {
@@ -173,9 +176,14 @@ impl Tool for Run {
                     )));
                 }
                 let text = String::from_utf8_lossy(&out).into_owned();
+                let window = if timeout_ms > 0 {
+                    format!("run timed out after {timeout_ms} ms")
+                } else {
+                    "run ended (timeout_ms=0: waited until a stop)".to_string()
+                };
                 return Ok(ToolOutput {
                     text: format!(
-                        "run timed out after {timeout_ms} ms; captured output [probe-rs lib]\n\
+                        "{window}; captured output [probe-rs lib]\n\
                          (flashed {segs} loadable segment(s), {bytes} RTT bytes)\n{}",
                         crate::forensic::append_fault_marker(text)
                     ),
@@ -186,8 +194,8 @@ impl Tool for Run {
                 // 明确的 "this firmware has no RTT" 来说那是噪音，只取第一行。
                 let why = why.lines().next().unwrap_or(&why).to_string();
                 // 已经烧好了。这里只 attach，**不再烧** —— 一次 `run` 只该烧一次。
-                // 先放开我们自己的句柄，否则 CLI 打不开探针（实测 error 5）。
-                crate::probe::release();
+                // 句柄的释放由 `run_argv` 在拿到租约后统一做：它要排在租约之后，
+                // 否则一个超时后仍在后台烧录的库任务会让这里卡在 session 锁上。
                 let mut args = vec!["attach".to_string(), "--chip".to_string(), chip.clone()];
                 if let Some(p) = probe.as_ref() {
                     args.push("--probe".to_string());
@@ -211,6 +219,11 @@ impl Tool for Run {
                     Err(e) if e.starts_with("[Timeout]") => {
                         format!("attached for {timeout_ms} ms, stream ended by the window\n{e}")
                     }
+                    Err(e) if e.starts_with("[Cancelled]") => {
+                        return Err(ToolError::new(format!(
+                            "[Cancelled] run was interrupted while attached over the CLI\n{e}"
+                        )));
+                    }
                     Err(e) => format!("(could not stream with the CLI: {e})"),
                 };
                 return Ok(ToolOutput {
@@ -221,8 +234,7 @@ impl Tool for Run {
                 });
             }
             LibRun::Failed => {
-                // 下面若走 CLI 的 `probe-rs run`，同样要先把句柄放掉。
-                crate::probe::release();
+                // 下面若走 CLI 的 `probe-rs run`，句柄由 `run_argv` 在租约后统一释放。
             }
         }
 

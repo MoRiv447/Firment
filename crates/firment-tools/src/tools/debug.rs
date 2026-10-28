@@ -413,7 +413,8 @@ impl Tool for Debug {
     fn description(&self) -> &'static str {
         "Inspect and control the target over the debug probe via probe-rs (ST-Link / J-Link / \
          CMSIS-DAP). Actions: halt (pause the target, stays paused after the call), regs (read \
-         all core registers), mem (read memory: width b8/b16/b32/b64, address 0x... or \
+         all core registers; a running target is halted for the read and stays halted), mem \
+         (read memory: width b8/b16/b32/b64, address 0x... or \
          symbol:name resolved from the ELF), write (write memory — changes target state), \
          analyze (one-shot fault diagnosis: halts, reads PC/LR/SP plus the Cortex-M fault \
          registers CFSR/HFSR/MMFAR/BFAR, decodes PC/LR against the ELF and explains the fault \
@@ -646,12 +647,20 @@ impl Tool for Debug {
             "regs" => {
                 if let Some(r) = lib_registers(chip.clone(), probe.clone()).await {
                     return match r {
-                        Ok(r) => Ok(ToolOutput {
-                            text: format!(
-                                "debug registers [probe-rs lib]\n{}",
-                                render_registers(&r)
-                            ),
-                        }),
+                        Ok(r) => {
+                            let halted = if r.halted_for_read {
+                                "\n[target was running: it was halted for this read and stays \
+                                 halted; use action=continue to resume]"
+                            } else {
+                                ""
+                            };
+                            Ok(ToolOutput {
+                                text: format!(
+                                    "debug registers [probe-rs lib]\n{}{halted}",
+                                    render_registers(&r)
+                                ),
+                            })
+                        }
                         Err(m) => Err(ToolError::new(m)),
                     };
                 }
