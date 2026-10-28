@@ -41,6 +41,16 @@ async fn apply_mode(
             normal_permission
         },
     );
+    // The parent's registry was just swapped, but the subagent runner is built once at
+    // assembly time. Without this a session started in agent mode with
+    // `subagents_may_write = true` still had a write-capable `task` child after `/plan`,
+    // though the session's prompt said its tools were read-only.
+    let may_write = !planning && config.tools.subagents_may_write;
+    let (sub_registry, _) = firment_tools::prune_unconfigured(
+        firment_tools::subagent_registry_for(planning, may_write),
+        config,
+    );
+    agent.set_subagent_registry(sub_registry, may_write);
     refusals
 }
 

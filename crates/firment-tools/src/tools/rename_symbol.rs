@@ -45,6 +45,13 @@ impl Tool for RenameSymbol {
         "rename_symbol"
     }
 
+    fn mutates(&self, args: &Value, _ctx: &ToolContext) -> bool {
+        !args
+            .get("dry_run")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+
     fn description(&self) -> &'static str {
         "Rename an identifier across several files as one transaction: every file is backed \
          up before it is written, and a failure on any file rolls all of them back. Matches \
@@ -679,5 +686,21 @@ mod tests {
         // And the foreign entry is still in the batch for the turn to close — the rename neither
         // committed it nor dropped it.
         assert!(!ctx.journal.lock().unwrap().is_empty(), "{}", err.message);
+    }
+
+    #[test]
+    fn a_dry_run_rename_is_not_a_mutation() {
+        let dir = tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        assert!(
+            RenameSymbol.mutates(
+                &json!({"from": "a", "to": "b", "paths": ["a.c"], "dry_run": true}),
+                &ctx
+            ) == false
+        );
+        assert!(
+            RenameSymbol.mutates(&json!({"from": "a", "to": "b", "paths": ["a.c"]}), &ctx),
+            "a real rename changes the workspace"
+        );
     }
 }

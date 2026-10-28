@@ -9,7 +9,7 @@ use crate::{Asker, PermissionChecker, Session, SubagentFactory, system_prompt_fo
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::{Value, json};
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -170,7 +170,10 @@ pub enum AgentError {
     /// `Ok`: somebody pressed Ctrl-C, which is not a failure.
     #[error("timed out: {0}")]
     TimedOut(String),
-    #[error("provider not configured: run /apikey <key> or /provider <name> inside the TUI")]
+    #[error(
+        "provider not configured: set an API key in the Settings UI, or run /apikey <key> or \
+         /provider <name> in the TUI"
+    )]
     NoProvider,
     #[error("no final text produced")]
     NoOutput,
@@ -351,8 +354,6 @@ pub struct Agent {
     /// not yet approved by the user). Until a re-run of the gate clears it,
     /// finishing the turn is not accepted.
     elf_gate_required: bool,
-    /// Hash of the last read result per path, for unchanged-read dedup.
-    read_hashes: HashMap<PathBuf, String>,
     /// Recently read paths (most recent last), for post-compact re-injection.
     recent_read_paths: VecDeque<PathBuf>,
     /// No-events cap for a provider stream (creation and mid-stream). See
@@ -422,7 +423,6 @@ impl Agent {
             elf_gate_done: false,
             elf_gate_dirty: false,
             elf_gate_required: false,
-            read_hashes: HashMap::new(),
             recent_read_paths: VecDeque::new(),
             stream_timeout: STREAM_TIMEOUT,
             tool_wave_timeout: TOOL_WAVE_TIMEOUT,
@@ -763,6 +763,22 @@ impl Agent {
         self.subagent = factory;
     }
 
+    /// Re-point the child factory after a mode switch. A `None` factory is left alone;
+    /// a factory that cannot clone itself is also left alone (and the caller should treat
+    /// that as a refusal, not as "the old one is fine"). Returns whether it changed.
+    pub fn set_subagent_registry(&mut self, registry: Arc<ToolRegistry>, may_write: bool) -> bool {
+        let Some(factory) = self.subagent.as_ref() else {
+            return false;
+        };
+        match factory.with_registry(registry, may_write) {
+            Some(next) => {
+                self.subagent = Some(next);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Expose the attacker-profile runner to the `redteam` campaign.
     pub fn set_attacker_factory(&mut self, runner: Option<Arc<crate::subagent::SubagentRunner>>) {
         self.attacker = runner;
@@ -871,7 +887,16 @@ impl Agent {
     /// injection: the gate can re-inject after a fix cycle, and providers
     /// expect tool call ids not to repeat within a conversation.
     async fn inject_elf_report(&mut self, content: &str, text: &str) {
-        self.session.messages.pop();
+        // Keep the thinking blocks of the assistant message this round replaces. With
+        // Anthropic extended thinking on, a tool_use assistant turn that starts with text
+        // instead of its thinking block is rejected by the API; the injected round was
+        // dropping them and turning every verify/ELF failure into a provider 400.
+        let thinking_blocks = match self.session.messages.pop() {
+            Some(ChatMessage::Assistant {
+                thinking_blocks, ..
+            }) => thinking_blocks,
+            _ => Vec::new(),
+        };
         let gate_seq = self.next_tool_seq();
         let gate_call = ToolCall {
             id: format!("elf_gate_{gate_seq}"),
@@ -881,7 +906,7 @@ impl Agent {
         self.session.push(ChatMessage::Assistant {
             content: content.to_string(),
             tool_calls: vec![gate_call.clone()],
-            thinking_blocks: Vec::new(),
+            thinking_blocks,
         });
         self.session.push(ChatMessage::Tool {
             tool_call_id: gate_call.id,
@@ -1035,7 +1060,9 @@ impl Agent {
     }
 
     /// Switch between agent and read-only plan mode. The caller supplies the
-    /// matching tool registry and permission checker for the new mode.
+    /// matching tool registry and permission checker for the new mode, and must also
+    /// call [`Agent::set_subagent_registry`] when the mode changes: the child factory
+    /// is built at assembly time and would otherwise keep the old mode's write set.
     pub fn set_mode(
         &mut self,
         mode: SessionMode,
@@ -1075,7 +1102,6 @@ impl Agent {
     pub fn replace_session(&mut self, session: Session) {
         self.session = session;
         self.ledger_seq_appended = 0;
-        self.read_hashes.clear();
         self.recent_read_paths.clear();
         self.elf_gate_done = false;
         self.set_elf_config(None);
@@ -1199,6 +1225,10 @@ impl Agent {
         self.session.push(ChatMessage::User {
             content: input.to_string(),
         });
+        // Open the boundary before the pre-cancel return: a turn that recorded a question
+        // must not emit TurnEnd without a TurnStart. The rest of the turn used to open it
+        // after the ledger/ELF bookkeeping, which made the pre-cancel exit half a pair.
+        self.emit_turn_start().await;
         if *cancel_rx.borrow() {
             self.sink
                 .event(AgentEvent::Info(
@@ -1231,6 +1261,7 @@ impl Agent {
         // is now, which blocks again if the firmware is still over threshold.
         if self.elf_gate_required {
             self.elf_gate_required = false;
+            self.elf_gate_done = false;
             self.elf_gate_dirty = true;
             self.sink
                 .event(AgentEvent::Info(
@@ -1240,8 +1271,6 @@ impl Agent {
                 ))
                 .await;
         }
-        self.emit_turn_start().await;
-
         // The turn's transaction: its own, or the one a parent handed down to a subagent.
         let journal = self.turn_journal();
         let ledger = Ledger::new(self.store.ledger_path(&self.session.id));
@@ -1332,12 +1361,11 @@ impl Agent {
                 // failure to the UI and end the turn so the user can retry.
                 _ = tokio::time::sleep(self.stream_timeout) => {
                     let rollback_note = journal.partial_note();
-                    self.sink
-                        .event(AgentEvent::Info(format!(
-                            "⚠ Provider stream timed out after {}s; ending turn.{rollback_note}",
-                            self.stream_timeout.as_secs()
-                        )))
-                        .await;
+                    self.emit_turn_error(format!(
+                        "provider stream timed out after {}s; ending turn.{rollback_note}",
+                        self.stream_timeout.as_secs()
+                    ))
+                    .await;
                     let _ = self.store.save(&self.session);
                     self.emit_turn_end(String::new()).await;
                     // Not `Ok`: the turn produced nothing because a timer stopped it, and the
@@ -1471,15 +1499,20 @@ impl Agent {
 
             if stalled {
                 let rollback_note = journal.partial_note();
-                self.sink
-                    .event(AgentEvent::Info(format!(
-                        "⚠ Provider stream stalled (no bytes for {}s); ending turn.{rollback_note}",
-                        self.stream_timeout.as_secs()
-                    )))
-                    .await;
+                let message = format!(
+                    "provider stream stalled (no bytes for {}s); ending turn.{rollback_note}",
+                    self.stream_timeout.as_secs()
+                );
+                // `AgentError::TimedOut`'s own rule: a timer-ended turn is an Err, or
+                // `firm -y` exits 0 on a partial reply. Error goes out before TurnEnd so a
+                // client closing the turn does not receive the failure afterwards.
+                self.emit_turn_error(message).await;
                 let _ = self.store.save(&self.session);
-                self.emit_turn_end(content.clone()).await;
-                return Ok(content);
+                self.emit_turn_end(String::new()).await;
+                return Err(AgentError::TimedOut(format!(
+                    "the provider stream stalled for {}s",
+                    self.stream_timeout.as_secs()
+                )));
             }
 
             if tool_calls.is_empty() {
@@ -1494,10 +1527,16 @@ impl Agent {
                         name: "verify".to_string(),
                         arguments: json!({}),
                     };
+                    let thinking_blocks = match &plain_assistant {
+                        ChatMessage::Assistant {
+                            thinking_blocks, ..
+                        } => thinking_blocks.clone(),
+                        _ => Vec::new(),
+                    };
                     self.session.push(ChatMessage::Assistant {
                         content: content.clone(),
                         tool_calls: vec![gate_call.clone()],
-                        thinking_blocks: Vec::new(),
+                        thinking_blocks,
                     });
                     self.sink
                         .event(AgentEvent::ToolStart {
@@ -1604,14 +1643,10 @@ impl Agent {
                             match self.ask_elf_gate(&text).await {
                                 ElfGateDecision::Allow => {
                                     self.elf_gate_required = false;
-                                    // Keep the transcript ending on an assistant
-                                    // message; the change is approved, so fall
-                                    // through to commit and finish the turn.
-                                    self.session.push(ChatMessage::Assistant {
-                                        content: content.clone(),
-                                        tool_calls: vec![],
-                                        thinking_blocks: Vec::new(),
-                                    });
+                                    // `inject_elf_report` already pushed this answer with
+                                    // the elf_analyze tool_use. Pushing a second
+                                    // content-only assistant here rendered the reply
+                                    // twice and sent it twice on the next request.
                                     self.sink
                                         .event(AgentEvent::Info(
                                             "elf gate: change approved by the user — completing"
@@ -1701,12 +1736,11 @@ impl Agent {
             let stats = execute_tool_calls(self, &tool_calls, &ctx, &journal).await;
             if stats.timed_out {
                 let rollback_note = journal.partial_note();
-                self.sink
-                    .event(AgentEvent::Info(format!(
-                        "⚠ Tool wave timed out after {}s; ending turn.{rollback_note}",
-                        self.tool_wave_timeout.as_secs()
-                    )))
-                    .await;
+                self.emit_turn_error(format!(
+                    "tool wave timed out after {}s; ending turn.{rollback_note}",
+                    self.tool_wave_timeout.as_secs()
+                ))
+                .await;
                 let _ = self.store.save(&self.session);
                 self.emit_turn_end(String::new()).await;
                 // Not `Ok`: the wave was cut off, nothing after it ran and no final text was ever
@@ -1797,6 +1831,12 @@ impl Agent {
     /// compacted into a digest when exceeded.
     async fn compact_if_needed(&mut self) {
         if self.compaction_strategy == CompactionStrategy::Off {
+            return;
+        }
+        // Do not drain the transcript after a Stop. The loop checks cancellation after
+        // compaction, so without this guard a turn interrupted between iterations still
+        // removed messages it was about to summarize.
+        if self.cancel.is_cancelled() {
             return;
         }
         const DIGEST_CHARS: usize = 6000;
@@ -1941,16 +1981,29 @@ impl Agent {
             max_tokens: Some(2048),
             thinking: None,
         };
-        let mut stream = provider.stream(request).await.ok()?;
+        let cancel = self.cancel.clone();
+        let mut stream = tokio::select! {
+            result = provider.stream(request) => result.ok()?,
+            // The messages have already been removed from the transcript; the caller
+            // falls back to `compact_summary` when this returns None, so a Stop during
+            // the summary keeps the old context in the digest instead of losing it.
+            _ = cancel.cancelled() => return None,
+        };
         let mut text = String::new();
         // The main provider stream is bounded by `stream_timeout` in run_turn,
         // but this auxiliary summarization request is not; bound it here so a
-        // blackholed summary cannot hang the whole turn.
-        while let Some(event) = tokio::time::timeout(self.stream_timeout, stream.next())
-            .await
-            .ok()
-            .flatten()
-        {
+        // blackholed summary cannot hang the whole turn. Cancellation is observed
+        // per event as well as at stream creation.
+        loop {
+            let next = tokio::select! {
+                _ = cancel.cancelled() => return None,
+                event = tokio::time::timeout(self.stream_timeout, stream.next()) => {
+                    event.ok().flatten()
+                }
+            };
+            let Some(event) = next else {
+                break;
+            };
             if let Ok(ProviderEvent::Text(part)) = event {
                 text.push_str(&part);
             }
@@ -2052,25 +2105,6 @@ impl Agent {
         }
         Ok(message)
     }
-}
-
-/// Which calls change the workspace, as far as a turn's bookkeeping is concerned.
-///
-/// The set is defined by one fact about the tools: they take a journal backup, either by hand or
-/// through a shared write tail (`WorkbenchTx` does it for the two writers of
-/// `.firment/workbench.toml`). Two jobs read this answer and both go wrong for a tool that writes
-/// files and is missing here — a turn re-arms the verify gate and the elf gate only after a
-/// mutation, and a wave orders a call against a concurrent read of the same path only if it is a
-/// mutation. `rename_symbol` was missing when this list was written, so the most wide-reaching edit
-/// tool in the set did neither: a call that rewrote thirty files neither triggered a verification
-/// nor waited for the reads beside it.
-/// `no_tool_that_backs_up_a_file_is_left_out_of_the_mutation_list` reads the tool sources rather
-/// than trusting this comment.
-fn is_mutation_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "write_file" | "edit_file" | "rename_symbol" | "pinmap" | "decision"
-    )
 }
 
 /// Errors that mean "this call itself was rejected before touching the file":
@@ -2234,13 +2268,16 @@ fn same_tool_path(a: &ToolCall, b: &ToolCall) -> bool {
 /// - reads of a path wait for mutations to that path;
 /// - broad tools (shell/verify/grep/glob/list_dir) wait for all mutations
 ///   and for earlier broad tools, so they observe a stable workspace.
-fn tool_call_dependencies(tool_calls: &[ToolCall]) -> Vec<Vec<usize>> {
+fn tool_call_dependencies(
+    tool_calls: &[ToolCall],
+    is_mutation: impl Fn(&ToolCall) -> bool,
+) -> Vec<Vec<usize>> {
     let n = tool_calls.len();
     let mut deps: Vec<Vec<usize>> = vec![Vec::new(); n];
     for i in 0..n {
         for j in 0..i {
             let prev = &tool_calls[j];
-            if !is_mutation_tool(&prev.name) {
+            if !is_mutation(prev) {
                 if is_broad_tool(&prev.name) && is_broad_tool(&tool_calls[i].name) {
                     deps[i].push(j);
                 }
@@ -2269,7 +2306,9 @@ async fn execute_tool_calls(
     journal: &TurnJournal,
 ) -> ToolRunStats {
     let n = tool_calls.len();
-    let deps = tool_call_dependencies(tool_calls);
+    let deps = tool_call_dependencies(tool_calls, |call| {
+        agent.registry.mutates(&call.name, &call.arguments, ctx)
+    });
     let mut done = vec![false; n];
     let mut remaining = n;
     let mut mutations = 0usize;
@@ -2534,7 +2573,9 @@ async fn execute_tool_calls(
         // retry with corrected arguments. Rolling back on those would silently
         // undo good work on every model mis-specification.
         let any_mutation_failed = ready.iter().enumerate().any(|(k, &i)| {
-            is_mutation_tool(&tool_calls[i].name)
+            agent
+                .registry
+                .mutates(&tool_calls[i].name, &tool_calls[i].arguments, ctx)
                 && matches!(
                     &results[k],
                     Err(e) if !e.denied && !is_benign_mutation_error(&e.message)
@@ -2574,7 +2615,7 @@ async fn execute_tool_calls(
                 Err(e) => (false, e.message.clone()),
             };
             if ok {
-                if is_mutation_tool(&call.name) {
+                if agent.registry.mutates(&call.name, &call.arguments, ctx) {
                     mutations += 1;
                 }
                 if call.name == "verify" {
@@ -2591,19 +2632,13 @@ async fn execute_tool_calls(
                 None
             };
             if let Some(path) = read_path {
-                let hash = simple_hash(&content);
-                if agent.read_hashes.get(&path) == Some(&hash) {
-                    content = format!(
-                        "[file unchanged (same content as the previous read_file result): {}; \
-                         re-read if you need the latest content]",
-                        path.display()
-                    );
-                } else {
-                    agent.read_hashes.insert(path.clone(), hash);
-                    agent.recent_read_paths.push_back(path);
-                    if agent.recent_read_paths.len() > 5 {
-                        agent.recent_read_paths.pop_front();
-                    }
+                // A duplicate read returns the content, not a "re-read if you need the
+                // latest" stub. The stub was returned forever because the hash was only
+                // stored on the first read, and a first result that had been spilled or
+                // dropped by compaction could not be recovered at all.
+                agent.recent_read_paths.push_back(path);
+                if agent.recent_read_paths.len() > 5 {
+                    agent.recent_read_paths.pop_front();
                 }
             }
             let summary = summarize(&content);
@@ -2757,10 +2792,6 @@ fn resolved_tool_path(ctx: &ToolContext, call: &ToolCall) -> Option<PathBuf> {
     } else {
         ctx.cwd.join(path)
     })
-}
-
-fn simple_hash(text: &str) -> String {
-    crate::hash::sha256_hex(text.as_bytes())
 }
 
 fn message_text(message: &ChatMessage) -> &str {
@@ -3077,16 +3108,25 @@ mod tests {
 
     #[test]
     fn a_rename_and_an_edit_of_the_same_file_never_run_in_one_wave() {
-        let rename_first = tool_call_dependencies(&[
-            call(
-                "rename_symbol",
-                serde_json::json!({"from": "a", "to": "b", "paths": ["src/main.c"]}),
-            ),
-            call(
-                "edit_file",
-                serde_json::json!({"path": "src/main.c", "old_text": "x", "new_text": "y"}),
-            ),
-        ]);
+        let is_mutation = |call: &ToolCall| {
+            matches!(
+                call.name.as_str(),
+                "write_file" | "edit_file" | "rename_symbol"
+            )
+        };
+        let rename_first = tool_call_dependencies(
+            &[
+                call(
+                    "rename_symbol",
+                    serde_json::json!({"from": "a", "to": "b", "paths": ["src/main.c"]}),
+                ),
+                call(
+                    "edit_file",
+                    serde_json::json!({"path": "src/main.c", "old_text": "x", "new_text": "y"}),
+                ),
+            ],
+            is_mutation,
+        );
         assert_eq!(
             rename_first[1],
             vec![0],
@@ -3094,16 +3134,19 @@ mod tests {
         );
 
         // The other direction is the same hazard: the rename has to read what the edit left.
-        let edit_first = tool_call_dependencies(&[
-            call(
-                "edit_file",
-                serde_json::json!({"path": "src/main.c", "old_text": "x", "new_text": "y"}),
-            ),
-            call(
-                "rename_symbol",
-                serde_json::json!({"from": "a", "to": "b", "paths": ["src/main.c"]}),
-            ),
-        ]);
+        let edit_first = tool_call_dependencies(
+            &[
+                call(
+                    "edit_file",
+                    serde_json::json!({"path": "src/main.c", "old_text": "x", "new_text": "y"}),
+                ),
+                call(
+                    "rename_symbol",
+                    serde_json::json!({"from": "a", "to": "b", "paths": ["src/main.c"]}),
+                ),
+            ],
+            is_mutation,
+        );
         assert_eq!(
             edit_first[1],
             vec![0],
@@ -3112,16 +3155,19 @@ mod tests {
 
         // Two renames over disjoint files are still independent, or this fix would have bought
         // serialisation nobody asked for.
-        let disjoint = tool_call_dependencies(&[
-            call(
-                "rename_symbol",
-                serde_json::json!({"from": "a", "to": "b", "paths": ["src/one.c"]}),
-            ),
-            call(
-                "rename_symbol",
-                serde_json::json!({"from": "c", "to": "d", "paths": ["src/two.c"]}),
-            ),
-        ]);
+        let disjoint = tool_call_dependencies(
+            &[
+                call(
+                    "rename_symbol",
+                    serde_json::json!({"from": "a", "to": "b", "paths": ["src/one.c"]}),
+                ),
+                call(
+                    "rename_symbol",
+                    serde_json::json!({"from": "c", "to": "d", "paths": ["src/two.c"]}),
+                ),
+            ],
+            is_mutation,
+        );
         assert!(
             disjoint[1].is_empty(),
             "files that do not overlap must not be ordered: {:?}",
@@ -3129,16 +3175,19 @@ mod tests {
         );
 
         // And a list with one file in common is the whole reason the array is read at all.
-        let overlapping = tool_call_dependencies(&[
-            call(
-                "rename_symbol",
-                serde_json::json!({"from": "a", "to": "b", "paths": ["src/one.c", "src/two.c"]}),
-            ),
-            call(
-                "rename_symbol",
-                serde_json::json!({"from": "c", "to": "d", "paths": ["src/two.c"]}),
-            ),
-        ]);
+        let overlapping = tool_call_dependencies(
+            &[
+                call(
+                    "rename_symbol",
+                    serde_json::json!({"from": "a", "to": "b", "paths": ["src/one.c", "src/two.c"]}),
+                ),
+                call(
+                    "rename_symbol",
+                    serde_json::json!({"from": "c", "to": "d", "paths": ["src/two.c"]}),
+                ),
+            ],
+            is_mutation,
+        );
         assert_eq!(
             overlapping[1],
             vec![0],
@@ -3493,27 +3542,32 @@ mod tests {
             Duration::from_millis(300),
             Duration::from_secs(600),
         );
-        tokio::time::timeout(Duration::from_secs(10), task)
+        let failed = tokio::time::timeout(Duration::from_secs(10), task)
             .await
             .expect("turn must end promptly after a mid-stream stall")
             .unwrap();
-        let events = events.lock().unwrap();
-        let infos: Vec<String> = events
-            .iter()
-            .filter_map(|e| match e {
-                AgentEvent::Info(m) => Some(m.clone()),
-                _ => None,
-            })
-            .collect();
         assert!(
-            infos.iter().any(|m| m.contains("stalled")),
-            "expected a stall Info event, got: {infos:?}"
+            failed,
+            "a stalled stream is a timed-out turn, not a completed one"
+        );
+        let events = events.lock().unwrap();
+        let stall_at = events
+            .iter()
+            .position(|e| matches!(e, AgentEvent::Error(m) if m.contains("stalled")));
+        let end_at = events
+            .iter()
+            .position(|e| matches!(e, AgentEvent::TurnEnd { .. }));
+        assert!(
+            stall_at.is_some(),
+            "expected a stall Error, got: {events:?}"
         );
         assert!(
-            events
-                .iter()
-                .any(|e| matches!(e, AgentEvent::TurnEnd { .. })),
+            end_at.is_some(),
             "expected TurnEnd after the stall, got: {events:?}"
+        );
+        assert!(
+            stall_at < end_at,
+            "the failure must be reported before the turn closes: {events:?}"
         );
     }
 
@@ -3647,16 +3701,16 @@ mod tests {
             !timed_out_ends.is_empty(),
             "expected a failed ToolEnd for the hung tool, got: {events:?}"
         );
-        let infos: Vec<String> = events
+        let errors: Vec<String> = events
             .iter()
             .filter_map(|e| match e {
-                AgentEvent::Info(m) => Some(m.clone()),
+                AgentEvent::Error(m) => Some(m.clone()),
                 _ => None,
             })
             .collect();
         assert!(
-            infos.iter().any(|m| m.contains("Tool wave timed out")),
-            "expected a wave-timeout Info event, got: {infos:?}"
+            errors.iter().any(|m| m.contains("tool wave timed out")),
+            "expected a wave-timeout Error event, got: {errors:?}"
         );
         assert!(
             events
@@ -3998,20 +4052,48 @@ mod tests {
         );
     }
 
+    struct HookTool(&'static str, bool);
+
+    #[async_trait::async_trait]
+    impl Tool for HookTool {
+        fn name(&self) -> &'static str {
+            self.0
+        }
+        fn description(&self) -> &'static str {
+            "test tool"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+        fn mutates(&self, _args: &serde_json::Value, _ctx: &ToolContext) -> bool {
+            self.1
+        }
+        async fn run(
+            &self,
+            _args: serde_json::Value,
+            _ctx: &ToolContext,
+        ) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput {
+                text: String::new(),
+            })
+        }
+    }
+
     #[test]
-    fn the_mutation_list_names_every_tool_that_takes_a_backup() {
-        for name in [
-            "write_file",
-            "edit_file",
-            "rename_symbol",
-            "pinmap",
-            "decision",
-        ] {
-            assert!(is_mutation_tool(name), "{name} changes the workspace");
-        }
-        for name in ["read_file", "grep", "build", "flash", "verify"] {
-            assert!(!is_mutation_tool(name), "{name} records no backup");
-        }
+    fn the_registry_routes_the_mutation_question_to_the_tool() {
+        // The old answer was a name list in this file. The registry now asks the tool,
+        // because only the tool knows whether this invocation (a dry-run rename, a
+        // `pinmap list`, a read-only child) changes the workspace.
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(HookTool("mutating", true)));
+        registry.register(Arc::new(HookTool("reading", false)));
+        let ctx = ToolContext::default();
+        assert!(registry.mutates("mutating", &serde_json::json!({}), &ctx));
+        assert!(!registry.mutates("reading", &serde_json::json!({}), &ctx));
+        assert!(
+            !registry.mutates("missing", &serde_json::json!({}), &ctx),
+            "an unknown tool mutates nothing"
+        );
     }
 
     /// The list above is a hand-written copy of a fact the tools state better, so this reads
@@ -4089,8 +4171,21 @@ mod tests {
             }
             backing_up += 1;
             assert!(
-                is_mutation_tool(name),
-                "{name} ({file}) records a journal backup and is not listed as a mutation, so the                  turn neither re-verifies after it nor orders it against a concurrent read"
+                product.contains("fn mutates("),
+                "{name} ({file}) records a journal backup but does not implement \
+                 `Tool::mutates`, so the turn neither re-verifies after it nor orders it \
+                 against a concurrent read"
+            );
+        }
+        // These two do not journal, so the backup scan cannot see them; both change the
+        // workspace (a child's edits, a shell redirect) and must answer the hook.
+        for file in ["task.rs", "shell.rs"] {
+            let path = dir.join(file);
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+            assert!(
+                text.contains("fn mutates("),
+                "{file} changes the workspace and must implement Tool::mutates"
             );
         }
         assert!(

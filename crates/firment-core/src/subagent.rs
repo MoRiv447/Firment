@@ -53,6 +53,22 @@ impl<F: FnOnce()> Drop for OnDrop<F> {
 pub trait SubagentFactory: Send + Sync {
     /// Run a nested read-only agent and return its final text.
     async fn run_subagent(&self, call: SubagentCall<'_>) -> Result<String, String>;
+
+    /// Whether this runner's child registry can write files. `task` reads it so a child's
+    /// edits count as a mutation of the parent turn instead of vanishing from its gates.
+    fn may_write(&self) -> bool {
+        false
+    }
+
+    /// Re-point this runner at a different registry (a `/plan` switch rebuilt the parent's
+    /// registry and permission but left the child holding the write-capable one).
+    fn with_registry(
+        &self,
+        _registry: Arc<ToolRegistry>,
+        _may_write: bool,
+    ) -> Option<Arc<dyn SubagentFactory>> {
+        None
+    }
 }
 
 /// Parks a task that carries a parent turn's cancellation into a nested agent,
@@ -104,6 +120,11 @@ impl Drop for CancelPropagator {
 pub struct SubagentRunner {
     pub config: Arc<Config>,
     pub registry: Arc<ToolRegistry>,
+    /// Whether `registry` can write. `task` reports a child's edits as the parent turn's
+    /// mutation only when this is true.
+    pub may_write: bool,
+    /// The configured recursion limit, inherited by every nested level.
+    pub max_subagent_depth: usize,
     pub provider_name: String,
     pub model: String,
     pub max_iterations: usize,
@@ -137,6 +158,7 @@ impl SubagentRunner {
     ) -> Self {
         Self {
             max_iterations: 8,
+            max_subagent_depth: config.tools.max_subagent_depth.max(1),
             // A fresh pool by default; the assembly overrides it with the parent agent's so
             // that a whole tree shares one bound.
             subagent_slots: Arc::new(tokio::sync::Semaphore::new(
@@ -146,6 +168,9 @@ impl SubagentRunner {
             web_search_api_key: config.tools.resolved_web_search_api_key(),
             config,
             registry,
+            // The assembly knows whether the child registry can write and overrides this;
+            // a bare `new` is the read-only default.
+            may_write: false,
             provider_name: provider_name.into(),
             model: model.into(),
             asker,
@@ -162,6 +187,8 @@ impl SubagentRunner {
         Arc::new(Self {
             config: self.config.clone(),
             registry: self.registry.clone(),
+            may_write: self.may_write,
+            max_subagent_depth: self.max_subagent_depth,
             provider_name: self.provider_name.clone(),
             model: self.model.clone(),
             max_iterations: self.max_iterations,
@@ -177,6 +204,21 @@ impl SubagentRunner {
 
 #[async_trait]
 impl SubagentFactory for SubagentRunner {
+    fn may_write(&self) -> bool {
+        self.may_write
+    }
+
+    fn with_registry(
+        &self,
+        registry: Arc<ToolRegistry>,
+        may_write: bool,
+    ) -> Option<Arc<dyn SubagentFactory>> {
+        let mut runner = self.clone();
+        runner.registry = registry;
+        runner.may_write = may_write;
+        Some(Arc::new(runner))
+    }
+
     async fn run_subagent(&self, call: SubagentCall<'_>) -> Result<String, String> {
         let SubagentCall {
             prompt,
@@ -234,6 +276,10 @@ impl SubagentFactory for SubagentRunner {
         nested.set_write_scope(scope);
         nested.set_subagent_factory(Some(self.child() as Arc<dyn SubagentFactory>));
         nested.set_subagent_depth(depth);
+        // The child inherits the configured recursion limit. Without this its `Agent::new`
+        // default (2) silently replaced the user's value: config 1 allowed a grandchild,
+        // config 5 could never be reached.
+        nested.set_max_subagent_depth(self.max_subagent_depth);
         // Subagents cannot ask the user: the ask_user tool is for questions
         // only the human can answer, and a nested research agent must not
         // pop a question modal on the parent's screen.

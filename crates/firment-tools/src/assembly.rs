@@ -186,6 +186,10 @@ pub fn assemble_agent(
         sink: attacker_sink.clone(),
         // The parent's pool, so the whole tree shares one bound.
         subagent_slots: agent.subagent_slots(),
+        // A child that can write makes its edits count as the parent turn's mutations.
+        // `subagent_registry_for` returns the write-capable set only when the mode and the
+        // opt-in both allow it, so this mirrors the registry rather than re-deciding it.
+        may_write: !plan && merged.tools.subagents_may_write,
         ..SubagentRunner::new(
             Arc::new(merged.clone()),
             // `subagent_registry_for`, not the opt-in flag read directly: a planning session's
@@ -216,6 +220,7 @@ pub fn assemble_agent(
     if !plan {
         let attacker = SubagentRunner {
             max_iterations: 16,
+            may_write: true,
             sink: attacker_sink,
             // Same pool as the research runner: the red-team campaign's agents are subagents
             // of this session too, and the bound is on provider streams, not on which

@@ -91,6 +91,13 @@ impl Tool for Pinmap {
         "pinmap"
     }
 
+    fn mutates(&self, args: &Value, _ctx: &ToolContext) -> bool {
+        matches!(
+            args.get("action").and_then(|v| v.as_str()).unwrap_or(""),
+            "claim" | "release"
+        )
+    }
+
     fn description(&self) -> &'static str {
         "Project pin/resource allocation registry (.firment/workbench.toml [pinmap.<board>]), \
          scoped PER BOARD. The board name should match the device's MQTT node name \
@@ -696,5 +703,23 @@ mod tests {
             "工作区外的出处不许读，也不能假装验证过：{}",
             out.text
         );
+    }
+
+    #[test]
+    fn only_the_writing_actions_are_mutations() {
+        let dir = tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        for action in ["boards", "list", "check"] {
+            assert!(
+                !Pinmap.mutates(&json!({"action": action}), &ctx),
+                "{action} only reads the pin registry"
+            );
+        }
+        for action in ["claim", "release"] {
+            assert!(
+                Pinmap.mutates(&json!({"action": action}), &ctx),
+                "{action} rewrites the pin registry"
+            );
+        }
     }
 }

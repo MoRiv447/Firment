@@ -13,6 +13,10 @@ impl Tool for EditFile {
         "edit_file"
     }
 
+    fn mutates(&self, _args: &Value, _ctx: &ToolContext) -> bool {
+        true
+    }
+
     fn description(&self) -> &'static str {
         "Edit a file by exact old_text anchor (must match exactly once), by 1-based line range, or \
          as a batch of edits in one call."

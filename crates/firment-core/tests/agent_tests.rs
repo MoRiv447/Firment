@@ -1583,7 +1583,7 @@ async fn model_based_compaction_uses_provider_summary() {
 }
 
 #[tokio::test]
-async fn duplicate_read_results_are_stubbed() {
+async fn duplicate_reads_return_the_content_instead_of_a_stub() {
     let dir = tempdir().unwrap();
     std::fs::write(dir.path().join("a.txt"), "hello world").unwrap();
     let provider = FakeProvider {
@@ -1637,8 +1637,10 @@ async fn duplicate_read_results_are_stubbed() {
         tool_texts[0]
     );
     assert!(
-        tool_texts[1].contains("[file unchanged"),
-        "second read should be stubbed, got: {}",
+        tool_texts[1].contains("hello world"),
+        "a repeated read must return the content; the old stub told the model to re-read \
+         and then returned the same stub forever, so a spilled or compacted result could \
+         not be recovered: {}",
         tool_texts[1]
     );
 }

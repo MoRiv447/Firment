@@ -256,6 +256,18 @@ pub trait Tool: Send + Sync {
         None
     }
 
+    /// Whether **this invocation** changes the workspace.
+    ///
+    /// The turn uses one answer for three jobs: whether to re-arm the verify/ELF gates,
+    /// whether a concurrent read of the same path must be ordered after it, and whether a
+    /// failure may roll the wave back. The old list keyed on the tool name, so `task` (a
+    /// child's edits) and `shell` were missed while `pinmap list`, `decision list` and a
+    /// dry-run rename were counted as mutations. Default false: a read-only tool does not
+    /// have to remember an exception.
+    fn mutates(&self, _args: &Value, _ctx: &ToolContext) -> bool {
+        false
+    }
+
     /// Optional unified-diff preview appended to the approval prompt (used by
     /// write/edit tools so the user sees exactly what will change).
     fn preview(&self, _args: &Value, _ctx: &ToolContext) -> Option<String> {
@@ -280,6 +292,13 @@ impl ToolRegistry {
         Self {
             tools: HashMap::new(),
         }
+    }
+
+    /// Ask the registered tool whether this invocation changes the workspace.
+    pub fn mutates(&self, name: &str, args: &Value, ctx: &ToolContext) -> bool {
+        self.tools
+            .get(name)
+            .is_some_and(|tool| tool.mutates(args, ctx))
     }
 
     /// Register a **built-in** tool. A duplicate name replaces.

@@ -257,6 +257,55 @@ fn redirect_targets(command: &str) -> Vec<String> {
 /// `2>/dev/null` in existence without protecting anything.
 const NULL_SINKS: &[&str] = &["nul", "/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"];
 
+/// Conservative answer to "could this command change the workspace?".
+///
+/// `shell` has no journal, so it cannot be backed up like the file tools; the turn still
+/// needs to know that an edit happened so the verify/ELF gates run and a concurrent read
+/// is ordered after it. The predicate intentionally over-approximates: a false positive
+/// costs one verify, a false negative leaves a changed file outside every gate.
+fn shell_may_write(command: &str) -> bool {
+    let lower = command.to_ascii_lowercase();
+    if lower.contains('>')
+        || lower.contains("sed -i")
+        || lower.contains("perl -pi")
+        || lower.contains("set-content")
+        || lower.contains("out-file")
+        || lower.contains("add-content")
+        || lower.contains("remove-item")
+        || lower.contains("new-item")
+    {
+        return true;
+    }
+    let mut tokens = lower.split_whitespace();
+    let first = tokens.next().unwrap_or("");
+    if matches!(
+        first,
+        "rm" | "del"
+            | "erase"
+            | "rmdir"
+            | "rd"
+            | "mv"
+            | "move"
+            | "cp"
+            | "copy"
+            | "mkdir"
+            | "md"
+            | "touch"
+            | "tee"
+            | "truncate"
+            | "chmod"
+    ) {
+        return true;
+    }
+    if first == "git" {
+        let sub = tokens.next().unwrap_or("");
+        // `git branch -d`, `git remote add` and `git config user.name x` all write; only
+        // the commands that are read-only in every form are below.
+        return !matches!(sub, "status" | "diff" | "log" | "show" | "rev-parse");
+    }
+    false
+}
+
 /// First redirect target that resolves outside `cwd`. A redirect is a write
 /// the file tools would refuse: `echo x > ../../outside.log` put the shell in
 /// charge of the workspace boundary instead of the code that checks it.
@@ -361,6 +410,12 @@ fn strip_outer_quotes(command: &str) -> String {
 impl Tool for Shell {
     fn name(&self) -> &'static str {
         "shell"
+    }
+
+    fn mutates(&self, args: &Value, _ctx: &ToolContext) -> bool {
+        args.get("command")
+            .and_then(|c| c.as_str())
+            .is_some_and(shell_may_write)
     }
 
     fn description(&self) -> &'static str {
@@ -868,5 +923,28 @@ mod tests {
         assert!(reason.contains("⚠ dangerous command"));
         let safe = tool.approval(&json!({"command": "git status"})).unwrap();
         assert!(!safe.contains("⚠"));
+    }
+
+    #[test]
+    fn shell_mutations_are_recognised_for_the_turn_gates() {
+        let ctx = ToolContext::default();
+        for command in [
+            "echo x > out",
+            "rm -rf build",
+            "sed -i s/a/b/ f.c",
+            "git checkout -- f.c",
+            "Set-Content f.ps1 x",
+        ] {
+            assert!(
+                Shell.mutates(&json!({"command": command}), &ctx),
+                "a write must arm the verify/ELF gates: {command}"
+            );
+        }
+        for command in ["git status", "cargo build", "echo hi"] {
+            assert!(
+                !Shell.mutates(&json!({"command": command}), &ctx),
+                "a read must not arm the gates: {command}"
+            );
+        }
     }
 }

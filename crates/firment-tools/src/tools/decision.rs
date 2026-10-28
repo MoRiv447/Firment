@@ -36,6 +36,13 @@ impl Tool for Decision {
         "decision"
     }
 
+    fn mutates(&self, args: &Value, _ctx: &ToolContext) -> bool {
+        matches!(
+            args.get("action").and_then(|v| v.as_str()).unwrap_or(""),
+            "add" | "remove"
+        )
+    }
+
     fn description(&self) -> &'static str {
         "Project decision log (ADR-lite, .firment/workbench.toml [[decision]]). \
          Record every choice a future session would need to know: chip/peripheral \
@@ -296,5 +303,14 @@ mod tests {
             "没有出处的决策要标未验证：{}",
             out.text
         );
+    }
+
+    #[test]
+    fn only_add_and_remove_are_mutations() {
+        let dir = tempdir().unwrap();
+        let ctx = ctx(dir.path());
+        assert!(!Decision.mutates(&json!({"action": "list"}), &ctx));
+        assert!(Decision.mutates(&json!({"action": "add"}), &ctx));
+        assert!(Decision.mutates(&json!({"action": "remove"}), &ctx));
     }
 }

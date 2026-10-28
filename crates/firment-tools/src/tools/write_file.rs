@@ -12,6 +12,10 @@ impl Tool for WriteFile {
         "write_file"
     }
 
+    fn mutates(&self, _args: &Value, _ctx: &ToolContext) -> bool {
+        true
+    }
+
     fn description(&self) -> &'static str {
         "Create or overwrite a file with the given text content. Parent directories are created if needed."
     }
