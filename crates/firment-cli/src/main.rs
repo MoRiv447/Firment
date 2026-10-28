@@ -1752,7 +1752,15 @@ fn run_share(
         }
     };
     let session = store.load(&id)?;
-    let events = EventLog::new(store.event_log_path(&id)).read();
+    let events = match EventLog::new(store.event_log_path(&id)).read() {
+        Ok(events) => events,
+        Err(e) => {
+            // The transcript is still worth sharing; a timeline that could not be read is
+            // said on stderr instead of being rendered as "this session had no events".
+            eprintln!("warning: {e}; exporting without the timeline");
+            Vec::new()
+        }
+    };
     let document = match format {
         "html" => share::html(&ExportInput {
             session: &session,
@@ -1810,7 +1818,7 @@ fn run_replay(
         }
     };
     let log = EventLog::new(store.event_log_path(&id));
-    let records = log.read();
+    let records = log.read().map_err(anyhow::Error::msg)?;
     if records.is_empty() {
         println!(
             "no event log for session {id} — the log is written as the session runs \
@@ -3149,7 +3157,7 @@ mod tests {
             })
             .unwrap();
         }
-        let read = log.read();
+        let read = log.read().unwrap();
         assert_eq!(read.len(), 3);
         // `--at 1` is the first event and nothing else — the time travel, in its own unit.
         assert_eq!(read[..1].len(), 1);

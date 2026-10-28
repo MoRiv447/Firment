@@ -302,9 +302,11 @@ impl WorkbenchConfig {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let body = toml::to_string_pretty(self).map_err(|e| format!("serialize workbench: {e}"))?;
-        let tmp = path.with_extension("toml.tmp");
-        std::fs::write(&tmp, body).map_err(|e| e.to_string())?;
-        std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+        // `path.with_extension("toml.tmp")` was one fixed name for every writer: the GUI's
+        // commands, the agent's pinmap/decision tools and two concurrent turns all wrote the
+        // same temp file, and `unchanged_since` is a compare-then-write, not a lock. Reuse
+        // the transcript's unique-temp + rename writer instead.
+        crate::session::write_atomic(&path, &body).map_err(|e| e.to_string())?;
         Ok(())
     }
 

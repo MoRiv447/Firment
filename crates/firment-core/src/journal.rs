@@ -518,11 +518,26 @@ impl EditJournal {
             name = self.index_name(self.next_seq);
         }
         let text = serde_json::to_string_pretty(&record).map_err(|e| e.to_string())?;
-        fs::write(self.dir.join(name), text).map_err(|e| e.to_string())?;
+        let index_path = self.dir.join(&name);
+        // A torn `undo-*.json` used to be reachable: a truncating `fs::write` here left the
+        // newest index unreadable, and `undo_latest` refuses to skip it, so every older turn
+        // became unreachable too. The index goes through the same temp+rename as the
+        // transcript.
+        crate::session::write_atomic(&index_path, &text).map_err(|e| e.to_string())?;
 
         let mut changes = Vec::new();
         for entry in &self.entries {
-            changes.push(ledger_change_for(&self.dir, entry)?);
+            match ledger_change_for(&self.dir, entry) {
+                Ok(change) => changes.push(change),
+                Err(e) => {
+                    // The index names a turn whose ledger change could not be recorded. Do
+                    // not leave a rollback entry for a turn the agent is about to report as
+                    // failed; the ledger may already hold a partial change, but an undo that
+                    // silently restores files the ledger never saw is the worse half.
+                    let _ = fs::remove_file(&index_path);
+                    return Err(e);
+                }
+            }
         }
         self.entries.clear();
         Ok(changes)
@@ -1752,6 +1767,46 @@ mod tests {
                 .contains(TRUNCATION_MARKER)
         );
     }
+    #[test]
+    fn a_failed_ledger_change_does_not_leave_an_undo_entry() {
+        let dir = tempdir().unwrap();
+        let undo = dir.path().join("undo");
+        let file = dir.path().join("a.txt");
+        fs::write(&file, "one").unwrap();
+        let mut journal = EditJournal::new(undo.clone());
+        journal.begin(&file).unwrap();
+        // `ledger_change_for` needs the backup; removing it makes the ledger step fail
+        // after the index has already been written.
+        for entry in fs::read_dir(&undo).unwrap() {
+            let path = entry.unwrap().path();
+            if !path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("undo-")
+            {
+                fs::remove_file(path).unwrap();
+            }
+        }
+        fs::write(&file, "two").unwrap();
+
+        let err = journal.commit_at_seq(1).unwrap_err();
+        assert!(err.contains("backup"), "got: {err}");
+        let indexes = fs::read_dir(&undo)
+            .unwrap()
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .map(|e| e.file_name().to_string_lossy().starts_with("undo-"))
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(
+            indexes, 0,
+            "an undo index for a turn whose ledger change failed must be removed"
+        );
+    }
+
     #[test]
     fn one_big_hunk_reports_its_truncation_instead_of_amputating_silently() {
         // A whole-region rewrite is ONE hunk. The marker used to be conditional on

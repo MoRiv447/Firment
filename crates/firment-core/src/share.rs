@@ -282,7 +282,16 @@ pub fn mask(text: &str) -> String {
     ];
     let mut out = String::with_capacity(text.len());
     for word in split_keeping_whitespace(text) {
-        let trimmed = word.trim_start_matches(|c: char| !c.is_alphanumeric() && c != '_');
+        // `DEEPSEEK_API_KEY=sk-...` and `?key=sk-...` were missed because the old check
+        // only stripped punctuation from the front of the whole token; a key attached to
+        // a name never started with the prefix. Try the part after the last `=`/`:` as
+        // well, while keeping the name and separator in the output.
+        let secret_start = word
+            .rfind(|c: char| c == '=' || c == ':')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let trimmed =
+            word[secret_start..].trim_start_matches(|c: char| !c.is_alphanumeric() && c != '_');
         let candidate = trimmed.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '-');
         let looks_like_key = PREFIXES
             .iter()
@@ -464,6 +473,25 @@ mod tests {
             mask("(sk-ant-abcdefghijklmnop)"),
             "(sk-ant-***masked***)",
             "the redactor may shorten the key; it may not rewrite the sentence around it"
+        );
+    }
+
+    #[test]
+    fn a_key_attached_to_a_name_query_or_json_field_is_masked() {
+        // The old check only stripped punctuation from the front of the whole token, so
+        // `DEEPSEEK_API_KEY=sk-...` and `?key=sk-...` started with a letter and were copied
+        // verbatim into an export whose footer promises secrets are masked.
+        assert_eq!(
+            mask("DEEPSEEK_API_KEY=sk-abcdefghijklmnop"),
+            "DEEPSEEK_API_KEY=sk-***masked***"
+        );
+        assert_eq!(
+            mask("https://host/?key=sk-abcdefghijklmnop"),
+            "https://host/?key=sk-***masked***"
+        );
+        assert_eq!(
+            mask("{\"api_key\":\"sk-abcdefghijklmnop\"}"),
+            "{\"api_key\":\"sk-***masked***\"}"
         );
     }
 

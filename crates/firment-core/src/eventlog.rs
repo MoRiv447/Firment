@@ -279,6 +279,16 @@ impl EventLog {
         Ok(())
     }
 
+    /// Every rotated generation this log may have written. Used by session deletion:
+    /// the current file was in the seven-path list but `events.1.jsonl` was not, so a
+    /// deleted session's history outlived its transcript.
+    pub fn rotated_paths(path: &Path) -> Vec<PathBuf> {
+        let log = Self::new(path);
+        (1..log.generations)
+            .map(|index| log.generation_path(index))
+            .collect()
+    }
+
     /// `events.jsonl` → `events.1.jsonl`, `events.2.jsonl`, …
     pub fn generation_path(&self, index: u32) -> PathBuf {
         let stem = self
@@ -299,23 +309,44 @@ impl EventLog {
     ///
     /// Rotated generations are read in order, so a session that outgrew the cap still reads
     /// as one sequence rather than as the tail of itself.
-    pub fn read(&self) -> Vec<LogRecord> {
+    /// Read every generation, oldest first. A missing file is an empty generation (a
+    /// session from before the log existed has none); a file that exists but cannot be
+    /// read is an error, because `replay`/`share` used to print "no event log" for a
+    /// permission error or a directory at the path.
+    pub fn read(&self) -> Result<Vec<LogRecord>, String> {
         let mut records = Vec::new();
         for index in (1..self.generations).rev() {
-            records.extend(self.read_file(&self.generation_path(index)));
+            records.extend(self.read_file(&self.generation_path(index))?);
         }
-        records.extend(self.read_file(&self.path));
-        records
+        records.extend(self.read_file(&self.path)?);
+        Ok(records)
     }
 
-    fn read_file(&self, path: &Path) -> Vec<LogRecord> {
-        let Ok(text) = std::fs::read_to_string(path) else {
-            return Vec::new();
+    fn read_file(&self, path: &Path) -> Result<Vec<LogRecord>, String> {
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(format!("cannot read event log {}: {e}", path.display())),
         };
-        text.lines()
+        let mut bad = 0usize;
+        let records: Vec<LogRecord> = text
+            .lines()
             .filter(|line| !line.trim().is_empty())
-            .filter_map(|line| serde_json::from_str::<LogRecord>(line).ok())
-            .collect()
+            .filter_map(|line| match serde_json::from_str::<LogRecord>(line) {
+                Ok(record) => Some(record),
+                Err(_) => {
+                    bad += 1;
+                    None
+                }
+            })
+            .collect();
+        if bad > 0 {
+            tracing::warn!(
+                "event log {} has {bad} unreadable line(s); they are omitted from replay",
+                path.display()
+            );
+        }
+        Ok(records)
     }
 }
 
@@ -402,7 +433,7 @@ mod tests {
         log.append(&record("turn_start", "turn started")).unwrap();
         log.append(&record("tool_end", "#1 edit_file ok")).unwrap();
 
-        let read = log.read();
+        let read = log.read().unwrap();
         assert_eq!(read.len(), 2);
         assert_eq!(read[0].kind, "turn_start");
         assert_eq!(read[1].summary, "#1 edit_file ok");
@@ -422,7 +453,7 @@ mod tests {
         let current = std::fs::metadata(log.path()).unwrap().len();
         assert!(current <= 400, "current generation is {current} bytes");
 
-        let read = log.read();
+        let read = log.read().unwrap();
         assert!(read.len() >= 2, "rotation lost everything: {read:?}");
         // The newest line survives, and the oldest is the one that went.
         assert!(read.iter().any(|r| r.summary == "step 39"), "{read:?}");
@@ -439,7 +470,7 @@ mod tests {
         }
         assert!(log.path().exists());
         assert!(!log.generation_path(1).exists());
-        assert!(log.read().iter().any(|r| r.summary == "step 19"));
+        assert!(log.read().unwrap().iter().any(|r| r.summary == "step 19"));
     }
 
     #[test]
@@ -470,7 +501,7 @@ mod tests {
     fn a_missing_log_reads_as_empty_rather_than_failing() {
         let dir = tempfile::tempdir().unwrap();
         let log = EventLog::new(dir.path().join("nothing.jsonl"));
-        assert!(log.read().is_empty());
+        assert!(log.read().unwrap().is_empty());
     }
 
     #[test]

@@ -943,6 +943,14 @@ impl Config {
                 None => {
                     let mut v = la.clone();
                     v.bin = None;
+                    // The user has no `[tools.la]`: the project supplies the first one, but
+                    // the tighten-only rule still applies. Adopting `max_samples =
+                    // 999999999999` here turned one approved capture into a disk DoS, and
+                    // the `Some(existing)` arm already used `.min()` for the same reason.
+                    v.max_samples = v.max_samples.min(default_la_max_samples());
+                    v.max_time_ms = v.max_time_ms.min(default_la_max_time_ms());
+                    let timeout_ceiling = default_la_max_time_ms().saturating_add(60_000);
+                    v.timeout_ms = v.timeout_ms.map(|t| t.min(timeout_ceiling));
                     config.tools.la = Some(v);
                 }
             }
@@ -1301,6 +1309,14 @@ impl Config {
     pub fn remove_provider(&mut self, name: &str) -> Result<(), ConfigError> {
         if !self.providers.contains_key(name) {
             return Ok(());
+        }
+        // Check before mutating. The old order removed the provider and *then* rejected the
+        // last one, so the caller's in-memory Config had no providers while the command
+        // returned an error; the next save_settings wrote that empty map to disk.
+        if self.providers.len() == 1 {
+            return Err(ConfigError::UnknownProvider(
+                "cannot delete the last provider — at least one must remain".to_string(),
+            ));
         }
         self.providers.remove(name);
         if self.default_provider == name {
@@ -2123,6 +2139,60 @@ mod tests {
         let la = merged.tools.la.expect("la merged");
         assert_eq!(la.max_samples, 500, "a tighter project cap wins");
         assert_eq!(la.max_time_ms, 1000);
+
+        // The `None` arm (the default: the user has no `[tools.la]`) used to clone the
+        // project's caps wholesale, so the tighten-only rule did not apply to the most
+        // common configuration.
+        std::fs::write(
+            dir.path().join(".firment.toml"),
+            r#"
+            [tools.la]
+            driver = "fx2lafw"
+            max_samples = 999999999999
+            max_time_ms = 999999999
+            "#,
+        )
+        .unwrap();
+        let mut unset = Config::default_config();
+        unset.tools.la = None;
+        let merged = unset.merged_for(dir.path());
+        let la = merged
+            .tools
+            .la
+            .expect("the project supplies the first la config");
+        assert_eq!(
+            la.max_samples,
+            default_la_max_samples(),
+            "a project may not raise the default sample cap"
+        );
+        assert_eq!(
+            la.max_time_ms,
+            default_la_max_time_ms(),
+            "a project may not raise the default time cap"
+        );
+    }
+
+    #[test]
+    fn removing_the_last_provider_is_refused_before_it_mutates_memory() {
+        let mut config = Config::default_with_provider(
+            "only",
+            ProviderConfig {
+                r#type: "openai".to_string(),
+                base_url: None,
+                api_key_env: None,
+                api_key: None,
+                model: "m".to_string(),
+                max_tokens: None,
+                temperature: None,
+            },
+        );
+        let err = config.remove_provider("only").unwrap_err();
+        assert!(err.to_string().contains("last provider"), "got: {err}");
+        assert!(
+            config.providers.contains_key("only"),
+            "the rejected delete must leave the provider in memory"
+        );
+        assert_eq!(config.default_provider, "only");
     }
 
     #[test]

@@ -84,6 +84,10 @@ pub struct Session {
     /// `build_request` folds it into the first user message on the way out, where role alternation is
     /// already enforced and where the ledger prefix already goes.
     pub compaction_digest: Option<String>,
+    /// Unreadable lines skipped by the last `load`. Not part of the stored JSONL: it is a
+    /// fact about this read, and the original bytes are preserved in a `.jsonl.damaged`
+    /// sidecar before the next save can rewrite the file.
+    pub damaged_lines: usize,
 }
 
 impl Session {
@@ -105,6 +109,7 @@ impl Session {
             title: None,
             tool_seq: 0,
             compaction_digest: None,
+            damaged_lines: 0,
         }
     }
 
@@ -546,6 +551,27 @@ impl SessionStore {
         // must round-trip byte-for-byte (an assistant may legitimately carry
         // un-answered tool_calls in stored-but-not-yet-run states).
         if corrupt_lines > 0 {
+            // The repair below drops the unreadable lines from memory, and every later
+            // save rewrites the whole file from that amputated vector. Keep the bytes this
+            // read could not understand before that happens: a torn transcript is evidence,
+            // and a backup is the difference between "one line was lost" and "the loss is
+            // permanent and silent".
+            let backup = path.with_extension("jsonl.damaged");
+            if !backup.exists() {
+                if let Err(e) = fs::copy(&path, &backup) {
+                    tracing::warn!(
+                        "session {} has {corrupt_lines} unreadable line(s); could not save the \
+                         damaged original to {}: {e}",
+                        path.display(),
+                        backup.display()
+                    );
+                }
+            }
+            tracing::warn!(
+                "session {} had {corrupt_lines} unreadable line(s); the original is preserved at {}",
+                path.display(),
+                backup.display()
+            );
             repair_dangling_tool_calls(&mut messages);
         }
         // Ungated on purpose: a consecutive-user transcript is made of valid
@@ -569,6 +595,7 @@ impl SessionStore {
             title: meta.title,
             tool_seq: meta.tool_seq,
             compaction_digest: meta.compaction_digest,
+            damaged_lines: corrupt_lines,
         };
         if model != meta.model {
             // deepseek-chat / deepseek-reasoner were deprecated on 2026-07-24;
@@ -597,35 +624,14 @@ impl SessionStore {
         for entry in fs::read_dir(&self.dir)? {
             let entry = entry?;
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            if !is_session_file(&path) {
                 continue;
             }
             let Ok(meta) = read_meta_line(&path) else {
                 unreadable.push(path);
                 continue;
             };
-            out.push(SessionSummary {
-                id: meta.id,
-                updated_at: meta.updated_at,
-                model: migrate_legacy_model(&meta.model),
-                cwd: meta.cwd,
-                // What the row shows: the rename if there is one, else the name
-                // derived when the file was written, else that it is new. The
-                // core answers this so that the three clients cannot answer it
-                // three ways.
-                preview: meta
-                    .title
-                    .filter(|t| !t.trim().is_empty())
-                    .unwrap_or_else(|| {
-                        if meta.preview.is_empty() {
-                            "New session".to_string()
-                        } else {
-                            meta.preview.clone()
-                        }
-                    }),
-                kind: meta.session_kind,
-                parent_session: meta.parent_session,
-            });
+            out.push(summary_from_meta(meta));
         }
         out.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
         Ok((out, unreadable))
@@ -646,7 +652,37 @@ impl SessionStore {
     }
 
     pub fn latest(&self) -> Result<Option<SessionSummary>, SessionError> {
-        Ok(self.list()?.into_iter().next())
+        // `list()` drops a file it cannot parse, so a damaged newest session used to turn
+        // `firm --continue latest` into "resume the previous conversation" with no error.
+        // Pick the newest *file* first and refuse if that file is the one that cannot be read.
+        if !self.dir.exists() {
+            return Ok(None);
+        }
+        let mut newest: Option<(SystemTime, PathBuf)> = None;
+        for entry in fs::read_dir(&self.dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if !is_session_file(&path) {
+                continue;
+            }
+            let mtime = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(UNIX_EPOCH);
+            if newest.as_ref().is_none_or(|(t, _)| mtime > *t) {
+                newest = Some((mtime, path));
+            }
+        }
+        let Some((_, path)) = newest else {
+            return Ok(None);
+        };
+        match read_meta_line(&path) {
+            Ok(meta) => Ok(Some(summary_from_meta(meta))),
+            Err(e) => Err(SessionError::Corrupt(
+                path,
+                format!("the newest session cannot be read: {e}"),
+            )),
+        }
     }
 
     /// Spawn a workbench BRANCH session from an existing one: same cwd,
@@ -747,15 +783,18 @@ impl SessionStore {
         // session is both a data-retention bug and the previous session's scratch arriving in the
         // next one to use the id.
         let mut removed = false;
-        for candidate in [
+        let event_log = self.event_log_path(&id);
+        let mut candidates = vec![
             self.path_for(&id),
             self.undo_dir(&id),
             self.spill_dir(&id),
             self.work_dir(&id),
             self.ledger_path(&id),
-            self.event_log_path(&id),
+            event_log.clone(),
             self.pins_path(&id),
-        ] {
+        ];
+        candidates.extend(crate::eventlog::EventLog::rotated_paths(&event_log));
+        for candidate in candidates {
             if candidate.is_dir() {
                 fs::remove_dir_all(&candidate)?;
                 removed = true;
@@ -888,6 +927,43 @@ impl Default for SessionStore {
         Self {
             dir: config_dir().join("sessions"),
         }
+    }
+}
+
+/// A `.jsonl` file in the sessions directory that is a transcript, not one of the
+/// sidecars rotation creates (`<id>.events.jsonl`, `<id>.events.1.jsonl`,
+/// `<id>.ledger.jsonl`). Those have no meta line and used to be reported as damaged
+/// sessions by `list_with_damage`.
+fn is_session_file(path: &Path) -> bool {
+    if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+        return false;
+    }
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    !name.contains(".events") && !name.contains(".ledger")
+}
+
+fn summary_from_meta(meta: MetaLine) -> SessionSummary {
+    SessionSummary {
+        id: meta.id,
+        updated_at: meta.updated_at,
+        model: migrate_legacy_model(&meta.model),
+        cwd: meta.cwd,
+        // What the row shows: the rename if there is one, else the name
+        // derived when the file was written, else that it is new. The
+        // core answers this so that the three clients cannot answer it
+        // three ways.
+        preview: meta
+            .title
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or_else(|| {
+                if meta.preview.is_empty() {
+                    "New session".to_string()
+                } else {
+                    meta.preview.clone()
+                }
+            }),
+        kind: meta.session_kind,
+        parent_session: meta.parent_session,
     }
 }
 
@@ -1718,5 +1794,106 @@ six earlier rounds"
         let path = dir.path().join("fresh.json");
         atomic_write(&path, "created").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "created");
+    }
+
+    #[test]
+    fn a_damaged_transcript_is_backed_up_before_the_next_save_can_erase_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+        let mut session = Session::new(dir.path().to_path_buf(), "p", "m");
+        session.id = "damaged".to_string();
+        session.messages.push(ChatMessage::User {
+            content: "keep me".to_string(),
+        });
+        store.save(&session).unwrap();
+        let path = store.path_for("damaged");
+        let mut text = std::fs::read_to_string(&path).unwrap();
+        text.push_str("{\"type\":\"message\", this line is broken\n");
+        std::fs::write(&path, &text).unwrap();
+
+        let loaded = store.load("damaged").unwrap();
+        assert_eq!(loaded.damaged_lines, 1, "the skipped line is counted");
+        let backup = path.with_extension("jsonl.damaged");
+        let backup_text = std::fs::read_to_string(&backup).unwrap();
+        assert!(
+            backup_text.contains("this line is broken"),
+            "the original bytes must survive in the backup: {backup_text}"
+        );
+
+        store.save(&loaded).unwrap();
+        assert!(
+            !std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("this line is broken"),
+            "the save rewrites from the repaired vector; only the backup keeps the damage"
+        );
+    }
+
+    #[test]
+    fn latest_refuses_a_damaged_newest_session_instead_of_skipping_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+        let mut old = Session::new(dir.path().to_path_buf(), "p", "m");
+        old.id = "older".to_string();
+        old.messages.push(ChatMessage::User {
+            content: "old".to_string(),
+        });
+        store.save(&old).unwrap();
+        let old_path = store.path_for("older");
+        std::fs::File::open(&old_path)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + std::time::Duration::from_secs(10))
+            .unwrap();
+
+        let newest = dir.path().join("newest.jsonl");
+        std::fs::write(&newest, "not a meta line\n").unwrap();
+        std::fs::File::open(&newest)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + std::time::Duration::from_secs(20))
+            .unwrap();
+
+        let err = store.latest().unwrap_err();
+        assert!(
+            matches!(&err, SessionError::Corrupt(path, message) if path.ends_with("newest.jsonl") && message.contains("newest session")),
+            "the newest unreadable file must be named, got {err:?}"
+        );
+        // The readable older session is still listed; refusing latest is not hiding it.
+        assert_eq!(store.list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn event_log_sidecars_are_not_sessions_and_rotation_is_deleted_with_the_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path().to_path_buf());
+        let session = Session::new(dir.path().to_path_buf(), "p", "m");
+        let id = session.id.clone();
+        store.save(&session).unwrap();
+
+        let events = store.event_log_path(&id);
+        let rotated = crate::eventlog::EventLog::new(events.clone()).generation_path(1);
+        std::fs::write(
+            &events,
+            "{\"at\":1,\"kind\":\"turn_start\",\"summary\":\"x\"}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &rotated,
+            "{\"at\":0,\"kind\":\"turn_start\",\"summary\":\"y\"}\n",
+        )
+        .unwrap();
+
+        let (summaries, unreadable) = store.list_with_damage().unwrap();
+        assert_eq!(summaries.len(), 1, "only the transcript is a session");
+        assert!(
+            unreadable.is_empty(),
+            "sidecar logs must not be reported as damaged sessions: {unreadable:?}"
+        );
+
+        store.delete(&id).unwrap();
+        assert!(!events.exists(), "the current event log is deleted");
+        assert!(
+            !rotated.exists(),
+            "a rotated event log must not outlive its session"
+        );
     }
 }
