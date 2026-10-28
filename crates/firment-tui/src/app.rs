@@ -680,6 +680,13 @@ impl App {
                 }
                 self.items.extend(keep);
                 self.push_messages(&session.messages);
+                if session.damaged_lines > 0 {
+                    self.items.push(Item::System(format!(
+                        "⚠ this transcript had {} unreadable line(s) omitted from the model's \
+                         view; the original bytes were preserved as .jsonl.damaged",
+                        session.damaged_lines
+                    )));
+                }
             }
             AgentEvent::Error(message) => {
                 // A picker that has not loaded yet is waiting on this request; without

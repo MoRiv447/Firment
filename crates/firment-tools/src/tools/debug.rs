@@ -372,11 +372,19 @@ fn analysis_report(
             format!("{addr:#010x}")
         }
     };
-    // 结构化之后这些字段一定存在：没有"没解析到"这一档了。
-    out.push_str(&format!("pc  : {:#010x} -> {}\n", regs.pc, decode(regs.pc)));
-    out.push_str(&format!("lr  : {:#010x} -> {}\n", regs.lr, decode(regs.lr)));
-    out.push_str(&format!("sp  : {:#010x}\n", regs.sp));
-    out.push_str(&format!("xpsr: {:#010x}\n", regs.xpsr));
+    if regs.parsed {
+        out.push_str(&format!("pc  : {:#010x} -> {}\n", regs.pc, decode(regs.pc)));
+        out.push_str(&format!("lr  : {:#010x} -> {}\n", regs.lr, decode(regs.lr)));
+        out.push_str(&format!("sp  : {:#010x}\n", regs.sp));
+        out.push_str(&format!("xpsr: {:#010x}\n", regs.xpsr));
+    } else {
+        // The CLI path fills missing fields with 0. A table-format change was
+        // therefore indistinguishable from a firmware halted at address zero.
+        out.push_str(
+            "registers: the CLI register table could not be parsed; pc/lr/sp are unknown, NOT \
+             zero. Check the probe-rs version/output format.\n",
+        );
+    }
 
     if let Some(lines) = fault_analysis(cfsr_words) {
         for line in lines {
@@ -1469,6 +1477,7 @@ async fn lib_registers(
 /// 把 CLI 的寄存器表转成同一个结构体，让两条路径的消费者只有一份代码。
 fn registers_from_text(text: &str) -> crate::probe::Registers {
     let m = parse_regs(text);
+    let parsed = m.contains_key("pc") || m.contains_key("r15");
     let mut r = crate::probe::Registers {
         pc: reg_value(&m, &["pc", "r15"]).unwrap_or(0),
         lr: reg_value(&m, &["lr", "r14"]).unwrap_or(0),
@@ -1476,6 +1485,7 @@ fn registers_from_text(text: &str) -> crate::probe::Registers {
         xpsr: reg_value(&m, &["xpsr"]).unwrap_or(0),
         msp: reg_value(&m, &["msp"]).unwrap_or(0),
         psp: reg_value(&m, &["psp"]).unwrap_or(0),
+        parsed,
         ..Default::default()
     };
     for i in 0..13 {
@@ -1786,6 +1796,23 @@ XPSR/PSR: 0x01000000
             "got: {report}"
         );
         assert!(report.contains("0x20001abc: 0xdeadbeef"), "got: {report}");
+    }
+
+    #[test]
+    fn an_unparsed_register_table_is_not_reported_as_pc_zero() {
+        let report = analysis_report(
+            "stm32g431rb",
+            &registers_from_text("this is not a register table"),
+            &[],
+            &[],
+            0,
+            None,
+        );
+        assert!(report.contains("could not be parsed"), "got: {report}");
+        assert!(
+            !report.contains("pc  : 0x00000000"),
+            "a parse failure must not look like a jump to address zero: {report}"
+        );
     }
 
     /// 真板：`regs` 与 `forensic` 走工具层（而不只是 `probe::registers`）。

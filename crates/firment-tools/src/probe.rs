@@ -501,6 +501,10 @@ pub struct Registers {
     /// True when this snapshot had to halt a running core. The target is left halted;
     /// callers that show the snapshot must say so instead of implying a passive read.
     pub halted_for_read: bool,
+    /// Whether a register table was actually parsed. The CLI path used to fill
+    /// missing entries with 0, so a format change looked like a firmware that
+    /// jumped to address zero.
+    pub parsed: bool,
 }
 
 impl Registers {
@@ -574,6 +578,7 @@ fn snapshot(core: &mut probe_rs::Core<'_>) -> Result<Registers, ProbeError> {
             first_err.map(|e| format!(" ({e})")).unwrap_or_default()
         )));
     }
+    out.parsed = true;
     Ok(out)
 }
 

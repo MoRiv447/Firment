@@ -93,6 +93,8 @@ pub fn build_agent(
         );
     }
 
+    let mut agent = assembly.agent;
+    let handles = (assembly.cancel_tx, assembly.cancel_signal);
     if let Some(error) = assembly.provider_error.take() {
         // Held, like every other way this turn can end: the slot is already reserved by the time
         // this line runs, so a window reading `running_sessions` right now would be told about a
@@ -105,10 +107,9 @@ pub fn build_agent(
                 message: error,
             },
         );
+        agent.set_provider_error_reported(true);
     }
-
-    let handles = (assembly.cancel_tx, assembly.cancel_signal);
-    Ok((assembly.agent, handles))
+    Ok((agent, handles))
 }
 
 pub fn default_provider_model(config: &Config) -> (String, String) {

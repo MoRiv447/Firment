@@ -263,6 +263,10 @@ enum ElfGateDecision {
 
 pub struct Agent {
     provider: Option<Box<dyn Provider>>,
+    /// Set when assembly already emitted the specific reason the provider is
+    /// missing (bad key, unreadable config). `run_turn` then closes the turn
+    /// without emitting the generic `NoProvider` a second time.
+    provider_error_reported: bool,
     registry: Arc<ToolRegistry>,
     session: Session,
     store: SessionStore,
@@ -386,6 +390,7 @@ impl Agent {
         let (cancel_tx, cancel_rx) = watch::channel(false);
         Self {
             provider,
+            provider_error_reported: false,
             registry,
             session,
             store,
@@ -588,6 +593,12 @@ impl Agent {
 
     pub fn set_provider_name(&mut self, name: impl Into<String>) {
         self.session.provider = name.into();
+    }
+
+    /// Assembly already told the user why there is no provider; do not repeat
+    /// the generic `NoProvider` at the first iteration.
+    pub fn set_provider_error_reported(&mut self, reported: bool) {
+        self.provider_error_reported = reported;
     }
 
     pub fn set_thinking(&mut self, level: ThinkingLevel) {
@@ -1333,7 +1344,18 @@ impl Agent {
                 return Ok(String::new());
             }
             let request = self.build_request();
-            let provider = self.provider.as_ref().ok_or(AgentError::NoProvider)?;
+            let provider = match self.provider.as_ref() {
+                Some(provider) => provider,
+                None => {
+                    // The specific assembly error was already emitted. Close the
+                    // turn here so the wrapper does not add the generic
+                    // `NoProvider` as a second, less useful banner.
+                    if self.provider_error_reported {
+                        self.emit_turn_end(String::new()).await;
+                    }
+                    return Err(AgentError::NoProvider);
+                }
+            };
             let mut stream = tokio::select! {
                 result = provider.stream(request) => match result {
                     Ok(stream) => stream,

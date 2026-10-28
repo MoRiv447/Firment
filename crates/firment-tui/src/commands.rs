@@ -690,16 +690,45 @@ pub(crate) fn spawn_agent_task(
                         provider.unwrap_or_else(|| agent.session().provider.clone());
                     match task_config.set_api_key(&provider_name, &key) {
                         Ok(()) => {
-                            let model = agent.session().model.clone();
+                            let current = agent.session().provider.clone();
+                            let switched = provider_name != current;
+                            // Setting a key for a DIFFERENT provider is also a provider
+                            // switch. The old code replaced the live provider while
+                            // leaving session.provider naming the old one, so the status
+                            // bar, save_session and /model disagreed with the requests.
+                            let model = if switched {
+                                task_config
+                                    .provider(Some(&provider_name))
+                                    .map(|p| p.model.clone())
+                                    .unwrap_or_else(|_| agent.session().model.clone())
+                            } else {
+                                agent.session().model.clone()
+                            };
                             match task_config.build_provider(Some(&provider_name), Some(&model)) {
                                 Ok(new_provider) => {
+                                    agent.set_provider_name(&provider_name);
                                     agent.set_provider(new_provider);
+                                    agent.set_model(model.clone());
+                                    let _ = agent.save_session();
+                                    let moved = if switched {
+                                        format!(" · provider -> {provider_name} · model -> {model}")
+                                    } else {
+                                        String::new()
+                                    };
                                     agent
                                         .emit(AgentEvent::Info(format!(
                                             "API key for {provider_name} saved to {} (no \
-                                             further setup needed)",
+                                             further setup needed){moved}",
                                             firment_core::auth_path().display()
                                         )))
+                                        .await;
+                                    agent
+                                        .emit(AgentEvent::Settings {
+                                            provider: Some(provider_name.clone()),
+                                            model: Some(model),
+                                            thinking: None,
+                                            mode: None,
+                                        })
                                         .await;
                                 }
                                 Err(e) => {

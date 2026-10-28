@@ -1338,10 +1338,9 @@ fn list_sessions() -> anyhow::Result<()> {
         return Ok(());
     }
     for summary in sessions {
-        let preview = store
-            .load(&summary.id)
-            .map(|s| s.title())
-            .unwrap_or_default();
+        let loaded = store.load(&summary.id);
+        let damaged = loaded.as_ref().map(|s| s.damaged_lines).unwrap_or(0);
+        let preview = loaded.map(|s| s.title()).unwrap_or_default();
         // Workbench tree marker: branches show their parent id so the list
         // reads as a tree at a glance.
         let kind_tag = match (&summary.kind, &summary.parent_session) {
@@ -1352,14 +1351,20 @@ fn list_sessions() -> anyhow::Result<()> {
             (firment_core::SessionKind::Branch, None) => "[branch] ".to_string(),
             _ => String::new(),
         };
+        let damage = if damaged > 0 {
+            format!(" [damaged: {damaged} line(s); original saved as .jsonl.damaged]")
+        } else {
+            String::new()
+        };
         println!(
-            "{:<36} {}  {:<24} {}  {}{}",
+            "{:<36} {}  {:<24} {}  {}{}{}",
             summary.id,
             format_ts(summary.updated_at),
             summary.model,
             summary.cwd.display(),
             kind_tag,
-            preview
+            preview,
+            damage
         );
     }
     if !unreadable.is_empty() {
