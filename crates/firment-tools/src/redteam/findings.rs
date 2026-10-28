@@ -218,7 +218,18 @@ pub fn render_report_md(suite: &str, run_id: &str, findings: &[Finding]) -> Stri
             f.reproducer.suite,
         ));
     }
-    out.push_str("\nevidence: reached level 5 (physical) — findings cite captured output\n");
+    let captured = findings
+        .iter()
+        .filter(|finding| !finding.evidence.is_empty())
+        .count();
+    if captured > 0 {
+        out.push_str(&format!(
+            "\nevidence: {captured} finding(s) cite captured output; the physical rung was \
+             reached only for those\n"
+        ));
+    } else {
+        out.push_str("\nevidence: no captured output — this run did NOT reach the physical rung\n");
+    }
     out
 }
 
@@ -291,9 +302,14 @@ mod tests {
         assert!(md.contains("F-001"), "got: {md}");
         assert!(md.contains("bitflip-17"), "got: {md}");
         assert!(md.contains("seed 1234"), "got: {md}");
-        assert!(md.contains("level 5 (physical)"), "got: {md}");
+        assert!(md.contains("physical rung"), "got: {md}");
+        assert!(md.contains("captured output"), "got: {md}");
         let empty = render_report_md("uart-fuzz", "run-9", &[]);
         assert!(empty.contains("No findings"), "got: {empty}");
+        assert!(
+            !empty.contains("reached level 5"),
+            "a report with no findings must not claim the physical rung: {empty}"
+        );
     }
 
     #[test]

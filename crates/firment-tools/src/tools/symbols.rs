@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-type TagCache = Arc<Mutex<HashMap<PathBuf, (Instant, Vec<TagEntry>)>>>;
+type TagCache = Arc<Mutex<HashMap<(PathBuf, u64), (Instant, Vec<TagEntry>)>>>;
 
 pub struct Symbols {
     cache: TagCache,
@@ -281,7 +281,11 @@ impl Symbols {
     /// hard 60s timeout on the command itself (a huge repo must not hang the
     /// tool). Returns None when ctags is missing/fails/times out.
     fn ctags_entries(cache: &TagCache, root: &Path) -> Option<Vec<TagEntry>> {
-        if let Some((at, entries)) = cache.lock().ok()?.get(root)
+        // The epoch makes a successful edit invalidate this cache immediately; the
+        // sixty-second ceiling only bounds a stale index on a tree changed outside
+        // the agent (a git checkout, another editor).
+        let key = (root.to_path_buf(), firment_core::tool::mutation_epoch());
+        if let Some((at, entries)) = cache.lock().ok()?.get(&key)
             && at.elapsed() < Duration::from_secs(60)
         {
             return Some(entries.clone());
@@ -323,7 +327,7 @@ impl Symbols {
             });
         }
         if let Ok(mut cache) = cache.lock() {
-            cache.insert(root.to_path_buf(), (Instant::now(), entries.clone()));
+            cache.insert(key, (Instant::now(), entries.clone()));
         }
         Some(entries)
     }

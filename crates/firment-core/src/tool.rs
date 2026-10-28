@@ -19,6 +19,19 @@ use std::time::Duration;
 /// is a one-line change with an obvious reason.
 pub const MAX_CONCURRENT_SUBAGENTS: usize = 4;
 
+/// Bumped after every successful mutating tool call. Tools that cache a view of the
+/// workspace (`symbols`' ctags index) include it in the cache key, so an edit is visible
+/// on the next call instead of after a fixed sixty seconds.
+static MUTATION_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+pub fn mutation_epoch() -> u64 {
+    MUTATION_EPOCH.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn bump_mutation_epoch() {
+    MUTATION_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 #[derive(Clone)]
 pub struct ToolContext {
     pub cwd: PathBuf,

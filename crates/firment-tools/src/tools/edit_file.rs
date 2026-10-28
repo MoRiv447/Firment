@@ -129,11 +129,6 @@ impl Tool for EditFile {
             ));
         }
 
-        ctx.journal
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .begin(&resolved)
-            .map_err(ToolError::new)?;
         // CAS: refuse to apply the edit if the file changed since we read it.
         let current =
             fs::read(&resolved).map_err(|e| ToolError::new(format!("[Io] re-read failed: {e}")))?;
@@ -143,6 +138,13 @@ impl Tool for EditFile {
                 resolved.display()
             )));
         }
+        // Journal only after the refusal checks; see write_file for the
+        // appeared-file hazard this ordering closes.
+        ctx.journal
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .begin(&resolved)
+            .map_err(ToolError::new)?;
         firment_core::session::write_atomic(&resolved, &new_content)
             .map_err(|e| ToolError::new(format!("[Io] write failed: {e}")))?;
         let old_lines = original.lines().count();

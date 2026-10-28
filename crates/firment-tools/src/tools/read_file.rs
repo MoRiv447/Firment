@@ -18,7 +18,8 @@ impl Tool for ReadFile {
          returned and a [truncated] hint tells you how to read on. For a LARGE file (thousands of \
          lines) read it once with hashlines=true: that returns the whole file with an 8-hex \
          content-hash anchor per line, and those anchors stay valid across the rest of the file, \
-         so several edits need no second read and no line arithmetic."
+         so several edits need no second read and no line arithmetic. hashlines refuses files \
+         over 8 MiB — use offset/limit for those."
     }
 
     fn input_schema(&self) -> Value {
@@ -59,6 +60,18 @@ impl Tool for ReadFile {
             });
         let resolved =
             resolve_within(&ctx.cwd, path, &ctx.allowed_roots).map_err(ToolError::new)?;
+        const MAX_HASHLINES_BYTES: u64 = 8 * 1024 * 1024;
+        if hashlines {
+            let size = std::fs::metadata(&resolved).map(|m| m.len()).unwrap_or(0);
+            if size > MAX_HASHLINES_BYTES {
+                return Err(ToolError::new(format!(
+                    "[InvalidInput] {} is {size} bytes; hashlines refuses files over 8 MiB \
+                     because the per-line anchors would put the whole file in the transcript. \
+                     Use the normal line mode with offset/limit.",
+                    resolved.display()
+                )));
+            }
+        }
         let (content, lossy) = read_text_report(&resolved).map_err(|e| {
             if resolved.exists() {
                 ToolError::new(format!("[Io] {e}"))

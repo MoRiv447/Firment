@@ -109,6 +109,15 @@ fn is_real_duckduckgo(url: &str) -> bool {
 /// error instead of returning a misleading empty result set.
 fn looks_blocked(body: &str) -> bool {
     let probe = body.to_ascii_lowercase();
+    // A result page can contain the query itself, and "challenge-response
+    // authentication" is a legitimate search. The words only mean a challenge
+    // when the page also has no result markers and does not say "no results".
+    if looks_like_no_results(&probe) {
+        return false;
+    }
+    if probe.contains("result__a") || probe.contains("result-link") || probe.contains("b_algo") {
+        return false;
+    }
     probe.contains("anomaly") || probe.contains("captcha") || probe.contains("challenge")
 }
 
@@ -836,6 +845,16 @@ mod tests {
         assert_eq!(items[0].url, "https://www.st.com/stm32");
         assert_eq!(items[0].snippet, "Official STM32 page");
         assert_eq!(items[1].title, "Datasheet");
+    }
+
+    #[test]
+    fn a_result_page_mentioning_challenge_is_not_a_challenge_page() {
+        // A query like "challenge-response authentication" is echoed into the
+        // result markup. The old check scanned the whole body and reported this
+        // as a rate-limit block on a perfectly successful search.
+        let page = r#"<a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com">
+            challenge-response authentication</a>"#;
+        assert!(!looks_blocked(page));
     }
 
     #[tokio::test]

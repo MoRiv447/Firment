@@ -49,10 +49,11 @@ impl Tool for Verify {
                  ({reason}); refusing to run: {command}"
             )));
         }
-        let timeout_ms = args
-            .get("timeout_ms")
-            .and_then(|t| t.as_u64())
-            .unwrap_or(120_000);
+        // Same zero-value guard as `build`: run_command's 0 means "no timeout".
+        let timeout_ms = match args.get("timeout_ms").and_then(|t| t.as_u64()) {
+            Some(0) | None => 120_000,
+            Some(t) => t,
+        };
         // Same shape as `build`: the phase says what kind of wait this is.
         if let Some(progress) = ctx.progress.as_ref() {
             progress.phase("verifying");

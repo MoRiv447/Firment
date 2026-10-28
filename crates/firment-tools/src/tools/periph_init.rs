@@ -125,6 +125,18 @@ impl Tool for PeriphInit {
         // The full HAL skeletons are STM32-specific. Non-STM32 parts (e.g.
         // ESP32, which uses its own SDK) must not get STM32 HAL code — emit a
         // generic skeleton + the cheatsheet instead.
+        // `pins` feeds the UART/GPIO skeletons and the conflict table; for the
+        // other peripherals the skeleton hard-codes I2C1/SPI1/TIM2/ADC1, so a
+        // request for PB6/PB7 was silently dropped. Say so instead of guessing.
+        if pins.as_deref().is_some_and(|pins| !pins.trim().is_empty())
+            && !matches!(peripheral.as_str(), "uart" | "gpio")
+        {
+            return Err(ToolError::new(format!(
+                "[InvalidInput] pins is not used for peripheral '{peripheral}'; it is only \
+                 applied to uart and gpio. Fill the generated TODO with the required pins, or \
+                 ask for uart/gpio."
+            )));
+        }
         let is_stm32 = part.to_lowercase().starts_with("stm32");
         let skeleton = if is_stm32 {
             match peripheral.as_str() {

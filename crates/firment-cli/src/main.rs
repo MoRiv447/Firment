@@ -1697,9 +1697,19 @@ fn run_adr(cwd: &Path, action: &str, arg: Option<&str>) -> anyhow::Result<()> {
             println!("created {}", path.display());
             println!(
                 "\n  fill in Context / Decision / Consequences - the file asks the three \
-                 questions a reader will have.\n  ADR-{number:04} [Proposed] is already in \
-                 every new session's system prompt."
+                 questions a reader will have."
             );
+            if (number as usize) <= adr::MAX_ADRS {
+                println!(
+                    "  ADR-{number:04} [Proposed] is already in every new session's system prompt."
+                );
+            } else {
+                println!(
+                    "  ADR-{number:04} [Proposed] is beyond the first {} records, so it is NOT \
+                     in the prompt digest (the digest names the rest as a count).",
+                    adr::MAX_ADRS
+                );
+            }
         }
         other => anyhow::bail!("unknown adr action '{other}' - try `firm adr list`"),
     }

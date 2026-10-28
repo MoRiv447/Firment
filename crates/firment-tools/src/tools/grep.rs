@@ -86,10 +86,20 @@ impl Tool for Grep {
             let wanted = glob_filter
                 .as_ref()
                 .is_none_or(|matcher| matcher.is_match(&rel));
-            if wanted && let Ok(content) = read_text(&resolved) {
-                collect_matches(&regex, &rel, &content, max_results, &mut out);
+            if wanted {
+                match read_text(&resolved) {
+                    Ok(content) => {
+                        collect_matches(&regex, &rel, &content, max_results, &mut out);
+                    }
+                    // The description recommends the single-file form as "one
+                    // authoritative file"; returning Ok("") for a read failure read
+                    // as "no matches" and the model concluded the symbol was absent.
+                    Err(e) => return Err(ToolError::new(format!("[Io] {e}"))),
+                }
             }
         } else {
+            let mut unreadable: Vec<String> = Vec::new();
+            let mut skipped = 0usize;
             for entry in WalkBuilder::new(&resolved).hidden(!include_hidden).build() {
                 let entry = match entry {
                     Ok(e) => e,
@@ -104,13 +114,27 @@ impl Tool for Grep {
                 {
                     continue;
                 }
-                let Ok(content) = read_text(entry.path()) else {
-                    continue;
+                let content = match read_text(entry.path()) {
+                    Ok(content) => content,
+                    Err(e) => {
+                        skipped += 1;
+                        if unreadable.len() < 5 {
+                            unreadable.push(e);
+                        }
+                        continue;
+                    }
                 };
                 collect_matches(&regex, &rel, &content, max_results, &mut out);
                 if out.len() >= max_results {
                     break;
                 }
+            }
+            if !unreadable.is_empty() {
+                out.push(format!(
+                    "[skipped: {skipped} file(s) could not be read; a hit list is not a \
+                     complete search: {}]",
+                    unreadable.join("; ")
+                ));
             }
         }
         if out.len() >= max_results {

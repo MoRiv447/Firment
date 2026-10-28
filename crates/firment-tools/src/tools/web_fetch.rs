@@ -157,6 +157,7 @@ impl Tool for WebFetch {
             }
             body.extend_from_slice(&chunk);
         }
+        let lossy = std::str::from_utf8(&body).is_err();
         let raw = String::from_utf8_lossy(&body).into_owned();
         let text = if content_type.contains("text/html") || raw.contains("<html") {
             strip_html(&raw)
@@ -175,6 +176,14 @@ impl Tool for WebFetch {
             // model treat truncated content as the complete document.
             text = format!(
                 "[truncated: page exceeds {MAX_BODY_BYTES} bytes; content below is the first part]\n{text}"
+            );
+        }
+        if lossy {
+            // GBK/Shift-JIS vendor pages decode to U+FFFD; the model was quoting
+            // characters that are not on the page.
+            text.push_str(
+                "\n[Encoding] this page was not valid UTF-8; every U+FFFD above is the \
+                 decoder's, not the page's. Quote with care or fetch the raw bytes.",
             );
         }
         Ok(ToolOutput { text })

@@ -64,11 +64,6 @@ impl Tool for WriteFile {
         } else {
             None
         };
-        ctx.journal
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .begin(&resolved)
-            .map_err(ToolError::new)?;
         if let Some(expected) = args.get("expected_sha256").and_then(|e| e.as_str())
             && let Some(original) = &original_bytes
         {
@@ -96,6 +91,15 @@ impl Tool for WriteFile {
                 resolved.display()
             )));
         }
+        // Journal the file only after the refusal checks. `begin` records
+        // `existed:false` for a new path, and rollback deletes a path with that
+        // entry — taking the backup before a CAS that then refuses could delete
+        // a file another process created in the window.
+        ctx.journal
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .begin(&resolved)
+            .map_err(ToolError::new)?;
         if let Some(parent) = resolved.parent() {
             fs::create_dir_all(parent)
                 .map_err(|e| ToolError::new(format!("[Io] create dirs: {e}")))?;

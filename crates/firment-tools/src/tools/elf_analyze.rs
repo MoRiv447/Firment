@@ -593,8 +593,9 @@ fn gate_blocks(
     Some(stack_grew || flash_grew || ram_grew)
 }
 
-/// `[GATE:BLOCK]` / `[GATE:OK]` / `[GATE:CLEAN]` marker for the agent's
-/// binary-analysis gate; empty when no thresholds were requested.
+/// `[GATE:BLOCK]` / `[GATE:OK]` / `[GATE:CLEAN]` / `[GATE:NO-BASELINE]`
+/// marker for the agent's binary-analysis gate; empty when no thresholds were
+/// requested.
 fn gate_marker(
     diff: Option<&ElfDiff>,
     stack_threshold: Option<u32>,
@@ -606,7 +607,13 @@ fn gate_marker(
     else {
         return String::new();
     };
-    match gate_blocks(diff, stack_t, flash_t, ram_t) {
+    let Some(diff) = diff else {
+        // `None` is "there was no baseline", not "nothing changed"; the old
+        // marker said CLEAN and the first build after enabling the gate passed
+        // without comparing anything.
+        return "[GATE:NO-BASELINE]".to_string();
+    };
+    match gate_blocks(Some(diff), stack_t, flash_t, ram_t) {
         Some(true) => "[GATE:BLOCK]".to_string(),
         Some(false) => "[GATE:OK]".to_string(),
         None => "[GATE:CLEAN]".to_string(),
@@ -1132,6 +1139,11 @@ mod tests {
         assert_eq!(
             gate_marker(Some(&diff(0, vec![])), Some(32), Some(1), Some(1)),
             "[GATE:CLEAN]"
+        );
+        assert_eq!(
+            gate_marker(None, Some(32), Some(1), Some(1)),
+            "[GATE:NO-BASELINE]",
+            "no baseline is not the same fact as no change"
         );
         assert_eq!(
             gate_marker(Some(&diff_ram(2048)), Some(32), Some(1), Some(1)),

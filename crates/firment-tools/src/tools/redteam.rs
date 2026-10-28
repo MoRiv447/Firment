@@ -179,6 +179,28 @@ fn validate_suite(suite: &RedteamSuite) -> Result<(), String> {
             "[InvalidInput] mutation.strategies is empty — nothing would be sent".to_string(),
         );
     }
+    // The approval prompt says `allowed_actions` defines the scope, but only the
+    // recovery half was ever checked. A typo or an unrelated token validated when
+    // recovery=none, and nothing checked that sending was allowed at all.
+    const KNOWN_ACTIONS: [&str; 3] = ["send", "reset", "flash"];
+    if let Some(unknown) = suite
+        .allowed_actions
+        .iter()
+        .find(|action| !KNOWN_ACTIONS.contains(&action.as_str()))
+    {
+        return Err(format!(
+            "[InvalidInput] allowed_actions contains '{unknown}'; the vocabulary is send, \
+             reset, flash"
+        ));
+    }
+    if !suite.interfaces.is_empty() && !suite.allowed_actions.iter().any(|action| action == "send")
+    {
+        return Err(
+            "[InvalidInput] the suite sends mutated payloads but allowed_actions does not \
+             include \"send\" — add it or remove the interfaces"
+                .to_string(),
+        );
+    }
     let recovery = suite.recovery.as_deref().unwrap_or("reset");
     match recovery {
         "reflash" => {
@@ -1619,6 +1641,25 @@ mod tests {
         let mut s = suite();
         s.interfaces[0].baseline = Some("55AA".to_string());
         assert!(validate_suite(&s).unwrap_err().contains("prefix"));
+    }
+
+    #[test]
+    fn allowed_actions_is_a_real_scope_not_a_comment() {
+        let mut s = suite();
+        s.allowed_actions = vec!["frobnicate".to_string()];
+        let err = validate_suite(&s).unwrap_err();
+        assert!(
+            err.contains("frobnicate"),
+            "unknown action must be refused: {err}"
+        );
+
+        let mut s = suite();
+        s.allowed_actions = vec!["reset".to_string()];
+        let err = validate_suite(&s).unwrap_err();
+        assert!(
+            err.contains("send"),
+            "a sending suite without send in scope must be refused: {err}"
+        );
     }
 
     #[test]

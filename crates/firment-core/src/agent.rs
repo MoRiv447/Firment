@@ -233,6 +233,13 @@ fn classify_gate(text: &str, cfg: &ElfConfig) -> ElfGateOutcome {
     if text.starts_with("[GATE:CLEAN]") {
         return ElfGateOutcome::Silent;
     }
+    if let Some(rest) = text.strip_prefix("[GATE:NO-BASELINE]") {
+        return ElfGateOutcome::Report(format!(
+            "the gate has no baseline to compare against yet; this is the first build it \
+             has seen. Review the analysis below rather than reading a clean verdict:\n{}",
+            rest.trim_start()
+        ));
+    }
     // Fail closed: run_elf_gate always passes threshold args, so elf_analyze
     // must return a [GATE:...] marker. A missing marker means the gate verdict
     // could not be determined (tool output drift / regression), so treat it as
@@ -2623,6 +2630,7 @@ async fn execute_tool_calls(
             if ok {
                 if agent.registry.mutates(&call.name, &call.arguments, ctx) {
                     mutations += 1;
+                    crate::tool::bump_mutation_epoch();
                 }
                 if call.name == "verify" {
                     verify_passed = true;

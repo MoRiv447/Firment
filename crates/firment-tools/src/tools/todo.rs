@@ -7,6 +7,12 @@ use std::path::{Path, PathBuf};
 
 pub struct Todo;
 
+/// Tool calls in one assistant turn run as a concurrent wave. Two `op=add` calls
+/// used to load the same list, append, and save, so the second silently dropped the
+/// first and both answered the same `#N`. The operation is short and synchronous;
+/// one process-wide lock is enough.
+static TODO_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[derive(Serialize, Deserialize, Clone)]
 struct TodoItem {
     text: String,
@@ -103,6 +109,9 @@ impl Tool for Todo {
     }
 
     async fn run(&self, args: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+        let _guard = TODO_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let op = args
             .get("op")
             .and_then(|o| o.as_str())
@@ -357,5 +366,24 @@ mod tests {
             1,
             "no temp file left beside the saved one"
         );
+    }
+
+    #[tokio::test]
+    async fn two_adds_in_one_wave_keep_both_items() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ctx = ToolContext::with_cwd(dir.path().to_path_buf());
+        ctx.session_dir = Some(dir.path().to_path_buf());
+        let (a, b) = tokio::join!(
+            Todo.run(json!({"op": "add", "text": "first"}), &ctx),
+            Todo.run(json!({"op": "add", "text": "second"}), &ctx),
+        );
+        a.unwrap();
+        b.unwrap();
+        let stored: Vec<TodoItem> =
+            serde_json::from_str(&std::fs::read_to_string(dir.path().join("todos.json")).unwrap())
+                .unwrap();
+        let texts: Vec<&str> = stored.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(texts.len(), 2, "one add overwrote the other: {texts:?}");
+        assert!(texts.contains(&"first") && texts.contains(&"second"));
     }
 }

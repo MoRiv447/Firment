@@ -54,7 +54,9 @@ export function TrafficPane({ traffic }: { traffic: DeviceTraffic }) {
             ))}
             {alerts.length > 0 && (
               <div className={styles.alerts}>
-                <p className={styles.alertHead}>Recent alerts ({alerts.length})</p>
+                <p className={styles.alertHead}>
+                  Recent alerts (showing {Math.min(5, alerts.length)} of {alerts.length})
+                </p>
                 {alerts.slice(0, 5).map((a, i) => (
                   <div key={`${a.ts}-${i}`} className={styles.alert}>
                     <Chip size="sm" status="failed">

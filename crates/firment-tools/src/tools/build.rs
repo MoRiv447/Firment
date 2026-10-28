@@ -168,10 +168,13 @@ impl Tool for Build {
                  ({reason}); refusing to run: {command}"
             )));
         }
-        let timeout_ms = args
-            .get("timeout_ms")
-            .and_then(|t| t.as_u64())
-            .unwrap_or(600_000);
+        // The schema says minimum 1, but args are not schema-enforced here and
+        // `run_command` reads 0 as "wait forever"; a model-supplied 0 would hang
+        // the build until the turn is cancelled.
+        let timeout_ms = match args.get("timeout_ms").and_then(|t| t.as_u64()) {
+            Some(0) | None => 600_000,
+            Some(t) => t,
+        };
         // The phase the card shows while this runs (plan item 7). "Compiling" rather than the
         // command itself, which the card already carries: the useful news is what *kind* of wait
         // this is, and a build is the one people start and walk away from.

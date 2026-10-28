@@ -2307,6 +2307,7 @@ mod tests {
             ("build", "[cancelled: interrupted]".to_string()),
         ] {
             session.push(ChatMessage::Tool {
+                ok: true,
                 tool_call_id: format!("c-{name}"),
                 name: name.to_string(),
                 content,
