@@ -34,6 +34,10 @@ pub struct AgentSlot {
     /// `start_turn` clears it when it reserves the slot and honours it as
     /// soon as it publishes the handles.
     pub cancel_requested: Arc<AtomicBool>,
+    /// Set while `delete_session` is removing the transcript. The delete used to
+    /// check `running`, release the map lock and then delete, so a `start_turn`
+    /// reserving the same id in that window had its transcript deleted under it.
+    pub deleting: Arc<AtomicBool>,
 }
 
 impl AgentSlot {
@@ -42,6 +46,7 @@ impl AgentSlot {
             cancel: Arc::new(Mutex::new(None)),
             running: Arc::new(AtomicBool::new(false)),
             cancel_requested: Arc::new(AtomicBool::new(false)),
+            deleting: Arc::new(AtomicBool::new(false)),
         }
     }
 }

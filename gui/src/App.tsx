@@ -297,6 +297,10 @@ export default function App() {
   // to the latest session so turn_end can refresh the transcript.
   const sessionRef = useRef(session);
   sessionRef.current = session;
+  // The last session the user explicitly asked for. `load_session` emits
+  // `session_loaded` before its promise resolves, so two quick clicks could
+  // otherwise land A's event after B's and put A back in the composer.
+  const requestedSessionRef = useRef<string | null>(null);
   // Which sessions have already had their turn END inside this window. Read once, by the mount
   // re-light below, because that snapshot can land after the notice it contradicts — see
   // `lib/relight.ts` for why that is not a theoretical ordering.
@@ -338,6 +342,13 @@ export default function App() {
     }, 5_000);
     return () => clearInterval(sweep);
   }, []);
+
+  // Clear the previous chat's percentage immediately on a switch. The fetch below
+  // re-checks `sessionRef` on arrival, but until it does the status bar would show
+  // the other conversation's context as if it were this one's.
+  useEffect(() => {
+    setUsage(null);
+  }, [session?.id]);
 
   // Context usage follows the open session and its message count.
   useEffect(() => {
@@ -507,6 +518,14 @@ export default function App() {
             notifySessionsChanged();
             break;
           case 'session_loaded':
+            if (
+              requestedSessionRef.current !== null &&
+              requestedSessionRef.current !== e.session.id
+            ) {
+              // A slower load from the session clicked first; the user has
+              // already moved on.
+              break;
+            }
             setSession(e.session);
             // Any session load lands in the chat (workbench "open" button,
             // startup restore, escalation handler all route here).
@@ -644,38 +663,37 @@ export default function App() {
   // Guard escalation → mainline-session diagnosis. The workbench card
   // synthesizes the prompt; here we load the session, switch to chat and
   // start the turn (refusing politely if that chat is already streaming).
-  // Registered ONCE: the running map is read through a ref, so streaming
-  // updates don't tear down/re-add the listener.
+  // Returns whether the turn actually started: the card used to drop its
+  // escalation on dispatch, including the refusal path, so the alert and the
+  // diagnosis were both gone without a word.
   const turnsRef = useRef(turnsById);
   turnsRef.current = turnsById;
-  useEffect(() => {
-    const handler = (ev: Event) => {
-      const detail = (ev as CustomEvent).detail as {
-        sessionId: string;
-        prompt: string;
-      };
-      if (turnsRef.current[detail.sessionId]?.running) {
-        pushInfo(
-          detail.sessionId,
-          'escalation skipped: mainline chat already has a turn running',
-        );
-        return;
-      }
-      void api
-        .loadSession(detail.sessionId)
-        .then((s) => {
-          setSession(s);
-          setWorkbenchOpen(false);
-          void api.startTurn(detail.sessionId, detail.prompt).catch((err) => {
-            console.error(err);
-            pushInfo(detail.sessionId, `escalation turn failed: ${err}`);
-          });
-        })
-        .catch(console.error);
-    };
-    window.addEventListener('firment:run-escalation', handler);
-    return () => window.removeEventListener('firment:run-escalation', handler);
-  }, []);
+  const runEscalation = async (detail: {
+    sessionId: string;
+    prompt: string;
+    cwd: string;
+  }): Promise<boolean> => {
+    if (turnsRef.current[detail.sessionId]?.running) {
+      pushInfo(
+        detail.sessionId,
+        'escalation skipped: mainline chat already has a turn running',
+      );
+      return false;
+    }
+    try {
+      requestedSessionRef.current = detail.sessionId;
+      const s = await api.loadSession(detail.sessionId);
+      if (requestedSessionRef.current !== detail.sessionId) return false;
+      setSession(s);
+      setWorkbenchOpen(false);
+      await api.startTurn(detail.sessionId, detail.prompt);
+      return true;
+    } catch (err) {
+      console.error(err);
+      pushInfo(detail.sessionId, `escalation turn failed: ${err}`);
+      return false;
+    }
+  };
 
   // Load the todo list when the open session changes. The list is per session
   // (since the work directory stopped being shared), so switching chats must
@@ -688,6 +706,10 @@ export default function App() {
       return;
     }
     let cancelled = false;
+    // The list belongs to the chat that is open. Keeping A's items while B's
+    // fetch is in flight (or forever, if it fails) put A's plan under B's
+    // header, inspector badge and status-bar count.
+    setTodos([]);
     setTodosLoading(true);
     void api
       .sessionTodos(id)
@@ -709,6 +731,7 @@ export default function App() {
     void api
       .newSession(workCwd || 'C:\\', mode)
       .then((s) => {
+        requestedSessionRef.current = s.id;
         setSession(s);
         setWorkbenchOpen(false);
         void api.listSessions().then(setSessions);
@@ -719,9 +742,13 @@ export default function App() {
   const handleSelectSession = (id: string) => {
     // Switching is free: the other chat's turn keeps running in the
     // background and its sidebar row shows a ⚡ badge until it finishes.
+    requestedSessionRef.current = id;
     void api
       .loadSession(id)
       .then((s) => {
+        // Re-check after the await: a later click must win even when this
+        // one's IPC was slower.
+        if (requestedSessionRef.current !== id) return;
         setSession(s);
         setWorkbenchOpen(false);
       })
@@ -1010,7 +1037,7 @@ export default function App() {
                 data-hidden={workbenchOpen ? undefined : 'true'}
                 className={styles.pane}
               >
-                <WorkbenchView />
+                <WorkbenchView onRunEscalation={runEscalation} />
               </main>
               </div>
             </div>

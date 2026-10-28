@@ -164,7 +164,10 @@ export function NotificationBell({
                         data-jumpable="true"
                         className={styles.row}
                         onClick={() => {
-                          setOpen(false);
+                          // `close()` returns focus to the bell; a bare
+                          // setOpen(false) unmounts the focused row and leaves
+                          // focus on <body>, so the next Tab restarts at the top.
+                          close();
                           onOpenSession(sid);
                         }}
                       >

@@ -52,6 +52,9 @@ pub async fn start_turn(
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let slot = map.entry(session_id.clone()).or_insert_with(AgentSlot::new);
+        if slot.deleting.load(Ordering::SeqCst) {
+            return Err("this session is being deleted; choose or create another".to_string());
+        }
         if slot.running.swap(true, Ordering::SeqCst) {
             return Err("this session already has a turn running - cancel it first".to_string());
         }
@@ -347,13 +350,27 @@ pub async fn delete_session(
                         .to_string(),
                 );
             }
+            if slot.deleting.swap(true, Ordering::SeqCst) {
+                return Err("this session is already being deleted".to_string());
+            }
         }
     }
-    let store = shared
-        .store
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    store.delete(&id).map_err(|e| e.to_string())
+    let result = {
+        let store = shared
+            .store
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        store.delete(&id).map_err(|e| e.to_string())
+    };
+    // Clear the reservation whether the delete succeeded or failed; a slot is
+    // reused by the next turn with this id. The store lock is released first,
+    // so this never nests store -> agents.
+    if let Ok(map) = shared.agents.lock() {
+        if let Some(slot) = map.get(&id) {
+            slot.deleting.store(false, Ordering::SeqCst);
+        }
+    }
+    result
 }
 
 #[tauri::command]

@@ -1,4 +1,4 @@
-import { CheckCircle2, XCircle } from 'lucide-react';
+import { CheckCircle2, LoaderCircle, XCircle } from 'lucide-react';
 
 import { workflowSteps } from '../lib/steps';
 import { turnTimeline } from '../lib/timeline';
@@ -39,6 +39,7 @@ export function TurnVerdict({
   if (ran.length === 0) return null;
 
   const failed = ran.some((s) => s.state === 'failed');
+  const running = ran.some((s) => s.state === 'current');
   const spent = turnTimeline(tools, now, turnStartedAt);
   const clause = ran
     .map((s) => {
@@ -48,8 +49,16 @@ export function TurnVerdict({
     .join(' · ');
 
   return (
-    <div data-ui="turn-verdict" data-tone={failed ? 'failed' : 'ok'} className={styles.band}>
-      <Icon src={failed ? XCircle : CheckCircle2} size="sm" tone={failed ? 'failed' : 'brand'} />
+    <div
+      data-ui="turn-verdict"
+      data-tone={failed ? 'failed' : running ? 'running' : 'ok'}
+      className={styles.band}
+    >
+      <Icon
+        src={failed ? XCircle : running ? LoaderCircle : CheckCircle2}
+        size="sm"
+        tone={failed ? 'failed' : running ? 'muted' : 'brand'}
+      />
       <span className={styles.text}>{clause}</span>
       {spent && (
         <span className={styles.time}>

@@ -45,8 +45,9 @@ export function ProvidersCard({
   /** Write the row out. Called on blur. */
   onPersist: (provider: ProviderEntryDto) => void;
   /** Writing a key is a different file from writing the config, so it has its own button -- and
-   * the value comes from the row's own draft, because the stored key never comes back here. */
-  onSaveKey: (provider: ProviderEntryDto, key: string) => void;
+   * the value comes from the row's own draft, because the stored key never comes back here.
+   * Resolves true only after the write succeeded; the row keeps its draft otherwise. */
+  onSaveKey: (provider: ProviderEntryDto, key: string) => Promise<boolean>;
   onRemove: (provider: ProviderEntryDto) => void;
   /** Returns true when the provider was stored. */
   onAdd: (fields: {
@@ -108,7 +109,7 @@ export function ProvidersCard({
           busy={busy}
           onChange={onChange}
           onPersist={(p) => void wrap(() => onPersist(p))}
-          onSaveKey={(p, key) => void wrap(() => onSaveKey(p, key))}
+          onSaveKey={(p, key) => wrap(() => onSaveKey(p, key))}
           onRemove={(p) => void wrap(() => onRemove(p))}
         />
       ))}
@@ -191,7 +192,7 @@ function ProviderRow({
   busy: boolean;
   onChange: (provider: ProviderEntryDto, patch: Partial<ProviderEntryDto>) => void;
   onPersist: (provider: ProviderEntryDto) => void;
-  onSaveKey: (provider: ProviderEntryDto, key: string) => void;
+  onSaveKey: (provider: ProviderEntryDto, key: string) => Promise<boolean>;
   onRemove: (provider: ProviderEntryDto) => void;
 }) {
   const [asking, setAsking] = useState(false);
@@ -278,8 +279,11 @@ function ProviderRow({
           size="sm"
           disabled={busy || draft.trim() === ''}
           onClick={() => {
-            onSaveKey(provider, draft.trim());
-            setDraft('');
+            // Clear only after the write is known to have succeeded; a failed
+            // save used to destroy the secret the user had just pasted.
+            void onSaveKey(provider, draft.trim()).then((saved) => {
+              if (saved) setDraft('');
+            });
           }}
         >
           Save key

@@ -142,11 +142,13 @@ export function SettingsView() {
       await api.setApiKey(p.name, key);
       setKeyMsg({ text: `key saved for ${p.name}`, tone: 'ok' });
       load();
+      return true;
     } catch (err) {
       // The tone is the point of this line: the string arrived in `failed: …` form and was
       // drawn in the success colour, next to a row whose key had not been stored.
       setKeyMsg({ text: `failed: ${err}`, tone: 'error' });
       console.error(err);
+      return false;
     }
   };
 
@@ -155,7 +157,14 @@ export function SettingsView() {
   return (
     <div className={styles.page}>
       <div className={styles.stack}>
-        {!settings && <Callout tone="info">Loading settings…</Callout>}
+        {!settings &&
+          (saveErr ? (
+            <Callout tone="failed" title="could not read settings">
+              {saveErr}
+            </Callout>
+          ) : (
+            <Callout tone="info">Loading settings…</Callout>
+          ))}
 
         <ProvidersCard
           providers={settings?.providers ?? []}

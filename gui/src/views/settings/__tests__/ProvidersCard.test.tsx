@@ -37,7 +37,7 @@ function setup(over: Partial<Parameters<typeof ProvidersCard>[0]> = {}) {
   const handlers = {
     onChange: vi.fn(),
     onPersist: vi.fn(),
-    onSaveKey: vi.fn(),
+    onSaveKey: vi.fn().mockResolvedValue(true),
     onRemove: vi.fn(),
     onAdd: vi.fn().mockResolvedValue(true),
   };
@@ -88,7 +88,7 @@ describe('ProvidersCard', () => {
     expect(onChange).toHaveBeenCalledWith(expect.anything(), { base_url: null });
   });
 
-  it('keeps a stored key out of the field and the draft out of the settings', () => {
+  it('keeps a stored key out of the field and the draft out of the settings', async () => {
     // The box used to be pre-filled from `get_settings`, which meant the live key travelled to a
     // window whose only job is to display settings and sat in its DOM. The field is write-only, so
     // what it needs back is `has_key` and where the key came from -- not the value.
@@ -105,7 +105,26 @@ describe('ProvidersCard', () => {
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Save key' })[0]);
     expect(onSaveKey).toHaveBeenCalledWith(expect.objectContaining({ name: 'deepseek' }), 'sk-1');
-    expect(box().value).toBe('');
+    await waitFor(() => expect(box().value).toBe(''));
+  });
+
+  it('keeps the draft when the key write fails', async () => {
+    const onSaveKey = vi.fn().mockResolvedValue(false);
+    setup({ onSaveKey });
+    const box = () =>
+      screen.getByPlaceholderText(/api key for deepseek/) as HTMLInputElement;
+    fireEvent.change(box(), { target: { value: 'sk-keep-me' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save key' })[0]);
+    await waitFor(() =>
+      expect(onSaveKey).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'deepseek' }),
+        'sk-keep-me',
+      ),
+    );
+    expect(
+      box().value,
+      'a failed write must not destroy the secret the user pasted',
+    ).toBe('sk-keep-me');
   });
 
   it('will not offer to save a key that has not been typed', () => {

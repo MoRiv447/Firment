@@ -567,6 +567,7 @@ mod tests {
                 thinking_blocks: Vec::new(),
             },
             ChatMessage::Tool {
+                ok: true,
                 tool_call_id: "call_00".to_string(),
                 name: "list_dir".to_string(),
                 content: String::new(),
@@ -611,11 +612,13 @@ mod tests {
                 thinking_blocks: Vec::new(),
             },
             ChatMessage::Tool {
+                ok: true,
                 tool_call_id: "call_00".to_string(),
                 name: "list_dir".to_string(),
                 content: String::new(),
             },
             ChatMessage::Tool {
+                ok: true,
                 tool_call_id: "call_01".to_string(),
                 name: "ask_user".to_string(),
                 content: "answer".to_string(),
@@ -647,6 +650,7 @@ mod tests {
                 content: "hi".to_string(),
             },
             ChatMessage::Tool {
+                ok: true,
                 tool_call_id: "call_00".to_string(),
                 name: "list_dir".to_string(),
                 content: "[]".to_string(),

@@ -364,6 +364,7 @@ mod tests {
 
     fn diff_message() -> ChatMessage {
         ChatMessage::Tool {
+            ok: true,
             tool_call_id: "c1".to_string(),
             name: "edit_file".to_string(),
             content: "Edited a.c (1 lines -> 2 lines)\n@@ -1 +1,2 @@\n-old\n+new\n".to_string(),
@@ -556,6 +557,7 @@ mod tests {
             body.chars().count()
         );
         let session = session_with(vec![ChatMessage::Tool {
+            ok: true,
             tool_call_id: "c1".to_string(),
             name: "edit_file".to_string(),
             content: body,

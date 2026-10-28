@@ -246,17 +246,59 @@ fn forward(shared: &Arc<Shared>, topic: &str, payload: &[u8]) {
 /// Append one raw frame to `device-log-<YYYYMMDD>.jsonl` in the config dir.
 /// Best-effort: a logging failure never breaks the live feed. Single
 /// writer (this MQTT task) so plain appends are safe.
+const DEVICE_LOG_MAX_BYTES: u64 = 8 * 1024 * 1024;
+const DEVICE_LOG_KEEP_DAYS: usize = 7;
+
+/// Keep the per-day sink bounded. It used to grow with every frame forever, and
+/// any publisher on the LAN broker could drive it; the flash history next door had
+/// a cap, this one did not. A new day also prunes all but the newest seven files.
 fn sink_frame(frame: &str) {
     use std::io::Write as _;
+    let dir = firment_core::config::config_dir();
     let day = chrono::Utc::now().format("%Y%m%d");
-    let path = firment_core::config::config_dir().join(format!("device-log-{day}.jsonl"));
+    let path = dir.join(format!("device-log-{day}.jsonl"));
+    let fresh = !path.exists();
+    if fresh {
+        prune_device_logs(&dir);
+    }
+    let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    if size >= DEVICE_LOG_MAX_BYTES {
+        return;
+    }
+    let clean = frame.replace('\n', " ");
+    let line_len = clean.len() as u64 + 1;
+    if size + line_len > DEVICE_LOG_MAX_BYTES {
+        return;
+    }
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)
     {
-        let clean = frame.replace('\n', " ");
         let _ = writeln!(f, "{clean}");
+    }
+}
+
+fn prune_device_logs(dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut logs: Vec<std::path::PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("device-log-") && n.ends_with(".jsonl"))
+        })
+        .collect();
+    if logs.len() <= DEVICE_LOG_KEEP_DAYS {
+        return;
+    }
+    logs.sort();
+    let remove = logs.len() - DEVICE_LOG_KEEP_DAYS;
+    for path in logs.into_iter().take(remove) {
+        let _ = std::fs::remove_file(path);
     }
 }
 

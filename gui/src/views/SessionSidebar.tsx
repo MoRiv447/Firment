@@ -328,6 +328,7 @@ function SessionRow({
           </button>
           <button
             ref={moreRef}
+            id={`${session.id}-options`}
             type="button"
             className={styles.more}
             aria-label={`Options for ${name}`}

@@ -41,6 +41,12 @@ pub enum ChatMessage {
         tool_call_id: String,
         name: String,
         content: String,
+        /// Whether the tool reported success. Persisted so a derived view (the GUI's
+        /// quality card) does not re-infer it from the result text. Old transcripts
+        /// default to true, which is the only safe reading of a message that predates
+        /// the field.
+        #[serde(default = "tool_ok_default")]
+        ok: bool,
     },
 }
 
@@ -123,4 +129,8 @@ pub struct ChatRequest {
     /// override is wanted, add the field, the plumbing and the precedence in one change that
     /// also fixes `max_tokens` and `temperature` pointing opposite ways.
     pub thinking: Option<ThinkingLevel>,
+}
+
+fn tool_ok_default() -> bool {
+    true
 }

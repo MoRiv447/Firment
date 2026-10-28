@@ -215,13 +215,32 @@ pub async fn workbench_set_mainline(
             "a turn is running in session {busy} - set the mainline after it finishes"
         ));
     }
-    store
-        .mark_mainline(&session_id)
-        .map_err(|e| format!("cannot set mainline: {e}"))?;
-    drop(store);
+    // Write the project file FIRST. The old order promoted/demoted transcripts and
+    // then failed the workbench CAS, leaving the sessions tagged for one mainline
+    // while workbench.toml still named the other; the next self-heal then demoted
+    // the session the user had just promoted. If the session write now fails, the
+    // workbench already names the target, which is the direction self-heal repairs.
     let (mut cfg, read) = WorkbenchConfig::load_with_bytes(Path::new(&cwd))?;
-    cfg.workbench.mainline_session = session_id;
-    save_workbench(&cfg, Path::new(&cwd), read.as_deref())
+    cfg.workbench.mainline_session = session_id.clone();
+    save_workbench(&cfg, Path::new(&cwd), read.as_deref())?;
+    if let Err(e) = store.mark_mainline(&session_id) {
+        // Put the project file back so a failed command leaves the previous
+        // mainline selected rather than a half-applied one.
+        let path = WorkbenchConfig::path_for(Path::new(&cwd));
+        let restored = match &read {
+            Some(bytes) => std::fs::write(&path, bytes),
+            None => std::fs::remove_file(&path),
+        };
+        if let Err(restore) = restored {
+            return Err(format!(
+                "cannot set mainline: {e} (and could not restore {}: {restore})",
+                path.display()
+            ));
+        }
+        return Err(format!("cannot set mainline: {e}"));
+    }
+    drop(store);
+    Ok(())
 }
 
 // ---------- pin/resource registry ([pinmap.<board>] in workbench.toml) ----
@@ -342,17 +361,15 @@ pub async fn workbench_hardware_list(
     }
     // A wedged USB probe or a stalled `probe-rs list` must not park this command (and the
     // Workbench's single `busy` flag) forever. Ten seconds is far above a healthy scan.
-    let probe_out = match tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        probe_cmd.output(),
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(_) => {
-            return Err("probe-rs list timed out after 10s (the probe may be wedged)".to_string());
-        }
-    };
+    let probe_out =
+        match tokio::time::timeout(std::time::Duration::from_secs(10), probe_cmd.output()).await {
+            Ok(result) => result,
+            Err(_) => {
+                return Err(
+                    "probe-rs list timed out after 10s (the probe may be wedged)".to_string(),
+                );
+            }
+        };
     let (probes, probe_rs_available) = match probe_out {
         Ok(out) if out.status.success() => {
             let text = String::from_utf8_lossy(&out.stdout);
@@ -919,23 +936,20 @@ pub async fn workbench_quality(
         .clone();
     let session = store.load(&session_id).map_err(|e| e.to_string())?;
     const WATCHED: [&str; 5] = ["build", "verify", "hil", "flash", "run"];
-    const FAIL_TAGS: [&str; 6] = [
-        "[Io]",
-        "[Timeout]",
-        "[InvalidInput]",
-        "[Permission]",
-        "[NotFound]",
-        "FAILED",
-    ];
     let mut last: std::collections::BTreeMap<String, (bool, String)> =
         std::collections::BTreeMap::new();
     for msg in session.messages.iter().rev() {
         // edition-2021 crate: no let-chains, so nest the guards.
-        if let firment_core::ChatMessage::Tool { name, content, .. } = msg {
+        if let firment_core::ChatMessage::Tool {
+            name, content, ok, ..
+        } = msg
+        {
             if WATCHED.contains(&name.as_str()) && !last.contains_key(name) {
-                let ok = !FAIL_TAGS.iter().any(|tag| content.contains(tag));
+                // `ok` is the tool's own answer. The card used to re-derive it from the
+                // text with a tag list that lacked `[CompileError]` and `[Cancelled]`, so
+                // the most common build failure rendered as green PASS.
                 let snippet: String = content.chars().take(120).collect();
-                last.insert(name.clone(), (ok, snippet));
+                last.insert(name.clone(), (*ok, snippet));
             }
         }
     }

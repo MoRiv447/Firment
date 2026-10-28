@@ -3,7 +3,7 @@ import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { Button, Confirm, Drawer, Modal, PopConfirm, confirm } from '..';
+import { Button, Confirm, Drawer, Modal, PopConfirm, Select, confirm } from '..';
 
 /**
  * What a window does to the keyboard.
@@ -157,6 +157,36 @@ describe('Drawer', () => {
     expect(screen.getByRole('dialog', { name: 'Settings' })).toHaveAttribute('data-ui', 'drawer');
     expect(app().inert).toBe(true);
     expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
+  });
+});
+
+describe('Drawer and a child Select', () => {
+  it('closes the Select, not the drawer, when Escape is pressed', () => {
+    const onClose = vi.fn();
+    render(
+      <Drawer open title="Settings" onClose={onClose}>
+        <Select
+          ariaLabel="Provider"
+          value="a"
+          onChange={() => {}}
+          options={[
+            { value: 'a', label: 'Provider A' },
+            { value: 'b', label: 'Provider B' },
+          ]}
+        />
+      </Drawer>,
+    );
+    const trigger = screen.getByRole('button', { name: 'Provider' });
+    fireEvent.click(trigger);
+    expect(screen.getByRole('listbox')).toBeInTheDocument();
+
+    fireEvent.keyDown(trigger, { key: 'Escape' });
+    expect(screen.queryByRole('listbox')).toBeNull();
+    expect(
+      onClose,
+      'Escape inside the listbox must not close the whole settings drawer',
+    ).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
   });
 });
 

@@ -27,6 +27,10 @@ export function SerialView({ lines }: { lines: Record<string, MonitorLine[]> }) 
   const [appendCrLf, setAppendCrLf] = useState(true);
   const [sendMsg, setSendMsg] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Follow only while the reader is at the bottom. The old effect jumped to the
+  // end on every batch, so reading scrollback on a chatty board was impossible
+  // and a selection was yanked out from under the pointer.
+  const stickRef = useRef(true);
 
   const refreshPorts = async () => {
     try {
@@ -63,10 +67,17 @@ export function SerialView({ lines }: { lines: Record<string, MonitorLine[]> }) 
   }, []);
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    const el = scrollRef.current;
+    if (el && stickRef.current) {
+      el.scrollTop = el.scrollHeight;
     }
   }, [lines]);
+
+  const onOutputScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  };
 
   const start = async () => {
     setStarting(true);
@@ -164,7 +175,7 @@ export function SerialView({ lines }: { lines: Record<string, MonitorLine[]> }) 
         </div>
       </Card>
 
-      <div ref={scrollRef} className={styles.output}>
+      <div ref={scrollRef} className={styles.output} onScroll={onOutputScroll}>
         {stream.length === 0 && <p className={styles.waiting}>No output yet — start the monitor above.</p>}
         {stream.map((block, i) => (
           <div key={i} className={styles.block}>

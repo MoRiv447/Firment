@@ -909,6 +909,7 @@ impl Agent {
             thinking_blocks,
         });
         self.session.push(ChatMessage::Tool {
+            ok: true,
             tool_call_id: gate_call.id,
             name: "elf_analyze".to_string(),
             content: text.to_string(),
@@ -1572,6 +1573,7 @@ impl Agent {
                         })
                         .await;
                     self.session.push(ChatMessage::Tool {
+                        ok: true,
                         tool_call_id: gate_call.id,
                         name: "verify".to_string(),
                         content: text,
@@ -2480,6 +2482,7 @@ async fn execute_tool_calls(
                     })
                     .await;
                 agent.session.push(ChatMessage::Tool {
+                    ok: false,
                     tool_call_id: call.id.clone(),
                     name: call.name.clone(),
                     content: "[cancelled: interrupted]".to_string(),
@@ -2492,6 +2495,7 @@ async fn execute_tool_calls(
             for i in 0..n {
                 if !done[i] {
                     agent.session.push(ChatMessage::Tool {
+                        ok: false,
                         tool_call_id: tool_calls[i].id.clone(),
                         name: tool_calls[i].name.clone(),
                         content: cancelled_text.clone(),
@@ -2532,6 +2536,7 @@ async fn execute_tool_calls(
                     })
                     .await;
                 agent.session.push(ChatMessage::Tool {
+                    ok: false,
                     tool_call_id: call.id.clone(),
                     name: call.name.clone(),
                     content: note.clone(),
@@ -2543,6 +2548,7 @@ async fn execute_tool_calls(
             for i in 0..n {
                 if !done[i] {
                     agent.session.push(ChatMessage::Tool {
+                        ok: false,
                         tool_call_id: tool_calls[i].id.clone(),
                         name: tool_calls[i].name.clone(),
                         content: note.clone(),
@@ -2660,6 +2666,7 @@ async fn execute_tool_calls(
                 })
                 .await;
             agent.session.push(ChatMessage::Tool {
+                ok,
                 tool_call_id: call.id.clone(),
                 name: call.name.clone(),
                 content: agent.spill_text(&content),
@@ -3215,6 +3222,7 @@ mod tests {
             dir.path().join(kept).display()
         );
         let messages = vec![ChatMessage::Tool {
+            ok: true,
             tool_call_id: "c1".to_string(),
             name: "read_file".to_string(),
             content: pointer,

@@ -2268,6 +2268,7 @@ mod tests {
             thinking_blocks: Vec::new(),
         });
         session.push(ChatMessage::Tool {
+            ok: true,
             tool_call_id: "c1".to_string(),
             name: "read_file".to_string(),
             content: "ok".to_string(),

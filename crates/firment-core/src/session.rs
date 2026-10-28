@@ -1381,6 +1381,7 @@ six earlier rounds"
             thinking_blocks: Vec::new(),
         });
         s.push(ChatMessage::Tool {
+            ok: true,
             tool_call_id: "c1".to_string(),
             name: "flash".to_string(),
             content: "cancelled".to_string(),
@@ -1405,11 +1406,13 @@ six earlier rounds"
         // A tool call whose output is not a diff is not a change to review — its text is
         // a summary, and reviewing a summary reviews nothing.
         s.push(ChatMessage::Tool {
+            ok: true,
             tool_call_id: "c1".to_string(),
             name: "read_file".to_string(),
             content: "fn main() {}\n".to_string(),
         });
         s.push(ChatMessage::Tool {
+            ok: true,
             tool_call_id: "c2".to_string(),
             name: "edit_file".to_string(),
             content: "Edited main.c (1 lines -> 2 lines)\n@@ -1 +1,2 @@\n-old\n+new\n".to_string(),
@@ -1429,6 +1432,7 @@ six earlier rounds"
         let mut s = Session::new(PathBuf::from("."), "p", "m");
         s.push(user_msg("look at it"));
         s.push(ChatMessage::Tool {
+            ok: true,
             tool_call_id: "c1".to_string(),
             name: "read_file".to_string(),
             content: "fn main() {}\n".to_string(),
@@ -1471,6 +1475,7 @@ six earlier rounds"
             thinking_blocks: Vec::new(),
         });
         session.messages.push(ChatMessage::Tool {
+            ok: true,
             tool_call_id: "call-1".into(),
             name: "shell".into(),
             content: "ok".into(),

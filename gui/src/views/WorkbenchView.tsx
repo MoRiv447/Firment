@@ -44,7 +44,15 @@ import { useDeviceTraffic } from './workbench/useDeviceTraffic';
  * archive, and a GUI table for the guard rules that live only in
  * `sbc-guard/rules.toml`. docs/gui-workbench.md lists exactly these.
  */
-export function WorkbenchView() {
+export function WorkbenchView({
+  onRunEscalation,
+}: {
+  onRunEscalation: (detail: {
+    sessionId: string;
+    prompt: string;
+    cwd: string;
+  }) => Promise<boolean>;
+}) {
   // Device traffic (the unfiltered stream + the guard link) is subscribed by
   // `useDeviceTraffic` below rather than up here: the alert callback has to
   // close over `runEscalation`, which is defined after the loaders it calls.
@@ -106,6 +114,9 @@ export function WorkbenchView() {
   // editor) is refused instead of silently overwritten. undefined = the file
   // was never opened in the editor.
   const kbBaselineRef = useRef<Record<string, number | null>>({});
+  // The project whose knowledge file is in the editor. `cwd` changes on every
+  // keystroke in the ProjectBar input, so this cannot be derived from `cwd` state.
+  const kbProjectRef = useRef<string | null>(null);
 
   const rememberProject = (dir: string) => {
     localStorage.setItem('workbench-last-cwd', dir);
@@ -162,12 +173,30 @@ export function WorkbenchView() {
   // the request here instead of relying on localStorage alone. The []-deps
   // listener reaches the latest load() through a ref (stale-closure-proof,
   // same pattern as runEscalationRef below).
+  const openProject = (dir: string) => {
+    const target = dir.trim();
+    if (!target) return;
+    const run = () => {
+      setCwd(target);
+      void load(target);
+    };
+    if (target !== kbProjectRef.current && kbDirty) {
+      void confirm({
+        title: 'Discard the unsaved knowledge edit?',
+        message:
+          'Switching projects replaces the knowledge editor draft. Save it first if you need it.',
+        confirmLabel: 'Discard and switch',
+        cancelLabel: 'Stay here',
+      }).then((ok) => {
+        if (ok) run();
+      });
+      return;
+    }
+    run();
+  };
   const reloadRef = useRef<(dir: string) => void>(() => {});
   useEffect(() => onWorkbenchOpen((dir) => reloadRef.current(dir)), []);
-  reloadRef.current = (dir: string) => {
-    setCwd(dir);
-    void load(dir);
-  };
+  reloadRef.current = (dir: string) => openProject(dir);
 
   // W1d cards: ELF stats + verification badges + change timeline, scoped to
   // the project's mainline session. Takes the FRESH workbench state so the
@@ -225,6 +254,17 @@ export function WorkbenchView() {
   const load = async (dir?: string) => {
     const target = (dir ?? cwd).trim();
     if (!target) return;
+    // A knowledge draft belongs to the project it was loaded from. Without this,
+    // switching A -> B left A's text in the editor under B's path, with A's mtime
+    // as the baseline: a save either reported a spurious "file changed on disk"
+    // or, if the mtimes happened to agree, wrote A's text into B's file.
+    if (kbProjectRef.current !== target) {
+      kbProjectRef.current = target;
+      kbBaselineRef.current = {};
+      setKbDraft('');
+      setKbDirty(false);
+      setKbKey(null);
+    }
     setBusy(true);
     const wb = await refresh(target);
     try {
@@ -371,12 +411,15 @@ export function WorkbenchView() {
       'Diagnose this device alert: start with device_log to find the root cause in recent frames.',
       'Use device_cmd if the device must be touched, and say why. End with a conclusion and next steps.',
     ].join('\n');
-    window.dispatchEvent(
-      new CustomEvent('firment:run-escalation', {
-        detail: { cwd: cwd.trim(), sessionId: mainline, prompt },
-      }),
-    );
-    dropEscalation(entry.id);
+    void onRunEscalation({
+      cwd: cwd.trim(),
+      sessionId: mainline,
+      prompt,
+    }).then((started) => {
+      // Keep the row when the turn did not start; the App has already said why
+      // in that chat, and an auto-run alert must not vanish with the diagnosis.
+      if (started) dropEscalation(entry.id);
+    });
   };
 
   // The alert half of the stream is decided here and not in the hook: what
@@ -432,14 +475,42 @@ export function WorkbenchView() {
   };
 
   const selectKbFile = (key: string) => {
-    const f = kbFiles.find((x) => x.key === key);
-    setKbKey(key);
-    setKbDraft(f?.content ?? '');
-    // Loading the draft freezes the baseline: any disk change from this
-    // moment on is a conflict the save must surface.
-    kbBaselineRef.current[key] = f?.mtimeMs ?? null;
-    setKbDirty(false);
+    const apply = () => {
+      const f = kbFiles.find((x) => x.key === key);
+      setKbKey(key);
+      setKbDraft(f?.content ?? '');
+      // Loading the draft freezes the baseline: any disk change from this
+      // moment on is a conflict the save must surface. An absent file gets 0,
+      // which the backend already reads as "expect it not to exist"; null would
+      // skip the guard and overwrite a file created by the agent meanwhile.
+      kbBaselineRef.current[key] = f ? (f.exists ? f.mtimeMs : 0) : 0;
+      setKbDirty(false);
+    };
+    if (kbDirty && key !== kbKey) {
+      void confirm({
+        title: 'Discard the unsaved knowledge edit?',
+        message:
+          'The editor has unsaved changes. Loading another knowledge file replaces them.',
+        confirmLabel: 'Discard and load',
+        cancelLabel: 'Keep editing',
+      }).then((ok) => {
+        if (ok) apply();
+      });
+      return;
+    }
+    apply();
   };
+
+  // Seed the editor from disk when a project/file is first loaded, and pick up
+  // external changes while the draft is clean. A dirty draft is never replaced.
+  useEffect(() => {
+    if (!kbKey) return;
+    if (kbDirty) return;
+    const f = kbFiles.find((x) => x.key === kbKey);
+    if (!f) return;
+    setKbDraft(f.content);
+    kbBaselineRef.current[kbKey] = f.exists ? f.mtimeMs : 0;
+  }, [kbKey, kbFiles, kbDirty]);
 
   const saveKbFile = async () => {
     if (!cwd.trim() || !kbKey || !kbDirty) return;
@@ -480,6 +551,16 @@ export function WorkbenchView() {
 
   const deleteKbFile = async () => {
     if (!cwd.trim() || !kbKey?.startsWith('cheatsheet:')) return;
+    // One click used to unlink the file. Session and provider deletion both ask;
+    // a knowledge file is the same kind of irreversible action.
+    const ok = await confirm({
+      title: 'Delete this cheatsheet?',
+      message: `${kbKey} will be removed from the project. This cannot be undone.`,
+      confirmLabel: 'Delete',
+      cancelLabel: 'Keep it',
+      tone: 'danger',
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       await api.workbenchKbDelete(cwd.trim(), kbKey);
@@ -595,11 +676,8 @@ export function WorkbenchView() {
           busy={busy}
           error={error}
           onCwd={setCwd}
-          onOpen={() => void load()}
-          onPick={(dir) => {
-            setCwd(dir);
-            void load(dir);
-          }}
+          onOpen={() => openProject(cwd)}
+          onPick={(dir) => openProject(dir)}
         />
 
         {state && (

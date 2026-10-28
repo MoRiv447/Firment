@@ -3080,6 +3080,7 @@ fn merging_never_crosses_an_assistant_tool_boundary() {
         thinking_blocks: Vec::new(),
     });
     session.push(ChatMessage::Tool {
+        ok: true,
         tool_call_id: "call_1".to_string(),
         name: "echo".to_string(),
         content: "done".to_string(),
