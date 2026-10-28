@@ -2231,7 +2231,9 @@ impl App {
         // absolute path ("/etc/hosts is wrong") was parsed as an unknown command and never
         // reached the model, with no escape documented anywhere.
         let (text, escaped) = match text.strip_prefix("//") {
-            Some(rest) => (rest.to_string(), true),
+            // Keep one slash: `//etc/hosts` is the user's escape for the message
+            // `/etc/hosts`, not a message with its leading slash removed.
+            Some(rest) => (format!("/{rest}"), true),
             None => (text, false),
         };
         if text.is_empty() {
