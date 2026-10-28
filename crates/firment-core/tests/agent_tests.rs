@@ -1333,13 +1333,14 @@ async fn a_stop_before_the_turn_starts_still_records_the_question() {
     let store = SessionStore::new(dir.path().to_path_buf());
     let session = Session::new(dir.path().to_path_buf(), "default", "fake");
     let id = session.id.clone();
+    let events = Arc::new(Mutex::new(Vec::new()));
     let mut agent = Agent::new(
         Some(Box::new(provider)),
         registry_with(vec![Arc::new(EchoTool)]),
         session,
         store.clone(),
         Arc::new(AutoApprove::everything()),
-        Arc::new(CollectSink(Arc::new(Mutex::new(Vec::new())))),
+        Arc::new(CollectSink(events.clone())),
         10,
     );
     agent.cancel();
@@ -1369,6 +1370,20 @@ async fn a_stop_before_the_turn_starts_still_records_the_question() {
         "{:?}",
         saved.messages
     );
+    // The pre-cancel return is above the old emit_turn_start, so it used to be a
+    // TurnEnd with no TurnStart. A client that keys turn state on the start got an
+    // end for a turn it never opened.
+    let kinds: Vec<&str> = events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::TurnStart => Some("turn_start"),
+            AgentEvent::TurnEnd { .. } => Some("turn_end"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(kinds, vec!["turn_start", "turn_end"], "{events:?}");
 }
 
 #[tokio::test]

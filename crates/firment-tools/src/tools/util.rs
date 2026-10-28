@@ -1932,4 +1932,32 @@ mod tests {
         ProbeLease::acquire("a flash")
             .expect("the lease is given back by Drop, not by the call finishing well");
     }
+
+    #[test]
+    fn every_probe_cli_spawn_releases_the_library_session() {
+        // The handover is one tail site on purpose; a new spawn that forgets it
+        // fails with "failed to open device" and blames the target, which is how
+        // `debug` and `hil` were broken before.
+        let src = include_str!("util.rs");
+        for signature in [
+            "pub(crate) async fn run_argv(",
+            "pub(crate) async fn run_streaming(",
+        ] {
+            let start = src
+                .find(signature)
+                .unwrap_or_else(|| panic!("{signature} is gone"));
+            let body = &src[start..];
+            let end = body
+                .find(
+                    "
+}",
+                )
+                .map(|i| i + 1)
+                .unwrap_or(body.len());
+            assert!(
+                body[..end].contains("crate::probe::release()"),
+                "{signature} does not hand the probe back to the CLI"
+            );
+        }
+    }
 }

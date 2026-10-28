@@ -832,4 +832,39 @@ mod tests {
             Ok(_) => panic!("attached to a chip that does not exist"),
         }
     }
+
+    #[test]
+    fn every_public_probe_operation_takes_a_lease() {
+        // A source gate, deliberately: a new library entry point that forgets the
+        // lease is invisible to the compiler and to every behavioural test here,
+        // because the tests run one call at a time.
+        let src = include_str!("probe.rs");
+        for signature in [
+            "pub fn read_words(",
+            "pub fn write_word(",
+            "pub fn rtt_stream(",
+            "pub fn swo_trace(",
+            "pub fn backtrace(",
+            "pub fn run_to_breakpoint(",
+            "pub fn core_op(",
+            "pub fn registers(",
+            "pub fn flash_elf_with_reset(",
+        ] {
+            let start = src
+                .find(signature)
+                .unwrap_or_else(|| panic!("{signature} is gone"));
+            let body = &src[start..];
+            let end = body
+                .find(
+                    "
+}",
+                )
+                .map(|i| i + 1)
+                .unwrap_or(body.len());
+            assert!(
+                body[..end].contains("ProbeLease::acquire("),
+                "{signature} does not take the probe lease"
+            );
+        }
+    }
 }
