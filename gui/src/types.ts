@@ -21,6 +21,8 @@ export interface SessionDto {
   thinking: string;
   /** Per-session compaction budget in chars; 0 = agent default. */
   context_budget_chars?: number;
+  /** Unreadable transcript lines skipped on load; the original is backed up. */
+  damaged_lines?: number;
   created_at: number;
   updated_at: number;
   messages: ChatMessage[];

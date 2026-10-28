@@ -343,6 +343,18 @@ export default function App() {
     return () => clearInterval(sweep);
   }, []);
 
+  // A damaged transcript is loaded with the readable lines only; the store has
+  // already kept the original bytes. Say so once, in the chat that owns it.
+  useEffect(() => {
+    if (session && session.damaged_lines && session.damaged_lines > 0) {
+      pushInfo(
+        session.id,
+        `this transcript had ${session.damaged_lines} unreadable line(s); the original bytes ` +
+          `are preserved in a .jsonl.damaged sidecar`,
+      );
+    }
+  }, [session?.id]);
+
   // Clear the previous chat's percentage immediately on a switch. The fetch below
   // re-checks `sessionRef` on arrival, but until it does the status bar would show
   // the other conversation's context as if it were this one's.

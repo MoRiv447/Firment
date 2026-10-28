@@ -144,6 +144,9 @@ pub struct SessionDto {
     pub thinking: String,
     /// Per-session compaction budget in chars; 0 = agent default.
     pub context_budget_chars: usize,
+    /// Unreadable transcript lines the last load skipped. The original bytes are
+    /// preserved in a `.jsonl.damaged` sidecar by the store.
+    pub damaged_lines: usize,
     pub created_at: u64,
     pub updated_at: u64,
     pub messages: Vec<ChatMessage>,
@@ -170,6 +173,7 @@ pub fn session_dto(s: &Session) -> SessionDto {
         mode: s.mode.label().to_string(),
         thinking: s.thinking.label().to_string(),
         context_budget_chars: s.context_budget_chars,
+        damaged_lines: s.damaged_lines,
         created_at: s.created_at,
         updated_at: s.updated_at,
         messages: s.messages.clone(),
