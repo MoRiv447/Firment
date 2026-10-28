@@ -39,6 +39,8 @@ pub fn build_agent(
     let permission: Arc<GuiPermission> = Arc::new(GuiPermission {
         shared: shared.clone(),
         session_id: session.id.clone(),
+        // The merged list, not `shared.config.auto_approve`: see the field's comment.
+        auto_approve: merged.auto_approve.clone(),
     });
     let asker: Arc<GuiAsker> = Arc::new(GuiAsker {
         shared: shared.clone(),

@@ -260,12 +260,78 @@ const NULL_SINKS: &[&str] = &["nul", "/dev/null", "/dev/stdout", "/dev/stderr", 
 /// First redirect target that resolves outside `cwd`. A redirect is a write
 /// the file tools would refuse: `echo x > ../../outside.log` put the shell in
 /// charge of the workspace boundary instead of the code that checks it.
-fn outside_workspace_redirect(command: &str, cwd: &Path, roots: &[PathBuf]) -> Option<String> {
-    redirect_targets(command).into_iter().find(|target| {
-        if NULL_SINKS.contains(&target.as_str()) {
-            return false;
+/// The directory a redirect in `command` actually resolves against.
+///
+/// The guard used to resolve every target against the tool's `cwd`, so
+/// `cd .. && echo x > escape.log` passed: `escape.log` was "inside" the old cwd
+/// while the shell wrote it one level up. A leading `cd`/`pushd` in an earlier
+/// segment now moves the base. Anything that cannot be resolved statically
+/// (`~`, `$HOME`, `%TEMP%`, `cd -`, a `cd` inside an `if`) makes the caller
+/// refuse the redirect rather than guess.
+fn redirect_cwd(command: &str, cwd: &Path, roots: &[PathBuf]) -> Result<PathBuf, String> {
+    let mut dir = cwd.to_path_buf();
+    let mut unparsed_change = false;
+    for segment in command
+        .split(['\n', ';'])
+        .flat_map(|s| s.split("&&").flat_map(|s| s.split("||")))
+    {
+        let segment = segment.trim();
+        let lower = segment.to_ascii_lowercase();
+        let cd = lower.starts_with("cd ")
+            || lower == "cd"
+            || lower.starts_with("pushd ")
+            || lower == "pushd";
+        if cd {
+            let rest = segment
+                .split_once(char::is_whitespace)
+                .map(|(_, rest)| rest.trim())
+                .unwrap_or("");
+            let target = rest.trim_matches(['"', '\'']);
+            if target.is_empty()
+                || target == "-"
+                || target.starts_with('~')
+                || target.contains('$')
+                || target.contains('%')
+            {
+                return Err(format!(
+                    "cannot resolve the directory change in '{segment}'"
+                ));
+            }
+            dir = resolve_within(&dir, target, roots)
+                .map_err(|e| format!("cannot resolve the directory change in '{segment}': {e}"))?;
+        } else if segment
+            .split_whitespace()
+            .any(|token| token.eq_ignore_ascii_case("cd") || token.eq_ignore_ascii_case("pushd"))
+        {
+            // A `cd` inside `if …; then cd …; fi`, a subshell, or a quoted word we
+            // cannot follow. It only matters if a redirect follows, which is checked
+            // after the loop.
+            unparsed_change = true;
         }
-        match resolve_within(cwd, target, roots) {
+        if segment.contains('>') {
+            break;
+        }
+    }
+    if unparsed_change && command.contains('>') {
+        return Err(
+            "a directory change is not at the start of a command; a redirect cannot be checked"
+                .to_string(),
+        );
+    }
+    Ok(dir)
+}
+
+fn outside_workspace_redirect(command: &str, cwd: &Path, roots: &[PathBuf]) -> Option<String> {
+    let targets: Vec<String> = redirect_targets(command)
+        .into_iter()
+        .filter(|target| !NULL_SINKS.contains(&target.as_str()))
+        .collect();
+    let effective = match redirect_cwd(command, cwd, roots) {
+        Ok(dir) => dir,
+        Err(_) => return targets.into_iter().next(),
+    };
+    targets.into_iter().find(|target| {
+        match resolve_within(&effective, target, roots) {
             // Only the explicit boundary verdict blocks; a path we could not
             // resolve for other reasons (permissions, a syntax the shell will
             // itself reject) stays the shell's problem.
@@ -705,6 +771,47 @@ mod tests {
             outside_workspace_redirect(&format!("make 2>{null_sink} && echo done"), cwd, &roots),
             None,
             "a discard sink is not a file the workspace owns"
+        );
+    }
+
+    #[test]
+    fn a_leading_cd_moves_the_redirect_boundary() {
+        let dir = tempdir().unwrap();
+        let cwd = dir.path();
+        let roots: Vec<PathBuf> = Vec::new();
+
+        // The old guard resolved `escape.log` against `cwd`, so this passed while the
+        // shell actually wrote one level above the workspace.
+        assert_eq!(
+            outside_workspace_redirect("cd .. && echo x > escape.log", cwd, &roots).as_deref(),
+            Some("escape.log")
+        );
+        assert_eq!(
+            outside_workspace_redirect("cd sub && echo x > inside.log", cwd, &roots),
+            None,
+            "a cd that stays inside the workspace is allowed"
+        );
+        assert_eq!(
+            outside_workspace_redirect("cd sub && echo x > ../inside.log", cwd, &roots),
+            None,
+            "the target is resolved against the cd destination, not the tool cwd"
+        );
+        for command in [
+            "cd ~ && echo x > escape.log",
+            "cd $HOME && echo x > escape.log",
+            "cd - && echo x > escape.log",
+            "if true; then cd /tmp; fi; echo x > escape.log",
+        ] {
+            assert_eq!(
+                outside_workspace_redirect(command, cwd, &roots).as_deref(),
+                Some("escape.log"),
+                "a directory change that cannot be followed must block the redirect: {command}"
+            );
+        }
+        assert_eq!(
+            outside_workspace_redirect("echo x > inside.log && cd ..", cwd, &roots),
+            None,
+            "a cd after the redirect does not move it"
         );
     }
 

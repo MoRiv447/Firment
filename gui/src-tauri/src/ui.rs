@@ -254,20 +254,19 @@ pub struct GuiPermission {
     pub shared: Arc<Shared>,
     /// Shown on the dialog so the user knows WHICH chat is asking.
     pub session_id: String,
+    /// The **merged** auto-approve list for this session's project.
+    ///
+    /// Reading `shared.config` here re-derived a decision `Config::merged_for` had already
+    /// made: a project that supplied `build_command`/`verify_command` is stripped from
+    /// `auto_approve` so a cloned checkout cannot run without a dialog. The GUI was the one
+    /// reader that skipped the merged copy, so `build` from `.firment.toml` ran unasked.
+    pub auto_approve: Vec<String>,
 }
 
 #[async_trait]
 impl PermissionChecker for GuiPermission {
     async fn confirm(&self, tool: &str, args: &serde_json::Value, reason: &str) -> Approval {
-        let always = {
-            let config = self
-                .shared
-                .config
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            config.auto_approve.to_vec()
-        };
-        if always.iter().any(|t| t == tool) {
+        if self.auto_approve.iter().any(|t| t == tool) {
             // A rule answered this one, so no person spent any time on it.
             return Approval::auto(Ok(()));
         }

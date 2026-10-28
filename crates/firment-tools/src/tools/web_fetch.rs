@@ -14,18 +14,6 @@ const MAX_BODY_BYTES: usize = 200_000;
 const MAX_TEXT_CHARS: usize = 60_000;
 
 impl WebFetch {
-    /// Extract the bare host from a URL string: strips scheme, userinfo,
-    /// port, path/query/fragment, and IPv6 brackets.
-    fn parse_host(url: &str) -> Option<String> {
-        let after_scheme = url.split_once("://")?.1;
-        let host_port = after_scheme.split(['/', '?', '#']).next()?;
-        let host = host_port.rsplit('@').next().unwrap_or(host_port);
-        if let Some(rest) = host.strip_prefix('[') {
-            return rest.split(']').next().map(|s| s.to_string());
-        }
-        Some(host.split(':').next().unwrap_or(host).to_string())
-    }
-
     /// True when `host` is a literal IP in an internal / link-local range
     /// that an agent must not fetch on its own: private RFC1918, CGNAT,
     /// link-local / cloud metadata (169.254/16), 0.0.0.0/8. Loopback is
@@ -63,35 +51,34 @@ impl WebFetch {
     }
 
     /// Host of `url` if it is a blocked literal internal IP.
-    fn blocked_host(url: &str) -> Option<String> {
-        let host = Self::parse_host(url)?;
-        if Self::is_blocked_literal_ip(&host) {
-            Some(host)
-        } else {
-            None
-        }
+    ///
+    /// `reqwest::Url` is the WHATWG parser, so `0xA9FEA9FE`, `2852039166` and
+    /// `0251.0376.0251.0376` have already become `169.254.169.254` by the time
+    /// `host_str()` is read. The old textual check only understood dotted decimal
+    /// (and IPv4-mapped IPv6), so those three spellings reached the metadata endpoint.
+    fn blocked_url(url: &reqwest::Url) -> Option<String> {
+        let host = url
+            .host_str()?
+            .trim_start_matches('[')
+            .trim_end_matches(']');
+        Self::is_blocked_literal_ip(host).then(|| host.to_string())
     }
 
     fn validate_url(url: &str) -> Result<(), ToolError> {
-        let lower = url.to_ascii_lowercase();
-        let (scheme, host) = match lower.split_once("://") {
-            Some((scheme, rest)) => (scheme, rest),
-            None => {
-                return Err(ToolError::new(
-                    "[InvalidInput] url must be http:// or https://",
-                ));
+        let parsed = reqwest::Url::parse(url)
+            .map_err(|e| ToolError::new(format!("[InvalidInput] invalid url: {e}")))?;
+        match parsed.scheme() {
+            "http" | "https" => {}
+            other => {
+                return Err(ToolError::new(format!(
+                    "[InvalidInput] unsupported scheme '{other}://' (only http/https)"
+                )));
             }
-        };
-        if scheme != "http" && scheme != "https" {
-            return Err(ToolError::new(format!(
-                "[InvalidInput] unsupported scheme '{scheme}://' (only http/https)"
-            )));
         }
-        let host = host.split(['/', '?', '#']).next().unwrap_or(host);
-        if host.is_empty() {
+        if parsed.host_str().is_none() {
             return Err(ToolError::new("[InvalidInput] url has no host"));
         }
-        if let Some(blocked) = Self::blocked_host(url) {
+        if let Some(blocked) = Self::blocked_url(&parsed) {
             return Err(ToolError::new(format!(
                 "[InvalidInput] url host '{blocked}' is an internal/link-local address; \
                  web_fetch refuses private, metadata, and link-local endpoints"
@@ -132,11 +119,7 @@ impl Tool for WebFetch {
             .timeout(Duration::from_secs(20))
             .user_agent("Firment/0.4 (firmware coding agent)")
             .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                let blocked = attempt
-                    .url()
-                    .host_str()
-                    .map(|h| h.trim_start_matches('[').trim_end_matches(']').to_string())
-                    .filter(|h| Self::is_blocked_literal_ip(h));
+                let blocked = Self::blocked_url(attempt.url());
                 match blocked {
                     Some(host) => attempt.error(std::io::Error::other(format!(
                         "redirect to internal address '{host}' is blocked"
@@ -276,6 +259,24 @@ mod tests {
             assert!(
                 err.message.contains("internal/link-local"),
                 "should reject: {url} got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_decimal_ipv4_spellings_are_normalized_before_the_guard() {
+        // WHATWG URL parsing turns all three into 169.254.169.254. A textual
+        // `parse::<IpAddr>()` on the original host saw none of them, so the metadata
+        // endpoint was reachable by choosing a different spelling.
+        for url in [
+            "http://0xA9FEA9FE/latest/meta-data/",
+            "http://2852039166/",
+            "http://0251.0376.0251.0376/",
+        ] {
+            let err = WebFetch::validate_url(url).unwrap_err();
+            assert!(
+                err.message.contains("internal/link-local"),
+                "should reject {url}: {err}"
             );
         }
     }
