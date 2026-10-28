@@ -77,14 +77,10 @@ export function useFocusTrap(
     target.focus({ preventScroll: true });
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!node.contains(event.target as Node)) return;
       if (event.key === 'Escape') {
-        // This listener is on `document`, not on `node`, on purpose. A React child's
-        // keydown handler is delegated at the React root, which the event reaches
-        // *before* document; a Select inside this drawer calls stopPropagation() when
-        // it closes its list, and a listener on `node` would have run first (native
-        // bubble reaches the drawer panel before the React root), closing the whole
-        // drawer instead. On document, the Select wins and the event never arrives.
+        // A Select/MultiSelect inside this dialog stops Escape natively on its
+        // trigger (useNativeEscape), before the event reaches this panel; an
+        // ancestor React handler would otherwise have run first at the root.
         event.stopPropagation();
         escape.current?.();
         return;
@@ -107,9 +103,9 @@ export function useFocusTrap(
       }
     };
 
-    document.addEventListener('keydown', onKeyDown);
+    node.addEventListener('keydown', onKeyDown);
     return () => {
-      document.removeEventListener('keydown', onKeyDown);
+      node.removeEventListener('keydown', onKeyDown);
       releaseIsolation();
       previouslyFocused.current?.focus({ preventScroll: true });
     };

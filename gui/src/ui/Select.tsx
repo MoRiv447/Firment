@@ -10,7 +10,7 @@ import { Popover } from './Popover';
 import styles from './Select.module.css';
 import type { Size } from './types';
 import { useFieldProps } from './Field';
-import { useListKeyboard } from './useListKeyboard';
+import { useListKeyboard, useNativeEscape } from './useListKeyboard';
 
 /** A row in a list: the value it writes, and what to show for it. */
 export interface SelectOption {
@@ -123,6 +123,8 @@ export function Select({
     onChange(option.value);
     setOpen(false);
   };
+
+  useNativeEscape(anchorRef, open, () => setOpen(false));
 
   const listKeys = useListKeyboard({
     count: items.length,

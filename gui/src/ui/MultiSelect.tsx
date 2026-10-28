@@ -12,7 +12,7 @@ import { Popover } from './Popover';
 import styles from './MultiSelect.module.css';
 import type { Size } from './types';
 import { useFieldProps } from './Field';
-import { useListKeyboard } from './useListKeyboard';
+import { useListKeyboard, useNativeEscape } from './useListKeyboard';
 
 /** A row that is not in `options`: the text you typed, offered back to you. */
 type Row = SelectOption & { create?: boolean };
@@ -107,6 +107,8 @@ export function MultiSelect({
     }
     toggle(row.value);
   };
+
+  useNativeEscape(inputRef, open, () => setOpen(false));
 
   const listKeys = useListKeyboard({
     count: items.length,

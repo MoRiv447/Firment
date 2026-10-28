@@ -1,5 +1,5 @@
-import { useRef } from 'react';
-import type { KeyboardEvent } from 'react';
+import { useEffect, useRef } from 'react';
+import type { KeyboardEvent, RefObject } from 'react';
 
 /** How long a typeahead buffer stays open, in ms. Long enough for two keys. */
 const TYPEAHEAD_MS = 600;
@@ -20,6 +20,36 @@ const TYPEAHEAD_MS = 600;
  *   the option they want and presses Tab means "that one, now move on"; treating
  *   Tab as a dismissal is how you end up saving the wrong model.
  */
+/**
+ * Close a floating list on Escape **before** an ancestor dialog sees the key.
+ *
+ * Focus stays on the trigger, and React's handlers run at the root — after a
+ * native bubble listener on the dialog panel. A Drawer would therefore close
+ * before the Select's own onKeyDown ran. This listener sits on the trigger itself,
+ * which is the first node in the bubble path, and stops the event there.
+ */
+export function useNativeEscape(
+  anchorRef: RefObject<HTMLElement | null>,
+  active: boolean,
+  onClose: () => void,
+): void {
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    if (!active) return;
+    const node = anchorRef.current;
+    if (!node) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      close.current();
+    };
+    node.addEventListener('keydown', onKeyDown);
+    return () => node.removeEventListener('keydown', onKeyDown);
+  }, [anchorRef, active]);
+}
+
 export function useListKeyboard(options: {
   /** How many rows there are. `0` disables everything but Escape. */
   count: number;
