@@ -306,18 +306,49 @@ fn shell_may_write(command: &str) -> bool {
     false
 }
 
-/// First redirect target that resolves outside `cwd`. A redirect is a write
-/// the file tools would refuse: `echo x > ../../outside.log` put the shell in
-/// charge of the workspace boundary instead of the code that checks it.
-/// The directory a redirect in `command` actually resolves against.
+/// Step `dir` by a `cd`/`pushd` argument without asserting anything about the
+/// workspace boundary. A directory change is not a write, so stepping outside is
+/// not an offence by itself — the redirect that follows it is what gets judged,
+/// against the directory this returns.
+fn stepped_dir(dir: &Path, target: &str) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in dir.join(target).components() {
+        match comp {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// First redirect target that resolves outside the workspace, judged against the
+/// directory the shell will be in when that redirect runs.
 ///
-/// The guard used to resolve every target against the tool's `cwd`, so
-/// `cd .. && echo x > escape.log` passed: `escape.log` was "inside" the old cwd
-/// while the shell wrote it one level up. A leading `cd`/`pushd` in an earlier
-/// segment now moves the base. Anything that cannot be resolved statically
-/// (`~`, `$HOME`, `%TEMP%`, `cd -`, a `cd` inside an `if`) makes the caller
-/// refuse the redirect rather than guess.
-fn redirect_cwd(command: &str, cwd: &Path, roots: &[PathBuf]) -> Result<PathBuf, String> {
+/// Two earlier versions of this guard were wrong the same way — one directory for
+/// the whole command:
+///
+/// 1. Every target resolved against the tool's `cwd`, so
+///    `cd .. && echo x > escape.log` passed while the shell wrote one level up.
+/// 2. A leading `cd`/`pushd` moved the base, but the walk stopped at the first
+///    `>`, so `echo x > a.txt && cd .. && echo y > escape.txt` resolved
+///    `escape.txt` against the old directory and passed as well.
+///
+/// Segments are now walked in order and each one's targets are resolved against
+/// the directory in effect at that point. A `cd` that cannot be resolved
+/// statically (`~`, `$HOME`, `%TEMP%`, `cd -`, one hidden in an `if`/subshell)
+/// still refuses the whole command rather than guessing.
+fn outside_workspace_redirect(command: &str, cwd: &Path, roots: &[PathBuf]) -> Option<String> {
+    let all_targets: Vec<String> = redirect_targets(command)
+        .into_iter()
+        .filter(|target| !NULL_SINKS.contains(&target.as_str()))
+        .collect();
+    if all_targets.is_empty() {
+        return None;
+    }
+
     let mut dir = cwd.to_path_buf();
     let mut unparsed_change = false;
     for segment in command
@@ -325,6 +356,9 @@ fn redirect_cwd(command: &str, cwd: &Path, roots: &[PathBuf]) -> Result<PathBuf,
         .flat_map(|s| s.split("&&").flat_map(|s| s.split("||")))
     {
         let segment = segment.trim();
+        if segment.is_empty() {
+            continue;
+        }
         let lower = segment.to_ascii_lowercase();
         let cd = lower.starts_with("cd ")
             || lower == "cd"
@@ -336,19 +370,21 @@ fn redirect_cwd(command: &str, cwd: &Path, roots: &[PathBuf]) -> Result<PathBuf,
                 .map(|(_, rest)| rest.trim())
                 .unwrap_or("");
             let target = rest.trim_matches(['"', '\'']);
-            if target.is_empty()
+            let unresolvable = target.is_empty()
                 || target == "-"
                 || target.starts_with('~')
                 || target.contains('$')
                 || target.contains('%')
-            {
-                return Err(format!(
-                    "cannot resolve the directory change in '{segment}'"
-                ));
+                // `cd x > log` opens the redirect before the change; no single
+                // directory describes it, so refuse instead of picking one.
+                || segment.contains('>');
+            if unresolvable {
+                return all_targets.into_iter().next();
             }
-            dir = resolve_within(&dir, target, roots)
-                .map_err(|e| format!("cannot resolve the directory change in '{segment}': {e}"))?;
-        } else if segment
+            dir = stepped_dir(&dir, target);
+            continue;
+        }
+        if segment
             .split_whitespace()
             .any(|token| token.eq_ignore_ascii_case("cd") || token.eq_ignore_ascii_case("pushd"))
         {
@@ -357,37 +393,28 @@ fn redirect_cwd(command: &str, cwd: &Path, roots: &[PathBuf]) -> Result<PathBuf,
             // after the loop.
             unparsed_change = true;
         }
-        if segment.contains('>') {
-            break;
-        }
-    }
-    if unparsed_change && command.contains('>') {
-        return Err(
-            "a directory change is not at the start of a command; a redirect cannot be checked"
-                .to_string(),
-        );
-    }
-    Ok(dir)
-}
-
-fn outside_workspace_redirect(command: &str, cwd: &Path, roots: &[PathBuf]) -> Option<String> {
-    let targets: Vec<String> = redirect_targets(command)
-        .into_iter()
-        .filter(|target| !NULL_SINKS.contains(&target.as_str()))
-        .collect();
-    let effective = match redirect_cwd(command, cwd, roots) {
-        Ok(dir) => dir,
-        Err(_) => return targets.into_iter().next(),
-    };
-    targets.into_iter().find(|target| {
-        match resolve_within(&effective, target, roots) {
+        for target in redirect_targets(segment) {
+            if NULL_SINKS.contains(&target.as_str()) {
+                continue;
+            }
+            // Anchor the boundary at the tool's cwd, not at `dir`: resolving
+            // against `dir` would make every target "inside" the directory the
+            // cd just moved to. `dir.join` is what the shell will actually
+            // touch, and an absolute target replaces the base as it should.
+            let absolute = dir.join(&target);
             // Only the explicit boundary verdict blocks; a path we could not
             // resolve for other reasons (permissions, a syntax the shell will
             // itself reject) stays the shell's problem.
-            Err(e) => e.contains("outside the workspace"),
-            Ok(_) => false,
+            match resolve_within(cwd, &absolute.to_string_lossy(), roots) {
+                Err(e) if e.contains("outside the workspace") => return Some(target),
+                _ => {}
+            }
         }
-    })
+    }
+    if unparsed_change && command.contains('>') {
+        return all_targets.into_iter().next();
+    }
+    None
 }
 
 /// Models frequently wrap the whole command in double quotes (e.g.
@@ -868,6 +895,18 @@ mod tests {
             None,
             "a cd after the redirect does not move it"
         );
+        // A cd that sits between two redirects still moves the SECOND one. The
+        // single-dir design breaks at the first `>` and resolves every target
+        // against the directory it had at that point, so this used to pass.
+        assert_eq!(
+            outside_workspace_redirect(
+                "echo x > a.txt && cd .. && echo y > escape.txt",
+                cwd,
+                &roots
+            )
+            .as_deref(),
+            Some("escape.txt")
+        );
     }
 
     #[tokio::test]
@@ -912,6 +951,27 @@ mod tests {
             .expect("an in-workspace redirect stays allowed");
         assert!(out.text.contains("exit code: 0"), "got: {}", out.text);
         assert!(dir.path().join("inside.log").exists());
+
+        // The third shape: a cd between two redirects. The guard has to refuse
+        // before the shell runs, so neither file exists afterwards.
+        let err = tool
+            .run(
+                json!({"command": "echo first > a.txt && cd .. && echo second > firmment-escape.log"}),
+                &ctx,
+            )
+            .await
+            .unwrap_err();
+        assert!(err.message.contains("outside the workspace"), "got: {err}");
+        assert!(
+            !dir.path().join("a.txt").exists(),
+            "the guard must run before the shell does"
+        );
+        assert!(
+            !dir.path()
+                .parent()
+                .is_some_and(|p| p.join("firmment-escape.log").exists()),
+            "the redirect after the cd must not reach the parent directory"
+        );
     }
 
     #[tokio::test]
