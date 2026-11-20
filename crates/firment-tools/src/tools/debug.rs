@@ -1488,8 +1488,11 @@ fn registers_from_text(text: &str) -> crate::probe::Registers {
         parsed,
         ..Default::default()
     };
-    for i in 0..13 {
-        r.r[i] = reg_value(&m, &[&*format!("r{i}")]).unwrap_or(0);
+    // `r` is r0..=r12 and nothing else, so enumerate it rather than index it by a
+    // range that has to be kept in step with the array. clippy's
+    // `needless_range_loop` reaches this shape on newer stable toolchains.
+    for (i, slot) in r.r.iter_mut().enumerate() {
+        *slot = reg_value(&m, &[&*format!("r{i}")]).unwrap_or(0);
     }
     r
 }
