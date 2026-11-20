@@ -129,7 +129,9 @@ impl Tool for Run {
                 segs: usize,
                 why: String,
             },
-            Failed,
+            Failed {
+                why: String,
+            },
         }
 
         let lib_run = {
@@ -145,7 +147,14 @@ impl Tool for Run {
                 let segs = match crate::probe::flash_elf(&chip_lib, probe_lib.as_deref(), &file_lib)
                 {
                     Ok(n) => n,
-                    Err(_) => return LibRun::Failed,
+                    // Keep the reason: without it the fallback below can only say "probe-rs is
+                    // not installed" when the real failure was a bad ELF, a chip id or a probe
+                    // another process holds.
+                    Err(e) => {
+                        return LibRun::Failed {
+                            why: e.message().to_string(),
+                        };
+                    }
                 };
                 let mut out: Vec<u8> = Vec::new();
                 match crate::probe::rtt_stream(
@@ -163,15 +172,18 @@ impl Tool for Run {
                 }
             })
             .await
-            .unwrap_or(LibRun::Failed)
+            .unwrap_or(LibRun::Failed {
+                why: "the library flash task did not finish (it panicked or was dropped)"
+                    .to_string(),
+            })
         };
         watcher.abort();
-        match lib_run {
+        let lib_why = match lib_run {
             LibRun::Done { segs, bytes, out } => {
                 if ctx.cancel.is_cancelled() {
                     return Err(ToolError::new(format!(
                         "[Cancelled] run interrupted by turn cancellation after {bytes} RTT bytes; \
-                         captured output://n{}",
+                         captured output:\n{}",
                         String::from_utf8_lossy(&out)
                     )));
                 }
@@ -233,17 +245,19 @@ impl Tool for Run {
                     ),
                 });
             }
-            LibRun::Failed => {
+            LibRun::Failed { why } => {
                 // 下面若走 CLI 的 `probe-rs run`，句柄由 `run_argv` 在租约后统一释放。
+                why
             }
-        }
+        };
 
         let probe_rs_ok = super::util::probe_rs_present().await;
         if !probe_rs_ok {
-            return Err(ToolError::new(
-                "[NotFound] probe-rs is not installed or not on PATH: install it with \
-                 `cargo install probe-rs-tools` or download from the probe-rs GitHub Releases",
-            ));
+            return Err(ToolError::new(format!(
+                "[NotFound] the library flash did not work ({lib_why}), and probe-rs is not \
+                 installed or not on PATH, so there is no CLI fallback: install it with \
+                 `cargo install probe-rs-tools` or download from the probe-rs GitHub Releases"
+            )));
         }
 
         let command = run_command_line(&chip, &resolved.to_string_lossy(), probe.as_deref());

@@ -1011,7 +1011,7 @@ impl Tool for Debug {
                     Err(why) => vec![format!(
                         "  fault registers: UNREADABLE. No fault flag is confirmed either way; \
                          the register state above is the only fault evidence in this report. \
-                         Output was://n{}",
+                         Output was:\n{}",
                         crate::tools::util::truncate(why, 500)
                     )],
                 };
