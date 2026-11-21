@@ -89,7 +89,7 @@
           "type": "integer"
         },
         "elf": {
-          "description": "Path to the firmware ELF (inside the workspace); REQUIRED for backtrace (needs DWARF debug info) and needed for symbol:name addresses / analyze PC decoding",
+          "description": "Path to the firmware ELF (inside the workspace); REQUIRED for backtrace and forensic (both depend on DWARF to unwind/symbolise the scene) and used by symbol:name addresses / analyze PC decoding",
           "type": "string"
         },
         "probe": {

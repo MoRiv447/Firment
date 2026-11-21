@@ -442,7 +442,7 @@ impl Tool for Debug {
                 "action": {"type": "string", "enum": ["halt", "regs", "mem", "write", "analyze", "forensic", "break", "step", "continue", "backtrace", "trace"], "description": "What to do on the target. forensic: capture a hard-fault scene (exception frame + fault registers + stack scan + change-ledger correlation) into a structured report — the target must still be sitting in the fault"},
                 "chip": {"type": "string", "description": "probe-rs chip id, e.g. stm32g431rb (defaults to [tools] default_chip)"},
                 "probe": {"type": "string", "description": "Optional probe serial/id when multiple probes are attached"},
-                "elf": {"type": "string", "description": "Path to the firmware ELF (inside the workspace); REQUIRED for backtrace (needs DWARF debug info) and needed for symbol:name addresses / analyze PC decoding"},
+                "elf": {"type": "string", "description": "Path to the firmware ELF (inside the workspace); REQUIRED for backtrace and forensic (both depend on DWARF to unwind/symbolise the scene) and used by symbol:name addresses / analyze PC decoding"},
                 "address": {"type": "string", "description": "For mem/write/break: '0x<hex>' or 'symbol:<name>' (resolved from the elf)"},
                 "width": {"type": "string", "enum": ["b8", "b16", "b32", "b64"], "description": "Access width for mem/write (default b32)"},
                 "words": {"type": "integer", "minimum": 1, "maximum": 1024, "description": "Number of words to read for mem (default 1)"},
