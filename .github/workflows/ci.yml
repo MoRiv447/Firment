@@ -144,5 +144,8 @@ jobs:
       - name: Audit the root lockfile
         run: cargo audit
       - name: Audit the Tauri lockfile
-        working-directory: gui/src-tauri
-        run: cargo audit
+        # Run from the root so both audits read the same `.cargo/audit.toml`:
+        # cargo-audit resolves its config from the directory it runs in (plus
+        # $CARGO_HOME), not from ancestors, and the Tauri workspace has no
+        # policy file of its own. `--file` scans that lock without cd-ing.
+        run: cargo audit --file gui/src-tauri/Cargo.lock

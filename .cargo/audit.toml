@@ -1,0 +1,29 @@
+# cargo-audit configuration. Both CI audit steps read it: the workspace root
+# directly, and `gui/src-tauri` by walking up (that workspace has its own lock
+# but no policy of its own -- probe-rs reaches it through firment-tools).
+
+[advisories]
+ignore = [
+    # ruzstd 0.8.3 -- a decompression bomb: an ELF whose zstd-compressed debug
+    # section expands without bound can exhaust memory.
+    #
+    # Why it cannot be upgraded yet: object 0.39.1 pins `ruzstd = "^0.8.1"`,
+    # 0.9.1 is the only patched release, object 0.39.1 is already the newest
+    # 0.39, and probe-rs 0.32.0 is the newest published version. Upstream has
+    # already merged the fix -- probe-rs#4236, "Update Rust crate object to
+    # 0.40", merged 2026-08-10 -- so this is waiting on a release, not on a
+    # decision.
+    #
+    # Why the wait is acceptable: `object`'s default features include
+    # `compression`, so the code IS in the binary (checked with `cargo tree -e
+    # features -i ruzstd@0.8.3`; do not claim otherwise). What it takes to
+    # reach it is a hand-crafted ELF carrying a zstd-compressed `.debug_*`
+    # section, and arm-none-eabi-gcc emits uncompressed debug info by default
+    # (`-gz=zstd` is opt-in), so a firmware this project builds cannot trigger
+    # it. The consequence is memory exhaustion in the agent process, not code
+    # execution and not data disclosure.
+    #
+    # Re-check when probe-rs publishes a build against object 0.40, then delete
+    # this entry rather than leaving it to rot.
+    "RUSTSEC-2026-0344",
+]
