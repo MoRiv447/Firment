@@ -585,11 +585,15 @@ pub(crate) fn toolchain_checks(
             // 说清楚**哪几条**已经不需要 CLI。早先这里写的是 "flash/debug work
             // without the CLI"，而 `debug` 的 11 个动作里只有 mem/write 走库；
             // 一句话把 9 个动作说成"不依赖"，正是这个仓库最不该犯的错。
+            // 说清楚**每一条**动作现在怎么走。rc4 之后 11 个 debug 动作和 trace/run 都先试库，
+            // CLI 只是库报告"探针不可用"时的回退；这句话一直停在库化中途的版本（当时只有
+            // flash 与 mem/write/halt/continue/step 走库），在 `firm doctor` 里把已经库化的
+            // 动作说成"还需要 CLI"，正好是这个仓库最不该犯的错。
             format!(
-                "{visible} probe(s) visible to the built-in library — `flash`, `debug \
-                 mem`/`write`/`halt`/`continue`/`step` work without the CLI; `debug \
-                 regs`/`break`/`backtrace`/`trace`/`analyze`/`forensic` and `run`'s semihosting \
-                 fallback still need `probe-rs` on PATH"
+                "{visible} probe(s) visible to the built-in library — flash and every debug \
+                 action (mem/write/regs/analyze/forensic/halt/continue/step/break/backtrace), \
+                 plus trace and run's RTT path, try the library first; `probe-rs` on PATH is \
+                 only the fallback for when the library reports the probe unavailable"
             ),
         ));
     } else {
