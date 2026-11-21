@@ -1,7 +1,7 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0--rc4-blue)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.89+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![CI](https://img.shields.io/badge/CI-Rust%20%2B%20GUI-green)](.github/workflows/ci.yml)
@@ -170,11 +170,11 @@ pre-release**——所以 `v1.0.0-rc` 挂着 pre-release 期间，上面这行�
 就指定 tag（注意变量是给脚本的，shell 那条要写在管道右边，不是 `curl` 前面）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | FIRMENT_VERSION=v1.0.0-rc4 sh
+curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | FIRMENT_VERSION=v1.0.0 sh
 ```
 
 ```powershell
-$env:FIRMENT_VERSION = 'v1.0.0-rc4'   # 然后再执行上面的 iex 那行
+$env:FIRMENT_VERSION = 'v1.0.0'   # 然后再执行上面的 iex 那行
 ```
 
 **离线 / 物理隔离的机器。** 两个安装脚本都要下载 release，没有网络都用不了。改用这两条路之一：
@@ -260,6 +260,14 @@ firm --doctor --sbc
 - 运行中按 `Esc` 两次中断（带 5 秒确认窗口）；空闲时按一次清空输入
 - 斜杠命令：`/new`、`/plan [on|off]`、`/agent`、`/models`、`/model <id>`、`/sessions`、`/session <id>`、`/undo`、`/ledger`、`/pin`、`/unpin`、`/provider`、`/add-provider`、`/apikey`、`/thinking`、`/budget`、`/output`、`/copy`、`/context`、`/config`、`/clear`、`/help`、`/quit`——完整命令与快捷键清单见 `/help`
 - `Ctrl+P` 打开模型选择器；`↑/↓` 历史/滚动；`PgUp/PgDn` + 滚轮滚动；左键拖选 + 右键复制；`Ctrl+Shift+C` 复制最后回复
+
+### 1.0 已知限制
+
+- **SWO/ITM 是实验性的。** NUCLEO-64 板子上 SWO 引脚（PB3）与调试器自身的跟踪输出复用，采集可能只回来一个同步字节、没有可解码的包。
+- **H7 的 DTCM 调试器读不到。** `0x2000_0000` 只能 CPU 访问，而 CubeMX 把 `.data`/`.bss` 放在那里，所以 `debug mem` 读这些地址会 FAULT——想在调试时看变量，就把缓冲放到 AXI SRAM（`0x2400_0000`）。
+- **`run` 的 RTT 路径只在 Cortex-M4 上验证过。**
+- **基准覆盖 14 题中的 8 题。** 剩下 6 题需要相机、蓝牙对端或人在中途回答一句，逐题原因在 `benchmark/RESULTS.md`。
+- **没有 SWD 速率控制。** 杜邦线偏长或接触不良时，换短线能通、当前没有参数可以降速。
 
 ## 🔒 安全模型
 

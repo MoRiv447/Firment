@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.0.0-rc4"
+version = "1.0.0"
 edition = "2024"
 # 1.89 是 `probe-rs 0.32` 的下限。抬它是一次有意的取舍：把探针从"调 CLI"
 # 换成"链接库"（会话常驻、结构化错误、RTT），代价是 1.85–1.88 的工具链不能构建。

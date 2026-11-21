@@ -1,5 +1,87 @@
 # Changelog
 
+## v1.0.0 (2026-11-21) — four candidates, 411 commits, and a loop that closes on the board
+
+1.0 is a stability statement, not a feature drop. Everything below was proven in the four
+candidate releases between v0.8.1 and this tag; what changes today is the promise: from here
+a patch fixes behaviour, it does not reshape a tool's schema, the evidence ladder, or the
+session format.
+
+### The loop
+
+A firmware task runs from a sentence to a measured result in one session: generate or edit
+code, build with the real toolchain, flash over the probe, run it, observe serial / registers
+/ photographs / logic-analyser captures, diagnose what failed, and go around again. 31 tools
+are registered; `firm tools` prints every name with its schema, and CI diffs that output so
+the CLI and the GUI cannot drift apart.
+
+Verification is a five-rung ladder — code, build, deploy, runtime, physical — where **each
+rung has a pass condition a tool decides** rather than a narrative one: an ELF gate and
+`[evidence: build]` for build, the probe lease and a reset that actually happened for deploy,
+an observed output matching an expected pattern for runtime, and a measured instrument verdict
+for physical, with low-confidence readings never satisfying an assertion. A higher rung never
+implies the lower ones succeeded. The five-rung framing follows GaryCLI's evidence levels;
+what this repository adds is that each rung is decided by a tool instead of asserted by the
+model.
+
+### The probe is a library
+
+`probe-rs 0.32` and `probe-rs-debug 0.32` are linked in. Flash, run (RTT), registers, analyze,
+forensic, halt, continue, step, break, backtrace and SWO all try the library first; the CLI is
+a fallback for when the library reports the probe unavailable, and `doctor` says which is
+which.
+
+- `flash` reads `p_paddr` from the program headers. The previous code used `p_vaddr`, which
+  put initialised globals in RAM while startup copied them from erased FLASH — a firmware that
+  booted with wrong values while the flash reported success.
+- `ProbeLease` is the single gate for exclusive use; a second caller gets `[Busy]` with the
+  holder's name instead of talking to a target that is being erased.
+- SWO programs the target's TPIU itself (probe-rs keeps `configure_tpiu` private) and decodes
+  ITM in-process. It is **partially working** — see the limitations below.
+
+### Review and recovery
+
+`review deps|last|evidence`, per-step progress with an ETA, `/retry-last`, session replay,
+ADR records, project change ledger with `/undo`, board profiles, parallel agents, and plugins.
+Damaged transcripts are preserved as `<id>.jsonl.damaged` instead of being rewritten from an
+amputated vector, and `--continue latest` refuses a corrupt newest transcript rather than
+silently resuming an older conversation.
+
+### Surfaces
+
+TUI and GUI were both rebuilt; the GUI dropped antd for a Radix-based design system, and the
+web client is frozen and no longer shipped or documented. The GUI installer is Windows-only;
+macOS and Linux ship the CLI.
+
+### Verification
+
+- Rust: **1089 passed / 0 failed / 7 ignored**, 15 test binaries.
+- Tauri backend 23, GUI 742 across 62 files, web 72 across 10 files.
+- CI: fmt, clippy `--all-targets` on three platforms, both GUI workspaces, the web build, the
+  tool-spec snapshot diff, and the advisory gate.
+- Real hardware, two boards:
+  - **NUCLEO-G431RB** (Cortex-M4, ST-Link): flash, run/RTT, registers, break, backtrace, HIL,
+    logic analyser, observe.
+  - **Third-party H723ZGT6 core board + DAPLink** (Cortex-M7): flash across both banks, reset,
+    GPIO, USART1, `regs`, `analyze`, `halt`, `step`, `continue`, `break`, `backtrace`,
+    `forensic`. Two defects were found and fixed this way — a Thumb-bit off-by-one in symbol
+    decoding, and a schema description that omitted `forensic`'s ELF requirement.
+
+### Known limitations at 1.0
+
+- **SWO is partial.** Measured on the NUCLEO-G431RB: 0 bytes → 1 byte over a 2 s window, still
+  with no decodable packets. On NUCLEO-64 boards the SWO pin (PB3) is shared with the
+  debugger's own trace output. Treat `trace` as experimental.
+- **H7 DTCM is not readable by the debugger.** `0x2000_0000` is CPU-only, and CubeMX puts
+  `.data`/`.bss` there, so `debug mem` on such an address returns a FAULT. Put buffers you
+  need to inspect in AXI SRAM (`0x2400_0000`).
+- **`run`'s RTT path is verified on Cortex-M4 only**; the H723 test firmware had no RTT
+  control block.
+- **The benchmark covers 8 of 14 cases** (57/100 weight). The remaining six need a camera, a
+  Bluetooth peer, or a human answering a prompt mid-run; `benchmark/RESULTS.md` records which.
+- **No SWD speed control.** probe-rs uses its default rate. A long or marginal DAPLink cable
+  can fail where a short one works, with no flag to slow it down.
+
 ## v1.0.0-rc4 (2026-11-21) — the probe moves into the process, and a flash that wrote to the wrong address
 
 Forty-five commits, twelve of them features, and one failure worth naming first: `flash`

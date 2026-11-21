@@ -1,7 +1,7 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0--rc4-blue)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.89+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![CI](https://img.shields.io/badge/CI-Rust%20%2B%20GUI-green)](.github/workflows/ci.yml)
@@ -171,11 +171,11 @@ above install the last stable one. Name the tag to choose otherwise (the variabl
 the *script*, so on the shell side it goes after the pipe):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | FIRMENT_VERSION=v1.0.0-rc4 sh
+curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | FIRMENT_VERSION=v1.0.0 sh
 ```
 
 ```powershell
-$env:FIRMENT_VERSION = 'v1.0.0-rc4'   # then the iex line above
+$env:FIRMENT_VERSION = 'v1.0.0'   # then the iex line above
 ```
 
 **Offline or air-gapped machine.** Both installers download a release, so neither works
@@ -263,6 +263,14 @@ firm --doctor --sbc
 - `Esc` twice while a turn is running interrupts it (with a 5s confirmation window); a single `Esc` clears the draft input when idle
 - Slash commands: `/new`, `/plan [on|off]`, `/agent`, `/models`, `/model <id>`, `/sessions`, `/session <id>`, `/undo`, `/ledger`, `/pin`, `/unpin`, `/provider`, `/add-provider`, `/apikey`, `/thinking`, `/budget`, `/output`, `/copy`, `/context`, `/config`, `/clear`, `/help`, `/quit` — run `/help` for the full command + key reference
 - `Ctrl+P` opens the model picker; `↑/↓` history/scroll; `PgUp/PgDn` + wheel scroll; left-drag select + right-click copy; `Ctrl+Shift+C` copy last reply
+
+### Known limitations at 1.0
+
+- **SWO/ITM is experimental.** On NUCLEO-64 boards the SWO pin (PB3) is shared with the debugger's own trace output; a capture can return one sync byte and no decodable packets.
+- **H7 DTCM cannot be read by the debugger.** `0x2000_0000` is CPU-only and CubeMX links `.data`/`.bss` there, so `debug mem` on those addresses faults — put buffers you need to inspect in AXI SRAM (`0x2400_0000`).
+- **`run`'s RTT path is verified on Cortex-M4 only.**
+- **The benchmark covers 8 of 14 cases.** `benchmark/RESULTS.md` records which six need a camera, a Bluetooth peer, or a human answering mid-run.
+- **No SWD speed control.** A marginal probe cable can fail where a shorter one works.
 
 ## 🔒 Security Model
 

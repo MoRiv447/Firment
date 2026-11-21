@@ -7,7 +7,7 @@ flash_kb = 1024
 ram_kb = 564
 baud = 115200
 probe = "st-link"
-notes = "The H7 Nucleo: 1 MB of flash and 564 KB of RAM, so the thing that runs out is your own discipline."
+notes = "The H7 Nucleo: 1 MB of flash and 564 KB of RAM, so the thing that runs out is your own discipline. Two H7 facts that cost time: DTCM (0x2000_0000) is CPU-only and CubeMX links .data/.bss there, so `debug mem` on those addresses returns a FAULT -- put buffers you need to inspect in AXI SRAM (0x2400_0000); and on third-party H723 core boards the debug header often carries USART1 (PA9/PA10) rather than this board's USART3 pins."
 
 [pins]
 led = "PB0"

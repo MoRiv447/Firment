@@ -1,6 +1,6 @@
 {
   "name": "firment",
-  "version": "1.0.0-rc4",
+  "version": "1.0.0",
   "private": true,
   "description": "Firment monorepo — CLI core (Rust) + GUI client (Tauri) + Web (Next.js)",
   "scripts": {
