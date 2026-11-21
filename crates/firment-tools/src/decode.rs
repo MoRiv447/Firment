@@ -77,6 +77,14 @@ pub fn symbol_address(elf: &Path, name: &str) -> Option<u64> {
 /// Resolve a code address to `function+0xOFFSET` using the ELF symbol table.
 /// Returns None when the file is missing/unparseable or no symbol covers it.
 pub fn decode_address(elf: &Path, address: u64) -> Option<String> {
+    // ARM ELF stores Thumb function pointers with bit 0 set (st_value, LR,
+    // PC-as-return-address). That bit is not part of the address: leaving it in
+    // shifts every coverage comparison by one, so a function whose `st_value +
+    // size` lands on the next function's entry swallows that entry and reports
+    // it as `previous+0xNN`. Seen on an STM32H723 ELF: `main` at 0x080008b0 was
+    // decoded as `SystemClock_Config+0x8b` because the symbol's value was
+    // 0x08000825 with size 0x8c.
+    let address = address & !1u64;
     let data = std::fs::read(elf).ok()?;
     let file = object::File::parse(&*data).ok()?;
     let mut best: Option<(u64, String)> = None;
@@ -84,7 +92,7 @@ pub fn decode_address(elf: &Path, address: u64) -> Option<String> {
         if sym.kind() != object::SymbolKind::Text {
             continue;
         }
-        let addr = sym.address();
+        let addr = sym.address() & !1u64;
         // The symbol must actually cover the address (or be the last symbol
         // with an unknown size, which old tools may report as 0): an address
         // in a gap between functions must not be attributed to the previous
@@ -145,7 +153,7 @@ impl SymbolIndex {
                 if name.is_empty() {
                     return None;
                 }
-                Some((sym.address(), sym.size(), name.to_string()))
+                Some((sym.address() & !1u64, sym.size(), name.to_string()))
             })
             .collect();
         symbols.sort_unstable_by_key(|(addr, _, _)| *addr);
@@ -158,6 +166,10 @@ impl SymbolIndex {
     /// size-0 symbol below it covers unboundedly upward, in which case the
     /// gap is attributed to that symbol; `decode_address` behaves the same.
     pub fn lookup(&self, address: u64) -> Option<String> {
+        // Same Thumb-bit rule as `decode_address`; the index stores cleared
+        // bases, so a query carrying bit 0 (an LR value, for instance) has to
+        // be cleared too or it falls one byte past its own symbol's entry.
+        let address = address & !1u64;
         if address < self.min_addr {
             return None;
         }
@@ -184,6 +196,7 @@ impl SymbolIndex {
     /// are identical to `lookup` — including size-0 symbols covering
     /// unboundedly upward, which is exactly what the caller must filter on.
     pub(crate) fn lookup_detail(&self, address: u64) -> Option<(&str, u64, u64)> {
+        let address = address & !1u64;
         if address < self.min_addr {
             return None;
         }
@@ -330,6 +343,56 @@ mod tests {
             "got: {}",
             index.decode_line(line)
         );
+    }
+
+    #[test]
+    fn thumb_bit_does_not_swallow_the_next_function() {
+        // Real ARM ELF: every Thumb function's st_value has bit 0 set. A
+        // function whose value+size lands exactly on the next entry must not
+        // cover it. Seen on an STM32H723 ELF, where `main` at 0x080008b0 was
+        // decoded as `SystemClock_Config+0x8b` because the previous symbol was
+        // 0x08000825 with size 0x8c.
+        use object::write::{Object, Symbol, SymbolSection};
+        use object::{BinaryFormat, Endianness, SectionKind, SymbolKind, SymbolScope};
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("thumb.elf");
+        let mut obj = Object::new(
+            BinaryFormat::Elf,
+            object::Architecture::Arm,
+            Endianness::Little,
+        );
+        let text = obj.add_section(Vec::new(), b".text".to_vec(), SectionKind::Text);
+        for (name, value, size) in [
+            ("SystemClock_Config", 0x825u64, 0x8cu64),
+            ("main", 0x8b1, 0x40),
+        ] {
+            obj.add_symbol(Symbol {
+                name: name.as_bytes().to_vec(),
+                value,
+                size,
+                kind: SymbolKind::Text,
+                scope: SymbolScope::Compilation,
+                section: SymbolSection::Section(text),
+                weak: false,
+                flags: object::SymbolFlags::None,
+            });
+        }
+        std::fs::write(&p, obj.write().unwrap()).unwrap();
+
+        // The last real instruction of the previous function still belongs to
+        // it. Thumb code is 2-byte aligned, so 0x8ae is that last instruction
+        // (0x8af would be the odd byte of it, which no PC ever holds).
+        assert_eq!(
+            decode_address(&p, 0x8ae).as_deref(),
+            Some("SystemClock_Config+0x8a")
+        );
+        // The entry itself belongs to main, with or without the Thumb bit.
+        assert_eq!(decode_address(&p, 0x8b0).as_deref(), Some("main+0x0"));
+        assert_eq!(decode_address(&p, 0x8b1).as_deref(), Some("main+0x0"));
+
+        let index = SymbolIndex::from_path(&p).unwrap();
+        assert_eq!(index.lookup(0x8b0).as_deref(), Some("main+0x0"));
+        assert_eq!(index.lookup(0x8b1).as_deref(), Some("main+0x0"));
     }
 
     #[test]
