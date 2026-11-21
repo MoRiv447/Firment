@@ -1,5 +1,142 @@
 # Changelog
 
+## v1.0.0-rc4 (2026-11-21) — the probe moves into the process, and a flash that wrote to the wrong address
+
+Forty-five commits, twelve of them features, and one failure worth naming first: `flash`
+read `ObjectSegment::address()`, which is `p_vaddr`. For the ordinary
+`.data : { } > RAM AT > FLASH` layout that put the initial values in RAM while the startup
+code copied them from erased FLASH — so a firmware with initialised globals booted with
+the wrong values, and `flash` reported success. The segments now come from the ELF program
+headers and use `p_paddr`, with a synthetic-ELF regression test whose vaddr and paddr
+differ.
+
+The rest of the release is the same idea applied to the whole hardware path: stop asking a
+subprocess what it said, and stop letting a failed read look like a clean answer.
+
+### The probe is a library now
+
+`probe-rs 0.32` and `probe-rs-debug 0.32` are real dependencies. `debug mem`/`write`,
+`regs`, `analyze`, `forensic`, `halt`, `continue`, `step`, `break`, `backtrace`, `flash` and
+`run` all go through the linked library; the CLI is a fallback, and `doctor` says which
+paths work without it.
+
+- `regs` returns a struct instead of parsing `info reg` text, and `analyze` reads the
+  register file and the fault words from **one** session instead of three processes at
+  three moments. Measured on the board: **13 ms** for the full register file.
+- `halt` / `continue` / `step` were a whole attach-run-detach session each. Measured:
+  **1 ms / 3 ms / 2 ms**, against roughly a second apiece.
+- `break` and `backtrace` go through `probe-rs-debug` — the crate that owns DWARF —
+  because `probe-rs-debugger` is a 0-dependency stub and `probe-rs-tools` is bin-only.
+  Both actions verified on the board in **0.51 s**.
+- `forensic` had been unreachable: it was missing from the runtime allow-list, so every
+  call returned "(forensic unavailable)". It reads one session now, and the report says
+  when a running core was halted for the read and stays halted.
+- `ProbeLease` is the single gate for exclusive probe use. The GUI's flash button, an agent
+  turn and the workbench panel used to be three independent ways onto one ST-Link; a
+  second caller now gets `[Busy]` with the holder's name. A source gate fails the build if
+  a public entry point is added without taking the lease.
+
+### SWO: our own ITM decoder, and an honest result
+
+probe-rs keeps `configure_tpiu` private, so `enable_swo` only switches the probe's pin mode.
+This release programs the target side itself — ITM unlock + TCR, TPIU CSPSR/ACPR/SPPR/FFCR
+— through `MemoryInterface`, following ARMv7-M.
+
+Measured with `fixtures/itm-probe-fw` on the NUCLEO-G431RB: **0 bytes → 1 byte** over a 2 s
+window, still with no decodable packets. One sync byte is what a receiver sees when almost
+nothing arrives, so the transport is partly alive and the remaining gap is likely the board:
+on NUCLEO-64 boards the SWO pin (PB3) is shared with the debugger's own trace output.
+**This is not a working SWO path**, and the release notes say so rather than implying
+otherwise.
+
+### What stopped being reported as success
+
+- `grep` swallowed every unreadable file and returned an empty hit list, which the model
+  read as "the symbol does not exist". A single-file read failure is now an error; a
+  directory search appends `[skipped: N file(s) …]`.
+- `elf_analyze` mapped "no baseline" to `[GATE:CLEAN]`, so the first build after enabling
+  the gate passed without comparing anything. `[GATE:NO-BASELINE]` is its own marker.
+- `read_file` with `hashlines` had no output cap; it refuses files over 8 MiB.
+- `web_fetch` said nothing when a page was decoded lossily; U+FFFD is now named as the
+  decoder's character, not the page's.
+- `web_search` scanned the whole body for "challenge"/"captcha", so a real result page for
+  "challenge-response authentication" was reported as a block.
+- `run`'s library flash error was discarded (`Err(_)`), and a machine without the CLI then
+  reported "probe-rs is not installed" whatever the real cause was.
+- Two error messages shipped a literal `//n` where `\n` was meant (`run`'s cancellation,
+  `debug`'s unreadable fault register).
+
+### Security
+
+- The GUI permission gate read the **unmerged** `auto_approve` list while the TUI and CLI
+  read the merged one, so a cloned checkout's `build_command` ran with no dialog.
+- `web_fetch` decided "is this an internal IP" with `parse::<IpAddr>()` on the raw text.
+  WHATWG normalises `0xA9FEA9FE`, `2852039166` and `0251.0376.0251.0376` to
+  `169.254.169.254`, so all three reached the metadata endpoint. The check now runs on the
+  parsed `Url::host_str()`.
+- `shell` resolved redirect targets against the tool's cwd. `cd .. && echo x > escape.log`
+  passed and wrote one level above the workspace; a fix for the leading-`cd` shape left a
+  third hole — **a `cd` between two redirects** moved the second one and was still judged
+  against the old directory. Each segment now carries its own directory, and a `cd` that
+  cannot be resolved statically refuses the whole command.
+
+### The turn boundary
+
+`Tool::mutates(args, ctx)` is now the one answer to "did this call change the workspace".
+The previous name list missed `task` (a write-capable child) and `shell`, and counted
+`pinmap list` and a dry-run rename as mutations — arming a verify gate for a turn that only
+read. A source gate requires every tool that journals a backup to implement it.
+
+Also in this group: a turn stopped before its first provider call now emits `TurnStart`
+before returning, so its `TurnEnd` has a pair; mid-stream stalls emit `Error` before
+`TurnEnd`; compaction observes cancellation and falls back instead of losing drained
+context; repeated `read_file` returns the content rather than a stub that told the model to
+re-read.
+
+### Persistence
+
+A `load` that skipped an unreadable JSONL line returned `Ok`, and the next save rewrote the
+whole file from the amputated vector — one torn line became a permanent, silent loss. The
+original bytes are now copied to `<id>.jsonl.damaged` before the repair. `latest()` no
+longer drops an unparseable newest transcript and silently resumes the previous
+conversation. The undo index, `workbench.toml` and the ledger all use the unique-temp
+writer; a fixed `.toml.tmp` was shared by every concurrent saver.
+
+### TUI and GUI
+
+- `/sessions` matched `c`/`d` before the filter arm: typing a word containing either
+  deleted or copied the selected session. Plain letters filter; `Ctrl+C`/`Ctrl+D` act.
+- Escape in a `Select` inside a drawer closed the drawer instead of the list.
+- Session loads carry the requested id, so a slower load from the previously clicked chat
+  cannot replace the one the user selected.
+- `ChatMessage::Tool` carries `ok`, so `workbench_quality` stops re-deriving success from
+  text with a tag list that missed `[CompileError]` and `[Cancelled]`.
+- `//text` sends one literal leading slash (`/etc/hosts` is no longer an unknown command).
+
+### Release hygiene
+
+- `rustls-webpki` 0.103.15 → **0.103.16** in both lockfiles (RUSTSEC-2026-0382).
+- `ruzstd 0.8.3` (RUSTSEC-2026-0344) **cannot** be upgraded: `object 0.39.1` pins
+  `ruzstd = "^0.8.1"`, 0.9.1 is the only patched release, and probe-rs 0.32.0 is the newest
+  published version. Upstream merged the fix on 2026-08-10 (probe-rs#4236, object 0.40), so
+  it waits on a release. `.cargo/audit.toml` records the ignore with that chain and with the
+  reachability argument, and says to delete the entry once probe-rs ships.
+- README badges said `1.0.0-rc` and `rust-1.85+`; the crate requires 1.89 and the version is
+  this one.
+- `docs/handoff/v1.0-handoff.md` and `gui/README.md` — a superseded handoff that cited files
+  which no longer exist, and the unmodified Tauri template — are gone.
+
+### Verification
+
+- Rust: **1088 passed / 0 failed / 7 ignored**, 15 test binaries.
+- Tauri backend: 23 passed; GUI: **742 passed / 62 files**; Web: **72 passed / 10 files**.
+- `firm tools` matches `web/src/lib/tools/specs.json` (CI diffs them).
+- CI: fmt, clippy `--all-targets` on three platforms, both GUI workspaces, the web build,
+  and the advisory gate.
+- Hardware: the measurements above come from a **NUCLEO-G431RB** and `fixtures/itm-probe-fw`.
+  Reset/timeout/cancel behaviour on a library flash is read from the code, not measured;
+  SWO is partly alive as described above. No second probe or board was exercised.
+
 ## v1.0.0-rc3 (2026-10-18) — registers stop being guessed, and the results can be re-run by anyone
 
 The release has one line: **turn raw data into data with its meaning attached**. It came out of a

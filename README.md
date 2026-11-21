@@ -1,8 +1,8 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0--rc-blue)](Cargo.toml)
-[![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-1.0.0--rc4-blue)](Cargo.toml)
+[![Rust](https://img.shields.io/badge/rust-1.89+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![CI](https://img.shields.io/badge/CI-Rust%20%2B%20GUI-green)](.github/workflows/ci.yml)
 [![Website](https://img.shields.io/badge/website-Firment%20official-ff5c9d)](https://moriv447.github.io/Firment-site/)
@@ -17,7 +17,7 @@
 
 The kernel is a Rust coding agent with an embedded-first toolchain. A firmware change is not "done" when the model prints code — it is done when it compiles, lands on the target, runs, and the observed output matches what was asked for; at the top of the evidence ladder, "observed" means a photo shows the LED lit or a logic-analyzer capture measures the waveform, never the model's say-so.
 
-**One repo, three surfaces (monorepo):**
+**One repo, two surfaces (monorepo):**
 
 | Surface | Path | Stack |
 |---|---|---|
@@ -94,7 +94,7 @@ Firment separates responsibilities instead of treating the model as a shell scri
   - `mem` / `write` — read/write memory with `0x...` or `symbol:name` addresses (resolved from the ELF symbol table); `write` requires approval
   - `break` / `step` / `continue` — set a breakpoint and report registers when it hits, single-step, resume
   - `backtrace` — halt and unwind the call stack against the firmware ELF (DWARF-based; the firmware must be built with `-g`)
-  - `trace` — stream SWO/ITM trace packets (`probe-rs itm swo`); probe-rs configures CoreSight itself, the firmware just writes ITM ports
+  - `trace` — stream SWO/ITM without a subprocess: Firment programs the probe's pin mode **and** the target's TPIU itself (probe-rs keeps `configure_tpiu` private), and decodes ITM packets in-process. **Partially working and described as such**: on NUCLEO-64 boards the SWO pin (PB3) is shared with the debugger's own trace output, so a capture can come back with a single sync byte and no decodable packets
   - `forensic` — one-command hard-fault post-mortem: halts the target, captures the exception frame + Cortex-M fault registers + a 64-word stack window, decodes the fault site and candidate call chain against the ELF, re-reads PC to detect a corrupted scene (watchdog reset race), correlates the capture against the session change ledger (7-day window, newest first), and snapshots the report under the session dir. Approval-exempt: the scene is ephemeral
 
 ### Verification & evidence
@@ -120,7 +120,7 @@ A successful compile or flash does **not** automatically prove the physical task
 
 Run the guard + small-model classification on a local single-board computer (Debian + systemd): mosquitto broker, ollama small models, the `sbc-guard` daemon, and PC-side provider config. From-zero walkthrough with a per-failure troubleshooting table: **[docs/sbc-setup.md](docs/sbc-setup.md)**. Acceptance is one command: `firm --doctor --sbc` (six checks, fix hints on every failure).
 
-### Three surfaces, one kernel
+### Two surfaces, one kernel
 
 | Surface | Screenshot |
 |---|---|
@@ -171,11 +171,11 @@ above install the last stable one. Name the tag to choose otherwise (the variabl
 the *script*, so on the shell side it goes after the pipe):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | FIRMENT_VERSION=v1.0.0-rc3 sh
+curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | FIRMENT_VERSION=v1.0.0-rc4 sh
 ```
 
 ```powershell
-$env:FIRMENT_VERSION = 'v1.0.0-rc3'   # then the iex line above
+$env:FIRMENT_VERSION = 'v1.0.0-rc4'   # then the iex line above
 ```
 
 **Offline or air-gapped machine.** Both installers download a release, so neither works
@@ -285,7 +285,7 @@ crates/
 gui/              Tauri GUI client (React/Vite + src-tauri)
 sbc-guard/        SBC-side collector + deterministic guard (Python, MQTT + ollama)
 docs/             vendor-index.toml + cheatsheets/*.toml (hardware KB)
-.github/workflows/  CI: Rust (fmt/clippy/test) + gui-check
+.github/workflows/  CI: fmt/clippy/test on three platforms, both GUI workspaces, web build, advisory audit
 ```
 
 ## 🧪 Development
@@ -313,8 +313,10 @@ same rig, three rounds each.
 
 The per-case results, the reasoning for every machine-unjudgeable point, and the build the
 numbers belong to are in `benchmark/RESULTS.md`. The short version: 6 of 8 cases were identical
-across both agents; the two that moved were a board-polarity assumption (both agents fell for the
-same one) and a debounce state machine.
+across both agents. Only two cases moved — case04 (one firm run got the debounce state machine
+wrong at both ends, **not** polarity: that run had already read `PUPDR PC13=pull-down`; one claude
+round treated "the Nucleo's B1 is active-low" as a fact and produced no output) and one claude
+round on case11 (4.0).
 
 ## 🗺️ Roadmap
 

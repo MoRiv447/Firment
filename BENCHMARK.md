@@ -1,5 +1,10 @@
 # 横向评测记录
 
+> **这份文件是什么**：2026-08-07 的通用编码横评（19 用例 × 4 个 agent，同一个模型）。
+> 它是**历史记录**，不是当前基准。产品今天用的是 [`benchmark/`](benchmark/README.md)：
+> 14 道真板题、判分口径冻结在 `r7`、结果在 [`benchmark/RESULTS.md`](benchmark/RESULTS.md)。
+> 两者不可比：这份测的是"通用编码能力"，那份测的是"固件任务在真硬件上的结果"。
+
 ## 2026-08-07 复测（S1/T1 加固后）
 
 四家通用编码 Agent 横向评测（19 用例 × 4 agent），统一模型 `deepseek-v4-flash`（thinking=max）、one-shot 非交互模式、自动批准等效权限。

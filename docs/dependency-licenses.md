@@ -1,7 +1,7 @@
 # Dependency licences — Rust
 
 Firment is MIT. That is a claim about the four crates in this repository, and it
-says nothing about the 409 packages the root workspace resolves and the 622 in
+says nothing about the 477 packages the root workspace resolves and the 671 in
 the Tauri application's own lockfile — two independent resolutions that overlap,
 so neither count contains the other
 (`grep -c '^name = ' Cargo.lock gui/src-tauri/Cargo.lock`), each package with its
@@ -18,12 +18,12 @@ no `cargo-license`, because a check that has to be installed before it can answe
 "is anything copyleft in here?" is a check that does not get run. Re-run it after
 any dependency change; the numbers below are a snapshot, not a promise.
 
-## The shipped set, measured 2026-09-12
+## The shipped set, measured 2026-11-21
 
-`cargo tree -p firment-cli --target x86_64-pc-windows-msvc` — **299 distinct
+`cargo tree -p firment-cli --target x86_64-pc-windows-msvc` — **356 distinct
 crates**. Every one of them resolved.
 
-`Cargo.lock` holds 409 package entries: 4 workspace members, 405 from the registry. The
+`Cargo.lock` holds 477 package entries: 4 workspace members, 473 from the registry. The
 difference is crates the lock contains but this build never compiles (see
 "Lock-only entries" below).
 
@@ -38,17 +38,17 @@ Rust ecosystem's default and means the user may pick either. Roughly:
 
 | Count | Licence |
 |---|---|
-| 198 | `MIT OR Apache-2.0` |
-| 79 | `MIT` |
+| 234 | `MIT OR Apache-2.0` |
+| 101 | `MIT` |
+| 24 | `Apache-2.0 OR MIT` |
+| 21 | `MIT/Apache-2.0` — the same dual grant, older spelling |
 | 18 | `Unicode-3.0` (the ICU4X family — text segmentation and normalisation) |
-| 16 | `MIT/Apache-2.0` — the same dual grant, older spelling |
-| 13 | `Apache-2.0 OR MIT` |
+| 10 | `Unlicense OR MIT` |
+| 7 | `Zlib OR Apache-2.0 OR MIT` |
 | 7 | `Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT` |
-| 6 | `Unlicense OR MIT` |
-| 6 | `Zlib OR Apache-2.0 OR MIT` |
 | 5 | `BSD-3-Clause` |
-| 5 | `Apache-2.0 OR ISC OR MIT` |
-| … | 20 further dual/triple expressions, all with a permissive option |
+| 4 | `Apache-2.0` |
+| … | 25 further dual/triple expressions, all with a permissive option |
 | 2 | **`MPL-2.0`** — see below |
 
 Every expression above leaves a permissive option, so a binary may be shipped
@@ -79,40 +79,43 @@ patching it a tempting thing to do.
 
 ## Lock-only entries
 
-17 registry crates are in `Cargo.lock` but in no shipped build:
+102 registry crates are in `Cargo.lock` but in no shipped Windows build. They are not a
+gap in the inventory — `cargo tree` for the target contains none of them — and they fall
+into four groups rather than being an accident:
 
-```
-arbitrary  foreign-types  foreign-types-shared  interpolate_name
-libfuzzer-sys  openssl  openssl-macros  openssl-probe  openssl-sys
-ppv-lite86  rand 0.9.5  rand_chacha  rand_core  security-framework
-system-configuration  system-configuration-sys  vcpkg
-```
+| Group | Examples |
+|---|---|
+| Other platforms | `objc2*`, `core-foundation*`, `security-framework*`, `mach2` (macOS); `libudev*`, `nix`, `x11rb*`, `linux-raw-sys` (Linux); `android_system_properties`; `wasm-bindgen*`, `web-sys`, `js-sys`, `wasi`, `wit-bindgen`; `windows_*` for every non-msvc architecture |
+| A TLS stack this target does not use | `rustls`, `rustls-webpki`, `ring`, `tokio-rustls`, `hyper-rustls`, `openssl`, `openssl-sys`, `vcpkg`, `foreign-types*` |
+| Test and fuzzing support | `arbitrary`, `libfuzzer-sys`, `interpolate_name`, `assert-json-diff`, `wiremock`, `bumpalo` |
+| Superseded or feature-gated | `rand 0.9.x`, `rand_chacha`, `rand_core`, `ppv-lite86`, `lazy_static`, `tinyvec`, `jiff*`, `httpdate`, `signal-hook*` |
 
-They are not a gap in the inventory. `cargo tree` for the Windows target
-contains none of them:
+Two corrections to what this section said before:
 
-* `openssl*`, `vcpkg`, `foreign-types*` — the OpenSSL backend of `native-tls`.
-  It is not what this target uses: the build pulls `native-tls` **and**
-  `schannel` (Windows' own TLS) rather than `openssl`. Note that the build also
-  contains `rustls`, so "which TLS backend" is not a single answer here.
-* `security-framework*`, `system-configuration*` — macOS.
-* `rand 0.9.x`, `rand_chacha`, `rand_core`, `ppv-lite86` — superseded entries:
-  the shipped tree contains **no `rand` at all**, at any version.
-* `arbitrary`, `libfuzzer-sys`, `interpolate_name` — fuzzing and macro internals.
+- It claimed the build "also contains `rustls`". **It does not.** `reqwest` is built with
+  `native-tls` (`schannel` on Windows), and the only rustls artifact in the shipped tree is
+  `rustls-pki-types` — type definitions, not a backend. `rustls` and `rustls-webpki` are
+  lock-only on this target, which is also why `cargo tree -i rustls-webpki` prints nothing
+  here while `cargo audit` still sees it.
+- The count was 17 and is 102 now. The growth is probe-rs's tree (`defmt`,
+  `portable-atomic`, `objc2`, the wasm crates) rather than anything this project added
+  directly.
 
-A Linux release **will** pull the `openssl` family, and those crates are among
-the 17 this offline method cannot read. Re-running the script on a machine that
-has built for that target is what resolves them; the script refuses to guess a
-licence from a different version of the same crate, which is the right failure.
+A Linux release **will** pull the `openssl` family and both rustls crates. Re-running the
+script on a machine that has built for that target is what resolves them; the script refuses
+to guess a licence from a different version of the same crate, which is the right failure.
 
 ## What this does not cover
 
 * **Security advisories.** This document is licences only. The other half of the
-  review is `cargo audit`, which needs the advisory database and therefore a
-  network — this machine has none, so it runs in CI instead (`ci.yml`, job
-  `audit`, against both lockfiles). It first ran on 2026-09-25, found six
-  advisories, and all six are cleared: two by version bumps, four by dropping a
-  TLS stack the MQTT client never used. Re-check it by pushing, not by hand.
+  review is `cargo audit`; `.cargo/audit.toml` holds the policy, including one
+  recorded ignore (`ruzstd 0.8.3`, with the reason and the reachability argument
+  written next to it). CI runs it against **both** lockfiles — the workspace one
+  directly, the Tauri one with `--file`, because cargo-audit reads its config from
+  the directory it runs in and does not walk up to the repository root. The same
+  two commands work locally when the network is up:
+  `cargo audit` and `cargo audit --file gui/src-tauri/Cargo.lock`.
+  Re-check it by running those, not only by pushing.
 * **The JavaScript side.** `gui/` and `web/` have their own, much larger trees
   (npm). They are covered by neither this document nor this script.
 * **Licences of fonts and assets.** The type stack names JetBrains Mono and

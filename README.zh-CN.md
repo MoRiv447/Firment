@@ -1,8 +1,8 @@
 # Firment — Firmware + Agent
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0--rc-blue)](Cargo.toml)
-[![Rust](https://img.shields.io/badge/rust-1.85+-deeppink)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-1.0.0--rc4-blue)](Cargo.toml)
+[![Rust](https://img.shields.io/badge/rust-1.89+-deeppink)](Cargo.toml)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 [![CI](https://img.shields.io/badge/CI-Rust%20%2B%20GUI-green)](.github/workflows/ci.yml)
 [![Website](https://img.shields.io/badge/website-Firment%20官网-ff5c9d)](https://moriv447.github.io/Firment-site/)
@@ -94,7 +94,7 @@ Firment 不把模型当 shell 脚本生成器，而是明确分工：
   - `mem` / `write` —— 内存读写，地址支持 `0x...` 或 `symbol:name`（从 ELF 符号表解析）；`write` 需要批准
   - `break` / `step` / `continue` —— 设置断点并在命中时上报寄存器、单步、恢复运行
   - `backtrace` —— 暂停并对照固件 ELF 回溯调用栈（基于 DWARF；固件需以 `-g` 构建）
-  - `trace` —— 流式采集 SWO/ITM 跟踪包（`probe-rs itm swo`）；probe-rs 自行配置 CoreSight，固件只需写 ITM 端口
+  - `trace` —— 不经子进程采集 SWO/ITM：探针的引脚模式和目标的 TPIU 都由 Firment 自己编程（probe-rs 把 `configure_tpiu` 留作私有），ITM 包在进程内解码。**目前只部分可用，文档如实写明**：NUCLEO-64 板子上 SWO 引脚（PB3）与调试器自身的跟踪输出复用，采集可能只回来一个同步字节、没有可解码的包
   - `forensic` —— 一条命令的 hard fault 验尸：暂停目标、抓取异常帧 + Cortex-M 故障寄存器 + 64 字栈窗，对照 ELF 解码故障点与候选调用链，复读 PC 检测现场是否被破坏（看门狗复位竞态），并将会话变更台账（7 天窗口、最新在前）关联进报告，快照存至会话目录。免审批：现场稍纵即逝
 
 ### 验证与证据
@@ -168,11 +168,11 @@ pre-release**——所以 `v1.0.0-rc` 挂着 pre-release 期间，上面这行�
 就指定 tag（注意变量是给脚本的，shell 那条要写在管道右边，不是 `curl` 前面）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | FIRMENT_VERSION=v1.0.0-rc3 sh
+curl -fsSL https://raw.githubusercontent.com/MoRiv447/Firment/main/install.sh | FIRMENT_VERSION=v1.0.0-rc4 sh
 ```
 
 ```powershell
-$env:FIRMENT_VERSION = 'v1.0.0-rc3'   # 然后再执行上面的 iex 那行
+$env:FIRMENT_VERSION = 'v1.0.0-rc4'   # 然后再执行上面的 iex 那行
 ```
 
 **离线 / 物理隔离的机器。** 两个安装脚本都要下载 release，没有网络都用不了。改用这两条路之一：
@@ -306,8 +306,9 @@ Firment 与另一个 agent 在同一台架各跑三轮。
 | **复现** | 测试集在本仓库 `benchmark/`，命令、接线与逐题证据格式见它的 README |
 
 逐题结果、每个"机器判不了"的点的裁定理由、以及分数属于哪份构建，都在 `benchmark/RESULTS.md`。
-一句话版本：8 题里有 6 题两侧完全相同，动过的两道题一个是板级极性假设（两个 agent 都栽了），
-一个是去抖状态机。
+一句话版本：8 题里有 6 题两侧完全相同。动过的只有两处：case04（firm 有一轮把去抖状态机写错——
+短按漏了一次、长按多了一次，**不是极性**，那一轮已经读到 `PUPDR PC13=pull-down`；claude 有一轮把
+"Nucleo 的 B1 是低有效"当成事实、配成 PULLUP，整轮没有输出）和 claude 在 case11 的一轮（4.0）。
 
 ## 🗺️ 路线图
 
